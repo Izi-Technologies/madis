@@ -1,0 +1,239 @@
+// ============ DIGEST AUTH (RFC 7616 / RFC 3261) ============
+// Keep MD5 for legacy SIP devices, while accepting SHA-256 and both standard
+// qop values. The database stores the algorithm-specific HA1 in
+// users.password_ha1 (32 hex chars for MD5, 64 for SHA-256).
+
+fn digest_algorithm_config() -> string {
+    let configured = str_to_lower(str_trim_space(env_get_or("SIP_DIGEST_ALGORITHM", "md5")))
+    if str_eq(configured, "sha256") { return "SHA-256" }
+    if str_eq(configured, "sha-256") { return "SHA-256" }
+    if str_eq(configured, "sha-256-sess") { return "SHA-256-sess" }
+    if str_eq(configured, "md5-sess") { return "MD5-sess" }
+    return "MD5"
+}
+
+fn digest_hash(value: string, algorithm: string) -> string {
+    let a = str_to_lower(algorithm)
+    if str_has_prefix(a, "sha-256") { return sha256(value) }
+    return sip_md5_hex(value)
+}
+
+fn digest_challenge_value(realm: string, nonce: string, stale: int) -> string {
+    let algorithm = digest_algorithm_config()
+    let mut value = "Digest realm=\"" + realm + "\", nonce=\"" + nonce + "\", algorithm=" + algorithm + ", qop=\"auth,auth-int\""
+    if stale == 1 { value = value + ", stale=true" }
+    return value
+}
+
+fn digest_challenge(realm: string, msg: string, n: int, tag: string) -> string {
+    let _ = n
+    let nonce = base64_encode(random_bytes(16))
+    let extra = sip_header_line("WWW-Authenticate", digest_challenge_value(realm, nonce, 0))
+    if len(tag) > 0 {
+        return sip_reply_with_to_tag(msg, 401, "Unauthorized", extra, "", tag)
+    }
+    return sip_reply(msg, 401, "Unauthorized", extra, "")
+}
+
+fn digest_challenge_proxy(realm: string, msg: string, n: int, tag: string) -> string {
+    let _ = n
+    let nonce = base64_encode(random_bytes(16))
+    let extra = sip_header_line("Proxy-Authenticate", digest_challenge_value(realm, nonce, 0))
+    if len(tag) > 0 {
+        return sip_reply_with_to_tag(msg, 407, "Proxy Authentication Required", extra, "", tag)
+    }
+    return sip_reply(msg, 407, "Proxy Authentication Required", extra, "")
+}
+
+fn digest_challenge_cached_stale(realm: string, msg: string, n: int, tag: string, cache: CMap, proxy: int, stale: int) -> string {
+    let _ = n
+    let nonce = base64_encode(random_bytes(24))
+    cmap_set(cache, "nonce|" + nonce, string(mono_ms()))
+    let mut extra = ""
+    if proxy == 1 {
+        extra = sip_header_line("Proxy-Authenticate", digest_challenge_value(realm, nonce, stale))
+        if len(tag) > 0 { return sip_reply_with_to_tag(msg, 407, "Proxy Authentication Required", extra, "", tag) }
+        return sip_reply(msg, 407, "Proxy Authentication Required", extra, "")
+    }
+    extra = sip_header_line("WWW-Authenticate", digest_challenge_value(realm, nonce, stale))
+    if len(tag) > 0 { return sip_reply_with_to_tag(msg, 401, "Unauthorized", extra, "", tag) }
+    return sip_reply(msg, 401, "Unauthorized", extra, "")
+}
+
+fn digest_challenge_cached(realm: string, msg: string, n: int, tag: string, cache: CMap, proxy: int) -> string {
+    return digest_challenge_cached_stale(realm, msg, n, tag, cache, proxy, 0)
+}
+
+fn has_auth(msg: string, n: int) -> int {
+    let auth = sip_hdr(msg, "Authorization", n)
+    if len(auth) > 5 { return 1 }
+    let pauth = sip_hdr(msg, "Proxy-Authorization", n)
+    if len(pauth) > 5 { return 1 }
+    return 0
+}
+
+fn extract_digest_field(auth: string, field: string) -> string {
+    return sip_auth_param(auth, field)
+}
+
+fn auth_username(msg: string, n: int) -> string {
+    let auth = sip_hdr(msg, "Authorization", n)
+    if len(auth) > 0 { return sip_auth_param(auth, "username") }
+    let pauth = sip_hdr(msg, "Proxy-Authorization", n)
+    return sip_auth_param(pauth, "username")
+}
+
+fn auth_header(msg: string, n: int) -> string {
+    let auth = sip_hdr(msg, "Authorization", n)
+    if len(auth) > 0 { return auth }
+    return sip_hdr(msg, "Proxy-Authorization", n)
+}
+
+fn digest_response_ha1_qop(ha1: string, method: string, uri: string, nonce: string, nc: string, cnonce: string, qop: string) -> string {
+    return digest_response_ha1_qop_alg(ha1, method, uri, nonce, nc, cnonce, qop, "MD5", "")
+}
+
+fn digest_response_ha1_qop_alg(ha1: string, method: string, uri: string, nonce: string, nc: string, cnonce: string, qop: string, algorithm: string, body: string) -> string {
+    let mut ha1_value = ha1
+    let a = str_to_lower(algorithm)
+    if str_has_suffix(a, "-sess") { ha1_value = digest_hash(ha1 + ":" + nonce + ":" + cnonce, algorithm) }
+    let mut ha2_input = method + ":" + uri
+    if str_eq(str_to_lower(qop), "auth-int") { ha2_input = ha2_input + ":" + digest_hash(body, algorithm) }
+    let ha2 = digest_hash(ha2_input, algorithm)
+    return digest_hash(ha1_value + ":" + nonce + ":" + nc + ":" + cnonce + ":" + qop + ":" + ha2, algorithm)
+}
+
+fn digest_response_ha1_alg(ha1: string, method: string, uri: string, nonce: string, algorithm: string, body: string) -> string {
+    let ha1_value = ha1
+    let mut ha2_input = method + ":" + uri
+    if len(body) > 0 { ha2_input = ha2_input + ":" + digest_hash(body, algorithm) }
+    let ha2 = digest_hash(ha2_input, algorithm)
+    return digest_hash(ha1_value + ":" + nonce + ":" + ha2, algorithm)
+}
+
+fn digest_response_ha1_sess(ha1: string, method: string, uri: string, nonce: string, cnonce: string, algorithm: string) -> string {
+    let ha1_value = digest_hash(ha1 + ":" + nonce + ":" + cnonce, algorithm)
+    let ha2 = digest_hash(method + ":" + uri, algorithm)
+    return digest_hash(ha1_value + ":" + nonce + ":" + ha2, algorithm)
+}
+
+fn db_digest_valid(db: SqlDB, db_ok: int, msg: string, n: int, method: string, fallback_domain: string, cache: CMap) -> int {
+    if db_ok == 0 { return 1 }
+    let auth = auth_header(msg, n)
+    if len(auth) == 0 { return 0 }
+    let username = sip_auth_param(auth, "username")
+    let realm = sip_auth_param(auth, "realm")
+    let nonce = sip_auth_param(auth, "nonce")
+    let uri = sip_auth_param(auth, "uri")
+    let response = sip_auth_param(auth, "response")
+    let mut algorithm = str_to_lower(sip_auth_param(auth, "algorithm"))
+    let qop = str_to_lower(sip_auth_param(auth, "qop"))
+    let nc = sip_auth_param(auth, "nc")
+    let cnonce = sip_auth_param(auth, "cnonce")
+    if len(username) == 0 { return 0 }
+    if len(nonce) == 0 { return 0 }
+    if len(uri) == 0 { return 0 }
+    if len(response) == 0 { return 0 }
+    if len(algorithm) == 0 { algorithm = "md5" }
+    if not str_eq(algorithm, "md5") && not str_eq(algorithm, "md5-sess") && not str_eq(algorithm, "sha-256") && not str_eq(algorithm, "sha-256-sess") { return 0 }
+    if len(qop) > 0 {
+        if not str_eq(qop, "auth") && not str_eq(qop, "auth-int") { return 0 }
+        if len(cnonce) == 0 || len(nc) != 8 { return 0 }
+        let mut ni = 0
+        while ni < len(nc) {
+            let ch = int(str_to_lower(nc)[ni])
+            if not ((ch >= 48 && ch <= 57) || (ch >= 97 && ch <= 102)) { return 0 }
+            ni = ni + 1
+        }
+    }
+    if str_has_suffix(algorithm, "-sess") && len(cnonce) == 0 { return 0 }
+    if cmap_has(cache, "nonce|" + nonce) == 0 { return 0 }
+    let mut nonce_at = 0
+    match parse_int(cmap_get(cache, "nonce|" + nonce)) {
+        Ok(v) => { nonce_at = v }
+        Err(_) => { return 0 }
+    }
+    if mono_ms() - nonce_at > 300000 { return 2 }
+    let mut domain = realm
+    if len(domain) == 0 { domain = fallback_domain }
+    let _ = domain
+    let mut ha1 = sql_query_str(db, "SELECT password_ha1 FROM users WHERE username = $1 AND enabled = true LIMIT 1", username)
+    if str_has_prefix(algorithm, "sha-256") {
+        let sha_ha1 = sql_query_str(db, "SELECT password_ha1_sha256 FROM users WHERE username = $1 AND enabled = true LIMIT 1", username)
+        if len(sha_ha1) == 64 { ha1 = sha_ha1 }
+    }
+    if str_has_prefix(algorithm, "sha-256") && len(ha1) != 64 { return 0 }
+    if str_has_prefix(algorithm, "md5") && len(ha1) != 32 { return 0 }
+    let expected = if len(qop) > 0 {
+        digest_response_ha1_qop_alg(ha1, method, uri, nonce, nc, cnonce, qop, algorithm, sip_body(msg))
+    } else if str_has_suffix(algorithm, "-sess") {
+        digest_response_ha1_sess(ha1, method, uri, nonce, cnonce, algorithm)
+    } else {
+        digest_response_ha1_alg(ha1, method, uri, nonce, algorithm, "")
+    }
+    if str_eq(str_to_lower(expected), str_to_lower(response)) {
+        let mut used_key = "nonce_used|" + nonce + "|" + username + "|" + method + "|" + uri
+        if len(qop) > 0 { used_key = used_key + "|" + nc + "|" + cnonce }
+        if cmap_has(cache, used_key) == 1 { return 0 }
+        cmap_set(cache, used_key, string(mono_ms()))
+        return 1
+    }
+    return 0
+}
+
+// IP-based auth: check if source IP is trusted (carriers, trunks, PBXes)
+// Returns: 1=trusted (skip digest), 0=not trusted (require digest)
+fn db_ip_auth(db: SqlDB, db_ok: int, src_ip: string, cache: CMap) -> int {
+    let key = "ipauth|" + src_ip
+    if cmap_has(cache, key) == 1 {
+        if str_eq(cmap_get(cache, key), "1") { return 1 }
+        return 0
+    }
+    if db_ok == 0 {
+        if is_private_ip(src_ip) == 1 {
+            cmap_set(cache, key, "1")
+            return 1
+        }
+        cmap_set(cache, key, "0")
+        return 0
+    }
+
+    // Check ip_auth table
+    let r = sql_query_str(db, "SELECT id FROM ip_auth WHERE ip_address = $1 AND enabled = true LIMIT 1", src_ip)
+    if len(r) > 0 {
+        cmap_set(cache, key, "1")
+        return 1
+    }
+    // Check CIDR/subnet (simplified: check /24 by stripping last octet)
+    let dot_parts = str_split(src_ip, ".")
+    if len(dot_parts) == 4 {
+        let subnet = dot_parts[0] + "." + dot_parts[1] + "." + dot_parts[2] + ".0/24"
+        let r2 = sql_query_str(db, "SELECT id FROM ip_auth WHERE ip_address = $1 AND enabled = true LIMIT 1", subnet)
+        if len(r2) > 0 {
+            cmap_set(cache, key, "1")
+            return 1
+        }
+    }
+    cmap_set(cache, key, "0")
+    return 0
+}
+
+// Check if user exists and auth is present
+fn db_auth_user(db: SqlDB, db_ok: int, username: string, domain: string, cache: CMap) -> int {
+    if db_ok == 0 { return 1 }
+
+    let key = "user|" + username + "@" + domain
+    if cmap_has(cache, key) == 1 {
+        let v = cmap_get(cache, key)
+        if str_eq(v, "1") { return 1 }
+        return 0
+    }
+
+    let result = sql_query_str(db, "SELECT id FROM users WHERE username = $1 AND enabled = true LIMIT 1", username)
+    if len(result) > 0 {
+        cmap_set(cache, key, "1")
+        return 1
+    }
+    cmap_set(cache, key, "0")
+    return 0
+}

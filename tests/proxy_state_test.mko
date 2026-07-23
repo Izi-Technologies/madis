@@ -1,0 +1,263 @@
+// Focused proxy tests. These stay independent of sockets and PostgreSQL so
+// they run in CI and in restricted build environments.
+pull . "../parser.mko"
+pull . "../rfc.mko"
+pull . "../registration.mko"
+pull . "../headers.mko"
+
+fn proxy_test_register_message(contact: string, expires: string) -> string {
+    let headers = "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bKtest\r\n"
+        + "From: <sip:alice@example.com>;tag=from1\r\n"
+        + "To: <sip:alice@example.com>\r\n"
+        + "Call-ID: reg-test\r\n"
+        + "CSeq: 1 REGISTER\r\n"
+        + "Contact: " + contact + "\r\n"
+        + "Expires: " + expires + "\r\n"
+        + "Max-Forwards: 70\r\n"
+        + "Content-Length: 0\r\n"
+        + "\r\n"
+    return "REGISTER sip:example.com SIP/2.0\r\n" + headers
+}
+
+fn TestProxyMessageValidation() {
+    let msg = proxy_test_register_message("<sip:alice@192.0.2.10:5060;transport=tcp>", "300")
+    assert_eq(sip_validate_message(msg, len(msg)), 1)
+    let bad = "REGISTER sip:x SIP/2.0\r\nBadHeader\r\n\r\n"
+    assert_eq(sip_validate_message(bad, len(bad)), 0)
+    let missing_to = str_replace(msg, "To: <sip:alice@example.com>\r\n", "")
+    assert_eq(sip_validate_message(missing_to, len(missing_to)), 0)
+    let bad_cseq = str_replace(msg, "CSeq: 1 REGISTER", "CSeq: 1 INVITE")
+    assert_eq(sip_validate_message(bad_cseq, len(bad_cseq)), 0)
+    let folded = str_replace(msg, "Contact: <sip:alice@192.0.2.10:5060;transport=tcp>\r\n", "Contact: <sip:alice@192.0.2.10:5060;transport=tcp>\r\n\texpires=300\r\n")
+    assert_eq(sip_validate_message(folded, len(folded)), 1)
+}
+
+fn TestResponseViaKeepsCallerHop() {
+    let response = "SIP/2.0 180 Ringing\r\n"
+        + "Via: SIP/2.0/UDP 192.0.2.20:5060;branch=proxy, SIP/2.0/UDP 192.0.2.10:5060;branch=caller\r\n"
+        + "From: <sip:a@example.com>;tag=a\r\n"
+        + "To: <sip:b@example.com>;tag=b\r\n"
+        + "Call-ID: via-test\r\n"
+        + "CSeq: 1 INVITE\r\n"
+        + "Content-Length: 0\r\n\r\n"
+    let stripped = sip_strip_top_via(response)
+    assert(str_contains(stripped, "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=caller"))
+    assert(not str_contains(stripped, "192.0.2.20:5060"))
+}
+
+fn TestRouteListProcessing() {
+    let msg = proxy_test_register_message("<sip:alice@example.com>", "300")
+    let routed = str_replace(msg, "Contact:", "Route: <sip:edge.example.com;lr>, <sip:backup.example.com;lr>\r\nContact:")
+    let route = sip_header(routed, "Route")
+    assert_eq_str(sip_route_target(route), "sip:edge.example.com;lr")
+    let popped = sip_pop_route(routed, len(routed))
+    assert(not str_contains(popped, "edge.example.com"))
+    assert(str_contains(popped, "backup.example.com"))
+    assert_eq(sip_validate_message(popped, len(popped)), 1)
+}
+
+fn TestMaxForwardsBounds() {
+    let msg = proxy_test_register_message("<sip:alice@example.com>", "300")
+    assert_eq(sip_get_max_forwards(msg, len(msg)), 70)
+    let too_high = str_replace(msg, "Max-Forwards: 70", "Max-Forwards: 256")
+    assert_eq(sip_get_max_forwards(too_high, len(too_high)), -1)
+    let malformed = str_replace(msg, "Max-Forwards: 70", "Max-Forwards: nope")
+    assert_eq(sip_get_max_forwards(malformed, len(malformed)), -1)
+    let absent = str_replace(msg, "Max-Forwards: 70\r\n", "")
+    let added = sip_decrement_max_forwards(absent, len(absent))
+    assert(str_contains(added, "Max-Forwards: 70\r\n"))
+    let compact_spacing = str_replace(msg, "Max-Forwards: 70", "max-forwards:70")
+    let decremented = sip_decrement_max_forwards(compact_spacing, len(compact_spacing))
+    assert(str_contains(decremented, "max-forwards: 69\r\n"))
+}
+
+fn TestContactListParsing() {
+    let contacts = sip_split_contact_values("\"Doe, Jane\" <sip:jane@example.com>, <sip:jane@192.0.2.11>;expires=120")
+    assert_eq(len(contacts), 2)
+    assert(str_contains(contacts[0], "Doe, Jane"))
+    assert(str_contains(contacts[1], "192.0.2.11"))
+}
+
+fn TestRegistrationExpiryPolicy() {
+    let msg = proxy_test_register_message("<sip:alice@example.com;expires=30>", "3600")
+    assert_eq(registration_expires(sip_header(msg, "Contact"), msg, len(msg)), 30)
+    assert_eq(registration_min_expires(), 60)
+    let malformed = proxy_test_register_message("<sip:alice@example.com;expires=oops>", "3600")
+    assert_eq(registration_expires(sip_header(malformed, "Contact"), malformed, len(malformed)), -1)
+}
+
+fn TestRegistrationExpiryAndMultipleBindings() {
+    let msg = proxy_test_register_message("<sip:alice@192.0.2.10:5060;transport=tcp>", "300")
+    let contact = sip_header(msg, "Contact")
+    assert_eq(registration_expires(contact, msg, len(msg)), 300)
+    let reg = cmap_new()
+    let _ = registration_store(reg, "alice@example.com", "sip:alice@192.0.2.10:5060;transport=tcp", "TCP", 300, "192.0.2.10", 5060)
+    let _ = registration_store(reg, "alice@example.com", "sip:alice@192.0.2.11:5061;transport=tls", "TLS", 300, "192.0.2.11", 5061)
+    let first = registration_find(reg, "alice@example.com")
+    assert(len(first) > 0)
+    assert(str_contains(first, "sip:alice@192.0.2.10") || str_contains(first, "sip:alice@192.0.2.11"))
+    assert_eq(registration_remove(reg, "alice@example.com", "sip:alice@192.0.2.10:5060;transport=tcp"), 1)
+    let remaining = registration_find(reg, "alice@example.com")
+    assert(str_contains(remaining, "192.0.2.11"))
+    let response_contacts = registration_response_contacts(reg, "alice@example.com")
+    assert(str_contains(response_contacts, "192.0.2.11"))
+    assert(str_contains(response_contacts, "expires="))
+    assert_eq(registration_remove(reg, "alice@example.com", "*"), 1)
+    assert_eq(len(registration_find(reg, "alice@example.com")), 0)
+}
+
+fn TestTransactionReplayExpiry() {
+    let msg = proxy_test_register_message("<sip:alice@192.0.2.10:5060>", "300")
+    let cache = cmap_new()
+    let response = sip_reply(msg, 200, "OK", "", "tag1")
+    let key = sip_transaction_key(msg, len(msg))
+    let _ = sip_store_txn(key, response, cache)
+    assert_eq(sip_is_retransmit(key, cache), 1)
+    assert_eq_str(sip_get_txn_response(key, cache), response)
+}
+
+fn proxy_test_final_response(code: int, branch: string) -> string {
+    return "SIP/2.0 " + string(code) + " Test\r\n"
+        + "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=" + branch + "\r\n"
+        + "From: <sip:a@example.com>;tag=a\r\n"
+        + "To: <sip:b@example.com>;tag=b\r\n"
+        + "Call-ID: fork-test\r\n"
+        + "CSeq: 1 INVITE\r\n"
+        + "Content-Length: 0\r\n\r\n"
+}
+
+fn TestForkFinalResponseSelection() {
+    let cache = cmap_new()
+    let cid = "fork-test"
+    let _ = sip_fork_register_branch(cid, "z9hG4bK-a", "sip:a@example.com", cache)
+    let _ = sip_fork_register_branch(cid, "z9hG4bK-b", "sip:b@example.com", cache)
+    cmap_set(cache, "fork_expected|" + cid, "2")
+    cmap_set(cache, "fork_done|" + cid, "0")
+    let held = sip_fork_collect_response(proxy_test_final_response(486, "z9hG4bK-a"), cache)
+    assert_eq(len(held), 0)
+    let selected = sip_fork_collect_response(proxy_test_final_response(404, "z9hG4bK-b"), cache)
+    assert_eq(sip_status_code(selected), 404)
+}
+
+fn TestForkSixxxPriority() {
+    let cache = cmap_new()
+    let cid = "fork-sixxx"
+    let _ = sip_fork_register_branch(cid, "z9hG4bK-c", "sip:c@example.com", cache)
+    let _ = sip_fork_register_branch(cid, "z9hG4bK-d", "sip:d@example.com", cache)
+    cmap_set(cache, "fork_expected|" + cid, "2")
+    cmap_set(cache, "fork_done|" + cid, "0")
+    let _ = sip_fork_collect_response(proxy_test_final_response(486, "z9hG4bK-c"), cache)
+    let selected = sip_fork_collect_response(proxy_test_final_response(603, "z9hG4bK-d"), cache)
+    assert_eq(sip_status_code(selected), 603)
+}
+
+fn TestForkSixxxImmediateAndAuthAggregation() {
+    let cache = cmap_new()
+    let cid = "fork-race"
+    let _ = sip_fork_register_branch(cid, "z9hG4bK-e", "sip:e@example.com", cache)
+    let _ = sip_fork_register_branch(cid, "z9hG4bK-f", "sip:f@example.com", cache)
+    cmap_set(cache, "fork_expected|" + cid, "2")
+    cmap_set(cache, "fork_done|" + cid, "0")
+    let six = sip_fork_collect_response(proxy_test_final_response(603, "z9hG4bK-e"), cache)
+    assert_eq(sip_status_code(six), 603)
+
+    let auth_cache = cmap_new()
+    let auth_cid = "fork-auth"
+    let _ = sip_fork_register_branch(auth_cid, "z9hG4bK-g", "sip:g@example.com", auth_cache)
+    let _ = sip_fork_register_branch(auth_cid, "z9hG4bK-h", "sip:h@example.com", auth_cache)
+    cmap_set(auth_cache, "fork_expected|" + auth_cid, "2")
+    cmap_set(auth_cache, "fork_done|" + auth_cid, "0")
+    let auth_a = str_replace(proxy_test_final_response(401, "z9hG4bK-g"), "Content-Length: 0", "WWW-Authenticate: Digest realm=\"a\", nonce=\"na\"\r\nContent-Length: 0")
+    let auth_b = str_replace(proxy_test_final_response(401, "z9hG4bK-h"), "Content-Length: 0", "WWW-Authenticate: Digest realm=\"b\", nonce=\"nb\"\r\nContent-Length: 0")
+    let _ = sip_fork_collect_response(auth_a, auth_cache)
+    let merged = sip_fork_collect_response(auth_b, auth_cache)
+    assert(str_contains(merged, "realm=\"a\""))
+    assert(str_contains(merged, "realm=\"b\""))
+}
+
+fn TestClientTransactionLifecycle() {
+    let req = proxy_test_register_message("<sip:alice@example.com>", "300")
+    let cache = cmap_new()
+    let key = sip_transaction_key(req, len(req))
+    assert_eq(sip_client_txn_record(req, "example.com:5060", "udp", 9, cache), 1)
+    assert(str_contains(cmap_get(cache, "client_req|" + key), "REGISTER sip:example.com"))
+    let response = sip_reply(req, 200, "OK", "", "")
+    assert_eq(sip_client_txn_finish(response, cache), 1)
+    assert_eq(cmap_has(cache, "client_req|" + key), 0)
+}
+
+fn TestInviteAckAndCancelConstruction() {
+    let invite = "INVITE sip:b@example.com SIP/2.0\r\n"
+        + "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-ack\r\n"
+        + "From: <sip:a@example.com>;tag=a\r\n"
+        + "To: <sip:b@example.com>\r\n"
+        + "Call-ID: ack-test\r\n"
+        + "CSeq: 42 INVITE\r\n"
+        + "Content-Length: 0\r\n\r\n"
+    let ack = sip_build_ack_non2xx(invite)
+    let cancel = sip_build_cancel(invite)
+    assert(str_has_prefix(ack, "ACK sip:b@example.com SIP/2.0\r\n"))
+    assert(str_contains(ack, "CSeq: 42 ACK\r\n"))
+    assert(str_contains(cancel, "CSeq: 42 CANCEL\r\n"))
+    assert(str_contains(ack, "Content-Length: 0\r\n"))
+    assert_eq(sip_validate_message(ack, len(ack)), 1)
+    assert_eq(sip_validate_message(cancel, len(cancel)), 1)
+}
+
+fn TestServerTransactionAckLifecycle() {
+    let invite = "INVITE sip:b@example.com SIP/2.0\r\n"
+        + "Via: SIP/2.0/UDP 192.0.2.10:50999;branch=z9hG4bK-server\r\n"
+        + "From: <sip:a@example.com>;tag=a\r\n"
+        + "To: <sip:b@example.com>\r\n"
+        + "Call-ID: server-txn\r\n"
+        + "CSeq: 42 INVITE\r\n"
+        + "Content-Length: 0\r\n\r\n"
+    let response = sip_reply(invite, 486, "Busy Here", "", "b")
+    let cache = cmap_new()
+    let key = sip_transaction_key(invite, len(invite))
+    assert_eq(sip_server_txn_record(invite, response, "192.0.2.10", 50999, "UDP", 9, cache), 1)
+    assert(str_contains(cmap_get(cache, "server_resp|" + key), "486 Busy Here"))
+    let ack = sip_build_ack_non2xx(invite)
+    assert_eq(sip_server_txn_ack(ack, cache), 1)
+    assert_eq(sip_server_txn_tick(cache, 9), 1)
+    assert_eq(cmap_has(cache, "server_resp|" + key), 0)
+}
+
+fn TestInviteTwoxxServerTransactionLifecycle() {
+    let invite = "INVITE sip:b@example.com SIP/2.0\r\n"
+        + "Via: SIP/2.0/UDP 192.0.2.10:50999;branch=z9hG4bK-server-2xx\r\n"
+        + "From: <sip:a@example.com>;tag=a\r\n"
+        + "To: <sip:b@example.com>\r\n"
+        + "Call-ID: server-2xx\r\n"
+        + "CSeq: 42 INVITE\r\n"
+        + "Content-Length: 0\r\n\r\n"
+    let response = sip_reply(invite, 200, "OK", "", "b")
+    let cache = cmap_new()
+    let key = sip_transaction_key(invite, len(invite))
+    assert_eq(sip_server_txn_record(invite, response, "192.0.2.10", 50999, "UDP", 9, cache), 1)
+    assert_eq_str(cmap_get(cache, "server_state|" + key), "accepted")
+    assert_eq_str(cmap_get(cache, "server_2xx|" + key), "1")
+    assert_eq(sip_server_txn_tick(cache, 9), 0)
+    let ack = str_replace(sip_build_ack_non2xx(invite), "z9hG4bK-server-2xx", "z9hG4bK-ack-2xx")
+    assert_eq(sip_server_txn_ack(ack, cache), 1)
+    assert_eq(sip_server_txn_tick(cache, 9), 1)
+    assert_eq(cmap_has(cache, "server_resp|" + key), 0)
+}
+
+fn TestForkSelectionAndCancellationState() {
+    let cache = cmap_new()
+    let cid = "fork-select"
+    let _ = sip_fork_register_branch(cid, "z9hG4bK-a", "sip:a@example.com", cache)
+    let _ = sip_fork_register_branch(cid, "z9hG4bK-b", "sip:b@example.com", cache)
+    assert_eq(sip_fork_mark_selected(cid, "z9hG4bK-a", cache), 1)
+    assert_eq(sip_fork_mark_selected(cid, "z9hG4bK-b", cache), 0)
+    assert_eq(sip_fork_is_pending(cid, "z9hG4bK-b", cache), 1)
+    assert_eq(sip_fork_mark_cancelled(cid, "z9hG4bK-b", cache), 1)
+    assert_eq(sip_fork_is_pending(cid, "z9hG4bK-b", cache), 0)
+}
+
+fn TestHeaderInjectionProtection() {
+    let msg = proxy_test_register_message("<sip:alice@example.com>", "300")
+    let untouched = hdr_add(msg, "X-Test", "safe\r\nInjected: bad")
+    assert_eq_str(untouched, msg)
+}

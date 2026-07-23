@@ -1,0 +1,106 @@
+// ============ STREAM TRANSPORT (TCP / TLS / WS framing) ============
+// Uses platform sip_first_message_len / sip_msg_complete for RFC 3261
+// Content-Length framing on stream transports.
+
+// Cap reassembly buffer (bytes) against slowloris / flood
+fn stream_max_buf() -> int {
+    return 1048576
+}
+
+// Parse "host:port" or "[v6]:port" from tcp_peer_addr
+fn peer_split(addr: string) -> []string {
+    let mut out = make([]string, 2)
+    out[0] = ""
+    out[1] = "5060"
+    if len(addr) == 0 { return out }
+
+    // IPv6 bracket form: [2001:db8::1]:5060
+    if int(addr[0]) == 91 {
+        let rb = str_index(addr, "]")
+        if rb > 0 {
+            out[0] = addr[1:rb]
+            if rb + 1 < len(addr) {
+                if int(addr[rb + 1]) == 58 {
+                    let ps = addr[rb + 2:]
+                    match parse_int(ps) {
+                        Ok(v) => { out[1] = string(v) }
+                        Err(_) => {}
+                    }
+                }
+            }
+            return out
+        }
+    }
+
+    // Last colon separates port for IPv4 / hostname
+    let mut colon = 0 - 1
+    let mut i = 0
+    while i < len(addr) {
+        if int(addr[i]) == 58 { colon = i }
+        i = i + 1
+    }
+    if colon < 0 {
+        out[0] = addr
+        return out
+    }
+    out[0] = addr[0:colon]
+    let ps = addr[colon + 1:]
+    match parse_int(ps) {
+        Ok(v) => { out[1] = string(v) }
+        Err(_) => {}
+    }
+    return out
+}
+
+fn peer_host(fd: int) -> string {
+    let parts = peer_split(tcp_peer_addr(fd))
+    return parts[0]
+}
+
+fn peer_port(fd: int) -> int {
+    let parts = peer_split(tcp_peer_addr(fd))
+    let mut p = 5060
+    match parse_int(parts[1]) {
+        Ok(v) => { p = v }
+        Err(_) => {}
+    }
+    return p
+}
+
+// Append chunk; return "" if over cap (caller should drop connection)
+fn stream_append(buf: string, chunk: string) -> string {
+    if len(chunk) == 0 { return buf }
+    if len(buf) + len(chunk) > stream_max_buf() { return "" }
+    return buf + chunk
+}
+
+// Process all complete SIP messages in buf; returns remaining incomplete tail.
+// write_fn style: caller supplies transport write via process callback results.
+// Here we return processed count indirectly by mutating through returned remainder.
+//
+// sip_on_msg is process_sip — returns reply body to write (may be empty).
+// For stream transports we call process and write via the provided write_reply helper
+// is inlined in workers; this helper only slices messages.
+
+fn stream_next_msg(buf: string) -> []string {
+    // Returns [message, remainder]. message empty if incomplete.
+    let mut out = make([]string, 2)
+    out[0] = ""
+    out[1] = buf
+    let n = sip_first_message_len(buf)
+    if n <= 0 {
+        return out
+    }
+    if n > len(buf) {
+        return out
+    }
+    out[0] = buf[0:n]
+    out[1] = buf[n:]
+    return out
+}
+
+// True if buffer has at least one complete message
+fn stream_has_complete(buf: string) -> int {
+    if sip_first_message_len(buf) > 0 { return 1 }
+    return 0
+}

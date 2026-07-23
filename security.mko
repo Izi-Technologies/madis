@@ -1,0 +1,114 @@
+// ============ SIP SECURITY ============
+
+// Check if IP is auto-banned
+fn sec_is_banned(db: SqlDB, db_ok: int, src_ip: string, cache: CMap) -> int {
+    // Short TTL cache — check DB every ~5 seconds so unbans take effect quickly
+    let key = "ban|" + src_ip
+    let ts_key = "ban_ts|" + src_ip
+    let now = now_ms()
+
+    if cmap_has(cache, key) == 1 {
+        // Check if cache is fresh (within 5 seconds)
+        if cmap_has(cache, ts_key) == 1 {
+            let mut cached_at = 0
+            match parse_int(cmap_get(cache, ts_key)) {
+                Ok(v) => { cached_at = v }
+                Err(_) => {}
+            }
+            if now - cached_at < 5000 {
+                if str_eq(cmap_get(cache, key), "1") { return 1 }
+                return 0
+            }
+        }
+    }
+
+    if db_ok == 0 { return 0 }
+    let r = sql_query_str(db, "SELECT 1 FROM security_bans WHERE source_ip = $1 AND (permanent = true OR expires_at > NOW())", src_ip)
+    if len(r) > 0 {
+        cmap_set(cache, key, "1")
+        cmap_set(cache, ts_key, string(now))
+        return 1
+    }
+    cmap_set(cache, key, "0")
+    cmap_set(cache, ts_key, string(now))
+    return 0
+}
+
+// Record auth failure and auto-ban if threshold exceeded
+fn sec_auth_failure(db: SqlDB, db_ok: int, src_ip: string, sip_user: string, cache: CMap) -> int {
+    if db_ok == 0 { return 0 }
+    // Log the event
+    let _ = sql_exec_str4(db, "INSERT INTO security_events (event_type, source_ip, sip_user, severity) VALUES ($1, $2, $3, $4)", "auth_failure", src_ip, sip_user, "medium")
+
+    // Count recent failures from this IP (last 10 minutes)
+    let count_str = sql_query_str(db, "SELECT COUNT(*) FROM security_events WHERE source_ip = $1 AND event_type = 'auth_failure' AND ts > NOW() - INTERVAL '10 minutes'", src_ip)
+    let mut count = 0
+    match parse_int(count_str) {
+        Ok(v) => { count = v }
+        Err(_) => { count = 0 }
+    }
+
+    // Get threshold from config
+    let thresh_str = sql_query_str(db, "SELECT value FROM config WHERE key = $1", "security_max_auth_failures")
+    let mut threshold = 5
+    match parse_int(thresh_str) {
+        Ok(v) => { threshold = v }
+        Err(_) => {}
+    }
+
+    if count >= threshold {
+        // Auto-ban
+        let ban_dur = sql_query_str(db, "SELECT value FROM config WHERE key = $1", "security_ban_duration_min")
+        let _ = sql_exec_str4(db, "INSERT INTO security_bans (source_ip, reason, expires_at, permanent) VALUES ($1, $2, NOW() + INTERVAL '" + ban_dur + " minutes', false) ON CONFLICT (source_ip) DO UPDATE SET ban_count = security_bans.ban_count + 1, reason = $2, expires_at = NOW() + INTERVAL '" + ban_dur + " minutes', permanent = false", src_ip, "auth_failures:" + count_str, "", "")
+        let _ = sql_exec_str4(db, "INSERT INTO security_events (event_type, source_ip, sip_user, severity) VALUES ($1, $2, $3, $4)", "auto_ban", src_ip, sip_user, "high")
+        cmap_set(cache, "ban|" + src_ip, "1")
+        return 1
+    }
+    return 0
+}
+
+// Detect SIP scanners by User-Agent
+fn sec_is_scanner(msg: string, msglen: int) -> int {
+    let ua = sip_hdr(msg, "User-Agent", msglen)
+    let ua_low = str_to_lower(ua)
+    if str_contains(ua_low, "sipvicious") { return 1 }
+    if str_contains(ua_low, "sipcli") { return 1 }
+    if str_contains(ua_low, "sipsak") { return 1 }
+    if str_contains(ua_low, "scanner") { return 1 }
+    if str_contains(ua_low, "friendly-scanner") { return 1 }
+    if str_contains(ua_low, "sundayddr") { return 1 }
+    if str_contains(ua_low, "iwar") { return 1 }
+    if str_contains(ua_low, "sip-scan") { return 1 }
+    if str_contains(ua_low, "vaxsipuseragent") { return 1 }
+    return 0
+}
+
+// Check for toll fraud (high-cost destination)
+fn sec_is_fraud_dest(dest: string, cache: CMap) -> int {
+    let key = "fraud_pfx"
+    let mut prefixes = "+900,+809,+284,+473,+649,+767,+268"
+    if cmap_has(cache, key) == 1 {
+        prefixes = cmap_get(cache, key)
+    }
+    let parts = str_split(prefixes, ",")
+    let mut i = 0
+    while i < len(parts) {
+        if str_has_prefix(dest, str_trim_space(parts[i])) { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+// Rate tracking per IP (platform rate_allow: window 1s)
+fn sec_rate_check(src_ip: string, limit: int, cache: CMap) -> int {
+    let _ = cache
+    // 1 = allowed, 0 = over limit
+    return rate_allow("sip|" + src_ip, limit, 1000)
+}
+
+// Log security event
+fn sec_log(db: SqlDB, db_ok: int, event_type: string, src_ip: string, user: string, severity: string, details: string) -> int {
+    if db_ok == 0 { return 0 }
+    let _ = sql_exec_str4(db, "INSERT INTO security_events (event_type, source_ip, sip_user, severity) VALUES ($1, $2, $3, $4)", event_type, src_ip, user, severity)
+    return 0
+}

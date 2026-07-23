@@ -1,0 +1,395 @@
+// ============ DISPATCHER / LOAD BALANCER ============
+// dispatch_sets table: groups of servers with algorithm
+//   Algorithms: round-robin, weight, priority, hash, broadcast
+//   Failover: if primary fails, try next in set
+//   Health: track server availability via OPTIONS pings
+//
+// ============ ADVANCED ROUTING ENGINE ============
+// Evaluates routing_rules table top-to-bottom (by priority).
+// Each rule has match conditions and an action.
+//
+// Match conditions (all must match for rule to fire):
+//   match_prefix      — longest prefix on callee ('' = any)
+//   match_caller      — prefix on caller ('' = any)
+//   match_src_ip      — source IP ('' = any)
+//   match_time_start  — time-of-day start HH:MM ('' = any)
+//   match_time_end    — time-of-day end HH:MM ('' = any)
+//   match_day         — day of week 0-6 ('' = any, csv "1,2,3,4,5" = weekdays)
+//   match_header      — SIP header=value condition ('' = any)
+//   match_user_tag    — tag on the user record ('' = any)
+//
+// Actions:
+//   route:gateway_name             — direct to gateway
+//   dispatch:set_name              — use dispatch set (LB)
+//   reject:code:reason             — reject with SIP status
+//   redirect:sip_uri               — 302 redirect
+//   forward:ip:port                — forward to IP directly
+//   lcr                            — least-cost routing (pick cheapest gateway for prefix)
+//   failover:gw1,gw2,gw3           — try gateways in order
+//   continue                       — skip this rule, try next
+
+// Get current hour:minute as "HHMM" int for time comparison
+fn current_time_int() -> int {
+    // Use now_ms to get approximate hour (good enough for routing)
+    // In production: use a proper time function
+    let ms = now_ms()
+    let secs = ms / 1000
+    let day_secs = secs - (secs / 86400) * 86400
+    let hours = day_secs / 3600
+    let mins = (day_secs - hours * 3600) / 60
+    return hours * 100 + mins
+}
+
+fn parse_hhmm(s: string) -> int {
+    // "09:00" → 900, "17:30" → 1730
+    let parts = str_split(s, ":")
+    if len(parts) < 2 { return 0 }
+    let mut h = 0
+    let mut m = 0
+    match parse_int(parts[0]) { Ok(v) => { h = v } Err(_) => {} }
+    match parse_int(parts[1]) { Ok(v) => { m = v } Err(_) => {} }
+    return h * 100 + m
+}
+
+fn time_in_range(now_hhmm: int, start: string, end: string) -> int {
+    if len(start) == 0 { return 1 }
+    let s = parse_hhmm(start)
+    let e = parse_hhmm(end)
+    if s <= e {
+        // Normal range: 09:00-17:00
+        if now_hhmm >= s { if now_hhmm <= e { return 1 } }
+        return 0
+    } else {
+        // Overnight: 22:00-06:00
+        if now_hhmm >= s { return 1 }
+        if now_hhmm <= e { return 1 }
+        return 0
+    }
+    return 0
+}
+
+fn current_day_of_week() -> int {
+    // 0=Sun .. 6=Sat — approximate from epoch
+    let days = now_ms() / 86400000
+    return (days + 4) - ((days + 4) / 7) * 7  // epoch was Thursday (4)
+}
+
+fn day_matches(rule_days: string, today: int) -> int {
+    if len(rule_days) == 0 { return 1 }
+    let today_str = string(today)
+    let parts = str_split(rule_days, ",")
+    let mut i = 0
+    while i < len(parts) {
+        if str_eq(str_trim_space(parts[i]), today_str) { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+fn prefix_matches(number: string, prefix: string) -> int {
+    if len(prefix) == 0 { return 1 }
+    if str_eq(prefix, "*") { return 1 }
+    if str_has_prefix(number, prefix) { return 1 }
+    return 0
+}
+
+// Dispatch helpers (kept from before)
+fn dispatch_next_rr(set_id: int, count: int, cache: CMap) -> int {
+    let key = "dsp_rr|" + string(set_id)
+    let mut idx = 0
+    if cmap_has(cache, key) == 1 {
+        match parse_int(cmap_get(cache, key)) {
+            Ok(v) => { idx = v }
+            Err(_) => { idx = 0 }
+        }
+    }
+    let next = idx + 1
+    if next >= count { cmap_set(cache, key, "0") } else { cmap_set(cache, key, string(next)) }
+    return idx
+}
+
+fn dispatch_hash(key: string, count: int) -> int {
+    let mut h = 2166136261
+    let mut i = 0
+    let n = len(key)
+    while i < n {
+        h = h ^ int(key[i])
+        h = h * 16777619
+        i = i + 1
+    }
+    if h < 0 { h = 0 - h }
+    return h - (h / count) * count
+}
+
+fn dispatch_is_healthy(addr: string, cache: CMap) -> int {
+    let key = "health|" + addr
+    let until_key = "health_until|" + addr
+    if cmap_has(cache, until_key) == 1 {
+        let mut until = 0
+        match parse_int(cmap_get(cache, until_key)) { Ok(v) => { until = v } Err(_) => {} }
+        if until > mono_ms() { return 0 }
+        let _ = cmap_del(cache, until_key)
+        cmap_set(cache, key, "half-open")
+    }
+    if cmap_has(cache, key) == 1 {
+        if str_eq(cmap_get(cache, key), "down") { return 0 }
+    }
+    return 1
+}
+
+fn dispatch_health_note(addr: string, ok: int, cache: CMap) -> int {
+    let fail_key = "health_fail|" + addr
+    let key = "health|" + addr
+    if ok == 1 {
+        cmap_set(cache, key, "up")
+        cmap_set(cache, fail_key, "0")
+        let _ = cmap_del(cache, "health_until|" + addr)
+        return 1
+    }
+    let failures = cmap_incr(cache, fail_key, 1)
+    if failures >= 3 {
+        let mut backoff = failures * 1000
+        if backoff > 60000 { backoff = 60000 }
+        cmap_set(cache, key, "down")
+        cmap_set(cache, "health_until|" + addr, string(mono_ms() + backoff))
+    }
+    return 0
+}
+
+// Resolve a dispatch set to comma-separated targets
+fn resolve_dispatch_set(db: SqlDB, set_name: string, from_user: string, call_id: string, cache: CMap) -> string {
+    let algo = sql_query_str(db, "SELECT algorithm FROM dispatch_sets WHERE name = $1 AND enabled = true", set_name)
+    if len(algo) == 0 { return "" }
+
+    let set_id_str = sql_query_str(db, "SELECT id FROM dispatch_sets WHERE name = $1", set_name)
+    let mut set_id = 0
+    match parse_int(set_id_str) { Ok(v) => { set_id = v } Err(_) => { return "" } }
+
+    let mut members = make([]string, 0, 8)
+    let mut mi = 0
+    while mi < 8 {
+        let m = sql_query_str(db, "SELECT g.address || ':' || g.port FROM dispatch_members dm JOIN gateways g ON dm.gateway_id = g.id WHERE dm.set_id = $1 AND dm.enabled = true AND g.enabled = true ORDER BY dm.priority ASC, dm.weight DESC LIMIT 1 OFFSET " + string(mi), set_id_str)
+        if len(m) == 0 { break }
+        if dispatch_is_healthy(m, cache) == 1 { members = append(members, m) }
+        mi = mi + 1
+    }
+
+    let count = len(members)
+    if count == 0 { return "" }
+
+    // Apply algorithm
+    let mut start_idx = 0
+    if str_eq(algo, "round-robin") { start_idx = dispatch_next_rr(set_id, count, cache) }
+    if str_eq(algo, "hash") { start_idx = dispatch_hash(call_id, count) }
+    if str_eq(algo, "hash-user") { start_idx = dispatch_hash(from_user, count) }
+
+    let mut result = members[start_idx]
+    let mut i = 1
+    while i < count {
+        let fi = (start_idx + i) - ((start_idx + i) / count) * count
+        result = result + "," + members[fi]
+        i = i + 1
+    }
+    return result
+}
+
+// Resolve gateway name to addr:port
+fn resolve_gateway(db: SqlDB, gw_name: string) -> string {
+    return sql_query_str(db, "SELECT address || ':' || port FROM gateways WHERE name = $1 AND enabled = true", gw_name)
+}
+
+// Main routing engine: evaluates routing_rules table
+// Returns: "action_type|targets" (e.g. "route|10.0.0.1:5060" or "reject|404|Not Found")
+// Check if a number falls within an ANI group's ranges
+fn ani_in_group(db: SqlDB, db_ok: int, number: string, group_name: string, cache: CMap) -> int {
+    if db_ok == 0 { return 0 }
+    if len(group_name) == 0 { return 0 }
+
+    // Cache: "ani|group|number" -> "1" or "0"
+    let key = "ani|" + group_name + "|" + number
+    if cmap_has(cache, key) == 1 {
+        if str_eq(cmap_get(cache, key), "1") { return 1 }
+        return 0
+    }
+
+    // Strip non-numeric for comparison (keep digits only)
+    let mut clean = number
+    if str_has_prefix(clean, "+") { clean = clean[1:] }
+
+    // Query: check if number falls in any range of this group
+    let hit = sql_query_str(db, "SELECT 1 FROM ani_ranges ar JOIN ani_groups ag ON ar.group_id = ag.id WHERE ag.name = $1 AND ag.enabled = true AND ar.enabled = true AND $1 >= ar.range_start AND $1 <= ar.range_end LIMIT 1", clean)
+    if len(hit) > 0 {
+        cmap_set(cache, key, "1")
+        return 1
+    }
+    cmap_set(cache, key, "0")
+    return 0
+}
+
+fn db_route_call(db: SqlDB, db_ok: int, callee: string, caller: string, src_ip: string, msg: string, msglen: int, from_user: string, call_id: string, cache: CMap) -> string {
+    if db_ok == 0 { return "" }
+
+    let now_time = current_time_int()
+    let today = current_day_of_week()
+
+    // Evaluate rules by priority (up to 50 rules)
+    let mut ri = 0
+    while ri < 50 {
+        // Fetch rule ri (now includes match_ani_group)
+        let rule_data = sql_query_str(db, "SELECT match_prefix || '|' || COALESCE(match_caller,'') || '|' || COALESCE(match_src_ip,'') || '|' || COALESCE(match_time_start,'') || '|' || COALESCE(match_time_end,'') || '|' || COALESCE(match_day,'') || '|' || action || '|' || COALESCE(match_ani_group,'') FROM routing_rules WHERE enabled = true ORDER BY priority ASC LIMIT 1 OFFSET " + string(ri), "")
+        if len(rule_data) == 0 { break }
+
+        let parts = str_split(rule_data, "|")
+        if len(parts) < 7 {
+            ri = ri + 1
+            continue
+        }
+
+        let r_prefix = parts[0]
+        let r_caller = parts[1]
+        let r_src_ip = parts[2]
+        let r_time_s = parts[3]
+        let r_time_e = parts[4]
+        let r_day = parts[5]
+        let r_action = parts[6]
+        let mut r_ani = ""
+        if len(parts) >= 8 { r_ani = parts[7] }
+
+        // Check all conditions
+        let mut matched = 1
+
+        // Prefix match on callee
+        if prefix_matches(callee, r_prefix) == 0 { matched = 0 }
+
+        // Caller prefix match
+        if matched == 1 {
+            if len(r_caller) > 0 {
+                if prefix_matches(caller, r_caller) == 0 { matched = 0 }
+            }
+        }
+
+        // ANI group match (caller number in range)
+        if matched == 1 {
+            if len(r_ani) > 0 {
+                if ani_in_group(db, db_ok, caller, r_ani, cache) == 0 { matched = 0 }
+            }
+        }
+
+        // Source IP match
+        if matched == 1 {
+            if len(r_src_ip) > 0 {
+                if r_src_ip != "*" {
+                    if r_src_ip != src_ip { matched = 0 }
+                }
+            }
+        }
+
+        // Time-of-day match
+        if matched == 1 {
+            if time_in_range(now_time, r_time_s, r_time_e) == 0 { matched = 0 }
+        }
+
+        // Day-of-week match
+        if matched == 1 {
+            if day_matches(r_day, today) == 0 { matched = 0 }
+        }
+
+        if matched == 0 {
+            ri = ri + 1
+            continue
+        }
+
+        // --- Rule matched: execute action ---
+
+        // continue → skip to next rule
+        if str_eq(r_action, "continue") {
+            ri = ri + 1
+            continue
+        }
+
+        // reject:code:reason
+        if str_has_prefix(r_action, "reject:") {
+            return r_action
+        }
+
+        // redirect:sip_uri
+        if str_has_prefix(r_action, "redirect:") {
+            return r_action
+        }
+
+        // route:gateway_name
+        if str_has_prefix(r_action, "route:") {
+            let gw_name = r_action[6:]
+            let addr = resolve_gateway(db, gw_name)
+            if len(addr) > 0 { return "route|" + addr }
+        }
+
+        // dispatch:set_name or dispatch:set_name|egress:egress_set
+        if str_has_prefix(r_action, "dispatch:") {
+            // Check for egress combo
+            let pipe_idx = str_index(r_action, "|egress:")
+            if pipe_idx > 0 {
+                // Combo: ingress dispatch + egress carrier group
+                let ingress_name = r_action[9:pipe_idx]
+                let egress_name = r_action[pipe_idx + 8:]
+                let ingress_targets = resolve_dispatch_set(db, ingress_name, from_user, call_id, cache)
+                let egress_targets = resolve_dispatch_set(db, egress_name, from_user, call_id, cache)
+                // Store egress for when the PBX sends the call back out
+                if len(egress_targets) > 0 {
+                    cmap_set(cache, "egress|" + call_id, egress_targets)
+                }
+                if len(ingress_targets) > 0 { return "dispatch|" + ingress_targets }
+            } else {
+                let set_name = r_action[9:]
+                let targets = resolve_dispatch_set(db, set_name, from_user, call_id, cache)
+                if len(targets) > 0 { return "dispatch|" + targets }
+            }
+        }
+
+        // forward:ip:port
+        if str_has_prefix(r_action, "forward:") {
+            return "route|" + r_action[8:]
+        }
+
+        // failover:gw1,gw2,gw3
+        if str_has_prefix(r_action, "failover:") {
+            let gw_names = str_split(r_action[9:], ",")
+            let mut targets = ""
+            let mut fi = 0
+            while fi < len(gw_names) {
+                let addr = resolve_gateway(db, str_trim_space(gw_names[fi]))
+                if len(addr) > 0 {
+                    if dispatch_is_healthy(addr, cache) == 1 {
+                        if len(targets) > 0 { targets = targets + "," }
+                        targets = targets + addr
+                    }
+                }
+                fi = fi + 1
+            }
+            if len(targets) > 0 { return "route|" + targets }
+        }
+
+        // lcr — least-cost routing: find cheapest gateway for this prefix
+        if str_eq(r_action, "lcr") {
+            let addr = sql_query_str(db, "SELECT g.address || ':' || g.port FROM routes r JOIN gateways g ON r.gateway_id = g.id WHERE $1 LIKE r.prefix || '%' AND r.enabled = true AND g.enabled = true ORDER BY r.cost_per_min ASC, r.priority ASC LIMIT 1", callee)
+            if len(addr) > 0 { return "route|" + addr }
+        }
+
+        // If action didn't resolve, try next rule
+        ri = ri + 1
+    }
+
+    // No rule matched — try legacy prefix routing as fallback
+    let mut plen = len(callee)
+    while plen > 0 {
+        let pfx = callee[0:plen]
+        let gw = sql_query_str(db, "SELECT g.address || ':' || g.port FROM routes r JOIN gateways g ON r.gateway_id = g.id WHERE r.prefix = $1 AND r.enabled = true AND g.enabled = true ORDER BY r.priority ASC LIMIT 1", pfx)
+        if len(gw) > 0 { return "route|" + gw }
+        plen = plen - 1
+    }
+    // Default route
+    let def = sql_query_str(db, "SELECT g.address || ':' || g.port FROM routes r JOIN gateways g ON r.gateway_id = g.id WHERE r.prefix = '*' AND r.enabled = true AND g.enabled = true ORDER BY r.priority ASC LIMIT 1", "")
+    if len(def) > 0 { return "route|" + def }
+
+    return ""
+}

@@ -1,0 +1,40 @@
+# Build artifacts
+main
+*.o
+*.a
+
+# Log files
+*.log
+
+# Mako cache
+.mako/
+
+# Benchmark cache
+bench/__pycache__/
+bench/sipp_stat.csv
+
+# AI tooling
+.claude/
+.cursor/
+.cursorrules
+.copilot/
+.aider*
+.anthropic/
+CLAUDE.md
+CLAUDE.local.md
+
+# Dev docs (internal only)
+PRODUCTION.md
+RFC_COMPLIANCE.md
+
+# Environment / secrets
+.env
+.env.*
+
+# Editor / OS
+.DS_Store
+*.swp
+*.swo
+*~
+.vscode/
+.idea/

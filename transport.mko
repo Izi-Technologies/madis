@@ -1,0 +1,462 @@
+// ============ UPSTREAM TRANSPORTS ============
+// Preserve the transport advertised by a registered contact or Via. UDP is
+// still the fast path; stream transports use bounded one-shot connections so
+// a dead gateway cannot block a SIP worker indefinitely.
+
+fn sip_transport_param(target: string, fallback: string) -> string {
+    let low = str_to_lower(target)
+    let p = str_index(low, "transport=")
+    if p >= 0 {
+        let start = p + 10
+        let mut end = start
+        while end < len(target) {
+            let c = int(target[end])
+            if c == 59 || c == 62 || c == 32 || c == 9 { break }
+            end = end + 1
+        }
+        if end > start { return str_to_lower(target[start:end]) }
+    }
+    if str_has_prefix(low, "sips:") || str_has_prefix(low, "tls:") { return "tls" }
+    if str_has_prefix(low, "ws:") { return "ws" }
+    if str_has_prefix(low, "wss:") { return "wss" }
+    return str_to_lower(fallback)
+}
+
+fn sip_target_path(target: string) -> string {
+    let low = str_to_lower(target)
+    let mut scheme = str_index(low, "ws://")
+    if scheme < 0 { scheme = str_index(low, "wss://") }
+    if scheme < 0 { return "/" }
+    let start = str_index(target[scheme:], "/")
+    if start < 0 { return "/" }
+    let mut path = target[scheme + start:]
+    let semi = str_index(path, ";")
+    if semi >= 0 { path = path[0:semi] }
+    if len(path) == 0 { return "/" }
+    return path
+}
+
+fn sip_target_explicit_port(target: string) -> int {
+    let authority = sip_target_authority(target)
+    if len(authority) == 0 { return 0 }
+    let mut colon = str_index(authority, ":")
+    if int(authority[0]) == 91 {
+        let close = str_index(authority, "]")
+        if close >= 0 && close + 1 < len(authority) && int(authority[close + 1]) == 58 { colon = close + 1 }
+        else { colon = -1 }
+    } else if colon >= 0 && str_index(authority[colon + 1:], ":") >= 0 {
+        colon = -1
+    }
+    if colon < 0 || colon + 1 >= len(authority) { return 0 }
+    let mut valid = 0
+    match parse_int(authority[colon + 1:]) { Ok(_) => { valid = 1 } Err(_) => { valid = 0 } }
+    return valid
+}
+
+fn sip_srv_service(target: string, transport: string) -> string {
+    if sip_target_explicit_port(target) == 1 { return "" }
+    let host = sip_target_host(target)
+    if len(host) == 0 || parse_ip_ok(host) == 1 { return "" }
+    let low = str_to_lower(target)
+    let tr = str_to_lower(transport)
+    if str_eq(tr, "tls") || str_eq(tr, "sips") || str_has_prefix(low, "sips:") || str_has_prefix(low, "tls://") {
+        return "_sips._tcp." + host
+    }
+    if str_eq(tr, "tcp") { return "_sip._tcp." + host }
+    return "_sip._udp." + host
+}
+
+fn sip_srv_record_priority(record: string) -> int {
+    let parts = str_split(record, ":")
+    if len(parts) < 4 { return -1 }
+    let mut value = -1
+    match parse_int(str_trim_space(parts[0])) { Ok(v) => { value = v } Err(_) => { value = -1 } }
+    return value
+}
+
+fn sip_srv_record_weight(record: string) -> int {
+    let parts = str_split(record, ":")
+    if len(parts) < 4 { return 0 }
+    let mut value = 0
+    match parse_int(str_trim_space(parts[1])) { Ok(v) => { value = v } Err(_) => { value = 0 } }
+    return value
+}
+
+fn sip_srv_record_target(record: string) -> string {
+    let parts = str_split(record, ":")
+    if len(parts) < 4 { return "" }
+    let port = parse_int(str_trim_space(parts[2]))
+    let mut host = str_trim_space(parts[3])
+    if len(host) > 0 && int(host[len(host) - 1]) == 46 { host = host[0:len(host) - 1] }
+    match port { Ok(v) => { if v > 0 && v <= 65535 && len(host) > 0 { return host + ":" + string(v) } } Err(_) => {} }
+    return ""
+}
+
+fn sip_naptr_record_order(record: string) -> int {
+    let parts = str_split(record, ":")
+    if len(parts) < 2 { return -1 }
+    let mut value = -1
+    match parse_int(str_trim_space(parts[0])) { Ok(v) => { value = v } Err(_) => {} }
+    return value
+}
+
+fn sip_naptr_record_preference(record: string) -> int {
+    let parts = str_split(record, ":")
+    if len(parts) < 2 { return -1 }
+    let mut value = -1
+    match parse_int(str_trim_space(parts[1])) { Ok(v) => { value = v } Err(_) => {} }
+    return value
+}
+
+fn sip_naptr_record_service(record: string) -> string {
+    let parts = str_split(record, "|")
+    if len(parts) < 4 { return "" }
+    return str_to_lower(str_trim_space(parts[1]))
+}
+
+fn sip_naptr_service_target(service: string, host: string) -> string {
+    let s = str_to_lower(service)
+    if str_eq(s, "sip+d2u") { return "_sip._udp." + host }
+    if str_eq(s, "sip+d2t") { return "_sip._tcp." + host }
+    if str_eq(s, "sips+d2t") { return "_sips._tcp." + host }
+    return ""
+}
+
+fn sip_naptr_service_transport(service: string) -> string {
+    let s = str_to_lower(service)
+    if str_has_suffix(s, "._udp") || str_contains(s, "_sip._udp.") { return "udp" }
+    if str_has_suffix(s, "._tcp") || str_contains(s, "_sip._tcp.") { return "tcp" }
+    if str_contains(s, "_sips._tcp.") { return "tls" }
+    return ""
+}
+
+fn sip_naptr_resolve_service(target: string, transport: string, cache: CMap) -> string {
+    if sip_target_explicit_port(target) == 1 { return "" }
+    if str_index(str_to_lower(target), "transport=") >= 0 { return "" }
+    let host = sip_target_host(target)
+    if len(host) == 0 || parse_ip_ok(host) == 1 { return "" }
+    let key = "dns_naptr|" + host
+    let now = mono_ms()
+    let mut records = ""
+    let mut fresh = 0
+    if cmap_has(cache, key) == 1 && cmap_has(cache, key + "|at") == 1 {
+        let mut at = 0
+        match parse_int(cmap_get(cache, key + "|at")) { Ok(v) => { at = v } Err(_) => {} }
+        if at > 0 && now - at < 60000 { fresh = 1; records = cmap_get(cache, key) }
+    }
+    if fresh == 0 {
+        records = dns_naptr_lookup(host)
+        cmap_set(cache, key, records)
+        cmap_set(cache, key + "|at", string(now))
+    }
+    if len(records) == 0 { return "" }
+    // A URI transport parameter (or sips scheme) is an explicit choice. A
+    // plain SIP URI leaves transport selection to NAPTR order/preference.
+    let mut wanted = ""
+    let target_low = str_to_lower(target)
+    if str_index(target_low, "transport=") >= 0 { wanted = str_to_lower(transport) }
+    if str_has_prefix(target_low, "sips:") || str_has_prefix(target_low, "sips://") { wanted = "tls" }
+    let mut best_order = 65536
+    let mut best_pref = 65536
+    let mut selected = ""
+    let raw = str_split(records, ",")
+    let mut i = 0
+    while i < len(raw) {
+        let record = str_trim_space(raw[i])
+        let service = sip_naptr_record_service(record)
+        let mut service_transport = ""
+        if str_eq(service, "sip+d2u") { service_transport = "udp" }
+        if str_eq(service, "sip+d2t") { service_transport = "tcp" }
+        if str_eq(service, "sips+d2t") { service_transport = "tls" }
+        let order = sip_naptr_record_order(record)
+        let pref = sip_naptr_record_preference(record)
+        if len(service_transport) > 0 && (len(wanted) == 0 || str_eq(wanted, service_transport)) {
+            if order >= 0 && (order < best_order || (order == best_order && pref < best_pref)) {
+                best_order = order
+                best_pref = pref
+                selected = sip_naptr_service_target(service, host)
+            }
+        }
+        i = i + 1
+    }
+    return selected
+}
+
+fn sip_srv_resolve_targets(target: string, transport: string, cache: CMap) -> string {
+    let mut service = sip_naptr_resolve_service(target, transport, cache)
+    if len(service) == 0 { service = sip_srv_service(target, transport) }
+    if len(service) == 0 { return "" }
+    let key = "dns_srv|" + service
+    let now = mono_ms()
+    let mut records = ""
+    let mut fresh = 0
+    if cmap_has(cache, key) == 1 && cmap_has(cache, key + "|at") == 1 {
+        let mut at = 0
+        match parse_int(cmap_get(cache, key + "|at")) { Ok(v) => { at = v } Err(_) => {} }
+        if at > 0 && now - at < 60000 { fresh = 1; records = cmap_get(cache, key) }
+    }
+    if fresh == 0 {
+        records = dns_srv_lookup(service)
+        cmap_set(cache, key, records)
+        cmap_set(cache, key + "|at", string(now))
+    }
+    if len(records) == 0 { return "" }
+
+    // RFC 2782: use the lowest priority set first and apply weight within
+    // that set. Keep the remaining records so connection failure can advance
+    // to the next weighted target without another DNS query.
+    let raw = str_split(records, ",")
+    let mut remaining = make([]string, 0, 8)
+    let mut i = 0
+    while i < len(raw) {
+        if sip_srv_record_target(str_trim_space(raw[i])) != "" { remaining = append(remaining, str_trim_space(raw[i])) }
+        i = i + 1
+    }
+    let mut result = ""
+    while len(remaining) > 0 {
+        let mut priority = 65536
+        i = 0
+        while i < len(remaining) {
+            let p = sip_srv_record_priority(remaining[i])
+            if p >= 0 && p < priority { priority = p }
+            i = i + 1
+        }
+        let mut total = 0
+        i = 0
+        while i < len(remaining) {
+            if sip_srv_record_priority(remaining[i]) == priority { total = total + sip_srv_record_weight(remaining[i]) }
+            i = i + 1
+        }
+        let pick = if total > 0 { mono_ms() % total } else { 0 }
+        let mut chosen = -1
+        i = 0
+        while i < len(remaining) {
+            if sip_srv_record_priority(remaining[i]) == priority {
+                if total == 0 && chosen < 0 { chosen = i }
+                if total > 0 {
+                    // cursor is intentionally recomputed below to keep this
+                    // helper compatible with the value semantics of arrays.
+                    let mut running = 0
+                    let mut j = 0
+                    while j <= i {
+                        if sip_srv_record_priority(remaining[j]) == priority { running = running + sip_srv_record_weight(remaining[j]) }
+                        j = j + 1
+                    }
+                    if pick < running { chosen = i; break }
+                }
+            }
+            i = i + 1
+        }
+        if chosen < 0 { break }
+        let picked = sip_srv_record_target(remaining[chosen])
+        if len(picked) > 0 {
+            if len(result) > 0 { result = result + "," }
+            result = result + picked
+        }
+        let mut next = make([]string, 0, 8)
+        i = 0
+        while i < len(remaining) {
+            if i != chosen { next = append(next, remaining[i]) }
+            i = i + 1
+        }
+        remaining = next
+    }
+    return result
+}
+
+fn sip_srv_resolve_target(target: string, transport: string, cache: CMap) -> string {
+    let targets = sip_srv_resolve_targets(target, transport, cache)
+    if len(targets) == 0 { return "" }
+    return str_trim_space(str_split(targets, ",")[0])
+}
+
+fn sip_forward_tcp(target: string, msg: string, cache: CMap, owner: int) -> int {
+    let host = sip_target_host(target)
+    let port = sip_target_port(target, 5060)
+    if len(host) == 0 { return 0 }
+    let assoc_key = "tcp_assoc|" + string(owner) + "|" + host + ":" + string(port)
+    let mut fd = -1
+    if cmap_has(cache, assoc_key) == 1 {
+        match parse_int(cmap_get(cache, assoc_key)) { Ok(v) => { fd = v } Err(_) => { fd = -1 } }
+    }
+    if fd >= 0 {
+        let sent_existing = sip_tcp_send(fd, msg)
+        if sent_existing >= 0 {
+            cmap_set(cache, "last_forward_target", host + ":" + string(port) + ";tcp;reused")
+            return 1
+        }
+        let _ = tcp_close(fd)
+        let _ = cmap_del(cache, assoc_key)
+        fd = -1
+    }
+    fd = tcp_connect_timeout(host, port, 1200)
+    if fd < 0 { return 0 }
+    let sent = sip_tcp_send(fd, msg)
+    if sent >= 0 {
+        cmap_set(cache, assoc_key, string(fd))
+        let list_key = "tcp_assoc_list|" + string(owner)
+        let mut list = ""
+        if cmap_has(cache, list_key) == 1 { list = cmap_get(cache, list_key) }
+        let item = host + ":" + string(port)
+        if not str_contains("," + list + ",", "," + item + ",") {
+            if len(list) == 0 { list = item } else { list = list + "," + item }
+            cmap_set(cache, list_key, list)
+        }
+        cmap_set(cache, "last_forward_target", host + ":" + string(port) + ";tcp")
+        return 1
+    }
+    let _ = tcp_close(fd)
+    return 0
+}
+
+fn sip_forward_tls(target: string, msg: string, cache: CMap, owner: int) -> int {
+    if tls_client_available() == 0 { return 0 }
+    let host = sip_target_host(target)
+    let port = sip_target_port(target, 5061)
+    if len(host) == 0 { return 0 }
+    let ca = env_get_or("SIP_UPSTREAM_CA", "")
+    let item = host + ":" + string(port)
+    let assoc_key = "tls_assoc|" + string(owner) + "|" + item
+    let mut handle = -1
+    if cmap_has(cache, assoc_key) == 1 {
+        match parse_int(cmap_get(cache, assoc_key)) { Ok(v) => { handle = v } Err(_) => { handle = -1 } }
+    }
+    if handle > 0 {
+        let sent_existing = tls_pool_send(handle, msg)
+        if sent_existing >= 0 {
+            cmap_set(cache, "last_forward_target", item + ";tls;reused")
+            return 1
+        }
+        let _ = tls_pool_close(handle)
+        let _ = cmap_del(cache, assoc_key)
+        handle = -1
+    }
+    handle = tls_pool_open(host, port, ca)
+    if handle < 0 { return 0 }
+    let sent = tls_pool_send(handle, msg)
+    if sent >= 0 {
+        cmap_set(cache, assoc_key, string(handle))
+        let list_key = "tls_assoc_list|" + string(owner)
+        let mut list = ""
+        if cmap_has(cache, list_key) == 1 { list = cmap_get(cache, list_key) }
+        if not str_contains("," + list + ",", "," + item + ",") {
+            if len(list) == 0 { list = item } else { list = list + "," + item }
+            cmap_set(cache, list_key, list)
+        }
+        cmap_set(cache, "last_forward_target", item + ";tls")
+        return 1
+    }
+    let _ = tls_pool_close(handle)
+    return 0
+}
+
+fn sip_forward_ws(target: string, msg: string, cache: CMap) -> int {
+    let host = sip_target_host(target)
+    let port = sip_target_port(target, 80)
+    if len(host) == 0 { return 0 }
+    let path = sip_target_path(target)
+    let key = base64_encode(random_bytes(16))
+    let conn = ws_client_connect(host, port, path, key)
+    if conn < 0 { return 0 }
+    let sent = ws_client_send_text(conn, msg)
+    let _ = ws_client_send_close(conn, 1000, "done")
+    let _ = ws_close(conn)
+    if sent == 0 {
+        cmap_set(cache, "last_forward_target", host + ":" + string(port) + ";ws")
+        return 1
+    }
+    return 0
+}
+
+fn sip_forward_target(target: string, msg: string, transport: string, cache: CMap, out_fd: int) -> int {
+    let mut tr = sip_transport_param(target, transport)
+    let target_low = str_to_lower(target)
+    let mut explicit = 0
+    if str_index(target_low, "transport=") >= 0 || sip_target_explicit_port(target) == 1 || str_has_prefix(target_low, "sips:") { explicit = 1 }
+    if explicit == 0 {
+        let naptr_service = sip_naptr_resolve_service(target, tr, cache)
+        let naptr_transport = sip_naptr_service_transport(naptr_service)
+        if len(naptr_transport) > 0 { tr = naptr_transport }
+    }
+    let mut resolved_targets = sip_srv_resolve_targets(target, tr, cache)
+    if len(resolved_targets) == 0 { resolved_targets = target }
+    let mut default_port = 5060
+    if str_eq(tr, "tls") || str_eq(tr, "sips") { default_port = 5061 }
+    if str_eq(tr, "ws") || str_eq(tr, "wss") { default_port = 80 }
+    let mut sent = 0
+    let mut chosen_target = ""
+    let candidates = str_split(resolved_targets, ",")
+    let mut i = 0
+    while i < len(candidates) && sent == 0 {
+        let send_target = str_trim_space(candidates[i])
+        if len(send_target) == 0 { i = i + 1; continue }
+        let health_addr = sip_target_host(send_target) + ":" + string(sip_target_port(send_target, default_port))
+        if dispatch_is_healthy(health_addr, cache) == 1 {
+            if str_eq(tr, "udp") { sent = sip_forward_udp(send_target, msg, cache, out_fd) }
+            if str_eq(tr, "tcp") { sent = sip_forward_tcp(send_target, msg, cache, out_fd) }
+            if str_eq(tr, "tls") || str_eq(tr, "sips") { sent = sip_forward_tls(send_target, msg, cache, out_fd) }
+            if str_eq(tr, "ws") { sent = sip_forward_ws(send_target, msg, cache) }
+            if len(tr) == 0 { sent = sip_forward_udp(send_target, msg, cache, out_fd) }
+            // WSS requires TLS + the WebSocket client framing layer. Fail
+            // closed until a WSS client association is available.
+            if str_eq(tr, "wss") { sent = 0 }
+            let _ = dispatch_health_note(health_addr, sent, cache)
+            if sent == 1 { chosen_target = send_target }
+        }
+        i = i + 1
+    }
+    if sent == 1 && str_eq(sip_method(msg), "INVITE") {
+        let cid = sip_header(msg, "Call-ID")
+        let branch = sip_via_branch(sip_header(msg, "Via"))
+        if len(cid) > 0 && len(branch) > 0 {
+            cmap_set(cache, "dialog_dst|" + cid, target)
+            cmap_set(cache, "dialog_branch|" + cid, branch)
+        }
+    }
+    if sent == 1 {
+        let method = sip_method(msg)
+        if not str_eq(method, "ACK") && not str_eq(method, "") {
+            let _ = sip_client_txn_record(msg, chosen_target, tr, out_fd, cache)
+        }
+    }
+    return sent
+}
+
+// Retransmission path: send an already-built request without creating a new
+// client transaction or changing its branch.
+fn sip_resend_target(target: string, msg: string, transport: string, cache: CMap, out_fd: int) -> int {
+    let tr = sip_transport_param(target, transport)
+    if str_eq(tr, "udp") { return sip_forward_udp(target, msg, cache, out_fd) }
+    if str_eq(tr, "tcp") { return sip_forward_tcp(target, msg, cache, out_fd) }
+    if str_eq(tr, "tls") || str_eq(tr, "sips") { return sip_forward_tls(target, msg, cache, out_fd) }
+    if str_eq(tr, "ws") { return sip_forward_ws(target, msg, cache) }
+    return 0
+}
+
+fn sip_reply_transport(msg: string, fallback: string) -> string {
+    let via = sip_header(msg, "Via")
+    let tr = sip_via_transport(via)
+    if len(tr) > 0 { return str_to_lower(tr) }
+    return str_to_lower(fallback)
+}
+
+fn sip_forward_reply(reply: string, cache: CMap, out_fd: int) -> int {
+    let txn_key = sip_transaction_key(reply, len(reply))
+    let conn_key = "server_conn|" + txn_key
+    if len(txn_key) > 2 && cmap_has(cache, conn_key) == 1 {
+        let mut conn_fd = -1
+        match parse_int(cmap_get(cache, conn_key)) {
+            Ok(v) => { conn_fd = v }
+            Err(_) => {}
+        }
+        if conn_fd >= 0 {
+            let sent_existing = tcp_write_all(conn_fd, reply)
+            if sent_existing >= 0 { return 1 }
+        }
+    }
+    let host = proxy_reply_host(reply)
+    let port = proxy_reply_port(reply)
+    if len(host) == 0 { return 0 }
+    let target = host + ":" + string(port)
+    return sip_forward_target(target, reply, sip_reply_transport(reply, "udp"), cache, out_fd)
+}

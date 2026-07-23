@@ -1,0 +1,52 @@
+// RFC 3263 target selection tests. DNS answers are injected into the cache so
+// the suite remains deterministic and does not depend on the host resolver.
+pull . "../main.mko"
+
+fn TestSipTargetIpv6Authority() {
+    assert_eq_str(sip_target_host("sip:alice@[2001:db8::10]:5070;transport=udp"), "2001:db8::10")
+    assert_eq(sip_target_port("sip:alice@[2001:db8::10]:5070;transport=udp", 5060), 5070)
+    assert_eq_str(sip_target_host("[2001:db8::11]:5080"), "2001:db8::11")
+    assert_eq(sip_target_port("[2001:db8::11]:5080", 5060), 5080)
+    assert_eq(sip_target_port("sip:example.com", 5060), 5060)
+}
+
+fn TestSipSrvSelectionAndCache() {
+    let cache = cmap_new()
+    let service = "_sip._udp.example.com"
+    cmap_set(cache, "dns_naptr|example.com", "10:10:|SIP+D2U||example.com.")
+    cmap_set(cache, "dns_naptr|example.com|at", string(mono_ms()))
+    cmap_set(cache, "dns_srv|" + service, "10:5:5070:edge.example.com.,20:0:5080:backup.example.com.")
+    cmap_set(cache, "dns_srv|" + service + "|at", string(mono_ms()))
+    let selected = sip_srv_resolve_target("sip:example.com", "udp", cache)
+    assert_eq_str(selected, "edge.example.com:5070")
+    assert_eq_str(sip_srv_service("sip:example.com:5060", "udp"), "")
+    assert_eq_str(sip_srv_service("sip:[2001:db8::12]", "udp"), "")
+}
+
+fn TestNaptrOrderAndSrvFailoverList() {
+    assert_eq(sip_naptr_record_order("20:1:|SIP+D2T||example.com."), 20)
+    assert_eq(sip_naptr_record_preference("20:1:|SIP+D2T||example.com."), 1)
+    assert_eq_str(sip_naptr_record_service("20:1:|SIP+D2T||example.com."), "sip+d2t")
+    assert_eq_str(sip_naptr_service_target("SIP+D2T", "example.com"), "_sip._tcp.example.com")
+    let cache = cmap_new()
+    let host = "example.net"
+    cmap_set(cache, "dns_naptr|" + host, "10:10:|SIP+D2U||" + host + ".")
+    cmap_set(cache, "dns_naptr|" + host + "|at", string(mono_ms()))
+    cmap_set(cache, "dns_srv|_sip._udp." + host, "10:0:5060:first.example.,10:0:5061:second.example.")
+    cmap_set(cache, "dns_srv|_sip._udp." + host + "|at", string(mono_ms()))
+    let targets = sip_srv_resolve_targets("sip:" + host, "udp", cache)
+    assert(str_contains(targets, "first.example:5060"))
+    assert(str_contains(targets, "second.example:5061"))
+}
+
+fn TestSipTransportSelectionMatrix() {
+    assert_eq_str(sip_srv_service("sip:example.com", "udp"), "_sip._udp.example.com")
+    assert_eq_str(sip_srv_service("sip:example.com", "tcp"), "_sip._tcp.example.com")
+    assert_eq_str(sip_srv_service("sips:example.com", "tls"), "_sips._tcp.example.com")
+    assert_eq_str(sip_srv_service("sip:example.com:5060", "udp"), "")
+    assert_eq_str(sip_naptr_service_transport("_sip._udp.example.com"), "udp")
+    assert_eq_str(sip_naptr_service_transport("_sip._tcp.example.com"), "tcp")
+    assert_eq_str(sip_naptr_service_transport("_sips._tcp.example.com"), "tls")
+    assert_eq(sip_srv_record_priority("not-a-record"), -1)
+    assert_eq(sip_srv_record_weight("10:bad:5060:edge.example.com"), 0)
+}

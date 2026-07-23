@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE scenario SYSTEM "sipp.dtd">
+
+<scenario name="Mako benchmark registration">
+  <send retrans="500">
+    <![CDATA[
+
+      REGISTER sip:mako.local:[remote_port] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      From: <sip:bench@mako.local>;tag=[call_number]
+      To: <sip:bench@mako.local>
+      Call-ID: [call_id]
+      CSeq: 1 REGISTER
+      Contact: <sip:bench@127.0.0.1:[field0];transport=udp>
+      Expires: 3600
+      Max-Forwards: 70
+      Content-Length: 0
+
+    ]]>
+  </send>
+  <recv response="200" rtd="true" />
+</scenario>

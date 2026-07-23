@@ -1,0 +1,146 @@
+// ============ SIP HEADER MANIPULATION ENGINE ============
+// DB-driven: header_rules table defines add/remove/modify/set per direction + method
+// Actions: add, remove, modify, set, rename, copy, move
+// Supports standard headers AND X-headers (X-Account-ID, X-Billing-Code, etc.)
+
+// Add a header to the message (before Content-Length)
+fn hdr_add(msg: string, name: string, value: string) -> string {
+    if str_contains(name, "\r") || str_contains(name, "\n") || str_contains(name, "\0") { return msg }
+    if str_contains(value, "\r") || str_contains(value, "\n") || str_contains(value, "\0") { return msg }
+    let n = len(msg)
+    let cl_idx = str_index(str_to_lower(msg), "content-length:")
+    if cl_idx >= 0 {
+        return msg[0:cl_idx] + name + ": " + value + "\r\n" + msg[cl_idx:]
+    }
+    // No Content-Length: add before \r\n\r\n
+    let mut i = 0
+    while i + 3 < n {
+        if int(msg[i]) == 13 {
+            if int(msg[i+1]) == 10 {
+                if int(msg[i+2]) == 13 {
+                    if int(msg[i+3]) == 10 {
+                        return msg[0:i] + "\r\n" + name + ": " + value + msg[i:]
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return msg
+}
+
+// Remove ALL instances of a header by name
+fn hdr_remove(msg: string, name: string) -> string {
+    let namelen = len(name)
+    let mut result = msg
+    let mut changed = 1
+    while changed == 1 {
+        changed = 0
+        let n = len(result)
+        let mut i = 0
+        // Skip request line
+        while i < n {
+            if int(result[i]) == 10 { i = i + 1; break }
+            i = i + 1
+        }
+        while i < n {
+            if int(result[i]) == 13 { break }
+            if i + namelen + 1 < n {
+                let mut ok = 1
+                let mut j = 0
+                while j < namelen {
+                    let mut c1 = int(result[i + j])
+                    let mut c2 = int(name[j])
+                    if c1 >= 65 { if c1 <= 90 { c1 = c1 + 32 } }
+                    if c2 >= 65 { if c2 <= 90 { c2 = c2 + 32 } }
+                    if c1 != c2 { ok = 0; break }
+                    j = j + 1
+                }
+                if ok == 1 {
+                    if int(result[i + namelen]) == 58 {
+                        let mut ve = i
+                        while ve < n {
+                            if int(result[ve]) == 10 { ve = ve + 1; break }
+                            ve = ve + 1
+                        }
+                        result = result[0:i] + result[ve:]
+                        changed = 1
+                        break
+                    }
+                }
+            }
+            while i < n {
+                if int(result[i]) == 10 { i = i + 1; break }
+                i = i + 1
+            }
+        }
+    }
+    return result
+}
+
+// Set header value (remove existing + add new)
+fn hdr_set(msg: string, name: string, value: string) -> string {
+    let cleaned = hdr_remove(msg, name)
+    return hdr_add(cleaned, name, value)
+}
+
+// Modify header value (find and replace within the header value)
+fn hdr_modify(msg: string, name: string, old_val: string, new_val: string) -> string {
+    let current = sip_hdr(msg, name, len(msg))
+    if len(current) == 0 { return msg }
+    let updated = str_replace(current, old_val, new_val)
+    return hdr_set(msg, name, updated)
+}
+
+// Rename a header (copy value to new name, remove old)
+fn hdr_rename(msg: string, old_name: string, new_name: string) -> string {
+    let val = sip_hdr(msg, old_name, len(msg))
+    if len(val) == 0 { return msg }
+    let removed = hdr_remove(msg, old_name)
+    return hdr_add(removed, new_name, val)
+}
+
+// Copy header value to another header (keep original)
+fn hdr_copy(msg: string, from_name: string, to_name: string) -> string {
+    let val = sip_hdr(msg, from_name, len(msg))
+    if len(val) == 0 { return msg }
+    return hdr_add(msg, to_name, val)
+}
+
+// Apply DB-driven header rules
+// header_rules table: match_method, match_direction, action, header_name, header_value, priority
+fn db_apply_header_rules(db: SqlDB, db_ok: int, msg: string, method: string, direction: string, cache: CMap) -> string {
+    if db_ok == 0 { return msg }
+
+    // Cache rules per direction (reload every 60s via cache expiry)
+    let mut result = msg
+
+    // Query rules matching this method + direction (up to 20 rules)
+    let mut i = 0
+    while i < 20 {
+        // Get rule i for this direction
+        let rule = sql_query_str(db, "SELECT action || '|' || header_name || '|' || COALESCE(header_value,'') FROM header_rules WHERE (match_method = $1 OR match_method = '*') AND match_direction = $1 AND enabled = true ORDER BY priority ASC LIMIT 1 OFFSET " + string(i), direction)
+        if len(rule) == 0 { break }
+
+        let parts = str_split(rule, "|")
+        if len(parts) >= 2 {
+            let action = parts[0]
+            let hname = parts[1]
+            let mut hval = ""
+            if len(parts) >= 3 { hval = parts[2] }
+
+            if str_eq(action, "add") {
+                result = hdr_add(result, hname, hval)
+            }
+            if str_eq(action, "remove") {
+                result = hdr_remove(result, hname)
+            }
+            if str_eq(action, "set") {
+                result = hdr_set(result, hname, hval)
+            }
+        }
+        i = i + 1
+    }
+
+    return result
+}

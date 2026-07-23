@@ -1,0 +1,642 @@
+// ============ SIP PARSING / HOP HELPERS ============
+// Thin adapters over platform sip_* builtins (mako_sip.h / std/sip).
+// Do NOT define free names that shadow builtins (sip_method, sip_branch,
+// sip_strip_via, sip_via_host, sip_via_port, sip_dialog_id, …).
+
+// Header value (msglen kept for call-site compatibility; platform is length-aware)
+fn sip_hdr(msg: string, name: string, msglen: int) -> string {
+    let _ = msglen
+    return sip_header(msg, name)
+}
+
+fn sip_ruri(msg: string, n: int) -> string {
+    let _ = n
+    return sip_request_uri(msg)
+}
+
+fn sip_is_resp(msg: string, n: int) -> int {
+    let _ = n
+    return sip_is_response(msg)
+}
+
+// User/host from a name-addr or URI (From/To/Contact/R-URI)
+fn sip_user(uri: string) -> string {
+    return sip_uri_user(uri)
+}
+
+fn sip_domain(uri: string) -> string {
+    return sip_uri_host(uri)
+}
+
+fn sip_contact_addr(c: string) -> string {
+    let n = len(c)
+    let mut i = 0
+    while i < n {
+        if int(c[i]) == 60 { i = i + 1; break }
+        i = i + 1
+    }
+    let s = i
+    while i < n {
+        if int(c[i]) == 62 { return c[s:i] }
+        i = i + 1
+    }
+    return c
+}
+
+// Split a Contact header on list commas without breaking a quoted display
+// name or a comma inside a name-addr URI. str_split() is not sufficient for
+// RFC 3261 §20.10 because Contact is a comma-separated header value with
+// quoted-string and angle-bracketed components.
+fn sip_split_contact_values(value: string) -> []string {
+    let mut parts = make([]string, 0, 8)
+    if len(value) == 0 { return parts }
+    let mut start = 0
+    let mut quoted = 0
+    let mut angle = 0
+    let mut escaped = 0
+    let mut i = 0
+    while i < len(value) {
+        let c = int(value[i])
+        if escaped == 1 {
+            escaped = 0
+        } else {
+            if quoted == 1 && c == 92 {
+                escaped = 1
+            } else {
+                if c == 34 { if quoted == 1 { quoted = 0 } else { quoted = 1 } }
+                if quoted == 0 {
+                    if c == 60 { angle = angle + 1 }
+                    if c == 62 && angle > 0 { angle = angle - 1 }
+                    if c == 44 && angle == 0 {
+                        parts = append(parts, value[start:i])
+                        start = i + 1
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    parts = append(parts, value[start:])
+    return parts
+}
+
+fn sip_route_target(route: string) -> string {
+    let values = sip_split_contact_values(route)
+    if len(values) == 0 { return "" }
+    return sip_contact_addr(str_trim_space(values[0]))
+}
+
+// Remove only the proxy's top Via value. Some UAs serialize multiple Via hops
+// as one comma-separated header line; removing the whole header would lose
+// the caller's next hop and route the response back to the terminating UA.
+fn sip_strip_top_via(msg: string) -> string {
+    let first = str_index(msg, "\r\n")
+    if first < 0 { return msg }
+    let mut i = first + 2
+    while i < len(msg) {
+        let rel_end = str_index(msg[i:], "\r\n")
+        if rel_end < 0 { return msg }
+        let end = i + rel_end
+        if end == i { return msg }
+        let line = msg[i:end]
+        let low = str_to_lower(line)
+        let mut value_start = -1
+        if str_has_prefix(low, "via:") { value_start = 4 }
+        if str_has_prefix(low, "v:") { value_start = 2 }
+        if value_start >= 0 {
+            let value = line[value_start:]
+            let comma = str_index(value, ",")
+            if comma >= 0 {
+                let rest = str_trim_space(value[comma + 1:])
+                return msg[0:i] + "Via: " + rest + "\r\n" + msg[end + 2:]
+            }
+            return msg[0:i] + msg[end + 2:]
+        }
+        i = end + 2
+    }
+    return msg
+}
+
+// Insert raw header block after the start line (legacy multi-header blob)
+fn sip_insert(msg: string, hdrs: string) -> string {
+    if len(hdrs) == 0 { return msg }
+    let n = len(msg)
+    let mut i = 0
+    while i < n {
+        if int(msg[i]) == 10 { i = i + 1; break }
+        i = i + 1
+    }
+    return msg[0:i] + hdrs + msg[i:]
+}
+
+// Proxy hop: top Via + Record-Route (RFC 3261 §16.6)
+fn proxy_hop(msg: string, ip: string, port: int, tr: string) -> string {
+    let mut out = sip_insert_via(msg, sip_via_value_rport(tr, ip, port, sip_branch()))
+    out = sip_prepend_header(out, "Record-Route", sip_record_route(ip, port, tr))
+    return out
+}
+
+// Via only (ACK/BYE mid-dialog style)
+fn proxy_hop_via(msg: string, ip: string, port: int, tr: string) -> string {
+    return sip_insert_via(msg, sip_via_value_rport(tr, ip, port, sip_branch()))
+}
+
+// Build a final response (optional To-tag)
+fn sip_resp(st: int, reason: string, msg: string, n: int, tag: string) -> string {
+    let _ = n
+    if len(tag) > 0 {
+        return sip_reply_with_to_tag(msg, st, reason, "", "", tag)
+    }
+    return sip_reply(msg, st, reason, "", "")
+}
+
+fn sip_options_response(msg: string) -> string {
+    let allow = "Allow: INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER\r\n"
+        + "Accept: application/sdp, application/pidf+xml, application/simple-message-summary\r\n"
+    return sip_reply(msg, 200, "OK", allow, "")
+}
+
+fn sip_method_not_allowed(msg: string) -> string {
+    return sip_reply(msg, 405, "Method Not Allowed", "Allow: INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER\r\n", "")
+}
+
+fn sip_cseq_valid(msg: string, is_response: int) -> int {
+    let cseq = str_trim_space(sip_header(msg, "CSeq"))
+    let mut i = 0
+    while i < len(cseq) && (int(cseq[i]) == 32 || int(cseq[i]) == 9) { i = i + 1 }
+    let seq_start = i
+    while i < len(cseq) && int(cseq[i]) >= 33 && int(cseq[i]) != 127 { i = i + 1 }
+    if i <= seq_start { return 0 }
+    let mut seq = 0
+    match parse_int(cseq[seq_start:i]) {
+        Ok(v) => { seq = v }
+        Err(_) => { return 0 }
+    }
+    if seq < 0 || seq > 2147483647 { return 0 }
+    while i < len(cseq) && (int(cseq[i]) == 32 || int(cseq[i]) == 9) { i = i + 1 }
+    let method_start = i
+    while i < len(cseq) && int(cseq[i]) >= 33 && int(cseq[i]) != 127 { i = i + 1 }
+    if i <= method_start { return 0 }
+    let cseq_method = cseq[method_start:i]
+    let mut mi = 0
+    while mi < len(cseq_method) {
+        if sip_token_char(int(cseq_method[mi])) == 0 { return 0 }
+        mi = mi + 1
+    }
+    while i < len(cseq) && (int(cseq[i]) == 32 || int(cseq[i]) == 9) { i = i + 1 }
+    if i != len(cseq) { return 0 }
+    if is_response == 0 {
+        let method = sip_method(msg)
+        // SIP method names are case-sensitive.  A lowercase CSeq method is
+        // not equivalent to the request-line method.
+        if not str_eq(method, cseq_method) { return 0 }
+    }
+    return 1
+}
+
+fn sip_cseq_number(msg: string) -> string {
+    let value = str_trim_space(sip_header(msg, "CSeq"))
+    let mut i = 0
+    while i < len(value) && (int(value[i]) == 32 || int(value[i]) == 9) { i = i + 1 }
+    let start = i
+    while i < len(value) && int(value[i]) >= 33 && int(value[i]) != 127 { i = i + 1 }
+    if i <= start { return "" }
+    return value[start:i]
+}
+
+fn sip_token_char(c: int) -> int {
+    if c >= 48 && c <= 57 { return 1 }
+    if c >= 65 && c <= 90 { return 1 }
+    if c >= 97 && c <= 122 { return 1 }
+    if c == 33 || c == 35 || c == 36 || c == 37 || c == 38 || c == 39 { return 1 }
+    if c == 42 || c == 43 || c == 45 || c == 46 { return 1 }
+    if c == 94 || c == 95 || c == 96 || c == 124 || c == 126 { return 1 }
+    return 0
+}
+
+// Rebuild an INVITE-derived request while retaining the original Via branch.
+// ACK for a non-2xx INVITE and CANCEL are in the same server transaction and
+// therefore must use the INVITE branch, but each has its own CSeq method.
+fn sip_build_transaction_request(msg: string, method: string) -> string {
+    let header_end = str_index(msg, "\r\n\r\n")
+    if header_end < 0 { return "" }
+    let first_end = str_index(msg, "\r\n")
+    if first_end < 0 { return "" }
+    let first_space = str_index(msg[0:first_end], " ")
+    if first_space < 0 { return "" }
+    let header_block = msg[0:header_end]
+    let lines = str_split(header_block, "\r\n")
+    if len(lines) < 2 { return "" }
+    let mut out = method + msg[first_space:first_end] + "\r\n"
+    let cseq_no = sip_cseq_number(msg)
+    if len(cseq_no) == 0 { return "" }
+    let mut i = 1
+    while i < len(lines) {
+        let line = lines[i]
+        let low = str_to_lower(line)
+        if str_has_prefix(low, "cseq:") {
+            out = out + "CSeq: " + cseq_no + " " + method + "\r\n"
+        } else if str_has_prefix(low, "content-length:") || str_has_prefix(low, "l:") {
+            let colon = str_index(line, ":")
+            if colon >= 0 { out = out + line[0:colon + 1] + " 0\r\n" }
+        } else {
+            out = out + line + "\r\n"
+        }
+        i = i + 1
+    }
+    return out + "\r\n"
+}
+
+fn sip_build_ack_non2xx(invite: string) -> string {
+    return sip_build_transaction_request(invite, "ACK")
+}
+
+fn sip_build_cancel(invite: string) -> string {
+    return sip_build_transaction_request(invite, "CANCEL")
+}
+
+fn sip_hex_char(c: int) -> int {
+    if c >= 48 && c <= 57 { return 1 }
+    if c >= 65 && c <= 70 { return 1 }
+    if c >= 97 && c <= 102 { return 1 }
+    return 0
+}
+
+fn sip_uri_percent_valid(value: string) -> int {
+    let mut i = 0
+    while i < len(value) {
+        let c = int(value[i])
+        if c == 37 {
+            if i + 2 >= len(value) || sip_hex_char(int(value[i + 1])) == 0 || sip_hex_char(int(value[i + 2])) == 0 { return 0 }
+            i = i + 3
+        } else {
+            if c == 0 || c == 13 || c == 10 || c == 127 || c < 32 { return 0 }
+            i = i + 1
+        }
+    }
+    return 1
+}
+
+fn sip_uri_port_valid(value: string) -> int {
+    if len(value) == 0 { return 0 }
+    let mut i = 0
+    while i < len(value) {
+        let c = int(value[i])
+        if c < 48 || c > 57 { return 0 }
+        i = i + 1
+    }
+    match parse_int(value) {
+        Ok(v) => { if v <= 0 || v > 65535 { return 0 } }
+        Err(_) => { return 0 }
+    }
+    return 1
+}
+
+// Validate a SIP sent-by/URI hostport, including the mandatory brackets for
+// IPv6 literals.  Hostnames are deliberately kept to RFC 3261 hostname/IPv4
+// characters; escaped bytes belong in user/parameter values, not the host.
+fn sip_hostport_valid(value: string) -> int {
+    let hostport = str_trim_space(value)
+    if len(hostport) == 0 { return 0 }
+    if int(hostport[0]) == 91 {
+        let rb = str_index(hostport, "]")
+        if rb <= 1 { return 0 }
+        let mut i = 1
+        while i < rb {
+            let c = int(hostport[i])
+            if not ((c >= 48 && c <= 57) || (c >= 65 && c <= 70) || (c >= 97 && c <= 102) || c == 58 || c == 46) { return 0 }
+            i = i + 1
+        }
+        if rb + 1 == len(hostport) { return 1 }
+        if int(hostport[rb + 1]) != 58 { return 0 }
+        return sip_uri_port_valid(hostport[rb + 2:])
+    }
+    let mut colon = -1
+    let mut colon_count = 0
+    let mut i = 0
+    while i < len(hostport) {
+        if int(hostport[i]) == 58 { colon = i; colon_count = colon_count + 1 }
+        i = i + 1
+    }
+    if colon_count > 1 { return 0 }
+    let host = if colon >= 0 { hostport[0:colon] } else { hostport }
+    if len(host) == 0 { return 0 }
+    if colon >= 0 && sip_uri_port_valid(hostport[colon + 1:]) == 0 { return 0 }
+    if int(host[0]) == 45 || int(host[len(host) - 1]) == 45 { return 0 }
+    let mut previous_dot = 0
+    i = 0
+    while i < len(host) {
+        let c = int(host[i])
+        if c == 46 {
+            if previous_dot == 1 { return 0 }
+            previous_dot = 1
+        } else {
+            if not ((c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 45) { return 0 }
+            previous_dot = 0
+        }
+        i = i + 1
+    }
+    return 1
+}
+
+fn sip_uri_component_valid(value: string) -> int {
+    if len(value) == 0 { return 0 }
+    if sip_uri_percent_valid(value) == 0 { return 0 }
+    let mut i = 0
+    while i < len(value) {
+        let c = int(value[i])
+        if c == 32 || c == 9 || c == 13 || c == 10 || c == 60 || c == 62 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn sip_uri_syntax_valid(uri: string) -> int {
+    if sip_uri_percent_valid(uri) == 0 { return 0 }
+    let colon = str_index(uri, ":")
+    if colon <= 0 { return 0 }
+    let scheme = str_to_lower(uri[0:colon])
+    if not str_eq(scheme, "sip") && not str_eq(scheme, "sips") { return 0 }
+    let rest = uri[colon + 1:]
+    let semi = str_index(rest, ";")
+    let question = str_index(rest, "?")
+    let mut authority_end = len(rest)
+    if semi >= 0 && semi < authority_end { authority_end = semi }
+    if question >= 0 && question < authority_end { authority_end = question }
+    let authority = rest[0:authority_end]
+    if len(authority) == 0 { return 0 }
+
+    let mut at = -1
+    let mut i = 0
+    while i < len(authority) {
+        if int(authority[i]) == 64 { at = i }
+        i = i + 1
+    }
+    if at == 0 { return 0 }
+    if at >= 0 {
+        if sip_uri_component_valid(authority[0:at]) == 0 { return 0 }
+    }
+    let hostport = if at >= 0 { authority[at + 1:] } else { authority }
+    if sip_hostport_valid(hostport) == 0 { return 0 }
+
+    if semi >= 0 {
+        let param_end = if question >= 0 && question > semi { question } else { len(rest) }
+        let param_text = rest[semi + 1:param_end]
+        if len(param_text) == 0 { return 0 }
+        let params = str_split(param_text, ";")
+        let mut pi = 0
+        while pi < len(params) {
+            let param = params[pi]
+            let eq = str_index(param, "=")
+            let pname = if eq >= 0 { param[0:eq] } else { param }
+            if len(pname) == 0 { return 0 }
+            let mut ni = 0
+            while ni < len(pname) {
+                if sip_token_char(int(pname[ni])) == 0 { return 0 }
+                ni = ni + 1
+            }
+            if eq >= 0 && sip_uri_component_valid(param[eq + 1:]) == 0 { return 0 }
+            pi = pi + 1
+        }
+    }
+    if question >= 0 {
+        let query = rest[question + 1:]
+        if len(query) == 0 { return 0 }
+        let headers = str_split(query, "&")
+        let mut hi = 0
+        while hi < len(headers) {
+            let header = headers[hi]
+            let eq = str_index(header, "=")
+            if eq <= 0 { return 0 }
+            let hname = header[0:eq]
+            let mut ni = 0
+            while ni < len(hname) {
+                if sip_token_char(int(hname[ni])) == 0 { return 0 }
+                ni = ni + 1
+            }
+            if sip_uri_component_valid(header[eq + 1:]) == 0 { return 0 }
+            hi = hi + 1
+        }
+    }
+    return 1
+}
+
+fn sip_request_uri_valid(msg: string) -> int {
+    let method = sip_method(msg)
+    let uri = sip_request_uri(msg)
+    if len(uri) == 0 { return 0 }
+    if str_eq(uri, "*") {
+        if str_eq(str_to_lower(method), "options") { return 1 }
+        return 0
+    }
+    return sip_uri_syntax_valid(uri)
+}
+
+fn sip_via_valid(msg: string) -> int {
+    let via = sip_header(msg, "Via")
+    if len(via) == 0 { return 0 }
+    let values = sip_split_contact_values(via)
+    if len(values) == 0 { return 0 }
+    let top = str_trim_space(values[0])
+    let space = str_index(top, " ")
+    if space <= 0 || space + 1 >= len(top) { return 0 }
+    let protocol = str_to_lower(top[0:space])
+    if not str_has_prefix(protocol, "sip/2.0/") { return 0 }
+    let transport = protocol[8:]
+    if len(transport) == 0 { return 0 }
+    let mut ti = 0
+    while ti < len(transport) {
+        if sip_token_char(int(transport[ti])) == 0 { return 0 }
+        ti = ti + 1
+    }
+    let rest = str_trim_space(top[space + 1:])
+    let parts = str_split(rest, ";")
+    if len(parts) == 0 { return 0 }
+    let hostport = str_trim_space(parts[0])
+    if sip_hostport_valid(hostport) == 0 { return 0 }
+    let mut branch = ""
+    let mut pi = 1
+    while pi < len(parts) {
+        let param = str_trim_space(parts[pi])
+        if len(param) == 0 { return 0 }
+        let eq = str_index(param, "=")
+        let pname = if eq >= 0 { str_trim_space(param[0:eq]) } else { param }
+        if len(pname) == 0 { return 0 }
+        let mut ni = 0
+        while ni < len(pname) {
+            if sip_token_char(int(pname[ni])) == 0 { return 0 }
+            ni = ni + 1
+        }
+        if eq >= 0 {
+            let pvalue = str_trim_space(param[eq + 1:])
+            if len(pvalue) == 0 || sip_uri_component_valid(pvalue) == 0 { return 0 }
+            let pname_low = str_to_lower(pname)
+            if str_eq(pname_low, "branch") { branch = pvalue }
+            if str_eq(pname_low, "rport") && sip_uri_port_valid(pvalue) == 0 { return 0 }
+            if str_eq(pname_low, "ttl") {
+                match parse_int(pvalue) {
+                    Ok(v) => { if v < 0 || v > 255 { return 0 } }
+                    Err(_) => { return 0 }
+                }
+            }
+            if str_eq(pname_low, "received") || str_eq(pname_low, "maddr") {
+                if sip_hostport_valid(pvalue) == 0 { return 0 }
+            }
+        } else if str_eq(str_to_lower(pname), "branch") {
+            return 0
+        }
+        pi = pi + 1
+    }
+    if len(branch) > 0 {
+        // RFC 3261's magic cookie must be followed by a branch identifier.
+        let branch_low = str_to_lower(branch)
+        if len(branch) <= 7 || not str_has_prefix(branch_low, "z9hg4bk") { return 0 }
+    }
+    return 1
+}
+
+fn sip_call_id_valid(value: string) -> int {
+    let v = str_trim_space(value)
+    if len(v) == 0 { return 0 }
+    let mut i = 0
+    while i < len(v) {
+        let c = int(v[i])
+        if c == 32 || c == 9 || c == 13 || c == 10 || c == 0 || c == 127 || c < 32 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn sip_name_addr_valid(value: string) -> int {
+    let v = str_trim_space(value)
+    if len(v) == 0 { return 0 }
+    let lt = str_index(v, "<")
+    let gt = str_index(v, ">")
+    let mut uri = v
+    if lt >= 0 {
+        if gt <= lt || gt + 1 < len(v) && str_index(v[gt + 1:], "<") >= 0 { return 0 }
+        uri = v[lt + 1:gt]
+    } else {
+        let semi = str_index(v, ";")
+        if semi >= 0 { uri = v[0:semi] }
+    }
+    return sip_uri_syntax_valid(str_trim_space(uri))
+}
+
+// Cheap ingress validation before any DB lookup or header allocation. Stream
+// workers already frame messages, but UDP and WebSocket input need the same
+// limits and control-character checks.
+fn sip_validate_message(msg: string, n: int) -> int {
+    if n < 12 || n > 65535 { return 0 }
+    if sip_ok(msg) == 0 { return 0 }
+    let mut header_end = -1
+    let mut i = 0
+    while i + 3 < n {
+        if int(msg[i]) == 13 && int(msg[i + 1]) == 10 && int(msg[i + 2]) == 13 && int(msg[i + 3]) == 10 {
+            header_end = i
+            break
+        }
+        i = i + 1
+    }
+    if header_end < 0 { return 0 }
+
+    let response = sip_is_response(msg)
+    if not str_eq(sip_version(msg), "SIP/2.0") { return 0 }
+    if response == 1 {
+        let code = sip_status_code(msg)
+        if code < 100 || code > 699 { return 0 }
+    } else {
+        if sip_request_uri_valid(msg) == 0 { return 0 }
+    }
+    if len(sip_header(msg, "Via")) == 0 { return 0 }
+    if len(sip_header(msg, "From")) == 0 { return 0 }
+    if len(sip_header(msg, "To")) == 0 { return 0 }
+    if len(sip_header(msg, "Call-ID")) == 0 { return 0 }
+    if sip_name_addr_valid(sip_header(msg, "From")) == 0 { return 0 }
+    if sip_name_addr_valid(sip_header(msg, "To")) == 0 { return 0 }
+    if sip_call_id_valid(sip_header(msg, "Call-ID")) == 0 { return 0 }
+    if sip_cseq_valid(msg, response) == 0 { return 0 }
+    if sip_via_valid(msg) == 0 { return 0 }
+
+    let header_block = msg[0:header_end]
+    let lines = str_split(header_block, "\r\n")
+    if len(lines) < 2 || len(lines) > 129 { return 0 }
+    i = 1
+    let mut from_count = 0
+    let mut to_count = 0
+    let mut call_id_count = 0
+    let mut cseq_count = 0
+    let mut max_forwards_count = 0
+    let mut have_header = 0
+    while i < len(lines) {
+        let header_line = lines[i]
+        if len(header_line) > 8192 { return 0 }
+        if len(header_line) > 0 {
+            let first_char = int(header_line[0])
+            if first_char == 32 || first_char == 9 {
+                if have_header == 0 { return 0 }
+            } else {
+                let colon = str_index(header_line, ":")
+                if colon <= 0 { return 0 }
+                let name = header_line[0:colon]
+                let mut ni = 0
+                while ni < len(name) {
+                    let nc = int(name[ni])
+                    if sip_token_char(nc) == 0 { return 0 }
+                    ni = ni + 1
+                }
+                let low_name = str_to_lower(name)
+                if str_eq(low_name, "from") || str_eq(low_name, "f") { from_count = from_count + 1 }
+                if str_eq(low_name, "to") || str_eq(low_name, "t") { to_count = to_count + 1 }
+                if str_eq(low_name, "call-id") || str_eq(low_name, "i") { call_id_count = call_id_count + 1 }
+                if str_eq(low_name, "cseq") { cseq_count = cseq_count + 1 }
+                if str_eq(low_name, "max-forwards") { max_forwards_count = max_forwards_count + 1 }
+                have_header = 1
+            }
+        }
+        i = i + 1
+    }
+
+    // These are singleton headers in a SIP message.  Accepting duplicates
+    // would make different stacks validate different identity/transaction
+    // contexts because the platform accessor returns only one occurrence.
+    if from_count != 1 || to_count != 1 || call_id_count != 1 || cseq_count != 1 { return 0 }
+    if max_forwards_count > 1 { return 0 }
+
+    // Reject NUL and other C0 characters in the start line/header area. HTAB
+    // is valid horizontal whitespace; the body is left to SDP/RTP handling.
+    i = 0
+    while i < header_end {
+        let c = int(msg[i])
+        if c == 0 || c == 127 || (c < 32 && c != 9 && c != 10 && c != 13) { return 0 }
+        i = i + 1
+    }
+    let body = sip_body(msg)
+    let mut declared_length = -1
+    let mut content_length_count = 0
+    i = 1
+    while i < len(lines) {
+        let low_line = str_to_lower(lines[i])
+        let mut is_length = 0
+        if str_has_prefix(low_line, "content-length:") || str_has_prefix(low_line, "l:") { is_length = 1 }
+        if is_length == 1 {
+            let colon = str_index(lines[i], ":")
+            if colon < 0 { return 0 }
+            let raw_length = str_trim_space(lines[i][colon + 1:])
+            if len(raw_length) == 0 { return 0 }
+            let parsed_length = parse_int(raw_length)
+            match parsed_length {
+                Ok(v) => {
+                    if v < 0 || v > 1048576 { return 0 }
+                    if declared_length >= 0 && declared_length != v { return 0 }
+                    declared_length = v
+                    content_length_count = content_length_count + 1
+                }
+                Err(_) => { return 0 }
+            }
+        }
+        i = i + 1
+    }
+    if content_length_count == 0 || declared_length != len(body) { return 0 }
+    return 1
+}

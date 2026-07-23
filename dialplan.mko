@@ -1,0 +1,224 @@
+// ============ NUMBER MANIPULATION ENGINE ============
+// Actions encoded in dialplan.action column:
+//   strip:N          — remove first N digits
+//   prepend:PREFIX   — add prefix
+//   replace:OLD:NEW  — replace substring
+//   set:NUMBER       — replace entire number
+//   e164:CC          — normalize to E.164 (+CC + national number)
+//   strip_plus       — remove leading +
+//   add_plus         — add leading + if missing
+// Multiple actions chained with ";" (processed left-to-right)
+
+fn num_apply_action(num: string, action: string) -> string {
+    let n = len(num)
+    if n == 0 { return num }
+
+    // strip:N
+    if str_has_prefix(action, "strip:") {
+        let digits_str = action[6:]
+        let mut digits = 0
+        match parse_int(digits_str) {
+            Ok(v) => { digits = v }
+            Err(_) => { return num }
+        }
+        if digits >= n { return "" }
+        return num[digits:]
+    } else {
+
+    // prepend:PREFIX
+    if str_has_prefix(action, "prepend:") {
+        return action[8:] + num
+    } else {
+
+    // replace:OLD:NEW
+    if str_has_prefix(action, "replace:") {
+        let rest = action[8:]
+        let colon = str_index(rest, ":")
+        if colon < 0 { return num }
+        let old = rest[0:colon]
+        let new_str = rest[colon + 1:]
+        return str_replace(num, old, new_str)
+    } else {
+
+    // set:NUMBER
+    if str_has_prefix(action, "set:") {
+        return action[4:]
+    } else {
+
+    // e164:CC — normalize to E.164 format
+    if str_has_prefix(action, "e164:") {
+        let cc = action[5:]
+        // Already E.164?
+        if str_has_prefix(num, "+") { return num }
+        // Already has country code?
+        if str_has_prefix(num, cc) { return "+" + num }
+        // Strip leading 0 (national format) and add +CC
+        if str_has_prefix(num, "0") { return "+" + cc + num[1:] }
+        // Just add +CC
+        return "+" + cc + num
+    } else {
+
+    // strip_plus
+    if str_eq(action, "strip_plus") {
+        if str_has_prefix(num, "+") { return num[1:] }
+        return num
+    } else {
+
+    // add_plus
+    if str_eq(action, "add_plus") {
+        if str_has_prefix(num, "+") { return num }
+        return "+" + num
+    } else {
+
+    // Unknown action — return unchanged
+        return num
+
+    }}}}}}}
+
+    return num
+}
+
+fn num_apply_chain(num: string, actions: string) -> string {
+    // Split on ";" and apply each action
+    let parts = str_split(actions, ";")
+    let mut result = num
+    let mut i = 0
+    while i < len(parts) {
+        let action = str_trim_space(parts[i])
+        if len(action) > 0 {
+            result = num_apply_action(result, action)
+        }
+        i = i + 1
+    }
+    return result
+}
+
+// Full dialplan processing: match number against rules, apply transformations
+// Returns: transformed number
+// dialplan table columns: match_prefix, match_length_min, match_length_max,
+//                         callee_action, caller_action, priority, direction
+fn db_dialplan(db: SqlDB, db_ok: int, caller: string, callee: string, direction: string, cache: CMap) -> []string {
+    // Returns [transformed_callee, transformed_caller]
+    let mut result = make([]string, 2)
+    result[0] = callee
+    result[1] = caller
+
+    if db_ok == 0 { return result }
+
+    let key = "dp|" + direction + "|" + callee
+    if cmap_has(cache, key) == 1 {
+        let cached = cmap_get(cache, key)
+        let parts = str_split(cached, "|")
+        if len(parts) >= 2 {
+            result[0] = parts[0]
+            result[1] = parts[1]
+        }
+        return result
+    }
+
+    // Longest prefix match on dialplan
+    let mut plen = len(callee)
+    while plen > 0 {
+        let pfx = callee[0:plen]
+        // Query: match prefix, direction, and number length
+        let callee_action = sql_query_str(db, "SELECT callee_action FROM dialplan WHERE match_prefix = $1 AND direction = $1 AND enabled = true ORDER BY priority ASC LIMIT 1", pfx)
+        if len(callee_action) > 0 {
+            result[0] = num_apply_chain(callee, callee_action)
+            // Also get caller action from same rule
+            let caller_action = sql_query_str(db, "SELECT caller_action FROM dialplan WHERE match_prefix = $1 AND direction = $1 AND enabled = true ORDER BY priority ASC LIMIT 1", pfx)
+            if len(caller_action) > 0 {
+                result[1] = num_apply_chain(caller, caller_action)
+            }
+            cmap_set(cache, key, result[0] + "|" + result[1])
+            return result
+        }
+        plen = plen - 1
+    }
+
+    // Default rule (prefix = '*')
+    let def_action = sql_query_str(db, "SELECT callee_action FROM dialplan WHERE match_prefix = '*' AND direction = $1 AND enabled = true ORDER BY priority ASC LIMIT 1", direction)
+    if len(def_action) > 0 {
+        result[0] = num_apply_chain(callee, def_action)
+    }
+
+    cmap_set(cache, key, result[0] + "|" + result[1])
+    return result
+}
+
+// DID lookup: inbound number → registered user
+fn db_lookup_did(db: SqlDB, db_ok: int, did_number: string, cache: CMap) -> string {
+    let key = "did|" + did_number
+    if cmap_has(cache, key) == 1 { return cmap_get(cache, key) }
+    if db_ok == 0 { return "" }
+    let user = sql_query_str(db, "SELECT destination_user FROM dids WHERE number = $1 AND enabled = true LIMIT 1", did_number)
+    if len(user) > 0 { cmap_set(cache, key, user); return user }
+    return ""
+}
+
+fn db_rate_ok(user: string, cache: CMap) -> int {
+    let limit_key = "rl_limit"
+    let mut limit = 100
+    if cmap_has(cache, limit_key) == 1 {
+        match parse_int(cmap_get(cache, limit_key)) { Ok(v) => { limit = v } Err(_) => {} }
+    } else {
+        match parse_int(env_get_or("SIP_USER_RATE_LIMIT", "100")) { Ok(v) => { limit = v } Err(_) => {} }
+        if limit > 1000000 { limit = 1000000 }
+        cmap_set(cache, limit_key, string(limit))
+    }
+    if limit <= 0 { return 1 }
+    let key = "rl|" + user
+    let now = now_ms()
+    if cmap_has(cache, key) == 0 {
+        cmap_set(cache, key, string(limit - 1) + "|" + string(now))
+        return 1
+    }
+    let st = cmap_get(cache, key)
+    let parts = str_split(st, "|")
+    if len(parts) < 2 { return 1 }
+    let mut tokens = 0
+    let mut last = 0
+    match parse_int(parts[0]) { Ok(v) => { tokens = v } Err(_) => { return 1 } }
+    match parse_int(parts[1]) { Ok(v) => { last = v } Err(_) => { return 1 } }
+    tokens = tokens + (now - last) / 10
+    if tokens > limit { tokens = limit }
+    if tokens <= 0 { return 0 }
+    tokens = tokens - 1
+    cmap_set(cache, key, string(tokens) + "|" + string(now))
+    return 1
+}
+
+fn db_cdr(db: SqlDB, db_ok: int, cid: string, caller: string, callee: string, status: string) -> int {
+    if db_ok == 0 { return 0 }
+    let _ = sql_exec_str4(db, "INSERT INTO cdr (call_id, caller, callee, status) VALUES ($1, $2, $3, $4) ON CONFLICT (call_id) DO UPDATE SET status = $4, ended_at = NOW()", cid, caller, callee, status)
+    return 0
+}
+
+fn db_cdr_detail(db: SqlDB, db_ok: int, cid: string, src_ip: string, dest: string, transport: string) -> int {
+    if db_ok == 0 { return 0 }
+    let _ = sql_exec_str4(db, "UPDATE cdr SET source_ip = $2, destination = $3, transport = $4 WHERE call_id = $1", cid, src_ip, dest, transport)
+    return 0
+}
+
+fn db_cdr_uris(db: SqlDB, db_ok: int, cid: string, from_uri: string, to_uri: string, user_agent: string) -> int {
+    if db_ok == 0 { return 0 }
+    let _ = sql_exec_str4(db, "UPDATE cdr SET from_uri = $2, to_uri = $3, user_agent = $4 WHERE call_id = $1", cid, from_uri, to_uri, user_agent)
+    return 0
+}
+
+fn db_cdr_code(db: SqlDB, db_ok: int, cid: string, code: string) -> int {
+    if db_ok == 0 { return 0 }
+    let _ = sql_exec_str4(db, "UPDATE cdr SET sip_code = $2::int WHERE call_id = $1", cid, code, "", "")
+    return 0
+}
+
+// Log a SIP transaction for the call ladder
+fn db_sip_tx(db: SqlDB, db_ok: int, cid: string, direction: string, method: string, code: int, src: string, dst: string) -> int {
+    if db_ok == 0 { return 0 }
+    let mut label = method
+    if code > 0 { label = string(code) + " " + method }
+    let flow = src + " -> " + dst
+    let result = sql_exec_str4(db, "INSERT INTO sip_transactions (call_id, direction, method, source) VALUES ($1, $2, $3, $4)", cid, direction, label, flow)
+    return result
+}
+
+// ============ CORE PROCESSING ============

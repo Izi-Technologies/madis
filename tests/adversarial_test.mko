@@ -1,0 +1,138 @@
+// Negative and boundary tests for parser, transaction, registration, fork,
+// and Digest behavior. These deliberately target inputs that happy-path SIPp
+// scenarios do not cover.
+pull . "../parser.mko"
+pull . "../rfc.mko"
+pull . "../registration.mko"
+pull . "../nat.mko"
+pull . "../auth.mko"
+pull . "../headers.mko"
+
+fn adversarial_request(uri: string, cseq: string, body: string, extra: string) -> string {
+    return "REGISTER " + uri + " SIP/2.0\r\n"
+        + "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-adversarial\r\n"
+        + "From: <sip:alice@example.com>;tag=from1\r\n"
+        + "To: <sip:alice@example.com>\r\n"
+        + "Call-ID: adversarial\r\n"
+        + "CSeq: " + cseq + "\r\n"
+        + "Max-Forwards: 70\r\n"
+        + extra
+        + "Content-Length: " + string(len(body)) + "\r\n\r\n"
+        + body
+}
+
+fn adversarial_response(code: string) -> string {
+    return "SIP/2.0 " + code + " Test\r\n"
+        + "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-response\r\n"
+        + "From: <sip:a@example.com>;tag=a\r\n"
+        + "To: <sip:b@example.com>;tag=b\r\n"
+        + "Call-ID: response-adversarial\r\n"
+        + "CSeq: 1 INVITE\r\n"
+        + "Content-Length: 0\r\n\r\n"
+}
+
+fn TestAdversarialStartLinesAndCSeq() {
+    let valid = adversarial_request("sip:example.com", "1 REGISTER", "", "")
+    assert_eq(sip_validate_message(valid, len(valid)), 1)
+    assert_eq(sip_validate_message(adversarial_request("*", "1 REGISTER", "", ""), len(adversarial_request("*", "1 REGISTER", "", ""))), 0)
+    assert_eq(sip_validate_message(adversarial_request("sip:example.com", "1 INVITE", "", ""), len(adversarial_request("sip:example.com", "1 INVITE", "", ""))), 0)
+    assert_eq(sip_validate_message(str_replace(valid, "SIP/2.0", "SIP/1.0"), len(valid)), 0)
+    assert_eq(sip_validate_message(str_replace(valid, "CSeq: 1 REGISTER", "CSeq: -1 REGISTER"), len(valid)), 0)
+    assert_eq(sip_validate_message(str_replace(valid, "CSeq: 1 REGISTER", "CSeq: 999999999999999 REGISTER"), len(valid)), 0)
+    let folded_cseq = str_replace(valid, "CSeq: 1 REGISTER", "CSeq: 1  REGISTER")
+    assert_eq(sip_validate_message(folded_cseq, len(folded_cseq)), 1)
+}
+
+fn TestAdversarialResponseStatusCodes() {
+    let low = adversarial_response("099")
+    let high = adversarial_response("700")
+    assert_eq(sip_validate_message(low, len(low)), 0)
+    assert_eq(sip_validate_message(high, len(high)), 0)
+}
+
+fn TestAdversarialBodyFraming() {
+    let short_msg = str_replace(adversarial_request("sip:example.com", "1 REGISTER", "", ""), "Content-Length: 0", "Content-Length: 1")
+    assert_eq(sip_validate_message(short_msg, len(short_msg)), 0)
+    let duplicate = str_replace(adversarial_request("sip:example.com", "1 REGISTER", "", ""), "Content-Length: 0\r\n\r\n", "Content-Length: 0\r\nContent-Length: 1\r\n\r\n")
+    assert_eq(sip_validate_message(duplicate, len(duplicate)), 0)
+}
+
+fn TestAdversarialHeaderName() {
+    let bad_header = adversarial_request("sip:example.com", "1 REGISTER", "", "Bad Header: value\r\n")
+    assert_eq(sip_validate_message(bad_header, len(bad_header)), 0)
+    let bad_cseq_method = adversarial_request("sip:example.com", "1 BAD@METHOD", "", "")
+    assert_eq(sip_validate_message(bad_cseq_method, len(bad_cseq_method)), 0)
+    let bad_branch = str_replace(adversarial_request("sip:example.com", "1 REGISTER", "", ""), "branch=z9hG4bK-adversarial", "branch=not-a-cookie")
+    assert_eq(sip_validate_message(bad_branch, len(bad_branch)), 0)
+}
+
+fn TestAdversarialSipUriGrammar() {
+    let valid = adversarial_request("sip:example.com", "1 REGISTER", "", "")
+    let bad_escape = str_replace(valid, "REGISTER sip:example.com", "REGISTER sip:example%2.example.com")
+    assert_eq(sip_validate_message(bad_escape, len(bad_escape)), 0)
+    let bad_port = str_replace(valid, "REGISTER sip:example.com", "REGISTER sip:example.com:0")
+    assert_eq(sip_validate_message(bad_port, len(bad_port)), 0)
+    let high_port = str_replace(valid, "REGISTER sip:example.com", "REGISTER sip:example.com:65536")
+    assert_eq(sip_validate_message(high_port, len(high_port)), 0)
+    let bad_ipv6 = str_replace(valid, "REGISTER sip:example.com", "REGISTER sip:2001:db8::1")
+    assert_eq(sip_validate_message(bad_ipv6, len(bad_ipv6)), 0)
+    let bad_param = str_replace(valid, "REGISTER sip:example.com", "REGISTER sip:example.com;=udp")
+    assert_eq(sip_validate_message(bad_param, len(bad_param)), 0)
+    let bad_header = str_replace(valid, "REGISTER sip:example.com", "REGISTER sip:example.com?Subject")
+    assert_eq(sip_validate_message(bad_header, len(bad_header)), 0)
+    let ipv6 = str_replace(valid, "REGISTER sip:example.com", "REGISTER sip:[2001:db8::1]:5060;transport=udp?subject=hello%20world")
+    let ipv6_via = str_replace(ipv6, "192.0.2.10:5060", "[2001:db8::10]:5060")
+    assert_eq(sip_validate_message(ipv6_via, len(ipv6_via)), 1)
+    let bad_call_id = str_replace(valid, "Call-ID: adversarial", "Call-ID: bad id")
+    assert_eq(sip_validate_message(bad_call_id, len(bad_call_id)), 0)
+    let bad_from = str_replace(valid, "From: <sip:alice@example.com>", "From: <sip:alice%ZZ@example.com>")
+    assert_eq(sip_validate_message(bad_from, len(bad_from)), 0)
+}
+
+fn TestAdversarialOrphanFold() {
+    let orphan_fold = "REGISTER sip:example.com SIP/2.0\r\n\tcontinuation\r\n"
+        + "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-orphan\r\n"
+        + "From: <sip:alice@example.com>;tag=from1\r\n"
+        + "To: <sip:alice@example.com>\r\n"
+        + "Call-ID: orphan\r\nCSeq: 1 REGISTER\r\nContent-Length: 0\r\n\r\n"
+    assert_eq(sip_validate_message(orphan_fold, len(orphan_fold)), 0)
+}
+
+fn TestAdversarialTransactionExpiryAndDuplicates() {
+    let msg = adversarial_request("sip:example.com", "1 REGISTER", "", "")
+    let cache = cmap_new()
+    let key = sip_transaction_key(msg, len(msg))
+    let response = sip_reply(msg, 200, "OK", "", "")
+    let _ = sip_store_txn(key, response, cache)
+    assert_eq(sip_is_retransmit(key, cache), 1)
+    cmap_set(cache, "txn_exp|" + key, string(mono_ms() - 1))
+    assert_eq(sip_is_retransmit(key, cache), 0)
+    assert_eq(cmap_has(cache, "txn|" + key), 0)
+
+    let fork_cache = cmap_new()
+    let cid = "duplicate-fork"
+    let _ = sip_fork_register_branch(cid, "z9hG4bK-one", "sip:one@example.com", fork_cache)
+    let _ = sip_fork_register_branch(cid, "z9hG4bK-two", "sip:two@example.com", fork_cache)
+    cmap_set(fork_cache, "fork_expected|" + cid, "2")
+    cmap_set(fork_cache, "fork_done|" + cid, "0")
+    let first = adversarial_response("486")
+    let first_branch = str_replace(first, "z9hG4bK-response", "z9hG4bK-one")
+    let _ = sip_fork_collect_response(first_branch, fork_cache)
+    let _ = sip_fork_collect_response(first_branch, fork_cache)
+    assert_eq_str(cmap_get(fork_cache, "fork_done|" + cid), "1")
+}
+
+fn TestAdversarialRegistrationValues() {
+    let msg = adversarial_request("sip:example.com", "1 REGISTER", "", "Expires: 300\r\n")
+    assert_eq(registration_expires("<sip:alice@example.com;expires=-1>", msg, len(msg)), -1)
+    assert_eq(registration_expires("<sip:alice@example.com;expires=oops>", msg, len(msg)), -1)
+    assert_eq(registration_expires("<sip:alice@example.com;expires=999999>", msg, len(msg)), registration_max_expires())
+}
+
+fn TestAdversarialDigestChallengeAndHeaderInjection() {
+    let challenge = digest_challenge_value("example.com", "nonce", 1)
+    assert(str_contains(challenge, "qop=\"auth,auth-int\""))
+    assert(str_contains(challenge, "stale=true"))
+    let msg = adversarial_request("sip:example.com", "1 REGISTER", "", "")
+    assert_eq_str(hdr_add(msg, "X-Evil", "ok\r\nInjected: yes"), msg)
+}

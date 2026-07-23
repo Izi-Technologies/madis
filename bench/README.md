@@ -1,0 +1,65 @@
+# SIP CPS/concurrency benchmark
+
+This harness measures completed INVITE dialogs through the proxy, using SIPp
+as both the caller and a registered terminating UAS. It reports successful and
+failed calls, response-time buckets, achieved CPS, and the proxy's process
+resource usage can be sampled externally.
+
+Run a baseline:
+
+```sh
+RATE=100 CALLS=1000 CONCURRENCY=200 WORKERS=1 ./bench/benchmark.sh
+```
+
+The scenario holds each dialog for one second. Change that pause in
+`bench/invite.xml` when testing a different traffic mix.
+
+Run a saturation sweep:
+
+```sh
+for rate in 100 250 500 1000; do
+  RATE="$rate" CALLS=5000 CONCURRENCY=1000 WORKERS=1 \
+    STATS="/tmp/mako-${rate}.csv" ./bench/benchmark.sh
+done
+```
+
+Then repeat the same matrix with `WORKERS=2`, `4`, and `8`. The useful score is
+the highest rate with zero failed calls and stable p99 setup latency—not the
+highest rate at which the generator starts dropping packets.
+
+For a fair Kamailio comparison, keep the SIPp scenario, host, CPU affinity,
+message size, worker count, and database/routing mode identical. Kamailio is
+not installed in this checkout; install or point `SIPP`/the proxy command at a
+separate candidate before comparing results.
+
+The latest pinned local run used Mako 0.4.5, `RATE=1000`, 2,000 calls, 1,000
+concurrent dialogs, and four workers. It completed 2,000/2,000 calls with
+zero failures, retransmissions, or timeouts, and achieved 660.72 CPS. The
+dialog length was 1.003 seconds. A five-run soak at `RATE=750`, 1,000 calls,
+500 concurrent dialogs, and four workers also completed every call without
+failures or retransmissions. These are Mako baselines, not Kamailio
+comparisons.
+
+Additional validation commands:
+
+```sh
+python3 bench/transport_matrix.py --binary ./main
+python3 bench/tls_ipv6_matrix.py --binary ./main
+python3 bench/fault_matrix.py --binary ./main
+python3 bench/abnf_corpus.py --binary ./main
+python3 bench/fuzz_sip.py --binary ./main --iterations 1000
+sh bench/sanitizer.sh
+SOAK_RUNS=5 SOAK_CALLS=1000 SOAK_RATE=750 SOAK_CONCURRENCY=500 SOAK_WORKERS=4 sh bench/soak.sh
+```
+
+`tls_ipv6_matrix.py` creates a temporary CA and verifies SNI certificate
+selection, hostname rejection, and UDP/TCP/TLS over `::1`. `fault_matrix.py`
+drives deterministic loss, delay, duplicate, reorder, retransmission, and
+unacknowledged-2xx cases through a real local UAS. These are independent
+process checks, but they do not replace PJSIP/Kamailio/OpenSIPS/Asterisk
+interoperability; those stacks must be installed and supplied as separate
+fixtures.
+
+`abnf_corpus.py` crosses 24 valid compact/long, quoted/unquoted, IPv4/IPv6,
+URI-escaped, and Via-parameter forms, then checks 13 one-rule invalid
+mutations receive 4xx responses.

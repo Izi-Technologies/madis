@@ -1,0 +1,255 @@
+// ============ REGISTRATION LIFECYCLE ============
+// In-memory bindings are deliberately bounded and expire lazily on lookup.
+// The database keeps the same binding data for cluster failover.
+
+fn registration_max_expires() -> int {
+    let raw = env_get_or("SIP_MAX_REG_EXPIRES", "3600")
+    let mut value = 3600
+    match parse_int(raw) {
+        Ok(v) => { value = v }
+        Err(_) => {}
+    }
+    if value < 60 { value = 60 }
+    if value > 86400 { value = 86400 }
+    return value
+}
+
+fn registration_min_expires() -> int {
+    let raw = env_get_or("SIP_MIN_EXPIRES", "60")
+    let mut value = 60
+    match parse_int(raw) {
+        Ok(v) => { value = v }
+        Err(_) => {}
+    }
+    if value < 0 { value = 0 }
+    if value > 86400 { value = 86400 }
+    return value
+}
+
+fn registration_expires(contact: string, msg: string, n: int) -> int {
+    let mut value = 3600
+    let header = sip_hdr(msg, "Expires", n)
+    if len(header) > 0 {
+        match parse_int(str_trim_space(header)) {
+            Ok(v) => { value = v }
+            Err(_) => { return -1 }
+        }
+        if value < 0 { return -1 }
+    }
+
+    let low = str_to_lower(contact)
+    let p = str_index(low, "expires=")
+    if p >= 0 {
+        let start = p + 8
+        let mut end = start
+        while end < len(contact) {
+            let c = int(contact[end])
+            if c == 59 || c == 44 || c == 62 || c == 32 || c == 9 { break }
+            end = end + 1
+        }
+        if end > start {
+            match parse_int(contact[start:end]) {
+                Ok(v) => { value = v }
+                Err(_) => { return -1 }
+            }
+            if value < 0 { return -1 }
+        }
+    }
+
+    if value < 0 { value = 0 }
+    if value > registration_max_expires() { value = registration_max_expires() }
+    return value
+}
+
+fn registration_value(contact: string, transport: string, expires_at: int, ip: string, port: int) -> string {
+    return contact + "|" + transport + "|" + string(expires_at) + "|" + ip + "|" + string(port)
+}
+
+fn registration_live(value: string) -> int {
+    let parts = str_split(value, "|")
+    if len(parts) < 3 { return 0 }
+    let mut expires_at = 0
+    match parse_int(parts[2]) {
+        Ok(v) => { expires_at = v }
+        Err(_) => { return 0 }
+    }
+    if expires_at <= now_ms() { return 0 }
+    return 1
+}
+
+fn registration_matches(value: string, contact: string) -> int {
+    let parts = str_split(value, "|")
+    if len(parts) < 1 { return 0 }
+    if str_eq(parts[0], contact) { return 1 }
+    return 0
+}
+
+// Return the first live binding and clean expired slots while looking.
+fn registration_find(reg: CMap, aor: string) -> string {
+    let prefix = "reg|" + aor + "|"
+    let mut i = 0
+    while i < 8 {
+        let key = prefix + string(i)
+        if cmap_has(reg, key) == 1 {
+            let value = cmap_get(reg, key)
+            if registration_live(value) == 1 { return value }
+            let _ = cmap_del(reg, key)
+        }
+        i = i + 1
+    }
+
+    // Compatibility with bindings written by older versions.
+    if cmap_has(reg, aor) == 1 {
+        let old = cmap_get(reg, aor)
+        let old_parts = str_split(old, "|")
+        if len(old_parts) >= 3 && registration_live(old) == 1 { return old }
+        if len(old_parts) >= 2 {
+            // Old values had no expiry; accept them only during migration.
+            return registration_value(old_parts[0], old_parts[1], now_ms() + 300000, "", 0)
+        }
+    }
+    return ""
+}
+
+fn registration_response_contact(value: string) -> string {
+    let parts = str_split(value, "|")
+    if len(parts) < 3 { return "" }
+    let mut expires_at = 0
+    match parse_int(parts[2]) {
+        Ok(v) => { expires_at = v }
+        Err(_) => { return "" }
+    }
+    let mut remaining = (expires_at - now_ms()) / 1000
+    if remaining < 1 { remaining = 1 }
+    return "<" + parts[0] + ">;expires=" + string(remaining)
+}
+
+// RFC 3261 §10.2.4: a successful REGISTER response reports the complete set
+// of current bindings, not merely the Contact value from the request.
+fn registration_response_contacts(reg: CMap, aor: string) -> string {
+    let prefix = "reg|" + aor + "|"
+    let mut result = ""
+    let mut i = 0
+    while i < 8 {
+        let key = prefix + string(i)
+        if cmap_has(reg, key) == 1 {
+            let value = cmap_get(reg, key)
+            if registration_live(value) == 1 {
+                let rendered = registration_response_contact(value)
+                if len(rendered) > 0 {
+                    if len(result) > 0 { result = result + ", " }
+                    result = result + rendered
+                }
+            } else {
+                let _ = cmap_del(reg, key)
+            }
+        }
+        i = i + 1
+    }
+    if len(result) == 0 {
+        let legacy = registration_find(reg, aor)
+        if len(legacy) > 0 { result = registration_response_contact(legacy) }
+    }
+    return result
+}
+
+fn registration_store(reg: CMap, aor: string, contact: string, transport: string, expires_s: int, ip: string, port: int) -> int {
+    if len(aor) == 0 || len(contact) == 0 { return 0 }
+    let expires_at = now_ms() + expires_s * 1000
+    let value = registration_value(contact, transport, expires_at, ip, port)
+    let prefix = "reg|" + aor + "|"
+    let mut slot = -1
+    let mut i = 0
+    while i < 8 {
+        let key = prefix + string(i)
+        if cmap_has(reg, key) == 1 {
+            let current = cmap_get(reg, key)
+            if registration_matches(current, contact) == 1 { slot = i; break }
+            if slot < 0 && registration_live(current) == 0 { slot = i }
+        } else {
+            if slot < 0 { slot = i }
+        }
+        i = i + 1
+    }
+    if slot < 0 { slot = 0 }
+    cmap_set(reg, prefix + string(slot), value)
+    // Keep the legacy key as a fast compatibility path; new lookups use slots.
+    cmap_set(reg, aor, value)
+    return 1
+}
+
+fn registration_remove(reg: CMap, aor: string, contact: string) -> int {
+    let prefix = "reg|" + aor + "|"
+    let mut removed = 0
+    let mut i = 0
+    while i < 8 {
+        let key = prefix + string(i)
+        if cmap_has(reg, key) == 1 {
+            let value = cmap_get(reg, key)
+            if len(contact) == 0 || str_eq(contact, "*") {
+                let _ = cmap_del(reg, key)
+                removed = removed + 1
+            } else {
+                if registration_matches(value, contact) == 1 {
+                    let _ = cmap_del(reg, key)
+                    removed = removed + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    let _ = cmap_del(reg, aor)
+    let remaining = registration_find(reg, aor)
+    if len(remaining) > 0 { cmap_set(reg, aor, remaining) } else { let _ = cmap_del(reg, aor) }
+    return removed
+}
+
+fn registration_db_upsert(db: SqlDB, db_ok: int, aor: string, contact: string, transport: string, node_id: string, expires_s: int, ip: string, port: int) -> int {
+    if db_ok == 0 { return 0 }
+    let _ = sql_exec_str4(db, "INSERT INTO registration_bindings (aor, contact, transport, node_id, expires_at, source_ip, source_port) VALUES ($1, $2, $3, $4, NOW() + INTERVAL '1 hour', '', 0) ON CONFLICT (aor, contact) DO UPDATE SET transport = $3, node_id = $4, updated_at = NOW()", aor, contact, transport, node_id)
+    let _ = sql_exec_str4(db, "UPDATE registration_bindings SET expires_at = NOW() + ($3 || ' seconds')::interval, source_ip = $4, source_port = 0, updated_at = NOW() WHERE aor = $1 AND contact = $2", aor, contact, string(expires_s), ip)
+    let _ = sql_exec_str4(db, "UPDATE registration_bindings SET source_port = CAST($3 AS INTEGER) WHERE aor = $1 AND contact = $2", aor, contact, string(port), "")
+    // Keep the original table populated for older cluster readers.
+    let _ = sql_exec_str4(db, "INSERT INTO registrations (aor, contact, transport, node_id, updated_at) VALUES ($1, $2, $3, $4, NOW()) ON CONFLICT (aor) DO UPDATE SET contact = $2, transport = $3, node_id = $4, updated_at = NOW()", aor, contact, transport, node_id)
+    return 1
+}
+
+fn registration_db_remove(db: SqlDB, db_ok: int, aor: string, contact: string) -> int {
+    if db_ok == 0 { return 0 }
+    if len(contact) == 0 || str_eq(contact, "*") {
+        let _ = sql_exec_str4(db, "DELETE FROM registration_bindings WHERE aor = $1", aor, "", "", "")
+        let _ = sql_exec_str4(db, "DELETE FROM registrations WHERE aor = $1", aor, "", "", "")
+    } else {
+        let _ = sql_exec_str4(db, "DELETE FROM registration_bindings WHERE aor = $1 AND contact = $2", aor, contact, "", "")
+        let _ = sql_exec_str4(db, "DELETE FROM registrations WHERE aor = $1 AND contact = $2", aor, contact, "", "")
+    }
+    return 1
+}
+
+fn registration_cleanup_db(db: SqlDB, db_ok: int) -> int {
+    if db_ok == 0 { return 0 }
+    let _ = sql_exec_plain(db, "DELETE FROM registration_bindings WHERE expires_at < NOW()")
+    let _ = sql_exec_plain(db, "DELETE FROM registrations WHERE updated_at < NOW() - INTERVAL '24 hours'")
+    return 1
+}
+
+fn registration_load_db(db: SqlDB, db_ok: int, reg: CMap) -> int {
+    if db_ok == 0 { return 0 }
+    let rows = sql_query_rows_str(db, "SELECT aor, contact, transport, EXTRACT(EPOCH FROM (expires_at - NOW()))::INT, source_ip, source_port FROM registration_bindings WHERE expires_at > NOW() ORDER BY updated_at DESC LIMIT 10000", "")
+    if rows <= 0 { return 0 }
+    let mut loaded = 0
+    while sql_rows_next(rows) == 1 {
+        let aor = sql_rows_str(rows, 0)
+        let contact = sql_rows_str(rows, 1)
+        let transport = sql_rows_str(rows, 2)
+        let expires_s = sql_rows_int(rows, 3)
+        let ip = sql_rows_str(rows, 4)
+        let port = sql_rows_int(rows, 5)
+        if expires_s > 0 && len(aor) > 0 && len(contact) > 0 {
+            let _ = registration_store(reg, aor, contact, transport, expires_s, ip, port)
+            loaded = loaded + 1
+        }
+    }
+    let _ = sql_rows_close(rows)
+    return loaded
+}

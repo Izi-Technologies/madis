@@ -1,0 +1,116 @@
+// ============ SDP PARSING & NAT TRAVERSAL ============
+// Via NAT: platform sip_msg_fix_top_via / sip_via_response_* (RFC 3261 + 3581).
+// SDP: platform sdp_* builtins; avoid shadowing sdp_media_port / sdp_connection_addr.
+
+// Check if IP is private (RFC 1918 / RFC 6598)
+fn is_private_ip(ip: string) -> int {
+    if str_has_prefix(ip, "10.") { return 1 }
+    if str_has_prefix(ip, "192.168.") { return 1 }
+    if str_has_prefix(ip, "127.") { return 1 }
+    // 172.16.0.0 - 172.31.255.255
+    if str_has_prefix(ip, "172.") {
+        let parts = str_split(ip, ".")
+        if len(parts) >= 2 {
+            let mut octet2 = 0
+            match parse_int(parts[1]) {
+                Ok(v) => { octet2 = v }
+                Err(_) => { return 0 }
+            }
+            if octet2 >= 16 {
+                if octet2 <= 31 { return 1 }
+            }
+        }
+    }
+    // 100.64.0.0/10 (CGNAT)
+    if str_has_prefix(ip, "100.") {
+        let parts = str_split(ip, ".")
+        if len(parts) >= 2 {
+            let mut octet2 = 0
+            match parse_int(parts[1]) {
+                Ok(v) => { octet2 = v }
+                Err(_) => { return 0 }
+            }
+            if octet2 >= 64 {
+                if octet2 <= 127 { return 1 }
+            }
+        }
+    }
+    return 0
+}
+
+// Headers before body (kept for rtpengine rebuild path)
+fn msg_headers_only(msg: string, msglen: int) -> string {
+    let mut i = 0
+    while i + 3 < msglen {
+        if int(msg[i]) == 13 {
+            if int(msg[i + 1]) == 10 {
+                if int(msg[i + 2]) == 13 {
+                    if int(msg[i + 3]) == 10 {
+                        return msg[0:i]
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return msg
+}
+
+// Rebuild message with new body and updated Content-Length
+fn msg_set_body(msg: string, new_body: string) -> string {
+    let headers = msg_headers_only(msg, len(msg))
+    let new_cl = string(len(new_body))
+    let mut updated = headers
+    let cl_idx = str_index(str_to_lower(headers), "content-length:")
+    if cl_idx >= 0 {
+        let mut vs = cl_idx + 15
+        let hlen = len(headers)
+        if vs < hlen { if int(headers[vs]) == 32 { vs = vs + 1 } }
+        let mut ve = vs
+        while ve < hlen {
+            if int(headers[ve]) == 13 { break }
+            if int(headers[ve]) == 10 { break }
+            ve = ve + 1
+        }
+        updated = headers[0:vs] + new_cl + headers[ve:]
+    }
+    return updated + "\r\n\r\n" + new_body
+}
+
+// Full NAT traversal: rewrite private c= (and o= via string replace) with public/source IP
+fn nat_fix_sdp(msg: string, msglen: int, source_ip: string) -> string {
+    let _ = msglen
+    let sdp = sip_body(msg)
+    if len(sdp) == 0 { return msg }
+    if sdp_ok(sdp) == 0 { return msg }
+
+    let conn_ip = sdp_connection_addr(sdp)
+    if len(conn_ip) == 0 { return msg }
+
+    // Only rewrite if the SDP contains a private IP
+    if is_private_ip(conn_ip) == 0 { return msg }
+
+    // Don't rewrite if source is also private (both behind same NAT)
+    if is_private_ip(source_ip) == 1 { return msg }
+
+    let mut final_sdp = sdp_replace_connection_addr(sdp, source_ip)
+    // Origin line o= may still hold the private address
+    if str_contains(final_sdp, conn_ip) {
+        final_sdp = str_replace(final_sdp, conn_ip, source_ip)
+    }
+
+    return msg_set_body(msg, final_sdp)
+}
+
+// Ingress: add received= / rport= on top Via (RFC 3261 §18.2 + RFC 3581)
+fn via_add_received(msg: string, msglen: int, source_ip: string, source_port: int) -> string {
+    let _ = msglen
+    return sip_msg_fix_top_via(msg, source_ip, source_port)
+}
+
+// received= from top Via (if present)
+fn via_received_ip(msg: string, msglen: int) -> string {
+    let _ = msglen
+    let via = sip_header(msg, "Via")
+    return sip_via_received(via)
+}

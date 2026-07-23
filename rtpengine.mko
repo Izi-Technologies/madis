@@ -1,0 +1,230 @@
+// ============ RTPENGINE INTEGRATION ============
+// Optional media proxy via rtpengine ng protocol.
+// Sends UDP bencode commands to rtpengine to set up RTP relay.
+// Rewrites SDP with rtpengine-provided media addresses.
+//
+// Config (DB config table):
+//   rtpengine_enabled = true/false
+//   rtpengine_host = 127.0.0.1
+//   rtpengine_port = 2223
+//
+// Protocol: bencode over UDP (ng control protocol)
+// Commands: offer, answer, delete
+
+// Build a bencode dictionary string
+// rtpengine ng protocol uses bencode: d...e wrapping
+fn bencode_str(s: string) -> string {
+    return string(len(s)) + ":" + s
+}
+
+fn bencode_dict_2(k1: string, v1: string, k2: string, v2: string) -> string {
+    return "d" + bencode_str(k1) + bencode_str(v1) + bencode_str(k2) + bencode_str(v2) + "e"
+}
+
+fn bencode_dict_3(k1: string, v1: string, k2: string, v2: string, k3: string, v3: string) -> string {
+    return "d" + bencode_str(k1) + bencode_str(v1) + bencode_str(k2) + bencode_str(v2) + bencode_str(k3) + bencode_str(v3) + "e"
+}
+
+// Parse a bencode response to extract a value by key
+// Simple parser: finds "N:key" then reads the next "N:value"
+fn bencode_get(resp: string, key: string) -> string {
+    let needle = string(len(key)) + ":" + key
+    let idx = str_index(resp, needle)
+    if idx < 0 { return "" }
+    // Move past the key
+    let mut i = idx + len(needle)
+    let n = len(resp)
+    // Read the value length
+    let mut vlen = 0
+    while i < n {
+        let c = int(resp[i])
+        if c == 58 { i = i + 1; break }  // ':'
+        if c >= 48 {
+            if c <= 57 { vlen = vlen * 10 + (c - 48) }
+        }
+        i = i + 1
+    }
+    if vlen == 0 { return "" }
+    if i + vlen > n { return "" }
+    return resp[i:i + vlen]
+}
+
+// Generate a unique cookie for the ng request
+fn rtp_cookie() -> string {
+    return base64_encode(random_bytes(6))
+}
+
+// Send ng command to rtpengine and get response
+fn rtp_send(host: string, port: int, command: string) -> string {
+    // Use a non-blocking socket, bounded polling, and one retry. A lost
+    // response should fail media rewriting without parking a SIP worker for
+    // an unbounded interval.
+    let mut attempt = 0
+    while attempt < 2 {
+        let fd = nb_udp_bind(0)
+        if fd >= 0 {
+            let cookie = rtp_cookie()
+            let msg = cookie + " " + command
+            let _ = udp_send_to(fd, host, port, msg)
+            let deadline = mono_ms() + 125
+            let mut resp = ""
+            while mono_ms() < deadline {
+                resp = nb_udp_recv(fd)
+                if len(resp) > 0 { break }
+                sleep_ms(5)
+            }
+            let _ = udp_close(fd)
+            let prefix = cookie + " "
+            if str_has_prefix(resp, prefix) { return resp[len(prefix):] }
+        }
+        attempt = attempt + 1
+        if attempt < 2 { sleep_ms(10) }
+    }
+    return ""
+}
+
+// Load rtpengine config from DB
+fn rtp_config(db: SqlDB, db_ok: int, cache: CMap) -> []string {
+    // Returns [enabled, host, port]
+    let mut result = make([]string, 3)
+    result[0] = "0"
+    result[1] = "127.0.0.1"
+    result[2] = "2223"
+
+    let key = "rtpengine_cfg|" + proxy_cache_epoch(cache)
+    if cmap_has(cache, key) == 1 {
+        let cached = cmap_get(cache, key)
+        let parts = str_split(cached, "|")
+        if len(parts) >= 3 {
+            result[0] = parts[0]
+            result[1] = parts[1]
+            result[2] = parts[2]
+        }
+        return result
+    }
+
+    if db_ok == 1 {
+        let enabled = sql_query_str(db, "SELECT value FROM config WHERE key = $1", "rtpengine_enabled")
+        let host = sql_query_str(db, "SELECT value FROM config WHERE key = $1", "rtpengine_host")
+        let port = sql_query_str(db, "SELECT value FROM config WHERE key = $1", "rtpengine_port")
+        if str_eq(enabled, "true") { result[0] = "1" }
+        if len(host) > 0 { result[1] = host }
+        if len(port) > 0 { result[2] = port }
+    }
+
+    // Start from a fresh buffer.  Array elements are owned by `result`;
+    // consuming result[0] with the in-place concat path would leave the
+    // array slot pointing at realloc-freed storage.
+    let cache_value = "" + result[0] + "|" + result[1] + "|" + result[2]
+    cmap_set(cache, key, cache_value)
+    return result
+}
+
+// OFFER: called when forwarding an INVITE (caller's SDP)
+// Sends SDP to rtpengine, gets back rewritten SDP with relay addresses
+fn rtp_offer(host: string, port: int, call_id: string, from_tag: string, sdp: string) -> string {
+    let cmd = bencode_dict_3(
+        "command", "offer",
+        "call-id", call_id,
+        "sdp", sdp
+    )
+    let resp = rtp_send(host, port, cmd)
+    if len(resp) == 0 { return "" }
+
+    // Extract rewritten SDP from response
+    let new_sdp = bencode_get(resp, "sdp")
+    let result = bencode_get(resp, "result")
+    if str_eq(result, "ok") {
+        return new_sdp
+    }
+    return ""
+}
+
+// ANSWER: called when forwarding 200 OK (callee's SDP)
+fn rtp_answer(host: string, port: int, call_id: string, from_tag: string, to_tag: string, sdp: string) -> string {
+    let cmd = bencode_dict_3(
+        "command", "answer",
+        "call-id", call_id,
+        "sdp", sdp
+    )
+    let resp = rtp_send(host, port, cmd)
+    if len(resp) == 0 { return "" }
+
+    let new_sdp = bencode_get(resp, "sdp")
+    let result = bencode_get(resp, "result")
+    if str_eq(result, "ok") {
+        return new_sdp
+    }
+    return ""
+}
+
+// DELETE: called on BYE/CANCEL to tear down RTP session
+fn rtp_delete(host: string, port: int, call_id: string) -> int {
+    let cmd = bencode_dict_2(
+        "command", "delete",
+        "call-id", call_id
+    )
+    let resp = rtp_send(host, port, cmd)
+    let result = bencode_get(resp, "result")
+    if str_eq(result, "ok") { return 1 }
+    return 0
+}
+
+// High-level: process SDP through rtpengine for an INVITE
+// Returns the message with SDP rewritten by rtpengine, or original if rtpengine is off
+fn rtp_process_offer(msg: string, msglen: int, call_id: string, from_tag: string, db: SqlDB, db_ok: int, cache: CMap) -> string {
+    let cfg = rtp_config(db, db_ok, cache)
+    if str_eq(cfg[0], "0") { return msg }
+
+    let sdp = sip_body(msg)
+    if len(sdp) == 0 { return msg }
+
+    let mut rtp_port = 2223
+    match parse_int(cfg[2]) {
+        Ok(v) => { rtp_port = v }
+        Err(_) => {}
+    }
+
+    let new_sdp = rtp_offer(cfg[1], rtp_port, call_id, from_tag, sdp)
+    if len(new_sdp) == 0 { return msg }
+    cmap_set(cache, "rtp_state|" + call_id, "offer|" + string(mono_ms()))
+    let _ = msglen
+    return msg_set_body(msg, new_sdp)
+}
+
+// High-level: process SDP through rtpengine for a 200 OK response
+fn rtp_process_answer(msg: string, msglen: int, call_id: string, from_tag: string, to_tag: string, db: SqlDB, db_ok: int, cache: CMap) -> string {
+    let cfg = rtp_config(db, db_ok, cache)
+    if str_eq(cfg[0], "0") { return msg }
+
+    let sdp = sip_body(msg)
+    if len(sdp) == 0 { return msg }
+
+    let mut rtp_port = 2223
+    match parse_int(cfg[2]) {
+        Ok(v) => { rtp_port = v }
+        Err(_) => {}
+    }
+
+    let new_sdp = rtp_answer(cfg[1], rtp_port, call_id, from_tag, to_tag, sdp)
+    if len(new_sdp) == 0 { return msg }
+    cmap_set(cache, "rtp_state|" + call_id, "answer|" + string(mono_ms()))
+    let _ = msglen
+    return msg_set_body(msg, new_sdp)
+}
+
+// High-level: tear down RTP session on BYE/CANCEL
+fn rtp_process_delete(call_id: string, db: SqlDB, db_ok: int, cache: CMap) -> int {
+    let cfg = rtp_config(db, db_ok, cache)
+    if str_eq(cfg[0], "0") { return 0 }
+
+    let mut rtp_port = 2223
+    match parse_int(cfg[2]) {
+        Ok(v) => { rtp_port = v }
+        Err(_) => {}
+    }
+
+    let result = rtp_delete(cfg[1], rtp_port, call_id)
+    if result == 1 { let _ = cmap_del(cache, "rtp_state|" + call_id) }
+    return result
+}

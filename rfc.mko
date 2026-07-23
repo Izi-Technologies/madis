@@ -1,0 +1,723 @@
+// ============ RFC 3261 COMPLIANCE ============
+// Policy-layer helpers; parse/hop IDs use platform sip_* builtins.
+
+// --- Max-Forwards (Section 16.6 step 3) ---
+fn sip_get_max_forwards(msg: string, n: int) -> int {
+    let mf = sip_hdr(msg, "Max-Forwards", n)
+    if len(mf) == 0 { return 70 }  // default per RFC
+    let mut val = 0
+    match parse_int(mf) {
+        Ok(v) => { val = v }
+        Err(_) => { return -1 }
+    }
+    if val < 0 || val > 255 { return -1 }
+    return val
+}
+
+fn sip_decrement_max_forwards(msg: string, n: int) -> string {
+    let mf_str = sip_hdr(msg, "Max-Forwards", n)
+    if len(mf_str) == 0 {
+        // RFC 3261 §16.6 step 3: add 70 when absent. The proxy decrements
+        // only a header that was actually present in the received request.
+        return sip_prepend_header(msg, "Max-Forwards", "70")
+    }
+    let mut mf = 70
+    match parse_int(mf_str) {
+        Ok(v) => { mf = v }
+        Err(_) => { mf = 70 }
+    }
+    let new_mf = mf - 1
+    // Replace the value in-place so capitalization and optional whitespace
+    // in the received header do not affect forwarding correctness.
+    let first = str_index(msg, "\r\n")
+    if first < 0 { return msg }
+    let mut i = first + 2
+    while i < len(msg) {
+        let rel_end = str_index(msg[i:], "\r\n")
+        if rel_end < 0 { return msg }
+        let end = i + rel_end
+        if end == i { return msg }
+        let line = msg[i:end]
+        let low = str_to_lower(line)
+        if str_has_prefix(low, "max-forwards:") {
+            let colon = str_index(line, ":")
+            if colon >= 0 {
+                return msg[0:i] + line[0:colon + 1] + " " + string(new_mf) + msg[end:]
+            }
+        }
+        i = end + 2
+    }
+    return msg
+}
+
+// --- Loop detection (Section 16.3 step 4) ---
+fn sip_detect_loop(msg: string, n: int, our_ip: string, our_port: int) -> int {
+    let our_addr = our_ip + ":" + string(our_port)
+    let mut count = 0
+    let mut i = 0
+    while i < n {
+        if int(msg[i]) == 10 { i = i + 1; break }
+        i = i + 1
+    }
+    while i < n {
+        if int(msg[i]) == 13 { break }
+        if i + 4 < n {
+            if str_eq(str_to_lower(msg[i:i + 4]), "via:") {
+                let mut ve = i
+                while ve < n {
+                    if int(msg[ve]) == 10 { ve = ve + 1; break }
+                    ve = ve + 1
+                }
+                let via_line = msg[i:ve]
+                if str_contains(via_line, our_addr) {
+                    count = count + 1
+                }
+                i = ve
+                continue
+            }
+        }
+        while i < n {
+            if int(msg[i]) == 10 { i = i + 1; break }
+            i = i + 1
+        }
+    }
+    return count
+}
+
+// --- Route header processing (Section 16.4, 16.12) ---
+fn sip_has_route(msg: string, n: int) -> int {
+    let route = sip_hdr(msg, "Route", n)
+    if len(route) > 0 { return 1 }
+    return 0
+}
+
+fn sip_get_route(msg: string, n: int) -> string {
+    return sip_hdr(msg, "Route", n)
+}
+
+fn sip_pop_route(msg: string, n: int) -> string {
+    let mut i = 0
+    while i < n {
+        if int(msg[i]) == 10 { i = i + 1; break }
+        i = i + 1
+    }
+    while i < n {
+        if int(msg[i]) == 13 { break }
+        if i + 6 < n {
+            if str_eq(str_to_lower(msg[i:i + 6]), "route:") {
+                let mut ve = i
+                while ve < n {
+                    if int(msg[ve]) == 10 { ve = ve + 1; break }
+                    ve = ve + 1
+                }
+                let line = msg[i:ve]
+                let value = line[6:]
+                let comma = str_index(value, ",")
+                if comma >= 0 {
+                    let rest = str_trim_space(value[comma + 1:])
+                    return msg[0:i] + "Route: " + rest + "\r\n" + msg[ve:]
+                }
+                return msg[0:i] + msg[ve:]
+            }
+        }
+        while i < n {
+            if int(msg[i]) == 10 { i = i + 1; break }
+            i = i + 1
+        }
+    }
+    return msg
+}
+
+fn sip_route_is_ours(route: string, our_ip: string, our_port: int) -> int {
+    let our_addr = our_ip + ":" + string(our_port)
+    let top = sip_route_target(route)
+    if str_contains(top, our_addr) { return 1 }
+    return 0
+}
+
+// --- Proxy-Require / Require (Section 16.3 step 2) ---
+fn sip_check_require(msg: string, n: int) -> string {
+    let pr = sip_hdr(msg, "Proxy-Require", n)
+    if len(pr) == 0 { return "" }
+    let parts = str_split(pr, ",")
+    let mut i = 0
+    while i < len(parts) {
+        let ext = str_trim_space(parts[i])
+        // No Proxy-Require extension is implemented by this proxy yet. Do
+        // not silently claim support for timer, replaces, path, or 100rel.
+        return ext
+    }
+    return ""
+}
+
+fn sip_420_response(msg: string, n: int, unsupported: string) -> string {
+    let _ = n
+    let extra = sip_header_line("Unsupported", unsupported)
+    return sip_reply(msg, 420, "Bad Extension", extra, "")
+}
+
+// --- Transaction deduplication (Section 17.2.3) ---
+// Key = Via branch + CSeq (stable for server-side matching)
+fn sip_transaction_key(msg: string, n: int) -> string {
+    let via = sip_hdr(msg, "Via", n)
+    let cseq = sip_hdr(msg, "CSeq", n)
+    let branch = sip_via_branch(via)
+    return branch + "|" + cseq
+}
+
+// Keep server transaction responses long enough for normal SIP
+// retransmissions, but do not let an old response match a reused branch.
+fn sip_transaction_ttl_ms() -> int {
+    return 64000
+}
+
+fn sip_transaction_expiry_ms(cache: CMap, txn_key: string) -> int {
+    let exp_key = "txn_exp|" + txn_key
+    if cmap_has(cache, exp_key) == 1 {
+        match parse_int(cmap_get(cache, exp_key)) {
+            Ok(v) => { return v }
+            Err(_) => {}
+        }
+    }
+    return 0
+}
+
+fn sip_transaction_fresh(txn_key: string, cache: CMap) -> int {
+    let response_key = "txn|" + txn_key
+    let stamp_key = "txn_ts|" + txn_key
+    if cmap_has(cache, response_key) == 0 || cmap_has(cache, stamp_key) == 0 {
+        return 0
+    }
+
+    let mut stamp = 0
+    let mut parsed = 0
+    match parse_int(cmap_get(cache, stamp_key)) {
+        Ok(v) => { stamp = v; parsed = 1 }
+        Err(_) => {}
+    }
+
+    let now = mono_ms()
+    let age = now - stamp
+    let mut ttl = sip_transaction_ttl_ms()
+    let exp = sip_transaction_expiry_ms(cache, txn_key)
+    if parsed == 1 && age >= 0 {
+        if exp > 0 {
+            if now <= exp { return 1 }
+        } else if age <= ttl {
+            return 1
+        }
+    }
+
+    let _ = cmap_del(cache, response_key)
+    let _ = cmap_del(cache, stamp_key)
+    let _ = cmap_del(cache, "txn_exp|" + txn_key)
+    return 0
+}
+
+fn sip_txn_begin(msg: string, cache: CMap) -> string {
+    let key = sip_transaction_key(msg, len(msg))
+    if len(key) <= 2 { return "" }
+    // Keep retransmission state bounded even when the proxy handles a long
+    // stream of unique Call-IDs/branches. The ring is intentionally larger
+    // than normal concurrent in-flight transactions.
+    let seq = cmap_incr(cache, "txn_seq", 1)
+    if seq >= 0 {
+        let slot = seq - (seq / 4096) * 4096
+        let ring_key = "txn_ring|" + string(slot)
+        if cmap_has(cache, ring_key) == 1 {
+            let old = cmap_get(cache, ring_key)
+            if len(old) > 0 {
+                if not str_eq(old, key) {
+                    let _ = cmap_del(cache, "txn|" + old)
+                    let _ = cmap_del(cache, "txn_ts|" + old)
+                    let _ = cmap_del(cache, "txn_exp|" + old)
+                    let _ = cmap_del(cache, "txn_state|" + old)
+                }
+            }
+        }
+        cmap_set(cache, ring_key, key)
+    }
+    let state_key = "txn_state|" + key
+    if cmap_has(cache, state_key) == 0 {
+        cmap_set(cache, state_key, "trying|" + string(mono_ms()))
+    }
+    return key
+}
+
+fn sip_txn_finish(msg: string, reply: string, cache: CMap) -> int {
+    let key = sip_transaction_key(msg, len(msg))
+    if len(key) <= 2 { return 0 }
+    let mut state = "proceeding"
+    let code = sip_status_code(reply)
+    if code >= 200 { state = "completed" }
+    if code >= 600 { state = "terminated" }
+    cmap_set(cache, "txn_state|" + key, state + "|" + string(mono_ms()))
+    return 1
+}
+
+fn sip_is_retransmit(txn_key: string, cache: CMap) -> int {
+    return sip_transaction_fresh(txn_key, cache)
+}
+
+fn sip_store_txn(txn_key: string, response: string, cache: CMap) -> int {
+    // Publish the timestamp first. A concurrent retransmission may observe
+    // either key, but must never see a response without its freshness mark.
+    cmap_set(cache, "txn_ts|" + txn_key, string(mono_ms()))
+    cmap_set(cache, "txn|" + txn_key, response)
+    let status = sip_status_code(response)
+    let ttl = 64000
+    if status >= 100 && status < 200 { cmap_set(cache, "txn_exp|" + txn_key, string(mono_ms() + 2000)) }
+    if status >= 200 { cmap_set(cache, "txn_exp|" + txn_key, string(mono_ms() + ttl)) }
+    return 0
+}
+
+fn sip_get_txn_response(txn_key: string, cache: CMap) -> string {
+    if sip_transaction_fresh(txn_key, cache) == 1 {
+        return cmap_get(cache, "txn|" + txn_key)
+    }
+    return ""
+}
+
+// Tag from From/To value — platform sip_addr_tag
+fn sip_extract_tag(header_val: string) -> string {
+    return sip_addr_tag(header_val)
+}
+
+// Dialog key — platform sip_dialog_id (do not redefine under that name)
+fn proxy_dialog_id(cid: string, from_tag: string, to_tag: string) -> string {
+    return sip_dialog_id(cid, from_tag, to_tag)
+}
+
+// Track dialog state independently from the call CMap value. This gives the
+// response path enough information to clean media and distinguish early,
+// confirmed, and terminated dialogs without changing the existing CDR key.
+fn sip_dialog_observe(msg: string, reply: string, calls: CMap) -> int {
+    let cid = sip_header(msg, "Call-ID")
+    if len(cid) == 0 { return 0 }
+    let method = sip_method(msg)
+    let from_tag = sip_addr_tag(sip_header(msg, "From"))
+    let mut to_tag = sip_addr_tag(sip_header(msg, "To"))
+    if len(to_tag) == 0 && len(reply) > 0 { to_tag = sip_addr_tag(sip_header(reply, "To")) }
+    let mut key = "dialog|" + proxy_dialog_id(cid, from_tag, to_tag)
+    if len(to_tag) == 0 { key = "dialog|" + cid }
+
+    let mut state = "trying"
+    if str_eq(method, "ACK") { state = "confirmed" }
+    if str_eq(method, "BYE") || str_eq(method, "CANCEL") { state = "terminated" }
+    if len(reply) > 0 {
+        let code = sip_status_code(reply)
+        if code >= 200 && code < 300 { state = "confirmed" }
+        if code >= 300 { state = "failed" }
+    }
+    cmap_set(calls, key, state + "|" + string(now_ms()))
+    if str_eq(state, "terminated") || str_eq(state, "failed") {
+        let _ = cmap_del(calls, key)
+    }
+    return 1
+}
+
+fn sip_txn_cache_response(msg: string, reply: string, cache: CMap) -> int {
+    if sip_is_response(msg) == 1 || len(reply) == 0 { return 0 }
+    let key = sip_transaction_key(msg, len(msg))
+    if len(key) <= 2 { return 0 }
+    return sip_store_txn(key, reply, cache)
+}
+
+fn sip_txn_cache_forwarded_response(reply: string, cache: CMap) -> int {
+    if len(reply) == 0 || sip_is_response(reply) == 0 { return 0 }
+    let key = sip_transaction_key(reply, len(reply))
+    if len(key) <= 2 { return 0 }
+    return sip_store_txn(key, reply, cache)
+}
+
+fn sip_server_txn_cleanup(key: string, cache: CMap) -> int {
+    let _ = cmap_del(cache, "server_req|" + key)
+    let _ = cmap_del(cache, "server_resp|" + key)
+    let _ = cmap_del(cache, "server_host|" + key)
+    let _ = cmap_del(cache, "server_port|" + key)
+    let _ = cmap_del(cache, "server_transport|" + key)
+    let _ = cmap_del(cache, "server_owner|" + key)
+    let _ = cmap_del(cache, "server_next|" + key)
+    let _ = cmap_del(cache, "server_exp|" + key)
+    let _ = cmap_del(cache, "server_attempt|" + key)
+    let _ = cmap_del(cache, "server_method|" + key)
+    let _ = cmap_del(cache, "server_cid|" + key)
+    let _ = cmap_del(cache, "server_state|" + key)
+    let _ = cmap_del(cache, "server_2xx|" + key)
+    return 1
+}
+
+fn sip_server_txn_record(request: string, response: string, ip: string, port: int, transport: string, owner: int, cache: CMap) -> int {
+    if len(response) == 0 || sip_is_response(request) == 1 { return 0 }
+    let code = sip_status_code(response)
+    if code < 200 { return 0 }
+    let key = sip_transaction_key(request, len(request))
+    if len(key) <= 2 { return 0 }
+    let seq = cmap_incr(cache, "server_seq", 1)
+    if seq < 0 { return 0 }
+    let slot = seq - (seq / 4096) * 4096
+    let ring_key = "server_ring|" + string(slot)
+    if cmap_has(cache, ring_key) == 1 {
+        let old = cmap_get(cache, ring_key)
+        if len(old) > 0 && not str_eq(old, key) { let _ = sip_server_txn_cleanup(old, cache) }
+    }
+    cmap_set(cache, ring_key, key)
+    let now = mono_ms()
+    cmap_set(cache, "server_req|" + key, request)
+    cmap_set(cache, "server_resp|" + key, response)
+    cmap_set(cache, "server_host|" + key, ip)
+    cmap_set(cache, "server_port|" + key, string(port))
+    cmap_set(cache, "server_transport|" + key, str_to_lower(transport))
+    cmap_set(cache, "server_owner|" + key, string(owner))
+    cmap_set(cache, "server_method|" + key, sip_method(request))
+    cmap_set(cache, "server_cid|" + key, sip_header(request, "Call-ID"))
+    cmap_set(cache, "server_attempt|" + key, "0")
+    let method = str_to_upper(sip_method(request))
+    let is_invite = if str_eq(method, "INVITE") { 1 } else { 0 }
+    let is_2xx = if is_invite == 1 && code >= 200 && code < 300 { 1 } else { 0 }
+    if is_2xx == 1 {
+        // RFC 3261 INVITE 2xx responses are retransmitted until the ACK is
+        // observed.  The bounded Timer L-style lifetime prevents an abandoned
+        // dialog from retaining an association forever.
+        cmap_set(cache, "server_state|" + key, "accepted")
+        cmap_set(cache, "server_2xx|" + key, "1")
+    } else if is_invite == 1 {
+        cmap_set(cache, "server_state|" + key, "completed")
+        cmap_set(cache, "server_2xx|" + key, "0")
+    } else {
+        cmap_set(cache, "server_state|" + key, "completed")
+        cmap_set(cache, "server_2xx|" + key, "0")
+    }
+    // Timer H (INVITE) and Timer J (non-INVITE) are bounded by the RFC 64*T1
+    // lifetime. Timer G/2xx retransmission is driven separately for UDP.
+    cmap_set(cache, "server_next|" + key, string(now + sip_t1_ms()))
+    cmap_set(cache, "server_exp|" + key, string(now + sip_timer_l_ms()))
+    return 1
+}
+
+fn sip_server_txn_ack(request: string, cache: CMap) -> int {
+    if not str_eq(sip_method(request), "ACK") { return 0 }
+    let branch = sip_via_branch(sip_header(request, "Via"))
+    let cid = sip_header(request, "Call-ID")
+    if len(branch) > 0 { cmap_set(cache, "server_acked|" + branch, "1") }
+    if len(cid) > 0 { cmap_set(cache, "server_acked_cid|" + cid, "1") }
+    return 1
+}
+
+fn sip_server_txn_tick(cache: CMap, owner: int) -> int {
+    let now = mono_ms()
+    let mut acted = 0
+    let mut slot = 0
+    while slot < 4096 {
+        let ring_key = "server_ring|" + string(slot)
+        if cmap_has(cache, ring_key) == 1 {
+            let key = cmap_get(cache, ring_key)
+            if len(key) > 2 && cmap_has(cache, "server_resp|" + key) == 1 {
+                let mut txn_owner = -1
+                match parse_int(cmap_get(cache, "server_owner|" + key)) { Ok(v) => { txn_owner = v } Err(_) => {} }
+                if txn_owner == owner {
+                    let mut exp = 0
+                    match parse_int(cmap_get(cache, "server_exp|" + key)) { Ok(v) => { exp = v } Err(_) => {} }
+                    let req = cmap_get(cache, "server_req|" + key)
+                    let branch = sip_via_branch(sip_header(req, "Via"))
+                    let cid = cmap_get(cache, "server_cid|" + key)
+                    let acked = (len(branch) > 0 && cmap_has(cache, "server_acked|" + branch) == 1) || (len(cid) > 0 && cmap_has(cache, "server_acked_cid|" + cid) == 1)
+                    if acked || (exp > 0 && now >= exp) {
+                        let _ = sip_server_txn_cleanup(key, cache)
+                        acted = acted + 1
+                    } else {
+                        let tr = cmap_get(cache, "server_transport|" + key)
+                        let mut is_2xx = 0
+                        if cmap_has(cache, "server_2xx|" + key) == 1 {
+                            match parse_int(cmap_get(cache, "server_2xx|" + key)) { Ok(v) => { is_2xx = v } Err(_) => {} }
+                        }
+                        if str_eq(tr, "udp") && (is_2xx == 1 || cmap_has(cache, "server_method|" + key) == 1) {
+                            let mut next = 0
+                            match parse_int(cmap_get(cache, "server_next|" + key)) { Ok(v) => { next = v } Err(_) => {} }
+                            if next > 0 && now >= next {
+                                let mut port = 5060
+                                match parse_int(cmap_get(cache, "server_port|" + key)) { Ok(v) => { port = v } Err(_) => {} }
+                                let _ = udp_send_to(owner, cmap_get(cache, "server_host|" + key), port, cmap_get(cache, "server_resp|" + key))
+                                let mut attempt = 0
+                                match parse_int(cmap_get(cache, "server_attempt|" + key)) { Ok(v) => { attempt = v } Err(_) => {} }
+                                attempt = attempt + 1
+                                let mut interval = sip_t1_ms()
+                                let mut i = 0
+                                while i < attempt {
+                                    if interval >= sip_t2_ms() { interval = sip_t2_ms(); break }
+                                    interval = interval * 2
+                                    if interval > sip_t2_ms() { interval = sip_t2_ms() }
+                                    i = i + 1
+                                }
+                                cmap_set(cache, "server_attempt|" + key, string(attempt))
+                                cmap_set(cache, "server_next|" + key, string(now + interval))
+                                acted = acted + 1
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        slot = slot + 1
+    }
+    return acted
+}
+
+fn sip_timer_l_ms() -> int {
+    let raw = env_get_or("SIP_TIMER_L_MS", "32000")
+    let mut value = 32000
+    match parse_int(raw) { Ok(v) => { value = v } Err(_) => {}
+    }
+    let minimum = 64 * sip_t1_ms()
+    if value < minimum { value = minimum }
+    if value > 600000 { value = 600000 }
+    return value
+}
+
+// RFC 3261 client-transaction timing. T1/T2 are configurable for lab
+// interop, but retain the RFC defaults of 500ms/4s.
+fn sip_t1_ms() -> int {
+    let raw = env_get_or("SIP_T1_MS", "500")
+    let mut value = 500
+    match parse_int(raw) { Ok(v) => { value = v } Err(_) => {}
+    }
+    if value < 100 { value = 100 }
+    if value > 4000 { value = 4000 }
+    return value
+}
+
+fn sip_t2_ms() -> int {
+    let raw = env_get_or("SIP_T2_MS", "4000")
+    let mut value = 4000
+    match parse_int(raw) { Ok(v) => { value = v } Err(_) => {}
+    }
+    let t1 = sip_t1_ms()
+    if value < t1 { value = t1 }
+    if value > 60000 { value = 60000 }
+    return value
+}
+
+fn sip_timer_c_ms() -> int {
+    let raw = env_get_or("SIP_TIMER_C_MS", "180000")
+    let mut value = 180000
+    match parse_int(raw) { Ok(v) => { value = v } Err(_) => {} }
+    let minimum = 64 * sip_t1_ms()
+    if value < minimum { value = minimum }
+    if value > 600000 { value = 600000 }
+    return value
+}
+
+fn sip_client_txn_cleanup(key: string, cache: CMap) -> int {
+    let _ = cmap_del(cache, "client_req|" + key)
+    let _ = cmap_del(cache, "client_target|" + key)
+    let _ = cmap_del(cache, "client_transport|" + key)
+    let _ = cmap_del(cache, "client_owner|" + key)
+    let _ = cmap_del(cache, "client_sent|" + key)
+    let _ = cmap_del(cache, "client_next|" + key)
+    let _ = cmap_del(cache, "client_attempt|" + key)
+    let _ = cmap_del(cache, "client_exp|" + key)
+    let _ = cmap_del(cache, "client_method|" + key)
+    let _ = cmap_del(cache, "client_state|" + key)
+    return 1
+}
+
+// Retain an outbound request for the client transaction layer. Reliable
+// transports still need Timer B/F expiry, while UDP also needs A/E retries.
+fn sip_client_txn_record(msg: string, target: string, transport: string, owner: int, cache: CMap) -> int {
+    let method = sip_method(msg)
+    if len(method) == 0 || str_eq(method, "ACK") { return 0 }
+    let key = sip_transaction_key(msg, len(msg))
+    if len(key) <= 2 { return 0 }
+
+    let seq = cmap_incr(cache, "client_seq", 1)
+    if seq < 0 { return 0 }
+    let slot = seq - (seq / 4096) * 4096
+    let ring_key = "client_ring|" + string(slot)
+    if cmap_has(cache, ring_key) == 1 {
+        let old = cmap_get(cache, ring_key)
+        if len(old) > 0 && not str_eq(old, key) {
+            let _ = sip_client_txn_cleanup(old, cache)
+        }
+    }
+    cmap_set(cache, ring_key, key)
+    let now = mono_ms()
+    let mut expiry_window = 64 * sip_t1_ms()
+    if str_eq(method, "INVITE") { expiry_window = sip_timer_c_ms() }
+    cmap_set(cache, "client_req|" + key, msg)
+    cmap_set(cache, "client_target|" + key, target)
+    cmap_set(cache, "client_transport|" + key, str_to_lower(transport))
+    cmap_set(cache, "client_owner|" + key, string(owner))
+    cmap_set(cache, "client_sent|" + key, string(now))
+    cmap_set(cache, "client_next|" + key, string(now + sip_t1_ms()))
+    cmap_set(cache, "client_attempt|" + key, "0")
+    cmap_set(cache, "client_exp|" + key, string(now + expiry_window))
+    cmap_set(cache, "client_method|" + key, method)
+    cmap_set(cache, "client_state|" + key, "calling")
+    return 1
+}
+
+fn sip_client_txn_finish(msg: string, cache: CMap) -> int {
+    if sip_is_response(msg) == 0 { return 0 }
+    let key = sip_transaction_key(msg, len(msg))
+    if len(key) <= 2 || cmap_has(cache, "client_req|" + key) == 0 { return 0 }
+    let code = sip_status_code(msg)
+    if code < 200 {
+        cmap_set(cache, "client_state|" + key, "proceeding")
+        // Timer A/E continue until a final response; reset the retransmission
+        // clock from the provisional response as permitted by RFC 3261.
+        cmap_set(cache, "client_attempt|" + key, "0")
+        cmap_set(cache, "client_next|" + key, string(mono_ms() + sip_t1_ms()))
+    } else {
+        cmap_set(cache, "client_state|" + key, "completed")
+        let _ = sip_client_txn_cleanup(key, cache)
+    }
+    return 1
+}
+
+fn sip_fork_register_branch(cid: string, branch: string, target: string, cache: CMap) -> int {
+    if len(cid) == 0 || len(branch) == 0 { return 0 }
+    cmap_set(cache, "fork_branch|" + branch, cid)
+    cmap_set(cache, "fork_target|" + cid + "|" + branch, target)
+    cmap_set(cache, "fork_pending|" + cid + "|" + branch, "1")
+    let list_key = "fork_branches|" + cid
+    let mut list = ""
+    if cmap_has(cache, list_key) == 1 { list = cmap_get(cache, list_key) }
+    if len(list) == 0 { list = branch } else { list = list + "," + branch }
+    cmap_set(cache, list_key, list)
+    return 1
+}
+
+fn sip_fork_store_request(cid: string, branch: string, request: string, cache: CMap) -> int {
+    if len(cid) == 0 || len(branch) == 0 || len(request) == 0 { return 0 }
+    cmap_set(cache, "fork_request|" + cid + "|" + branch, request)
+    return 1
+}
+
+fn sip_fork_mark_selected(cid: string, branch: string, cache: CMap) -> int {
+    if len(cid) == 0 || len(branch) == 0 { return 0 }
+    let key = "fork_selected|" + cid
+    if cmap_has(cache, key) == 1 { return 0 }
+    cmap_set(cache, key, branch)
+    return 1
+}
+
+fn sip_fork_is_pending(cid: string, branch: string, cache: CMap) -> int {
+    let key = "fork_pending|" + cid + "|" + branch
+    if cmap_has(cache, key) == 1 && str_eq(cmap_get(cache, key), "1") { return 1 }
+    return 0
+}
+
+fn sip_fork_mark_cancelled(cid: string, branch: string, cache: CMap) -> int {
+    let key = "fork_cancelled|" + cid + "|" + branch
+    if cmap_has(cache, key) == 1 { return 0 }
+    cmap_set(cache, key, "1")
+    cmap_set(cache, "fork_pending|" + cid + "|" + branch, "0")
+    return 1
+}
+
+fn sip_fork_collect_auth(cid: string, code: int, msg: string, cache: CMap) -> int {
+    if code != 401 && code != 407 { return 0 }
+    let name = if code == 401 { "WWW-Authenticate" } else { "Proxy-Authenticate" }
+    let value = sip_header(msg, name)
+    if len(value) == 0 { return 0 }
+    let key = "fork_auth|" + cid + "|" + string(code)
+    let mut current = ""
+    if cmap_has(cache, key) == 1 { current = cmap_get(cache, key) }
+    if not str_contains("\n" + current + "\n", "\n" + value + "\n") {
+        if len(current) == 0 { current = value } else { current = current + "\n" + value }
+        cmap_set(cache, key, current)
+    }
+    return 1
+}
+
+fn sip_fork_attach_auth(cid: string, response: string, cache: CMap) -> string {
+    let code = sip_status_code(response)
+    if code != 401 && code != 407 { return response }
+    let key = "fork_auth|" + cid + "|" + string(code)
+    if cmap_has(cache, key) == 0 { return response }
+    let name = if code == 401 { "WWW-Authenticate" } else { "Proxy-Authenticate" }
+    let values = str_split(cmap_get(cache, key), "\n")
+    let mut out = response
+    let mut i = 0
+    while i < len(values) {
+        let value = str_trim_space(values[i])
+        if len(value) > 0 && not str_contains(out, value) { out = sip_prepend_header(out, name, value) }
+        i = i + 1
+    }
+    return out
+}
+
+fn sip_fork_response_better(candidate: int, current: int) -> int {
+    if current <= 0 { return 1 }
+    if candidate >= 600 && current < 600 { return 1 }
+    if candidate < 600 && current >= 600 { return 0 }
+    if candidate / 100 < current / 100 { return 1 }
+    if candidate / 100 > current / 100 { return 0 }
+    if candidate < current { return 1 }
+    return 0
+}
+
+// Collect non-2xx finals for a fork and return the best response only after
+// every sent branch has terminated. Provisional and 2xx responses are
+// returned immediately, as required for INVITE response contexts.
+fn sip_fork_collect_response(msg: string, cache: CMap) -> string {
+    let via = sip_header(msg, "Via")
+    let branch = sip_via_branch(via)
+    if len(branch) == 0 || cmap_has(cache, "fork_branch|" + branch) == 0 { return msg }
+    let cid = cmap_get(cache, "fork_branch|" + branch)
+    let code = sip_status_code(msg)
+    if code < 200 || (code >= 200 && code < 300) { return msg }
+
+    let _ = sip_fork_collect_auth(cid, code, msg, cache)
+
+    let response_key = "fork_response|" + cid + "|" + branch
+    if cmap_has(cache, response_key) == 0 {
+        cmap_set(cache, response_key, msg)
+        cmap_set(cache, "fork_pending|" + cid + "|" + branch, "0")
+        let done = cmap_incr(cache, "fork_done|" + cid, 1)
+        let mut current_code = 0
+        if cmap_has(cache, "fork_best_code|" + cid) == 1 {
+            match parse_int(cmap_get(cache, "fork_best_code|" + cid)) {
+                Ok(v) => { current_code = v }
+                Err(_) => {}
+            }
+        }
+        if sip_fork_response_better(code, current_code) == 1 {
+            cmap_set(cache, "fork_best_code|" + cid, string(code))
+            cmap_set(cache, "fork_best_branch|" + cid, branch)
+        }
+        let mut expected = 0
+        if cmap_has(cache, "fork_expected|" + cid) == 1 {
+            match parse_int(cmap_get(cache, "fork_expected|" + cid)) {
+                Ok(v) => { expected = v }
+                Err(_) => {}
+            }
+        }
+        if done < expected {
+            if code >= 600 {
+                cmap_set(cache, "fork_complete|" + cid, "1")
+            } else {
+                return ""
+            }
+        }
+        if code >= 600 {
+            cmap_set(cache, "fork_complete|" + cid, "1")
+        }
+        cmap_set(cache, "fork_complete|" + cid, "1")
+    }
+
+    if cmap_has(cache, "fork_complete|" + cid) == 0 { return "" }
+    if cmap_has(cache, "fork_best_branch|" + cid) == 0 { return msg }
+    let best = cmap_get(cache, "fork_best_branch|" + cid)
+    if cmap_has(cache, "fork_response|" + cid + "|" + best) == 1 {
+        return sip_fork_attach_auth(cid, cmap_get(cache, "fork_response|" + cid + "|" + best), cache)
+    }
+    return msg
+}
+
+fn sip_resp_cached(st: int, reason: string, msg: string, n: int, tag: string, cache: CMap) -> string {
+    let resp = sip_resp(st, reason, msg, n, tag)
+    let txn = sip_transaction_key(msg, n)
+    if len(txn) > 2 { let _ = sip_store_txn(txn, resp, cache) }
+    return resp
+}

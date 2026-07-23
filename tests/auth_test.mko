@@ -1,0 +1,92 @@
+// RFC 2617 Digest qop=auth known-answer test (the RFC's Mufasa example).
+pull . "../parser.mko"
+pull . "../nat.mko"
+pull . "../auth.mko"
+
+fn TestDigestQopAuthKnownAnswer() {
+    let ha1 = "939e7578ed9e3c518a452acee763bce9"
+    let response = digest_response_ha1_qop(
+        ha1,
+        "GET",
+        "/dir/index.html",
+        "dcd98b7102dd2f0e8b11d0f600bfb0c093",
+        "00000001",
+        "0a4f113b",
+        "auth"
+    )
+    assert_eq_str(response, "6629fae49393a05397450978507c4ef1")
+}
+
+fn TestDigestSha256AndAuthInt() {
+    let sha_ha1 = "94560c960fdbe54a07e2bf476695b77d751773ccf39073f964baac6fe1dd3e26"
+    let response = digest_response_ha1_qop_alg(
+        sha_ha1,
+        "GET",
+        "/dir/index.html",
+        "dcd98b7102dd2f0e8b11d0f600bfb0c093",
+        "00000001",
+        "0a4f113b",
+        "auth",
+        "SHA-256",
+        ""
+    )
+    assert_eq_str(response, "a0d25f20d8476d92b88e6b13412b655ae18b539568d606e61d218109707e9be9")
+    let auth_int = digest_response_ha1_qop_alg(
+        sha_ha1,
+        "GET",
+        "/dir/index.html",
+        "dcd98b7102dd2f0e8b11d0f600bfb0c093",
+        "00000001",
+        "0a4f113b",
+        "auth-int",
+        "SHA-256",
+        "Hello"
+    )
+    assert_eq_str(auth_int, "5eaf95f8f7cab8eeaee835334fb3e22a91d60858e2be79dd52a186ac2e879135")
+}
+
+fn TestDigestSessInteropVectors() {
+    let md5_ha1 = "939e7578ed9e3c518a452acee763bce9"
+    let md5_sess = digest_response_ha1_sess(
+        md5_ha1,
+        "GET",
+        "/dir/index.html",
+        "dcd98b7102dd2f0e8b11d0f600bfb0c093",
+        "0a4f113b",
+        "MD5-sess"
+    )
+    assert_eq_str(md5_sess, "4726bc10c33fa6cb357eb27807b1cce8")
+
+    let md5_qop_sess = digest_response_ha1_qop_alg(
+        md5_ha1,
+        "GET",
+        "/dir/index.html",
+        "dcd98b7102dd2f0e8b11d0f600bfb0c093",
+        "00000001",
+        "0a4f113b",
+        "auth",
+        "MD5-sess",
+        ""
+    )
+    assert_eq_str(md5_qop_sess, "8e3825c57e897f5a0dec6c2d4e5059d0")
+
+    let sha_ha1 = "3ba6cd94661c5ef34598040c868f13b8775df29109986be50ad35ae537dd3aa4"
+    let sha_sess = digest_response_ha1_sess(
+        sha_ha1,
+        "GET",
+        "/dir/index.html",
+        "dcd98b7102dd2f0e8b11d0f600bfb0c093",
+        "0a4f113b",
+        "SHA-256-sess"
+    )
+    assert_eq_str(sha_sess, "6f421709505a71923c950606510a113314a303e5224f5d6390e4ad42cb718479")
+}
+
+fn TestDigestAuthParameterParsing() {
+    let auth = "Digest username=\"Mufasa\", realm=\"testrealm@host.com\", nonce=\"abc\", uri=\"/dir/index.html\", response=\"deadbeef\", algorithm=SHA-256, qop=auth, nc=00000001, cnonce=\"xyz\""
+    assert_eq_str(sip_auth_param(auth, "username"), "Mufasa")
+    assert_eq_str(sip_auth_param(auth, "realm"), "testrealm@host.com")
+    assert_eq_str(sip_auth_param(auth, "algorithm"), "SHA-256")
+    assert_eq_str(sip_auth_param(auth, "nc"), "00000001")
+    assert_eq_str(sip_auth_param(auth, "missing"), "")
+}

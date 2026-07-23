@@ -1,0 +1,95 @@
+// ============ OBSERVABILITY / ADMIN PLANE ============
+
+fn proxy_cache_epoch(cache: CMap) -> string {
+    if cmap_has(cache, "config_epoch") == 1 { return cmap_get(cache, "config_epoch") }
+    cmap_set(cache, "config_epoch", "0")
+    return "0"
+}
+
+fn proxy_config_reload(cache: CMap) -> int {
+    let mut epoch = 0
+    match parse_int(proxy_cache_epoch(cache)) { Ok(v) => { epoch = v } Err(_) => {} }
+    epoch = epoch + 1
+    cmap_set(cache, "config_epoch", string(epoch))
+    cmap_set(cache, "config_reloaded_at", string(now_ms()))
+    metric_add(7, 1)
+    return epoch
+}
+
+fn proxy_metric_message(msg: string, reply: string, elapsed: int, calls: CMap) -> int {
+    metric_add(0, 1) // sip_messages_total
+    if sip_is_response(msg) == 1 {
+        metric_add(2, 1) // sip_responses_total
+    } else {
+        metric_add(1, 1) // sip_requests_total
+    }
+    if len(reply) > 0 {
+        let code = sip_status_code(reply)
+        if code >= 200 && code < 300 { metric_add(3, 1) }
+        if code >= 400 && code < 500 { metric_add(4, 1) }
+        if code >= 500 { metric_add(5, 1) }
+    }
+    hist_observe(0, elapsed)
+    gauge_set(0, cmap_len(calls))
+    return 0
+}
+
+fn proxy_admin_authorized(c: int) -> int {
+    let expected = env_get_or("SIP_ADMIN_TOKEN", "")
+    if len(expected) == 0 { return 1 }
+    let header = http_header(c, "Authorization")
+    if str_eq(header, "Bearer " + expected) { return 1 }
+    return 0
+}
+
+fn proxy_admin_worker(reg: CMap, calls: CMap, cache: CMap) -> int {
+    let raw_port = env_get_or("SIP_ADMIN_PORT", "8080")
+    let mut port = 8080
+    match parse_int(raw_port) { Ok(v) => { port = v } Err(_) => {} }
+    if port <= 0 { return 0 }
+    let fd = http_bind(port)
+    if fd < 0 {
+        slog("  Admin:   bind failed on :" + string(port))
+        return 1
+    }
+    let _ = register_listener(fd)
+    slog("  Admin:   http://127.0.0.1:" + string(port) + " (/healthz, /readyz, /metrics)")
+    while shutdown_requested() == 0 {
+        let c = http_accept(fd)
+        if c < 0 {
+            if should_stop_accepting() == 1 { break }
+            continue
+        }
+        let path = http_path(c)
+        if proxy_admin_authorized(c) == 0 {
+            let _ = http_respond_json(c, 401, "{\"ok\":false,\"error\":\"unauthorized\"}\n")
+        } else if str_eq(path, "/healthz") {
+            let body = "{\"ok\":true,\"version\":\"0.4.5\",\"calls\":" + string(cmap_len(calls)) + "}\n"
+            let _ = http_respond_json(c, 200, body)
+        } else if str_eq(path, "/readyz") {
+            let ready = cmap_get(cache, "ready")
+            if str_eq(ready, "1") {
+                let _ = http_respond_json(c, 200, "{\"ready\":true}\n")
+            } else {
+                let _ = http_respond_json(c, 503, "{\"ready\":false}\n")
+            }
+        } else if str_eq(path, "/metrics") {
+            let _ = http_respond_ct(c, 200, "text/plain; version=0.0.4", metrics_export_prom())
+        } else if str_eq(path, "/reload") {
+            if str_eq(http_method(c), "POST") {
+                let epoch = proxy_config_reload(cache)
+                let _ = http_respond_json(c, 200, "{\"reloaded\":true,\"epoch\":" + string(epoch) + "}\n")
+            } else {
+                let _ = http_respond_json(c, 405, "{\"ok\":false,\"error\":\"POST required\"}\n")
+            }
+        } else if str_eq(path, "/state") {
+            let body = "{\"registrations\":" + string(cmap_len(reg)) + ",\"calls\":" + string(cmap_len(calls)) + ",\"cache\":" + string(cmap_len(cache)) + "}\n"
+            let _ = http_respond_json(c, 200, body)
+        } else {
+            let _ = http_respond_json(c, 404, "{\"ok\":false,\"error\":\"not found\"}\n")
+        }
+        let _ = http_close(c)
+    }
+    let _ = http_close_listener(fd)
+    return 0
+}

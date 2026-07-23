@@ -1,0 +1,65 @@
+// Focused RFC 3261 grammar/normalization cases that are easy for a permissive
+// SIP parser to get wrong. These complement the transaction and fuzz tests.
+pull . "../parser.mko"
+pull . "../rfc.mko"
+
+fn abnf_request(extra: string) -> string {
+    return "REGISTER sip:example.com SIP/2.0\r\n"
+        + "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-abnf1;rport\r\n"
+        + "From: \"Doe, Jane\" <sip:alice@example.com>;tag=from1\r\n"
+        + "To: <sip:alice@example.com>\r\n"
+        + "Call-ID: abnf@example.com\r\n"
+        + "CSeq: 1 REGISTER\r\n"
+        + "Max-Forwards: 70\r\n"
+        + extra
+        + "Content-Length: 0\r\n\r\n"
+}
+
+fn TestRfc3261CompactHeadersAndQuotedDisplayName() {
+    let msg = "REGISTER sip:alice:pa%3Ass@example.com;transport=tcp?subject=hello%20world SIP/2.0\r\n"
+        + "v: SIP/2.0/TCP [2001:db8::10]:5060;branch=z9hG4bK-compact;rport=5060\r\n"
+        + "f: \"Doe, Jane\" <sips:alice@example.com>;tag=from1\r\n"
+        + "t: <sips:alice@example.com>\r\n"
+        + "i: compact-call@example.com\r\n"
+        + "CSeq: 1 REGISTER\r\n"
+        + "l: 0\r\n\r\n"
+    assert_eq(sip_validate_message(msg, len(msg)), 1)
+}
+
+fn TestRfc3261SingletonHeadersAndMethodCase() {
+    let valid = abnf_request("")
+    let duplicate_from = str_replace(valid, "To: <sip:alice@example.com>", "From: <sip:other@example.com>;tag=from2\r\nTo: <sip:alice@example.com>")
+    assert_eq(sip_validate_message(duplicate_from, len(duplicate_from)), 0)
+    let duplicate_cseq = str_replace(valid, "Max-Forwards: 70", "CSeq: 2 REGISTER\r\nMax-Forwards: 70")
+    assert_eq(sip_validate_message(duplicate_cseq, len(duplicate_cseq)), 0)
+    let lower_cseq_method = str_replace(valid, "CSeq: 1 REGISTER", "CSeq: 1 register")
+    assert_eq(sip_validate_message(lower_cseq_method, len(lower_cseq_method)), 0)
+    let duplicate_max_forwards = str_replace(valid, "Max-Forwards: 70", "Max-Forwards: 70\r\nMax-Forwards: 69")
+    assert_eq(sip_validate_message(duplicate_max_forwards, len(duplicate_max_forwards)), 0)
+}
+
+fn TestRfc3261ViaParameterGrammar() {
+    let valid = abnf_request("")
+    let bad_branch = str_replace(valid, "branch=z9hG4bK-abnf1", "branch=z9hG4bK")
+    assert_eq(sip_validate_message(bad_branch, len(bad_branch)), 0)
+    let bad_rport = str_replace(valid, ";rport", ";rport=not-a-port")
+    assert_eq(sip_validate_message(bad_rport, len(bad_rport)), 0)
+    let bad_param_name = str_replace(valid, ";rport", ";bad name=value")
+    assert_eq(sip_validate_message(bad_param_name, len(bad_param_name)), 0)
+    let duplicate_separator = str_replace(valid, ";rport", ";;rport")
+    assert_eq(sip_validate_message(duplicate_separator, len(duplicate_separator)), 0)
+}
+
+fn TestRfc3261HeaderContinuation() {
+    let folded = abnf_request("User-Agent: test\r\n\tcontinued\r\n")
+    assert_eq(sip_validate_message(folded, len(folded)), 1)
+    let orphan = str_replace(folded, "Via: SIP/2.0/UDP", "\tcontinued\r\nVia: SIP/2.0/UDP")
+    assert_eq(sip_validate_message(orphan, len(orphan)), 0)
+}
+
+fn TestUnsupportedProxyRequireIsRejected() {
+    let msg = abnf_request("Proxy-Require: 100rel\r\n")
+    assert_eq_str(sip_check_require(msg, len(msg)), "100rel")
+    let path = abnf_request("Proxy-Require: path\r\n")
+    assert_eq_str(sip_check_require(path, len(path)), "path")
+}

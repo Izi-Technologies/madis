@@ -1,0 +1,2667 @@
+// LEGACY monofile snapshot — prefer modular main.mko + *.mko (Mako 0.2.3
+// platform sip_*/sdp_* builtins). This file is not kept in sync.
+
+// ============ LOGGING ============
+
+fn slog(msg: string) -> int {
+    print(time_format(now_ms()) + " " + msg)
+    return 0
+}
+
+fn log_info(component: string, msg: string) -> int {
+    print(time_format(now_ms()) + " [" + component + "] " + msg)
+    return 0
+}
+// ============ SIP PARSING ============
+
+fn sip_hdr(msg: string, name: string, msglen: int) -> string {
+    let namelen = len(name)
+    let mut i = 0
+    while i < msglen {
+        if int(msg[i]) == 10 { i = i + 1; break }
+        i = i + 1
+    }
+    while i + namelen + 2 < msglen {
+        if int(msg[i]) == 13 { break }
+        let mut ok = 1
+        let mut j = 0
+        while j < namelen {
+            let mut c1 = int(msg[i + j])
+            let mut c2 = int(name[j])
+            if c1 >= 65 { if c1 <= 90 { c1 = c1 + 32 } }
+            if c2 >= 65 { if c2 <= 90 { c2 = c2 + 32 } }
+            if c1 != c2 { ok = 0; break }
+            j = j + 1
+        }
+        if ok == 1 {
+            if i + namelen < msglen {
+                if int(msg[i + namelen]) == 58 {
+                    let mut vs = i + namelen + 1
+                    if vs < msglen { if int(msg[vs]) == 32 { vs = vs + 1 } }
+                    let mut ve = vs
+                    while ve < msglen {
+                        if int(msg[ve]) == 13 { break }
+                        if int(msg[ve]) == 10 { break }
+                        ve = ve + 1
+                    }
+                    return msg[vs:ve]
+                }
+            }
+        }
+        while i < msglen {
+            if int(msg[i]) == 10 { i = i + 1; break }
+            i = i + 1
+        }
+    }
+    return ""
+}
+
+fn sip_method(msg: string, n: int) -> string {
+    let mut i = 0
+    while i < n {
+        if int(msg[i]) == 32 { return msg[0:i] }
+        i = i + 1
+    }
+    return ""
+}
+
+fn sip_ruri(msg: string, n: int) -> string {
+    let mut i = 0
+    while i < n {
+        if int(msg[i]) == 32 { i = i + 1; break }
+        i = i + 1
+    }
+    let s = i
+    while i < n {
+        if int(msg[i]) == 32 { return msg[s:i] }
+        i = i + 1
+    }
+    return ""
+}
+
+fn sip_is_resp(msg: string, n: int) -> int {
+    if n < 7 { return 0 }
+    if str_eq(msg[0:7], "SIP/2.0") { return 1 }
+    return 0
+}
+
+fn sip_user(uri: string) -> string {
+    let n = len(uri)
+    let mut s = 0
+    let mut i = 0
+    while i < n {
+        if int(uri[i]) == 58 { s = i + 1; break }
+        i = i + 1
+    }
+    i = s
+    while i < n {
+        if int(uri[i]) == 64 { return uri[s:i] }
+        i = i + 1
+    }
+    return uri[s:]
+}
+
+fn sip_domain(uri: string) -> string {
+    let n = len(uri)
+    let mut i = 0
+    while i < n {
+        if int(uri[i]) == 64 { i = i + 1; break }
+        i = i + 1
+    }
+    if i >= n { return "" }
+    let s = i
+    while i < n {
+        let c = int(uri[i])
+        if c == 58 { return uri[s:i] }
+        if c == 62 { return uri[s:i] }
+        if c == 59 { return uri[s:i] }
+        i = i + 1
+    }
+    return uri[s:]
+}
+
+fn sip_contact_addr(c: string) -> string {
+    let n = len(c)
+    let mut i = 0
+    while i < n {
+        if int(c[i]) == 60 { i = i + 1; break }
+        i = i + 1
+    }
+    let s = i
+    while i < n {
+        if int(c[i]) == 62 { return c[s:i] }
+        i = i + 1
+    }
+    return c
+}
+
+fn sip_branch() -> string {
+    return "z9hG4bK" + base64_encode(random_bytes(12))
+}
+
+fn sip_via(ip: string, port: int, tr: string) -> string {
+    return "Via: SIP/2.0/" + tr + " " + ip + ":" + string(port) + ";branch=" + sip_branch() + ";rport\r\n"
+}
+
+fn sip_rr(ip: string, port: int, tr: string) -> string {
+    return "Record-Route: <sip:" + ip + ":" + string(port) + ";transport=" + str_to_lower(tr) + ";lr>\r\n"
+}
+
+fn sip_insert(msg: string, hdrs: string) -> string {
+    let n = len(msg)
+    let mut i = 0
+    while i < n {
+        if int(msg[i]) == 10 { i = i + 1; break }
+        i = i + 1
+    }
+    return msg[0:i] + hdrs + msg[i:]
+}
+
+fn sip_strip_via(msg: string, ip: string) -> string {
+    let n = len(msg)
+    let mut i = 0
+    while i < n {
+        if int(msg[i]) == 10 { i = i + 1; break }
+        i = i + 1
+    }
+    while i < n {
+        if int(msg[i]) == 13 { break }
+        if i + 4 < n {
+            if str_eq(str_to_lower(msg[i:i + 4]), "via:") {
+                let mut ve = i
+                while ve < n {
+                    if int(msg[ve]) == 10 { ve = ve + 1; break }
+                    ve = ve + 1
+                }
+                if str_contains(msg[i:ve], ip) { return msg[0:i] + msg[ve:] }
+            }
+        }
+        while i < n {
+        if int(msg[i]) == 10 { i = i + 1; break }
+        i = i + 1
+    }
+    }
+    return msg
+}
+
+fn sip_resp(st: int, reason: string, msg: string, n: int, tag: string) -> string {
+    let via = sip_hdr(msg, "Via", n)
+    let from = sip_hdr(msg, "From", n)
+    let to = sip_hdr(msg, "To", n)
+    let cid = sip_hdr(msg, "Call-ID", n)
+    let cseq = sip_hdr(msg, "CSeq", n)
+    let mut to_h = to
+    if len(tag) > 0 { to_h = to + ";tag=" + tag }
+    return "SIP/2.0 " + string(st) + " " + reason + "\r\nVia: " + via + "\r\nFrom: " + from + "\r\nTo: " + to_h + "\r\nCall-ID: " + cid + "\r\nCSeq: " + cseq + "\r\nAllow: INVITE,ACK,BYE,CANCEL,OPTIONS,REGISTER\r\nContent-Length: 0\r\n\r\n"
+}
+// ============ SDP PARSING & NAT TRAVERSAL ============
+
+// Check if IP is private (RFC 1918 / RFC 6598)
+fn is_private_ip(ip: string) -> int {
+    if str_has_prefix(ip, "10.") { return 1 }
+    if str_has_prefix(ip, "192.168.") { return 1 }
+    if str_has_prefix(ip, "127.") { return 1 }
+    // 172.16.0.0 - 172.31.255.255
+    if str_has_prefix(ip, "172.") {
+        let parts = str_split(ip, ".")
+        if len(parts) >= 2 {
+            let mut octet2 = 0
+            match parse_int(parts[1]) {
+                Ok(v) => { octet2 = v }
+                Err(_) => { return 0 }
+            }
+            if octet2 >= 16 {
+                if octet2 <= 31 { return 1 }
+            }
+        }
+    }
+    // 100.64.0.0/10 (CGNAT)
+    if str_has_prefix(ip, "100.") {
+        let parts = str_split(ip, ".")
+        if len(parts) >= 2 {
+            let mut octet2 = 0
+            match parse_int(parts[1]) {
+                Ok(v) => { octet2 = v }
+                Err(_) => { return 0 }
+            }
+            if octet2 >= 64 {
+                if octet2 <= 127 { return 1 }
+            }
+        }
+    }
+    return 0
+}
+
+// Find the SDP body in a SIP message (everything after \r\n\r\n)
+fn sdp_get_body(msg: string, msglen: int) -> string {
+    let mut i = 0
+    while i + 3 < msglen {
+        if int(msg[i]) == 13 {
+            if int(msg[i+1]) == 10 {
+                if int(msg[i+2]) == 13 {
+                    if int(msg[i+3]) == 10 {
+                        if i + 4 < msglen {
+                            return msg[i+4:]
+                        }
+                        return ""
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// Get SIP headers portion (everything before \r\n\r\n)
+fn sdp_get_headers(msg: string, msglen: int) -> string {
+    let mut i = 0
+    while i + 3 < msglen {
+        if int(msg[i]) == 13 {
+            if int(msg[i+1]) == 10 {
+                if int(msg[i+2]) == 13 {
+                    if int(msg[i+3]) == 10 {
+                        return msg[0:i]
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return msg
+}
+
+// Extract IP from SDP "c=IN IP4 x.x.x.x" line
+fn sdp_connection_ip(sdp: string) -> string {
+    let lines = str_split(sdp, "\n")
+    let mut i = 0
+    while i < len(lines) {
+        let line = str_trim_space(lines[i])
+        if str_has_prefix(line, "c=IN IP4 ") {
+            return line[9:]
+        }
+        if str_has_prefix(line, "c=IN IP6 ") {
+            return line[9:]
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// Extract media port from "m=audio PORT RTP/AVP ..." line
+fn sdp_media_port(sdp: string, media_type: string) -> string {
+    let lines = str_split(sdp, "\n")
+    let prefix = "m=" + media_type + " "
+    let mut i = 0
+    while i < len(lines) {
+        let line = str_trim_space(lines[i])
+        if str_has_prefix(line, prefix) {
+            // "m=audio 20000 RTP/AVP 0 8 101" → extract "20000"
+            let rest = line[len(prefix):]
+            let parts = str_split(rest, " ")
+            if len(parts) > 0 {
+                return parts[0]
+            }
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// Extract origin IP from "o=..." line
+fn sdp_origin_ip(sdp: string) -> string {
+    let lines = str_split(sdp, "\n")
+    let mut i = 0
+    while i < len(lines) {
+        let line = str_trim_space(lines[i])
+        if str_has_prefix(line, "o=") {
+            // "o=- 123 456 IN IP4 x.x.x.x"
+            let parts = str_split(line, " ")
+            let plen = len(parts)
+            if plen >= 6 {
+                return parts[plen - 1]
+            }
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// Rewrite private IPs in SDP with public IP (NAT fixup)
+// Replaces IPs in c= and o= lines
+fn sdp_nat_rewrite(sdp: string, private_ip: string, public_ip: string) -> string {
+    if len(private_ip) == 0 { return sdp }
+    if len(public_ip) == 0 { return sdp }
+    if str_eq(private_ip, public_ip) { return sdp }
+
+    // Replace in c= line and o= line
+    return str_replace(sdp, private_ip, public_ip)
+}
+
+// Full NAT traversal: detect private IPs in SDP, rewrite with source IP
+// source_ip: the actual IP address the packet came from (Via received or socket peer)
+fn nat_fix_sdp(msg: string, msglen: int, source_ip: string) -> string {
+    let sdp = sdp_get_body(msg, msglen)
+    if len(sdp) == 0 { return msg }
+
+    let conn_ip = sdp_connection_ip(sdp)
+    if len(conn_ip) == 0 { return msg }
+
+    // Only rewrite if the SDP contains a private IP
+    if is_private_ip(conn_ip) == 0 { return msg }
+
+    // Don't rewrite if source is also private (both behind same NAT)
+    if is_private_ip(source_ip) == 1 { return msg }
+
+    // Rewrite private IP → source IP (the public side we see)
+    let new_sdp = sdp_nat_rewrite(sdp, conn_ip, source_ip)
+
+    // Also check origin line
+    let orig_ip = sdp_origin_ip(sdp)
+    let mut final_sdp = new_sdp
+    if len(orig_ip) > 0 {
+        if is_private_ip(orig_ip) == 1 {
+            if orig_ip != conn_ip {
+                final_sdp = sdp_nat_rewrite(final_sdp, orig_ip, source_ip)
+            }
+        }
+    }
+
+    // Rebuild message with new SDP and updated Content-Length
+    let headers = sdp_get_headers(msg, msglen)
+
+    // Update Content-Length header
+    let new_cl = string(len(final_sdp))
+    let mut updated_headers = headers
+    // Find and replace Content-Length value
+    let cl_idx = str_index(str_to_lower(headers), "content-length:")
+    if cl_idx >= 0 {
+        // Find the value start and end
+        let mut vs = cl_idx + 15
+        let hlen = len(headers)
+        if vs < hlen { if int(headers[vs]) == 32 { vs = vs + 1 } }
+        let mut ve = vs
+        while ve < hlen {
+            if int(headers[ve]) == 13 { break }
+            if int(headers[ve]) == 10 { break }
+            ve = ve + 1
+        }
+        updated_headers = headers[0:vs] + new_cl + headers[ve:]
+    }
+
+    return updated_headers + "\r\n\r\n" + final_sdp
+}
+
+// Extract received IP from Via header (the actual source IP for NAT detection)
+// Via: SIP/2.0/UDP 10.0.0.5:5060;branch=xxx;received=203.0.113.1;rport=12345
+fn via_received_ip(msg: string, msglen: int) -> string {
+    let via = sip_hdr(msg, "Via", msglen)
+    let idx = str_index(via, "received=")
+    if idx < 0 { return "" }
+    let start = idx + 9
+    let vlen = len(via)
+    let mut end = start
+    while end < vlen {
+        let c = int(via[end])
+        if c == 59 { break }  // ';'
+        if c == 44 { break }  // ','
+        if c == 32 { break }  // ' '
+        end = end + 1
+    }
+    return via[start:end]
+}
+
+// Add received= and rport= to top Via (so upstream knows our NAT mapping)
+fn via_add_received(msg: string, msglen: int, source_ip: string, source_port: int) -> string {
+    // Find first Via header
+    let mut i = 0
+    let n = msglen
+    while i < n {
+        if int(msg[i]) == 10 { i = i + 1; break }
+        i = i + 1
+    }
+    while i < n {
+        if int(msg[i]) == 13 { break }
+        if i + 4 < n {
+            if str_eq(str_to_lower(msg[i:i + 4]), "via:") {
+                // Find end of this Via line
+                let mut ve = i
+                while ve < n {
+                    if int(msg[ve]) == 13 { break }
+                    ve = ve + 1
+                }
+                let via_line = msg[i:ve]
+                // Only add received if not already present
+                if str_index(via_line, "received=") < 0 {
+                    let insert = ";received=" + source_ip + ";rport=" + string(source_port)
+                    // Insert before \r\n
+                    return msg[0:ve] + insert + msg[ve:]
+                }
+                return msg
+            }
+        }
+        while i < n {
+            if int(msg[i]) == 10 { i = i + 1; break }
+            i = i + 1
+        }
+    }
+    return msg
+}
+// ============ DIGEST AUTH (RFC 2617) ============
+
+fn digest_challenge(realm: string, msg: string, n: int, tag: string) -> string {
+    let nonce = base64_encode(random_bytes(16))
+    let via = sip_hdr(msg, "Via", n)
+    let from = sip_hdr(msg, "From", n)
+    let to = sip_hdr(msg, "To", n)
+    let cid = sip_hdr(msg, "Call-ID", n)
+    let cseq = sip_hdr(msg, "CSeq", n)
+    let mut to_h = to
+    if len(tag) > 0 { to_h = to + ";tag=" + tag }
+    return "SIP/2.0 401 Unauthorized\r\nVia: " + via + "\r\nFrom: " + from + "\r\nTo: " + to_h + "\r\nCall-ID: " + cid + "\r\nCSeq: " + cseq + "\r\nWWW-Authenticate: Digest realm=\"" + realm + "\",nonce=\"" + nonce + "\",algorithm=MD5,qop=\"auth\"\r\nContent-Length: 0\r\n\r\n"
+}
+
+fn digest_challenge_proxy(realm: string, msg: string, n: int, tag: string) -> string {
+    let nonce = base64_encode(random_bytes(16))
+    let via = sip_hdr(msg, "Via", n)
+    let from = sip_hdr(msg, "From", n)
+    let to = sip_hdr(msg, "To", n)
+    let cid = sip_hdr(msg, "Call-ID", n)
+    let cseq = sip_hdr(msg, "CSeq", n)
+    let mut to_h = to
+    if len(tag) > 0 { to_h = to + ";tag=" + tag }
+    return "SIP/2.0 407 Proxy Authentication Required\r\nVia: " + via + "\r\nFrom: " + from + "\r\nTo: " + to_h + "\r\nCall-ID: " + cid + "\r\nCSeq: " + cseq + "\r\nProxy-Authenticate: Digest realm=\"" + realm + "\",nonce=\"" + nonce + "\",algorithm=MD5,qop=\"auth\"\r\nContent-Length: 0\r\n\r\n"
+}
+
+fn has_auth(msg: string, n: int) -> int {
+    let auth = sip_hdr(msg, "Authorization", n)
+    if len(auth) > 5 { return 1 }
+    let pauth = sip_hdr(msg, "Proxy-Authorization", n)
+    if len(pauth) > 5 { return 1 }
+    return 0
+}
+
+fn extract_digest_field(auth: string, field: string) -> string {
+    let idx = str_index(auth, field + "=\"")
+    if idx < 0 { return "" }
+    let start = idx + len(field) + 2
+    let n = len(auth)
+    let mut i = start
+    while i < n {
+        if int(auth[i]) == 34 { return auth[start:i] }
+        i = i + 1
+    }
+    return ""
+}
+
+fn auth_username(msg: string, n: int) -> string {
+    let auth = sip_hdr(msg, "Authorization", n)
+    if len(auth) > 0 { return extract_digest_field(auth, "username") }
+    let pauth = sip_hdr(msg, "Proxy-Authorization", n)
+    return extract_digest_field(pauth, "username")
+}
+
+// IP-based auth: check if source IP is trusted (carriers, trunks, PBXes)
+// Returns: 1=trusted (skip digest), 0=not trusted (require digest)
+fn db_ip_auth(db: SqlDB, db_ok: int, src_ip: string, cache: CMap) -> int {
+    let key = "ipauth|" + src_ip
+    if cmap_has(cache, key) == 1 {
+        if str_eq(cmap_get(cache, key), "1") { return 1 }
+        return 0
+    }
+    if db_ok == 0 { cmap_set(cache, key, "0"); return 0 }
+
+    // Check ip_auth table
+    let r = sql_query_str(db, "SELECT id FROM ip_auth WHERE ip_address = $1 AND enabled = true LIMIT 1", src_ip)
+    if len(r) > 0 {
+        cmap_set(cache, key, "1")
+        return 1
+    }
+    // Check CIDR/subnet (simplified: check /24 by stripping last octet)
+    let dot_parts = str_split(src_ip, ".")
+    if len(dot_parts) == 4 {
+        let subnet = dot_parts[0] + "." + dot_parts[1] + "." + dot_parts[2] + ".0/24"
+        let r2 = sql_query_str(db, "SELECT id FROM ip_auth WHERE ip_address = $1 AND enabled = true LIMIT 1", subnet)
+        if len(r2) > 0 {
+            cmap_set(cache, key, "1")
+            return 1
+        }
+    }
+    cmap_set(cache, key, "0")
+    return 0
+}
+
+// Check if user exists and auth is present
+fn db_auth_user(db: SqlDB, db_ok: int, username: string, domain: string, cache: CMap) -> int {
+    if db_ok == 0 { return 1 }
+
+    let key = "user|" + username + "@" + domain
+    if cmap_has(cache, key) == 1 {
+        let v = cmap_get(cache, key)
+        if str_eq(v, "1") { return 1 }
+        return 0
+    }
+
+    let result = sql_query_str(db, "SELECT id FROM users WHERE username = $1 AND enabled = true LIMIT 1", username)
+    if len(result) > 0 {
+        cmap_set(cache, key, "1")
+        return 1
+    }
+    cmap_set(cache, key, "0")
+    return 0
+}
+// ============ DATABASE LOOKUPS ============
+
+fn db_check_acl(db: SqlDB, db_ok: int, src_ip: string, user: string, cache: CMap) -> int {
+    let key = "acl|" + src_ip + "|" + user
+    if cmap_has(cache, key) == 1 {
+        if str_eq(cmap_get(cache, key), "0") { return 0 }
+        return 1
+    }
+    if db_ok == 0 { cmap_set(cache, key, "1"); return 1 }
+    let r = sql_query_str(db, "SELECT action FROM acl WHERE (source_ip = $1 OR source_ip = '*') ORDER BY priority DESC LIMIT 1", src_ip)
+    if str_eq(r, "deny") { cmap_set(cache, key, "0"); return 0 }
+    cmap_set(cache, key, "1")
+    return 1
+}
+
+// ============ DISPATCHER / LOAD BALANCER ============
+// dispatch_sets table: groups of servers with algorithm
+//   Algorithms: round-robin, weight, priority, hash, broadcast
+//   Failover: if primary fails, try next in set
+//   Health: track server availability via OPTIONS pings
+//
+// ============ ADVANCED ROUTING ENGINE ============
+// Evaluates routing_rules table top-to-bottom (by priority).
+// Each rule has match conditions and an action.
+//
+// Match conditions (all must match for rule to fire):
+//   match_prefix      — longest prefix on callee ('' = any)
+//   match_caller      — prefix on caller ('' = any)
+//   match_src_ip      — source IP ('' = any)
+//   match_time_start  — time-of-day start HH:MM ('' = any)
+//   match_time_end    — time-of-day end HH:MM ('' = any)
+//   match_day         — day of week 0-6 ('' = any, csv "1,2,3,4,5" = weekdays)
+//   match_header      — SIP header=value condition ('' = any)
+//   match_user_tag    — tag on the user record ('' = any)
+//
+// Actions:
+//   route:gateway_name             — direct to gateway
+//   dispatch:set_name              — use dispatch set (LB)
+//   reject:code:reason             — reject with SIP status
+//   redirect:sip_uri               — 302 redirect
+//   forward:ip:port                — forward to IP directly
+//   lcr                            — least-cost routing (pick cheapest gateway for prefix)
+//   failover:gw1,gw2,gw3           — try gateways in order
+//   continue                       — skip this rule, try next
+
+// Get current hour:minute as "HHMM" int for time comparison
+fn current_time_int() -> int {
+    // Use now_ms to get approximate hour (good enough for routing)
+    // In production: use a proper time function
+    let ms = now_ms()
+    let secs = ms / 1000
+    let day_secs = secs - (secs / 86400) * 86400
+    let hours = day_secs / 3600
+    let mins = (day_secs - hours * 3600) / 60
+    return hours * 100 + mins
+}
+
+fn parse_hhmm(s: string) -> int {
+    // "09:00" → 900, "17:30" → 1730
+    let parts = str_split(s, ":")
+    if len(parts) < 2 { return 0 }
+    let mut h = 0
+    let mut m = 0
+    match parse_int(parts[0]) { Ok(v) => { h = v } Err(_) => {} }
+    match parse_int(parts[1]) { Ok(v) => { m = v } Err(_) => {} }
+    return h * 100 + m
+}
+
+fn time_in_range(now_hhmm: int, start: string, end: string) -> int {
+    if len(start) == 0 { return 1 }
+    let s = parse_hhmm(start)
+    let e = parse_hhmm(end)
+    if s <= e {
+        // Normal range: 09:00-17:00
+        if now_hhmm >= s { if now_hhmm <= e { return 1 } }
+        return 0
+    } else {
+        // Overnight: 22:00-06:00
+        if now_hhmm >= s { return 1 }
+        if now_hhmm <= e { return 1 }
+        return 0
+    }
+    return 0
+}
+
+fn current_day_of_week() -> int {
+    // 0=Sun .. 6=Sat — approximate from epoch
+    let days = now_ms() / 86400000
+    return (days + 4) - ((days + 4) / 7) * 7  // epoch was Thursday (4)
+}
+
+fn day_matches(rule_days: string, today: int) -> int {
+    if len(rule_days) == 0 { return 1 }
+    let today_str = string(today)
+    let parts = str_split(rule_days, ",")
+    let mut i = 0
+    while i < len(parts) {
+        if str_eq(str_trim_space(parts[i]), today_str) { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+fn prefix_matches(number: string, prefix: string) -> int {
+    if len(prefix) == 0 { return 1 }
+    if str_eq(prefix, "*") { return 1 }
+    if str_has_prefix(number, prefix) { return 1 }
+    return 0
+}
+
+// Dispatch helpers (kept from before)
+fn dispatch_next_rr(set_id: int, count: int, cache: CMap) -> int {
+    let key = "dsp_rr|" + string(set_id)
+    let mut idx = 0
+    if cmap_has(cache, key) == 1 {
+        match parse_int(cmap_get(cache, key)) {
+            Ok(v) => { idx = v }
+            Err(_) => { idx = 0 }
+        }
+    }
+    let next = idx + 1
+    if next >= count { cmap_set(cache, key, "0") } else { cmap_set(cache, key, string(next)) }
+    return idx
+}
+
+fn dispatch_hash(key: string, count: int) -> int {
+    let mut h = 2166136261
+    let mut i = 0
+    let n = len(key)
+    while i < n {
+        h = h ^ int(key[i])
+        h = h * 16777619
+        i = i + 1
+    }
+    if h < 0 { h = 0 - h }
+    return h - (h / count) * count
+}
+
+fn dispatch_is_healthy(addr: string, cache: CMap) -> int {
+    let key = "health|" + addr
+    if cmap_has(cache, key) == 1 {
+        if str_eq(cmap_get(cache, key), "down") { return 0 }
+    }
+    return 1
+}
+
+// Resolve a dispatch set to comma-separated targets
+fn resolve_dispatch_set(db: SqlDB, set_name: string, from_user: string, call_id: string, cache: CMap) -> string {
+    let algo = sql_query_str(db, "SELECT algorithm FROM dispatch_sets WHERE name = $1 AND enabled = true", set_name)
+    if len(algo) == 0 { return "" }
+
+    let set_id_str = sql_query_str(db, "SELECT id FROM dispatch_sets WHERE name = $1", set_name)
+    let mut set_id = 0
+    match parse_int(set_id_str) { Ok(v) => { set_id = v } Err(_) => { return "" } }
+
+    let mut members = make([]string, 0, 8)
+    let mut mi = 0
+    while mi < 8 {
+        let m = sql_query_str(db, "SELECT g.address || ':' || g.port FROM dispatch_members dm JOIN gateways g ON dm.gateway_id = g.id WHERE dm.set_id = $1 AND dm.enabled = true AND g.enabled = true ORDER BY dm.priority ASC, dm.weight DESC LIMIT 1 OFFSET " + string(mi), set_id_str)
+        if len(m) == 0 { break }
+        if dispatch_is_healthy(m, cache) == 1 { members = append(members, m) }
+        mi = mi + 1
+    }
+
+    let count = len(members)
+    if count == 0 { return "" }
+
+    // Apply algorithm
+    let mut start_idx = 0
+    if str_eq(algo, "round-robin") { start_idx = dispatch_next_rr(set_id, count, cache) }
+    if str_eq(algo, "hash") { start_idx = dispatch_hash(call_id, count) }
+    if str_eq(algo, "hash-user") { start_idx = dispatch_hash(from_user, count) }
+
+    let mut result = members[start_idx]
+    let mut i = 1
+    while i < count {
+        let fi = (start_idx + i) - ((start_idx + i) / count) * count
+        result = result + "," + members[fi]
+        i = i + 1
+    }
+    return result
+}
+
+// Resolve gateway name to addr:port
+fn resolve_gateway(db: SqlDB, gw_name: string) -> string {
+    return sql_query_str(db, "SELECT address || ':' || port FROM gateways WHERE name = $1 AND enabled = true", gw_name)
+}
+
+// Main routing engine: evaluates routing_rules table
+// Returns: "action_type|targets" (e.g. "route|10.0.0.1:5060" or "reject|404|Not Found")
+// Check if a number falls within an ANI group's ranges
+fn ani_in_group(db: SqlDB, db_ok: int, number: string, group_name: string, cache: CMap) -> int {
+    if db_ok == 0 { return 0 }
+    if len(group_name) == 0 { return 0 }
+
+    // Cache: "ani|group|number" -> "1" or "0"
+    let key = "ani|" + group_name + "|" + number
+    if cmap_has(cache, key) == 1 {
+        if str_eq(cmap_get(cache, key), "1") { return 1 }
+        return 0
+    }
+
+    // Strip non-numeric for comparison (keep digits only)
+    let mut clean = number
+    if str_has_prefix(clean, "+") { clean = clean[1:] }
+
+    // Query: check if number falls in any range of this group
+    let hit = sql_query_str(db, "SELECT 1 FROM ani_ranges ar JOIN ani_groups ag ON ar.group_id = ag.id WHERE ag.name = $1 AND ag.enabled = true AND ar.enabled = true AND $1 >= ar.range_start AND $1 <= ar.range_end LIMIT 1", clean)
+    if len(hit) > 0 {
+        cmap_set(cache, key, "1")
+        return 1
+    }
+    cmap_set(cache, key, "0")
+    return 0
+}
+
+fn db_route_call(db: SqlDB, db_ok: int, callee: string, caller: string, src_ip: string, msg: string, msglen: int, from_user: string, call_id: string, cache: CMap) -> string {
+    if db_ok == 0 { return "" }
+
+    let now_time = current_time_int()
+    let today = current_day_of_week()
+
+    // Evaluate rules by priority (up to 50 rules)
+    let mut ri = 0
+    while ri < 50 {
+        // Fetch rule ri (now includes match_ani_group)
+        let rule_data = sql_query_str(db, "SELECT match_prefix || '|' || COALESCE(match_caller,'') || '|' || COALESCE(match_src_ip,'') || '|' || COALESCE(match_time_start,'') || '|' || COALESCE(match_time_end,'') || '|' || COALESCE(match_day,'') || '|' || action || '|' || COALESCE(match_ani_group,'') FROM routing_rules WHERE enabled = true ORDER BY priority ASC LIMIT 1 OFFSET " + string(ri), "")
+        if len(rule_data) == 0 { break }
+
+        let parts = str_split(rule_data, "|")
+        if len(parts) < 7 {
+            ri = ri + 1
+            continue
+        }
+
+        let r_prefix = parts[0]
+        let r_caller = parts[1]
+        let r_src_ip = parts[2]
+        let r_time_s = parts[3]
+        let r_time_e = parts[4]
+        let r_day = parts[5]
+        let r_action = parts[6]
+        let mut r_ani = ""
+        if len(parts) >= 8 { r_ani = parts[7] }
+
+        // Check all conditions
+        let mut matched = 1
+
+        // Prefix match on callee
+        if prefix_matches(callee, r_prefix) == 0 { matched = 0 }
+
+        // Caller prefix match
+        if matched == 1 {
+            if len(r_caller) > 0 {
+                if prefix_matches(caller, r_caller) == 0 { matched = 0 }
+            }
+        }
+
+        // ANI group match (caller number in range)
+        if matched == 1 {
+            if len(r_ani) > 0 {
+                if ani_in_group(db, db_ok, caller, r_ani, cache) == 0 { matched = 0 }
+            }
+        }
+
+        // Source IP match
+        if matched == 1 {
+            if len(r_src_ip) > 0 {
+                if r_src_ip != "*" {
+                    if r_src_ip != src_ip { matched = 0 }
+                }
+            }
+        }
+
+        // Time-of-day match
+        if matched == 1 {
+            if time_in_range(now_time, r_time_s, r_time_e) == 0 { matched = 0 }
+        }
+
+        // Day-of-week match
+        if matched == 1 {
+            if day_matches(r_day, today) == 0 { matched = 0 }
+        }
+
+        if matched == 0 {
+            ri = ri + 1
+            continue
+        }
+
+        // --- Rule matched: execute action ---
+
+        // continue → skip to next rule
+        if str_eq(r_action, "continue") {
+            ri = ri + 1
+            continue
+        }
+
+        // reject:code:reason
+        if str_has_prefix(r_action, "reject:") {
+            return r_action
+        }
+
+        // redirect:sip_uri
+        if str_has_prefix(r_action, "redirect:") {
+            return r_action
+        }
+
+        // route:gateway_name
+        if str_has_prefix(r_action, "route:") {
+            let gw_name = r_action[6:]
+            let addr = resolve_gateway(db, gw_name)
+            if len(addr) > 0 { return "route|" + addr }
+        }
+
+        // dispatch:set_name or dispatch:set_name|egress:egress_set
+        if str_has_prefix(r_action, "dispatch:") {
+            // Check for egress combo
+            let pipe_idx = str_index(r_action, "|egress:")
+            if pipe_idx > 0 {
+                // Combo: ingress dispatch + egress carrier group
+                let ingress_name = r_action[9:pipe_idx]
+                let egress_name = r_action[pipe_idx + 8:]
+                let ingress_targets = resolve_dispatch_set(db, ingress_name, from_user, call_id, cache)
+                let egress_targets = resolve_dispatch_set(db, egress_name, from_user, call_id, cache)
+                // Store egress for when the PBX sends the call back out
+                if len(egress_targets) > 0 {
+                    cmap_set(cache, "egress|" + call_id, egress_targets)
+                }
+                if len(ingress_targets) > 0 { return "dispatch|" + ingress_targets }
+            } else {
+                let set_name = r_action[9:]
+                let targets = resolve_dispatch_set(db, set_name, from_user, call_id, cache)
+                if len(targets) > 0 { return "dispatch|" + targets }
+            }
+        }
+
+        // forward:ip:port
+        if str_has_prefix(r_action, "forward:") {
+            return "route|" + r_action[8:]
+        }
+
+        // failover:gw1,gw2,gw3
+        if str_has_prefix(r_action, "failover:") {
+            let gw_names = str_split(r_action[9:], ",")
+            let mut targets = ""
+            let mut fi = 0
+            while fi < len(gw_names) {
+                let addr = resolve_gateway(db, str_trim_space(gw_names[fi]))
+                if len(addr) > 0 {
+                    if dispatch_is_healthy(addr, cache) == 1 {
+                        if len(targets) > 0 { targets = targets + "," }
+                        targets = targets + addr
+                    }
+                }
+                fi = fi + 1
+            }
+            if len(targets) > 0 { return "route|" + targets }
+        }
+
+        // lcr — least-cost routing: find cheapest gateway for this prefix
+        if str_eq(r_action, "lcr") {
+            let addr = sql_query_str(db, "SELECT g.address || ':' || g.port FROM routes r JOIN gateways g ON r.gateway_id = g.id WHERE $1 LIKE r.prefix || '%' AND r.enabled = true AND g.enabled = true ORDER BY r.cost_per_min ASC, r.priority ASC LIMIT 1", callee)
+            if len(addr) > 0 { return "route|" + addr }
+        }
+
+        // If action didn't resolve, try next rule
+        ri = ri + 1
+    }
+
+    // No rule matched — try legacy prefix routing as fallback
+    let mut plen = len(callee)
+    while plen > 0 {
+        let pfx = callee[0:plen]
+        let gw = sql_query_str(db, "SELECT g.address || ':' || g.port FROM routes r JOIN gateways g ON r.gateway_id = g.id WHERE r.prefix = $1 AND r.enabled = true AND g.enabled = true ORDER BY r.priority ASC LIMIT 1", pfx)
+        if len(gw) > 0 { return "route|" + gw }
+        plen = plen - 1
+    }
+    // Default route
+    let def = sql_query_str(db, "SELECT g.address || ':' || g.port FROM routes r JOIN gateways g ON r.gateway_id = g.id WHERE r.prefix = '*' AND r.enabled = true AND g.enabled = true ORDER BY r.priority ASC LIMIT 1", "")
+    if len(def) > 0 { return "route|" + def }
+
+    return ""
+}
+// ============ NUMBER MANIPULATION ENGINE ============
+// Actions encoded in dialplan.action column:
+//   strip:N          — remove first N digits
+//   prepend:PREFIX   — add prefix
+//   replace:OLD:NEW  — replace substring
+//   set:NUMBER       — replace entire number
+//   e164:CC          — normalize to E.164 (+CC + national number)
+//   strip_plus       — remove leading +
+//   add_plus         — add leading + if missing
+// Multiple actions chained with ";" (processed left-to-right)
+
+fn num_apply_action(num: string, action: string) -> string {
+    let n = len(num)
+    if n == 0 { return num }
+
+    // strip:N
+    if str_has_prefix(action, "strip:") {
+        let digits_str = action[6:]
+        let mut digits = 0
+        match parse_int(digits_str) {
+            Ok(v) => { digits = v }
+            Err(_) => { return num }
+        }
+        if digits >= n { return "" }
+        return num[digits:]
+    } else {
+
+    // prepend:PREFIX
+    if str_has_prefix(action, "prepend:") {
+        return action[8:] + num
+    } else {
+
+    // replace:OLD:NEW
+    if str_has_prefix(action, "replace:") {
+        let rest = action[8:]
+        let colon = str_index(rest, ":")
+        if colon < 0 { return num }
+        let old = rest[0:colon]
+        let new_str = rest[colon + 1:]
+        return str_replace(num, old, new_str)
+    } else {
+
+    // set:NUMBER
+    if str_has_prefix(action, "set:") {
+        return action[4:]
+    } else {
+
+    // e164:CC — normalize to E.164 format
+    if str_has_prefix(action, "e164:") {
+        let cc = action[5:]
+        // Already E.164?
+        if str_has_prefix(num, "+") { return num }
+        // Already has country code?
+        if str_has_prefix(num, cc) { return "+" + num }
+        // Strip leading 0 (national format) and add +CC
+        if str_has_prefix(num, "0") { return "+" + cc + num[1:] }
+        // Just add +CC
+        return "+" + cc + num
+    } else {
+
+    // strip_plus
+    if str_eq(action, "strip_plus") {
+        if str_has_prefix(num, "+") { return num[1:] }
+        return num
+    } else {
+
+    // add_plus
+    if str_eq(action, "add_plus") {
+        if str_has_prefix(num, "+") { return num }
+        return "+" + num
+    } else {
+
+    // Unknown action — return unchanged
+        return num
+
+    }}}}}}}
+
+    return num
+}
+
+fn num_apply_chain(num: string, actions: string) -> string {
+    // Split on ";" and apply each action
+    let parts = str_split(actions, ";")
+    let mut result = num
+    let mut i = 0
+    while i < len(parts) {
+        let action = str_trim_space(parts[i])
+        if len(action) > 0 {
+            result = num_apply_action(result, action)
+        }
+        i = i + 1
+    }
+    return result
+}
+
+// Full dialplan processing: match number against rules, apply transformations
+// Returns: transformed number
+// dialplan table columns: match_prefix, match_length_min, match_length_max,
+//                         callee_action, caller_action, priority, direction
+fn db_dialplan(db: SqlDB, db_ok: int, caller: string, callee: string, direction: string, cache: CMap) -> []string {
+    // Returns [transformed_callee, transformed_caller]
+    let mut result = make([]string, 2)
+    result[0] = callee
+    result[1] = caller
+
+    if db_ok == 0 { return result }
+
+    let key = "dp|" + direction + "|" + callee
+    if cmap_has(cache, key) == 1 {
+        let cached = cmap_get(cache, key)
+        let parts = str_split(cached, "|")
+        if len(parts) >= 2 {
+            result[0] = parts[0]
+            result[1] = parts[1]
+        }
+        return result
+    }
+
+    // Longest prefix match on dialplan
+    let mut plen = len(callee)
+    while plen > 0 {
+        let pfx = callee[0:plen]
+        // Query: match prefix, direction, and number length
+        let callee_action = sql_query_str(db, "SELECT callee_action FROM dialplan WHERE match_prefix = $1 AND direction = $1 AND enabled = true ORDER BY priority ASC LIMIT 1", pfx)
+        if len(callee_action) > 0 {
+            result[0] = num_apply_chain(callee, callee_action)
+            // Also get caller action from same rule
+            let caller_action = sql_query_str(db, "SELECT caller_action FROM dialplan WHERE match_prefix = $1 AND direction = $1 AND enabled = true ORDER BY priority ASC LIMIT 1", pfx)
+            if len(caller_action) > 0 {
+                result[1] = num_apply_chain(caller, caller_action)
+            }
+            cmap_set(cache, key, result[0] + "|" + result[1])
+            return result
+        }
+        plen = plen - 1
+    }
+
+    // Default rule (prefix = '*')
+    let def_action = sql_query_str(db, "SELECT callee_action FROM dialplan WHERE match_prefix = '*' AND direction = $1 AND enabled = true ORDER BY priority ASC LIMIT 1", direction)
+    if len(def_action) > 0 {
+        result[0] = num_apply_chain(callee, def_action)
+    }
+
+    cmap_set(cache, key, result[0] + "|" + result[1])
+    return result
+}
+
+// DID lookup: inbound number → registered user
+fn db_lookup_did(db: SqlDB, db_ok: int, did_number: string, cache: CMap) -> string {
+    let key = "did|" + did_number
+    if cmap_has(cache, key) == 1 { return cmap_get(cache, key) }
+    if db_ok == 0 { return "" }
+    let user = sql_query_str(db, "SELECT destination_user FROM dids WHERE number = $1 AND enabled = true LIMIT 1", did_number)
+    if len(user) > 0 { cmap_set(cache, key, user); return user }
+    return ""
+}
+
+fn db_rate_ok(user: string, cache: CMap) -> int {
+    let key = "rl|" + user
+    let now = now_ms()
+    if cmap_has(cache, key) == 0 {
+        cmap_set(cache, key, "99|" + string(now))
+        return 1
+    }
+    let st = cmap_get(cache, key)
+    let parts = str_split(st, "|")
+    if len(parts) < 2 { return 1 }
+    let mut tokens = 0
+    let mut last = 0
+    match parse_int(parts[0]) { Ok(v) => { tokens = v } Err(_) => { return 1 } }
+    match parse_int(parts[1]) { Ok(v) => { last = v } Err(_) => { return 1 } }
+    tokens = tokens + (now - last) / 10
+    if tokens > 100 { tokens = 100 }
+    if tokens <= 0 { return 0 }
+    tokens = tokens - 1
+    cmap_set(cache, key, string(tokens) + "|" + string(now))
+    return 1
+}
+
+fn db_cdr(db: SqlDB, db_ok: int, cid: string, caller: string, callee: string, status: string) -> int {
+    if db_ok == 0 { return 0 }
+    let _ = sql_exec_str4(db, "INSERT INTO cdr (call_id, caller, callee, status) VALUES ($1, $2, $3, $4) ON CONFLICT (call_id) DO UPDATE SET status = $4, ended_at = NOW()", cid, caller, callee, status)
+    return 0
+}
+
+fn db_cdr_detail(db: SqlDB, db_ok: int, cid: string, src_ip: string, dest: string, transport: string) -> int {
+    if db_ok == 0 { return 0 }
+    let _ = sql_exec_str4(db, "UPDATE cdr SET source_ip = $2, destination = $3, transport = $4 WHERE call_id = $1", cid, src_ip, dest, transport)
+    return 0
+}
+
+fn db_cdr_uris(db: SqlDB, db_ok: int, cid: string, from_uri: string, to_uri: string, user_agent: string) -> int {
+    if db_ok == 0 { return 0 }
+    let _ = sql_exec_str4(db, "UPDATE cdr SET from_uri = $2, to_uri = $3, user_agent = $4 WHERE call_id = $1", cid, from_uri, to_uri, user_agent)
+    return 0
+}
+
+fn db_cdr_code(db: SqlDB, db_ok: int, cid: string, code: string) -> int {
+    if db_ok == 0 { return 0 }
+    let _ = sql_exec_str4(db, "UPDATE cdr SET sip_code = $2::int WHERE call_id = $1", cid, code, "", "")
+    return 0
+}
+
+// Log a SIP transaction for the call ladder
+fn db_sip_tx(db: SqlDB, db_ok: int, cid: string, direction: string, method: string, code: int, src: string, dst: string) -> int {
+    if db_ok == 0 { return 0 }
+    let mut label = method
+    if code > 0 { label = string(code) + " " + method }
+    let flow = src + " -> " + dst
+    let result = sql_exec_str4(db, "INSERT INTO sip_transactions (call_id, direction, method, source) VALUES ($1, $2, $3, $4)", cid, direction, label, flow)
+    return result
+}
+
+// ============ CORE PROCESSING ============
+// ============ SIP HEADER MANIPULATION ENGINE ============
+// DB-driven: header_rules table defines add/remove/modify/set per direction + method
+// Actions: add, remove, modify, set, rename, copy, move
+// Supports standard headers AND X-headers (X-Account-ID, X-Billing-Code, etc.)
+
+// Add a header to the message (before Content-Length)
+fn hdr_add(msg: string, name: string, value: string) -> string {
+    let n = len(msg)
+    let cl_idx = str_index(str_to_lower(msg), "content-length:")
+    if cl_idx >= 0 {
+        return msg[0:cl_idx] + name + ": " + value + "\r\n" + msg[cl_idx:]
+    }
+    // No Content-Length: add before \r\n\r\n
+    let mut i = 0
+    while i + 3 < n {
+        if int(msg[i]) == 13 {
+            if int(msg[i+1]) == 10 {
+                if int(msg[i+2]) == 13 {
+                    if int(msg[i+3]) == 10 {
+                        return msg[0:i] + "\r\n" + name + ": " + value + msg[i:]
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return msg
+}
+
+// Remove ALL instances of a header by name
+fn hdr_remove(msg: string, name: string) -> string {
+    let namelen = len(name)
+    let mut result = msg
+    let mut changed = 1
+    while changed == 1 {
+        changed = 0
+        let n = len(result)
+        let mut i = 0
+        // Skip request line
+        while i < n {
+            if int(result[i]) == 10 { i = i + 1; break }
+            i = i + 1
+        }
+        while i < n {
+            if int(result[i]) == 13 { break }
+            if i + namelen + 1 < n {
+                let mut ok = 1
+                let mut j = 0
+                while j < namelen {
+                    let mut c1 = int(result[i + j])
+                    let mut c2 = int(name[j])
+                    if c1 >= 65 { if c1 <= 90 { c1 = c1 + 32 } }
+                    if c2 >= 65 { if c2 <= 90 { c2 = c2 + 32 } }
+                    if c1 != c2 { ok = 0; break }
+                    j = j + 1
+                }
+                if ok == 1 {
+                    if int(result[i + namelen]) == 58 {
+                        let mut ve = i
+                        while ve < n {
+                            if int(result[ve]) == 10 { ve = ve + 1; break }
+                            ve = ve + 1
+                        }
+                        result = result[0:i] + result[ve:]
+                        changed = 1
+                        break
+                    }
+                }
+            }
+            while i < n {
+                if int(result[i]) == 10 { i = i + 1; break }
+                i = i + 1
+            }
+        }
+    }
+    return result
+}
+
+// Set header value (remove existing + add new)
+fn hdr_set(msg: string, name: string, value: string) -> string {
+    let cleaned = hdr_remove(msg, name)
+    return hdr_add(cleaned, name, value)
+}
+
+// Modify header value (find and replace within the header value)
+fn hdr_modify(msg: string, name: string, old_val: string, new_val: string) -> string {
+    let current = sip_hdr(msg, name, len(msg))
+    if len(current) == 0 { return msg }
+    let updated = str_replace(current, old_val, new_val)
+    return hdr_set(msg, name, updated)
+}
+
+// Rename a header (copy value to new name, remove old)
+fn hdr_rename(msg: string, old_name: string, new_name: string) -> string {
+    let val = sip_hdr(msg, old_name, len(msg))
+    if len(val) == 0 { return msg }
+    let removed = hdr_remove(msg, old_name)
+    return hdr_add(removed, new_name, val)
+}
+
+// Copy header value to another header (keep original)
+fn hdr_copy(msg: string, from_name: string, to_name: string) -> string {
+    let val = sip_hdr(msg, from_name, len(msg))
+    if len(val) == 0 { return msg }
+    return hdr_add(msg, to_name, val)
+}
+
+// Apply DB-driven header rules
+// header_rules table: match_method, match_direction, action, header_name, header_value, priority
+fn db_apply_header_rules(db: SqlDB, db_ok: int, msg: string, method: string, direction: string, cache: CMap) -> string {
+    if db_ok == 0 { return msg }
+
+    // Cache rules per direction (reload every 60s via cache expiry)
+    let mut result = msg
+
+    // Query rules matching this method + direction (up to 20 rules)
+    let mut i = 0
+    while i < 20 {
+        // Get rule i for this direction
+        let rule = sql_query_str(db, "SELECT action || '|' || header_name || '|' || COALESCE(header_value,'') FROM header_rules WHERE (match_method = $1 OR match_method = '*') AND match_direction = $1 AND enabled = true ORDER BY priority ASC LIMIT 1 OFFSET " + string(i), direction)
+        if len(rule) == 0 { break }
+
+        let parts = str_split(rule, "|")
+        if len(parts) >= 2 {
+            let action = parts[0]
+            let hname = parts[1]
+            let mut hval = ""
+            if len(parts) >= 3 { hval = parts[2] }
+
+            if str_eq(action, "add") {
+                result = hdr_add(result, hname, hval)
+            }
+            if str_eq(action, "remove") {
+                result = hdr_remove(result, hname)
+            }
+            if str_eq(action, "set") {
+                result = hdr_set(result, hname, hval)
+            }
+        }
+        i = i + 1
+    }
+
+    return result
+}
+
+// ============ STIR/SHAKEN (RFC 8224/8225/8226) ============
+// Signing: generate Identity header with PASSporT JWT
+// Verification: validate Identity header from upstream
+// Attestation: A (full), B (partial), C (gateway)
+
+// PASSporT header (always the same for SHAKEN)
+fn shaken_passport_header() -> string {
+    return "{\"alg\":\"ES256\",\"ppt\":\"shaken\",\"typ\":\"passport\",\"x5u\":\"\"}"
+}
+
+// Build PASSporT payload
+fn shaken_passport_payload(orig_tn: string, dest_tn: string, attest: string, origid: string, iat: int) -> string {
+    return "{\"attest\":\"" + attest + "\",\"dest\":{\"tn\":[\"" + dest_tn + "\"]},\"iat\":" + string(iat) + ",\"orig\":{\"tn\":\"" + orig_tn + "\"},\"origid\":\"" + origid + "\"}"
+}
+
+// Sign PASSporT and generate Identity header value
+// In production: use ES256 (ECDSA P-256) with a real STI certificate
+// Here we use HMAC-SHA256 as a placeholder — real deployment needs ES256
+fn shaken_sign(orig_tn: string, dest_tn: string, attest: string, cert_url: string, secret: string) -> string {
+    let origid = base64_encode(random_bytes(16))
+    let iat = now_ms() / 1000
+    let payload = shaken_passport_payload(orig_tn, dest_tn, attest, origid, iat)
+
+    // Sign as JWT
+    let token = jwt_sign(payload, secret)
+
+    // Identity header format: <token>;info=<cert_url>;alg=ES256;ppt=shaken
+    return token + ";info=<" + cert_url + ">;alg=ES256;ppt=shaken"
+}
+
+// Verify Identity header
+// Returns: "A", "B", "C" (attestation level) or "" (invalid/missing)
+fn shaken_verify(msg: string, msglen: int, secret: string) -> string {
+    let identity = sip_hdr(msg, "Identity", msglen)
+    if len(identity) == 0 { return "" }
+
+    // Extract token (everything before first ";")
+    let semi = str_index(identity, ";")
+    if semi < 0 { return "" }
+    let token = identity[0:semi]
+
+    // Verify JWT signature
+    if jwt_verify(token, secret) == 0 { return "" }
+
+    // Extract attestation from payload
+    let payload = jwt_payload(token)
+    if len(payload) == 0 { return "" }
+
+    // Find "attest":"X"
+    let aidx = str_index(payload, "\"attest\":\"")
+    if aidx < 0 { return "" }
+    let astart = aidx + 10
+    if astart >= len(payload) { return "" }
+    let attest_char = payload[astart:astart + 1]
+
+    // Validate attestation level
+    if str_eq(attest_char, "A") { return "A" }
+    if str_eq(attest_char, "B") { return "B" }
+    if str_eq(attest_char, "C") { return "C" }
+    return ""
+}
+
+// Add STIR/SHAKEN headers to outbound INVITE
+fn shaken_add_identity(msg: string, orig_tn: string, dest_tn: string, attest: string, cert_url: string, secret: string) -> string {
+    let identity_val = shaken_sign(orig_tn, dest_tn, attest, cert_url, secret)
+    let mut result = hdr_add(msg, "Identity", identity_val)
+    // Add P-Attestation-Indicator
+    result = hdr_add(result, "P-Attestation-Indicator", attest)
+    return result
+}
+
+// Verify and strip/annotate STIR/SHAKEN on inbound INVITE
+// Returns the message with P-Attestation-Indicator set (or removed if invalid)
+fn shaken_verify_and_annotate(msg: string, msglen: int, secret: string) -> string {
+    let attest = shaken_verify(msg, msglen, secret)
+    if len(attest) > 0 {
+        // Valid: add verification result
+        let mut result = hdr_set(msg, "P-Attestation-Indicator", attest)
+        result = hdr_add(result, "P-Identity-Verified", "true")
+        return result
+    }
+
+    // Check if Identity header was present but invalid
+    let identity = sip_hdr(msg, "Identity", msglen)
+    if len(identity) > 0 {
+        // Invalid signature
+        let mut result = hdr_add(msg, "P-Identity-Verified", "false")
+        result = hdr_add(result, "P-Identity-Error", "signature-validation-failed")
+        return result
+    }
+
+    // No Identity header at all
+    return msg
+}
+
+// DB-driven STIR/SHAKEN config
+fn db_shaken_config(db: SqlDB, db_ok: int, cache: CMap) -> []string {
+    // Returns [enabled, cert_url, attest_default, secret]
+    let mut result = make([]string, 4)
+    result[0] = "0"
+    result[1] = ""
+    result[2] = "C"
+    result[3] = ""
+
+    if db_ok == 0 { return result }
+
+    let key = "shaken_config"
+    if cmap_has(cache, key) == 1 {
+        let cached = cmap_get(cache, key)
+        let parts = str_split(cached, "|")
+        if len(parts) >= 4 {
+            result[0] = parts[0]
+            result[1] = parts[1]
+            result[2] = parts[2]
+            result[3] = parts[3]
+        }
+        return result
+    }
+
+    let enabled = sql_query_str(db, "SELECT value FROM config WHERE key = $1", "stir_shaken_enabled")
+    let cert = sql_query_str(db, "SELECT value FROM config WHERE key = $1", "stir_shaken_cert_url")
+    let attest = sql_query_str(db, "SELECT value FROM config WHERE key = $1", "stir_shaken_attestation")
+    let secret = sql_query_str(db, "SELECT value FROM config WHERE key = $1", "stir_shaken_secret")
+
+    if str_eq(enabled, "true") { result[0] = "1" }
+    if len(cert) > 0 { result[1] = cert }
+    if len(attest) > 0 { result[2] = attest }
+    if len(secret) > 0 { result[3] = secret }
+
+    cmap_set(cache, key, result[0] + "|" + result[1] + "|" + result[2] + "|" + result[3])
+    return result
+}
+
+// ============ RFC 3261 COMPLIANCE ============
+
+// --- Max-Forwards (Section 16.6 step 3) ---
+fn sip_get_max_forwards(msg: string, n: int) -> int {
+    let mf = sip_hdr(msg, "Max-Forwards", n)
+    if len(mf) == 0 { return 70 }  // default per RFC
+    let mut val = 0
+    match parse_int(mf) {
+        Ok(v) => { val = v }
+        Err(_) => { val = 70 }
+    }
+    return val
+}
+
+fn sip_decrement_max_forwards(msg: string, n: int) -> string {
+    let mf_str = sip_hdr(msg, "Max-Forwards", n)
+    if len(mf_str) == 0 {
+        // No Max-Forwards: insert one
+        return sip_insert(msg, "Max-Forwards: 69\r\n")
+    }
+    let mut mf = 70
+    match parse_int(mf_str) {
+        Ok(v) => { mf = v }
+        Err(_) => { mf = 70 }
+    }
+    let new_mf = mf - 1
+    return str_replace(msg, "Max-Forwards: " + mf_str, "Max-Forwards: " + string(new_mf))
+}
+
+// --- Loop detection (Section 16.3 step 4) ---
+// Check if our Via is already in the message (we'd be forwarding to ourselves)
+fn sip_detect_loop(msg: string, n: int, our_ip: string, our_port: int) -> int {
+    let our_addr = our_ip + ":" + string(our_port)
+    // Count how many Via headers contain our address
+    let mut count = 0
+    let mut i = 0
+    while i < n {
+        if int(msg[i]) == 10 { i = i + 1; break }
+        i = i + 1
+    }
+    while i < n {
+        if int(msg[i]) == 13 { break }
+        if i + 4 < n {
+            if str_eq(str_to_lower(msg[i:i + 4]), "via:") {
+                let mut ve = i
+                while ve < n {
+                    if int(msg[ve]) == 10 { ve = ve + 1; break }
+                    ve = ve + 1
+                }
+                let via_line = msg[i:ve]
+                if str_contains(via_line, our_addr) {
+                    count = count + 1
+                }
+                i = ve
+                continue
+            }
+        }
+        while i < n {
+            if int(msg[i]) == 10 { i = i + 1; break }
+            i = i + 1
+        }
+    }
+    // If our address appears in Via, it's a loop
+    return count
+}
+
+// --- Route header processing (Section 16.4, 16.12) ---
+// Extract and remove Route header (for loose routing)
+fn sip_has_route(msg: string, n: int) -> int {
+    let route = sip_hdr(msg, "Route", n)
+    if len(route) > 0 { return 1 }
+    return 0
+}
+
+fn sip_get_route(msg: string, n: int) -> string {
+    return sip_hdr(msg, "Route", n)
+}
+
+// Remove top Route header (after processing it)
+fn sip_pop_route(msg: string, n: int) -> string {
+    let mut i = 0
+    while i < n {
+        if int(msg[i]) == 10 { i = i + 1; break }
+        i = i + 1
+    }
+    while i < n {
+        if int(msg[i]) == 13 { break }
+        if i + 6 < n {
+            if str_eq(str_to_lower(msg[i:i + 6]), "route:") {
+                let mut ve = i
+                while ve < n {
+                    if int(msg[ve]) == 10 { ve = ve + 1; break }
+                    ve = ve + 1
+                }
+                return msg[0:i] + msg[ve:]
+            }
+        }
+        while i < n {
+            if int(msg[i]) == 10 { i = i + 1; break }
+            i = i + 1
+        }
+    }
+    return msg
+}
+
+// Check if Route points to us (loose routing)
+fn sip_route_is_ours(route: string, our_ip: string, our_port: int) -> int {
+    let our_addr = our_ip + ":" + string(our_port)
+    if str_contains(route, our_addr) { return 1 }
+    return 0
+}
+
+// --- Proxy-Require / Require (Section 16.3 step 2) ---
+fn sip_check_require(msg: string, n: int) -> string {
+    // Check Proxy-Require for unsupported extensions
+    let pr = sip_hdr(msg, "Proxy-Require", n)
+    if len(pr) == 0 { return "" }
+    let parts = str_split(pr, ",")
+    let mut i = 0
+    while i < len(parts) {
+        let ext = str_trim_space(parts[i])
+        // Unsupported extension
+        return ext
+    }
+    return ""
+}
+
+fn sip_420_response(msg: string, n: int, unsupported: string) -> string {
+    let via = sip_hdr(msg, "Via", n)
+    let from = sip_hdr(msg, "From", n)
+    let to = sip_hdr(msg, "To", n)
+    let cid = sip_hdr(msg, "Call-ID", n)
+    let cseq = sip_hdr(msg, "CSeq", n)
+    return "SIP/2.0 420 Bad Extension\r\nVia: " + via + "\r\nFrom: " + from + "\r\nTo: " + to + "\r\nCall-ID: " + cid + "\r\nCSeq: " + cseq + "\r\nUnsupported: " + unsupported + "\r\nContent-Length: 0\r\n\r\n"
+}
+
+// --- Transaction deduplication (Section 17.2.3) ---
+// Key = Via branch + CSeq method + sent-by
+fn sip_transaction_key(msg: string, n: int) -> string {
+    let via = sip_hdr(msg, "Via", n)
+    let cseq = sip_hdr(msg, "CSeq", n)
+    // Extract branch from Via
+    let bidx = str_index(via, "branch=")
+    let mut branch = ""
+    if bidx >= 0 {
+        let bstart = bidx + 7
+        let vlen = len(via)
+        let mut bend = bstart
+        while bend < vlen {
+            let c = int(via[bend])
+            if c == 59 { break }
+            if c == 44 { break }
+            if c == 32 { break }
+            bend = bend + 1
+        }
+        branch = via[bstart:bend]
+    }
+    return branch + "|" + cseq
+}
+
+// Check if we've seen this transaction before. Returns 1 if duplicate.
+fn sip_is_retransmit(txn_key: string, cache: CMap) -> int {
+    let key = "txn|" + txn_key
+    if cmap_has(cache, key) == 1 { return 1 }
+    return 0
+}
+
+// Store transaction and its response for retransmit matching
+fn sip_store_txn(txn_key: string, response: string, cache: CMap) -> int {
+    cmap_set(cache, "txn|" + txn_key, response)
+    return 0
+}
+
+// Get cached response for retransmit
+fn sip_get_txn_response(txn_key: string, cache: CMap) -> string {
+    let key = "txn|" + txn_key
+    if cmap_has(cache, key) == 1 { return cmap_get(cache, key) }
+    return ""
+}
+
+// --- Dialog tracking (Section 12) ---
+// Dialog ID = Call-ID + local-tag + remote-tag
+fn sip_dialog_id(cid: string, from_tag: string, to_tag: string) -> string {
+    return cid + "|" + from_tag + "|" + to_tag
+}
+
+fn sip_extract_tag(header_val: string) -> string {
+    let idx = str_index(header_val, "tag=")
+    if idx < 0 { return "" }
+    let start = idx + 4
+    let n = len(header_val)
+    let mut end = start
+    while end < n {
+        let c = int(header_val[end])
+        if c == 59 { break }  // ';'
+        if c == 62 { break }  // '>'
+        if c == 44 { break }  // ','
+        if c == 32 { break }  // ' '
+        end = end + 1
+    }
+    return header_val[start:end]
+}
+
+// Helper: generate response AND cache it for retransmit matching
+fn sip_resp_cached(st: int, reason: string, msg: string, n: int, tag: string, cache: CMap) -> string {
+    let resp = sip_resp(st, reason, msg, n, tag)
+    let txn = sip_transaction_key(msg, n)
+    if len(txn) > 2 { let _ = sip_store_txn(txn, resp, cache) }
+    return resp
+}
+
+// ============ SIP SECURITY ============
+
+// Check if IP is auto-banned
+fn sec_is_banned(db: SqlDB, db_ok: int, src_ip: string, cache: CMap) -> int {
+    // Short TTL cache — check DB every ~5 seconds so unbans take effect quickly
+    let key = "ban|" + src_ip
+    let ts_key = "ban_ts|" + src_ip
+    let now = now_ms()
+
+    if cmap_has(cache, key) == 1 {
+        // Check if cache is fresh (within 5 seconds)
+        if cmap_has(cache, ts_key) == 1 {
+            let mut cached_at = 0
+            match parse_int(cmap_get(cache, ts_key)) {
+                Ok(v) => { cached_at = v }
+                Err(_) => {}
+            }
+            if now - cached_at < 5000 {
+                if str_eq(cmap_get(cache, key), "1") { return 1 }
+                return 0
+            }
+        }
+    }
+
+    if db_ok == 0 { return 0 }
+    let r = sql_query_str(db, "SELECT 1 FROM security_bans WHERE source_ip = $1 AND (permanent = true OR expires_at > NOW())", src_ip)
+    if len(r) > 0 {
+        cmap_set(cache, key, "1")
+        cmap_set(cache, ts_key, string(now))
+        return 1
+    }
+    cmap_set(cache, key, "0")
+    cmap_set(cache, ts_key, string(now))
+    return 0
+}
+
+// Record auth failure and auto-ban if threshold exceeded
+fn sec_auth_failure(db: SqlDB, db_ok: int, src_ip: string, sip_user: string, cache: CMap) -> int {
+    if db_ok == 0 { return 0 }
+    // Log the event
+    let _ = sql_exec_str4(db, "INSERT INTO security_events (event_type, source_ip, sip_user, severity) VALUES ($1, $2, $3, $4)", "auth_failure", src_ip, sip_user, "medium")
+
+    // Count recent failures from this IP (last 10 minutes)
+    let count_str = sql_query_str(db, "SELECT COUNT(*) FROM security_events WHERE source_ip = $1 AND event_type = 'auth_failure' AND ts > NOW() - INTERVAL '10 minutes'", src_ip)
+    let mut count = 0
+    match parse_int(count_str) {
+        Ok(v) => { count = v }
+        Err(_) => { count = 0 }
+    }
+
+    // Get threshold from config
+    let thresh_str = sql_query_str(db, "SELECT value FROM config WHERE key = $1", "security_max_auth_failures")
+    let mut threshold = 5
+    match parse_int(thresh_str) {
+        Ok(v) => { threshold = v }
+        Err(_) => {}
+    }
+
+    if count >= threshold {
+        // Auto-ban
+        let ban_dur = sql_query_str(db, "SELECT value FROM config WHERE key = $1", "security_ban_duration_min")
+        let _ = sql_exec_str4(db, "INSERT INTO security_bans (source_ip, reason, expires_at) VALUES ($1, $2, NOW() + INTERVAL '" + ban_dur + " minutes', false) ON CONFLICT (source_ip) DO UPDATE SET ban_count = security_bans.ban_count + 1, expires_at = NOW() + INTERVAL '" + ban_dur + " minutes'", src_ip, "auth_failures:" + count_str, "", "")
+        let _ = sql_exec_str4(db, "INSERT INTO security_events (event_type, source_ip, sip_user, severity) VALUES ($1, $2, $3, $4)", "auto_ban", src_ip, sip_user, "high")
+        cmap_set(cache, "ban|" + src_ip, "1")
+        return 1
+    }
+    return 0
+}
+
+// Detect SIP scanners by User-Agent
+fn sec_is_scanner(msg: string, msglen: int) -> int {
+    let ua = sip_hdr(msg, "User-Agent", msglen)
+    let ua_low = str_to_lower(ua)
+    if str_contains(ua_low, "sipvicious") { return 1 }
+    if str_contains(ua_low, "sipcli") { return 1 }
+    if str_contains(ua_low, "sipsak") { return 1 }
+    if str_contains(ua_low, "scanner") { return 1 }
+    if str_contains(ua_low, "friendly-scanner") { return 1 }
+    if str_contains(ua_low, "sundayddr") { return 1 }
+    if str_contains(ua_low, "iwar") { return 1 }
+    if str_contains(ua_low, "sip-scan") { return 1 }
+    if str_contains(ua_low, "vaxsipuseragent") { return 1 }
+    return 0
+}
+
+// Check for toll fraud (high-cost destination)
+fn sec_is_fraud_dest(dest: string, cache: CMap) -> int {
+    let key = "fraud_pfx"
+    let mut prefixes = "+900,+809,+284,+473,+649,+767,+268"
+    if cmap_has(cache, key) == 1 {
+        prefixes = cmap_get(cache, key)
+    }
+    let parts = str_split(prefixes, ",")
+    let mut i = 0
+    while i < len(parts) {
+        if str_has_prefix(dest, str_trim_space(parts[i])) { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+// Rate tracking per IP
+fn sec_rate_check(src_ip: string, limit: int, cache: CMap) -> int {
+    let key = "rate|" + src_ip
+    let now = now_ms()
+    if cmap_has(cache, key) == 0 {
+        cmap_set(cache, key, "1|" + string(now))
+        return 1
+    }
+    let st = cmap_get(cache, key)
+    let parts = str_split(st, "|")
+    if len(parts) < 2 { return 1 }
+    let mut count = 0
+    let mut window_start = 0
+    match parse_int(parts[0]) { Ok(v) => { count = v } Err(_) => { return 1 } }
+    match parse_int(parts[1]) { Ok(v) => { window_start = v } Err(_) => { return 1 } }
+
+    // Reset window every second
+    if now - window_start > 1000 {
+        cmap_set(cache, key, "1|" + string(now))
+        return 1
+    }
+    count = count + 1
+    cmap_set(cache, key, string(count) + "|" + string(window_start))
+    if count > limit { return 0 }
+    return 1
+}
+
+// Log security event
+fn sec_log(db: SqlDB, db_ok: int, event_type: string, src_ip: string, user: string, severity: string, details: string) -> int {
+    if db_ok == 0 { return 0 }
+    let _ = sql_exec_str4(db, "INSERT INTO security_events (event_type, source_ip, sip_user, severity) VALUES ($1, $2, $3, $4)", event_type, src_ip, user, severity)
+    return 0
+}
+
+// ============ RTPENGINE INTEGRATION ============
+// Optional media proxy via rtpengine ng protocol.
+// Sends UDP bencode commands to rtpengine to set up RTP relay.
+// Rewrites SDP with rtpengine-provided media addresses.
+//
+// Config (DB config table):
+//   rtpengine_enabled = true/false
+//   rtpengine_host = 127.0.0.1
+//   rtpengine_port = 2223
+//
+// Protocol: bencode over UDP (ng control protocol)
+// Commands: offer, answer, delete
+
+// Build a bencode dictionary string
+// rtpengine ng protocol uses bencode: d...e wrapping
+fn bencode_str(s: string) -> string {
+    return string(len(s)) + ":" + s
+}
+
+fn bencode_dict_2(k1: string, v1: string, k2: string, v2: string) -> string {
+    return "d" + bencode_str(k1) + bencode_str(v1) + bencode_str(k2) + bencode_str(v2) + "e"
+}
+
+fn bencode_dict_3(k1: string, v1: string, k2: string, v2: string, k3: string, v3: string) -> string {
+    return "d" + bencode_str(k1) + bencode_str(v1) + bencode_str(k2) + bencode_str(v2) + bencode_str(k3) + bencode_str(v3) + "e"
+}
+
+// Parse a bencode response to extract a value by key
+// Simple parser: finds "N:key" then reads the next "N:value"
+fn bencode_get(resp: string, key: string) -> string {
+    let needle = string(len(key)) + ":" + key
+    let idx = str_index(resp, needle)
+    if idx < 0 { return "" }
+    // Move past the key
+    let mut i = idx + len(needle)
+    let n = len(resp)
+    // Read the value length
+    let mut vlen = 0
+    while i < n {
+        let c = int(resp[i])
+        if c == 58 { i = i + 1; break }  // ':'
+        if c >= 48 {
+            if c <= 57 { vlen = vlen * 10 + (c - 48) }
+        }
+        i = i + 1
+    }
+    if vlen == 0 { return "" }
+    if i + vlen > n { return "" }
+    return resp[i:i + vlen]
+}
+
+// Generate a unique cookie for the ng request
+fn rtp_cookie() -> string {
+    return base64_encode(random_bytes(6))
+}
+
+// Send ng command to rtpengine and get response
+fn rtp_send(host: string, port: int, command: string) -> string {
+    let fd = udp_bind(0)
+    if fd < 0 { return "" }
+    let cookie = rtp_cookie()
+    let msg = cookie + " " + command
+    let _ = udp_send_to(fd, host, port, msg)
+    // Wait for response (blocking, with timeout via sleep)
+    sleep_ms(50)
+    let resp = nb_udp_recv(fd)
+    let _ = tcp_close(fd)
+    // Strip cookie prefix from response
+    if len(resp) > len(cookie) + 1 {
+        return resp[len(cookie) + 1:]
+    }
+    return resp
+}
+
+// Load rtpengine config from DB
+fn rtp_config(db: SqlDB, db_ok: int, cache: CMap) -> []string {
+    // Returns [enabled, host, port]
+    let mut result = make([]string, 3)
+    result[0] = "0"
+    result[1] = "127.0.0.1"
+    result[2] = "2223"
+
+    let key = "rtpengine_cfg"
+    if cmap_has(cache, key) == 1 {
+        let cached = cmap_get(cache, key)
+        let parts = str_split(cached, "|")
+        if len(parts) >= 3 {
+            result[0] = parts[0]
+            result[1] = parts[1]
+            result[2] = parts[2]
+        }
+        return result
+    }
+
+    if db_ok == 1 {
+        let enabled = sql_query_str(db, "SELECT value FROM config WHERE key = $1", "rtpengine_enabled")
+        let host = sql_query_str(db, "SELECT value FROM config WHERE key = $1", "rtpengine_host")
+        let port = sql_query_str(db, "SELECT value FROM config WHERE key = $1", "rtpengine_port")
+        if str_eq(enabled, "true") { result[0] = "1" }
+        if len(host) > 0 { result[1] = host }
+        if len(port) > 0 { result[2] = port }
+    }
+
+    cmap_set(cache, key, result[0] + "|" + result[1] + "|" + result[2])
+    return result
+}
+
+// OFFER: called when forwarding an INVITE (caller's SDP)
+// Sends SDP to rtpengine, gets back rewritten SDP with relay addresses
+fn rtp_offer(host: string, port: int, call_id: string, from_tag: string, sdp: string) -> string {
+    let cmd = bencode_dict_3(
+        "command", "offer",
+        "call-id", call_id,
+        "sdp", sdp
+    )
+    let resp = rtp_send(host, port, cmd)
+    if len(resp) == 0 { return "" }
+
+    // Extract rewritten SDP from response
+    let new_sdp = bencode_get(resp, "sdp")
+    let result = bencode_get(resp, "result")
+    if str_eq(result, "ok") {
+        return new_sdp
+    }
+    return ""
+}
+
+// ANSWER: called when forwarding 200 OK (callee's SDP)
+fn rtp_answer(host: string, port: int, call_id: string, from_tag: string, to_tag: string, sdp: string) -> string {
+    let cmd = bencode_dict_3(
+        "command", "answer",
+        "call-id", call_id,
+        "sdp", sdp
+    )
+    let resp = rtp_send(host, port, cmd)
+    if len(resp) == 0 { return "" }
+
+    let new_sdp = bencode_get(resp, "sdp")
+    let result = bencode_get(resp, "result")
+    if str_eq(result, "ok") {
+        return new_sdp
+    }
+    return ""
+}
+
+// DELETE: called on BYE/CANCEL to tear down RTP session
+fn rtp_delete(host: string, port: int, call_id: string) -> int {
+    let cmd = bencode_dict_2(
+        "command", "delete",
+        "call-id", call_id
+    )
+    let resp = rtp_send(host, port, cmd)
+    let result = bencode_get(resp, "result")
+    if str_eq(result, "ok") { return 1 }
+    return 0
+}
+
+// High-level: process SDP through rtpengine for an INVITE
+// Returns the message with SDP rewritten by rtpengine, or original if rtpengine is off
+fn rtp_process_offer(msg: string, msglen: int, call_id: string, from_tag: string, db: SqlDB, db_ok: int, cache: CMap) -> string {
+    let cfg = rtp_config(db, db_ok, cache)
+    if str_eq(cfg[0], "0") { return msg }
+
+    let sdp = sdp_get_body(msg, msglen)
+    if len(sdp) == 0 { return msg }
+
+    let mut rtp_port = 2223
+    match parse_int(cfg[2]) {
+        Ok(v) => { rtp_port = v }
+        Err(_) => {}
+    }
+
+    let new_sdp = rtp_offer(cfg[1], rtp_port, call_id, from_tag, sdp)
+    if len(new_sdp) == 0 { return msg }
+
+    // Replace SDP in the message
+    let headers = sdp_get_headers(msg, msglen)
+    // Update Content-Length
+    let new_cl = string(len(new_sdp))
+    let mut updated = headers
+    let cl_idx = str_index(str_to_lower(headers), "content-length:")
+    if cl_idx >= 0 {
+        let mut vs = cl_idx + 15
+        let hlen = len(headers)
+        if vs < hlen { if int(headers[vs]) == 32 { vs = vs + 1 } }
+        let mut ve = vs
+        while ve < hlen {
+            if int(headers[ve]) == 13 { break }
+            if int(headers[ve]) == 10 { break }
+            ve = ve + 1
+        }
+        updated = headers[0:vs] + new_cl + headers[ve:]
+    }
+    return updated + "\r\n\r\n" + new_sdp
+}
+
+// High-level: process SDP through rtpengine for a 200 OK response
+fn rtp_process_answer(msg: string, msglen: int, call_id: string, from_tag: string, to_tag: string, db: SqlDB, db_ok: int, cache: CMap) -> string {
+    let cfg = rtp_config(db, db_ok, cache)
+    if str_eq(cfg[0], "0") { return msg }
+
+    let sdp = sdp_get_body(msg, msglen)
+    if len(sdp) == 0 { return msg }
+
+    let mut rtp_port = 2223
+    match parse_int(cfg[2]) {
+        Ok(v) => { rtp_port = v }
+        Err(_) => {}
+    }
+
+    let new_sdp = rtp_answer(cfg[1], rtp_port, call_id, from_tag, to_tag, sdp)
+    if len(new_sdp) == 0 { return msg }
+
+    let headers = sdp_get_headers(msg, msglen)
+    let new_cl = string(len(new_sdp))
+    let mut updated = headers
+    let cl_idx = str_index(str_to_lower(headers), "content-length:")
+    if cl_idx >= 0 {
+        let mut vs = cl_idx + 15
+        let hlen = len(headers)
+        if vs < hlen { if int(headers[vs]) == 32 { vs = vs + 1 } }
+        let mut ve = vs
+        while ve < hlen {
+            if int(headers[ve]) == 13 { break }
+            if int(headers[ve]) == 10 { break }
+            ve = ve + 1
+        }
+        updated = headers[0:vs] + new_cl + headers[ve:]
+    }
+    return updated + "\r\n\r\n" + new_sdp
+}
+
+// High-level: tear down RTP session on BYE/CANCEL
+fn rtp_process_delete(call_id: string, db: SqlDB, db_ok: int, cache: CMap) -> int {
+    let cfg = rtp_config(db, db_ok, cache)
+    if str_eq(cfg[0], "0") { return 0 }
+
+    let mut rtp_port = 2223
+    match parse_int(cfg[2]) {
+        Ok(v) => { rtp_port = v }
+        Err(_) => {}
+    }
+
+    return rtp_delete(cfg[1], rtp_port, call_id)
+}
+// Mako SIP Proxy — main entry point
+
+fn process_sip(data: string, dl: int, reg: CMap, calls: CMap, ip: string, port: int, tr: string, db: SqlDB, db_ok: int, cache: CMap, realm: string, node_id: string) -> string {
+    // Get public IP for NAT (from config or env)
+    let public_ip = env_get_or("SIP_PUBLIC_IP", ip)
+
+    // --- Response processing (Section 16.7) ---
+    if sip_is_resp(data, dl) == 1 {
+        let mut resp = sip_strip_via(data, ip)
+        resp = nat_fix_sdp(resp, len(resp), public_ip)
+        let resp_cid = sip_hdr(resp, "Call-ID", len(resp))
+        let resp_from_tag = sip_extract_tag(sip_hdr(resp, "From", len(resp)))
+        let resp_to_tag = sip_extract_tag(sip_hdr(resp, "To", len(resp)))
+        resp = rtp_process_answer(resp, len(resp), resp_cid, resp_from_tag, resp_to_tag, db, db_ok, cache)
+        // Log response transaction
+        let resp_code = sip_method(data, 12)  // "SIP/2.0 200" → extract code
+        let _ = db_sip_tx(db, db_ok, resp_cid, "recv", resp_code, 0, ip, "proxy")
+        return resp
+    }
+
+    let method = sip_method(data, dl)
+    let ruri = sip_ruri(data, dl)
+    let cid = sip_hdr(data, "Call-ID", dl)
+    let ua = sip_hdr(data, "User-Agent", dl)
+    let from = sip_hdr(data, "From", dl)
+    let to = sip_hdr(data, "To", dl)
+    let from_user = sip_user(from)
+    let from_domain = sip_domain(from)
+    let from_tag = sip_extract_tag(from)
+    let to_tag = sip_extract_tag(to)
+
+    // ===== SECURITY LAYER =====
+
+    // Master switch — check if security is enabled
+    let mut sec_enabled = 1
+    let sec_key = "sec_enabled"
+    if cmap_has(cache, sec_key) == 1 {
+        if str_eq(cmap_get(cache, sec_key), "0") { sec_enabled = 0 }
+    } else {
+        if db_ok == 1 {
+            let se = sql_query_str(db, "SELECT value FROM config WHERE key = $1", "security_enabled")
+            if str_eq(se, "false") { sec_enabled = 0; cmap_set(cache, sec_key, "0") } else { cmap_set(cache, sec_key, "1") }
+        }
+    }
+
+    if sec_enabled == 1 {
+
+    // 0. Whitelist check — internal/trusted IPs skip ALL security
+    let mut whitelisted = 0
+    let wl_key = "wl|" + ip
+    if cmap_has(cache, wl_key) == 1 {
+        if str_eq(cmap_get(cache, wl_key), "1") { whitelisted = 1 }
+    } else {
+        // Check against whitelist
+        if is_private_ip(ip) == 1 {
+            whitelisted = 1
+        }
+        if str_eq(ip, "127.0.0.1") { whitelisted = 1 }
+        // IPs in access_control with allow are trusted
+        if db_ok == 1 {
+            let acl_ok = sql_query_str(db, "SELECT 1 FROM access_control WHERE source_ip = $1 AND action = 'allow' AND enabled = true LIMIT 1", ip)
+            if len(acl_ok) > 0 { whitelisted = 1 }
+        }
+        if db_ok == 1 {
+            let wl_list = sql_query_str(db, "SELECT value FROM config WHERE key = $1", "security_whitelist_ips")
+            if len(wl_list) > 0 {
+                let wl_parts = str_split(wl_list, ",")
+                let mut wi = 0
+                while wi < len(wl_parts) {
+                    let wl_ip = str_trim_space(wl_parts[wi])
+                    if str_eq(wl_ip, ip) { whitelisted = 1 }
+                    // CIDR /8 check
+                    if str_has_suffix(wl_ip, ".0.0.0/8") {
+                        let pfx = wl_ip[0:str_index(wl_ip, ".")]
+                        if str_has_prefix(ip, pfx + ".") { whitelisted = 1 }
+                    }
+                    // CIDR /16 check
+                    if str_has_suffix(wl_ip, ".0.0/16") {
+                        let dot1 = str_index(wl_ip, ".")
+                        let rest = wl_ip[dot1 + 1:]
+                        let dot2 = str_index(rest, ".")
+                        let pfx2 = wl_ip[0:dot1 + 1 + dot2]
+                        if str_has_prefix(ip, pfx2 + ".") { whitelisted = 1 }
+                    }
+                    wi = wi + 1
+                }
+            }
+        }
+        if whitelisted == 1 {
+            cmap_set(cache, wl_key, "1")
+        } else {
+            cmap_set(cache, wl_key, "0")
+        }
+    }
+
+    // 1. Check if IP is auto-banned (skip if whitelisted)
+    if whitelisted == 0 {
+    if sec_is_banned(db, db_ok, ip, cache) == 1 {
+        return sip_resp(403, "Forbidden", data, dl, "banned")
+    }
+
+    // 2. Rate limiting per IP (50 req/sec default)
+    if sec_rate_check(ip, 50, cache) == 0 {
+        let _ = sec_log(db, db_ok, "rate_exceeded", ip, from_user, "high", "")
+        return sip_resp(429, "Too Many Requests", data, dl, "rate")
+    }
+
+    // 3. Block SIP scanners
+    if sec_is_scanner(data, dl) == 1 {
+        let _ = sec_log(db, db_ok, "scanner_blocked", ip, from_user, "high", "")
+        // Auto-ban scanner IPs permanently
+        if db_ok == 1 {
+            let _ = sql_exec_str4(db, "INSERT INTO security_bans (source_ip, reason, permanent) VALUES ($1, $2, true) ON CONFLICT (source_ip) DO UPDATE SET permanent = true", ip, "sip_scanner", "", "")
+            cmap_set(cache, "ban|" + ip, "1")
+        }
+        return sip_resp(403, "Forbidden", data, dl, "scanner")
+    }
+
+    // 4. Toll fraud check on INVITE
+    if str_eq(method, "INVITE") {
+        let dest = sip_user(ruri)
+        if sec_is_fraud_dest(dest, cache) == 1 {
+            let _ = sec_log(db, db_ok, "fraud_attempt", ip, from_user, "critical", dest)
+            return sip_resp(403, "Call Blocked", data, dl, "fraud")
+        }
+    }
+
+    } // end if whitelisted == 0
+    } // end if sec_enabled == 1
+
+    // ===== END SECURITY =====
+
+    // --- Section 16.3 step 2: Check Proxy-Require ---
+    let unsupported = sip_check_require(data, dl)
+    if len(unsupported) > 0 {
+        return sip_420_response(data, dl, unsupported)
+    }
+
+    // --- Section 16.3 step 3: Max-Forwards check ---
+    let mf = sip_get_max_forwards(data, dl)
+    if mf <= 0 {
+        return sip_resp(483, "Too Many Hops", data, dl, "loop")
+    }
+
+    // --- Section 16.3 step 4: Loop detection ---
+    let loops = sip_detect_loop(data, dl, ip, port)
+    if loops > 0 {
+        return sip_resp(482, "Loop Detected", data, dl, "loop")
+    }
+
+    // --- Transaction deduplication (Section 17.2.3) ---
+    let txn_key = sip_transaction_key(data, dl)
+    if sip_is_retransmit(txn_key, cache) == 1 {
+        // Retransmit: return cached response
+        let cached_resp = sip_get_txn_response(txn_key, cache)
+        if len(cached_resp) > 0 { return cached_resp }
+    }
+
+    // --- Section 16.4: Route header processing ---
+    let mut msg = data
+    if sip_has_route(data, dl) == 1 {
+        let route = sip_get_route(data, dl)
+        if sip_route_is_ours(route, ip, port) == 1 {
+            // Route points to us: pop it and continue (loose routing)
+            msg = sip_pop_route(data, dl)
+        }
+        // If Route doesn't point to us, forward to Route destination
+    }
+
+    // Add received= and rport= to Via for NAT detection
+    msg = via_add_received(msg, len(msg), ip, port)
+    let msglen = len(msg)
+
+    // --- Section 16.6 step 3: Decrement Max-Forwards ---
+    msg = sip_decrement_max_forwards(msg, msglen)
+
+    // ACL
+    if db_check_acl(db, db_ok, ip, from_user, cache) == 0 {
+        return sip_resp(403, "Forbidden", data, dl, "acl")
+    }
+
+    // Rate limit
+    if db_rate_ok(from_user, cache) == 0 {
+        return sip_resp(429, "Too Many Requests", data, dl, "rl")
+    }
+
+    // === REGISTER ===
+    if str_eq(method, "REGISTER") {
+        // IP auth: skip digest if source IP is trusted
+        let ip_trusted = db_ip_auth(db, db_ok, ip, cache)
+        if ip_trusted == 0 {
+            // Digest auth required
+            if has_auth(data, dl) == 0 {
+                return digest_challenge(realm, data, dl, "auth")
+            }
+            let auth_user = auth_username(data, dl)
+            if db_auth_user(db, db_ok, auth_user, from_domain, cache) == 0 {
+                let _ = sec_auth_failure(db, db_ok, ip, auth_user, cache)
+                return sip_resp(403, "User Not Found", data, dl, "nf")
+            }
+        }
+
+        let contact = sip_hdr(data, "Contact", dl)
+        let aor = sip_user(to) + "@" + sip_domain(to)
+        let addr = sip_contact_addr(contact)
+        if len(addr) > 0 {
+            cmap_set(reg, aor, addr + "|" + tr)
+            if db_ok == 1 {
+                let _ = sql_exec_str4(db, "INSERT INTO registrations (aor, contact, transport, node_id) VALUES ($1, $2, $3, $4) ON CONFLICT (aor) DO UPDATE SET contact = $2, transport = $3, node_id = $4, updated_at = NOW()", aor, addr, tr, node_id)
+            }
+        }
+        let _ = db_sip_tx(db, db_ok, cid, "recv", "REGISTER", 0, ip, "proxy")
+        let _ = db_sip_tx(db, db_ok, cid, "send", "OK", 200, "proxy", ip)
+        return sip_resp(200, "OK", data, dl, "r" + string(now_ms()))
+
+    } else {
+    // === INVITE ===
+    if str_eq(method, "INVITE") {
+        // IP auth: skip digest if source IP is trusted
+        let ip_trusted = db_ip_auth(db, db_ok, ip, cache)
+        if ip_trusted == 0 {
+            if has_auth(data, dl) == 0 {
+                return digest_challenge_proxy(realm, data, dl, "pauth")
+            }
+            let auth_user = auth_username(data, dl)
+            if db_auth_user(db, db_ok, auth_user, from_domain, cache) == 0 {
+                let _ = sec_auth_failure(db, db_ok, ip, auth_user, cache)
+                return sip_resp(403, "Forbidden", data, dl, "noauth")
+            }
+        }
+
+        let dest_user = sip_user(ruri)
+        let dest_domain = sip_domain(ruri)
+
+        // Number manipulation: transform both caller and callee
+        let dp_result = db_dialplan(db, db_ok, from_user, dest_user, "outbound", cache)
+        let translated = dp_result[0]   // transformed callee
+        let caller_id = dp_result[1]    // transformed caller (for gateway)
+        let aor = translated + "@" + dest_domain
+
+        // CDR start
+        let _ = db_cdr(db, db_ok, cid, caller_id, translated, "TRYING")
+        let _ = db_cdr_detail(db, db_ok, cid, ip, "", tr)
+        let _ = db_cdr_uris(db, db_ok, cid, from, sip_hdr(data, "To", dl), ua)
+        let _ = db_sip_tx(db, db_ok, cid, "recv", "INVITE", 0, ip, "proxy")
+        cmap_set(calls, cid, caller_id + "|" + translated + "|" + string(now_ms()))
+
+        // Apply DB-driven header rules (add X-headers, strip Privacy, etc.)
+        let mut inv_msg = db_apply_header_rules(db, db_ok, data, "INVITE", "outbound", cache)
+
+        // STIR/SHAKEN: sign outbound calls
+        let shaken_cfg = db_shaken_config(db, db_ok, cache)
+        if str_eq(shaken_cfg[0], "1") {
+            inv_msg = shaken_verify_and_annotate(inv_msg, len(inv_msg), shaken_cfg[3])
+            inv_msg = shaken_add_identity(inv_msg, caller_id, translated, shaken_cfg[2], shaken_cfg[1], shaken_cfg[3])
+        }
+        // rtpengine: process offer SDP (INVITE with SDP)
+        inv_msg = rtp_process_offer(inv_msg, len(inv_msg), cid, from_tag, db, db_ok, cache)
+        let inv_dl = len(inv_msg)
+
+        // 1. Check DID mapping (inbound calls)
+        let did_target = db_lookup_did(db, db_ok, translated, cache)
+        if len(did_target) > 0 {
+            // DID maps to a local user
+            let did_aor = did_target + "@" + dest_domain
+            if cmap_has(reg, did_aor) == 1 {
+                let contact_info = cmap_get(reg, did_aor)
+                // Forward to registered contact
+                let fwd = nat_fix_sdp(sip_insert(inv_msg, sip_via(ip, port, tr) + sip_rr(ip, port, tr)), inv_dl, public_ip)
+                // In production: extract IP:port from contact_info, send fwd there
+                return sip_resp(100, "Trying", data, dl, "")
+            }
+        }
+
+        // 2. Check local registration
+        if cmap_has(reg, aor) == 1 {
+            let contact_info = cmap_get(reg, aor)
+            let contact_parts = str_split(contact_info, "|")
+            let contact_uri = contact_parts[0]
+            let fwd = nat_fix_sdp(sip_insert(inv_msg, sip_via(ip, port, tr) + sip_rr(ip, port, tr)), inv_dl, public_ip)
+            return sip_resp(100, "Trying", data, dl, "")
+        }
+
+        // 2b. Cluster: user not local — check which node has them
+        if db_ok == 1 {
+            let remote_node = sql_query_str(db, "SELECT cn.address || ':' || cn.port FROM registrations r JOIN cluster_nodes cn ON r.node_id = cn.id WHERE r.aor = $1 AND cn.status = 'active' AND cn.last_heartbeat > NOW() - INTERVAL '30 seconds' LIMIT 1", aor)
+            if len(remote_node) > 0 {
+                // Forward INVITE to the remote node that owns this registration
+                let fwd = nat_fix_sdp(sip_insert(inv_msg, sip_via(ip, port, tr) + sip_rr(ip, port, tr)), inv_dl, public_ip)
+                cmap_set(cache, "dispatch|" + cid, remote_node)
+                let _ = db_cdr(db, db_ok, cid, caller_id, translated, "CLUSTER:" + remote_node)
+                return sip_resp(100, "Trying", data, dl, "")
+            }
+        }
+
+        // 2c. Check if call is FROM a PBX server going outbound (egress)
+        // If the source IP is a server in an ingress dispatch group, and it's
+        // sending a new INVITE, look up the egress carrier group.
+        let egress_key = "egress|" + cid
+        if cmap_has(cache, egress_key) == 1 {
+            let egress_targets = cmap_get(cache, egress_key)
+            if len(egress_targets) > 0 {
+                let fwd = nat_fix_sdp(sip_insert(inv_msg, sip_via(ip, port, tr) + sip_rr(ip, port, tr)), inv_dl, public_ip)
+                let target_list = str_split(egress_targets, ",")
+                let primary = target_list[0]
+                cmap_set(cache, "dispatch|" + cid, egress_targets)
+                let _ = db_cdr(db, db_ok, cid, caller_id, translated, "EGRESS:" + primary)
+                return sip_resp(100, "Trying", data, dl, "")
+            }
+        }
+
+        // 3. Advanced routing engine
+        let route_result = db_route_call(db, db_ok, translated, caller_id, ip, inv_msg, inv_dl, from_user, cid, cache)
+        if len(route_result) > 0 {
+            // Parse action
+            if str_has_prefix(route_result, "reject:") {
+                // reject:code:reason
+                let reject_parts = str_split(route_result[7:], ":")
+                let mut rcode = 403
+                let mut rreason = "Forbidden"
+                if len(reject_parts) >= 1 {
+                    match parse_int(reject_parts[0]) {
+                        Ok(v) => { rcode = v }
+                        Err(_) => {}
+                    }
+                }
+                if len(reject_parts) >= 2 { rreason = reject_parts[1] }
+                let _ = db_cdr(db, db_ok, cid, caller_id, translated, "REJECTED:" + string(rcode))
+                return sip_resp(rcode, rreason, data, dl, "rj")
+            } else {
+            if str_has_prefix(route_result, "redirect:") {
+                // 302 redirect
+                let redir_uri = route_result[9:]
+                let via = sip_hdr(data, "Via", dl)
+                let rfrom = sip_hdr(data, "From", dl)
+                let rto = sip_hdr(data, "To", dl)
+                let rcid = sip_hdr(data, "Call-ID", dl)
+                let rcseq = sip_hdr(data, "CSeq", dl)
+                return "SIP/2.0 302 Moved Temporarily\r\nVia: " + via + "\r\nFrom: " + rfrom + "\r\nTo: " + rto + "\r\nCall-ID: " + rcid + "\r\nCSeq: " + rcseq + "\r\nContact: <" + redir_uri + ">\r\nContent-Length: 0\r\n\r\n"
+            } else {
+            if str_has_prefix(route_result, "route|") {
+                let targets = route_result[6:]
+                let fwd = nat_fix_sdp(sip_insert(inv_msg, sip_via(ip, port, tr) + sip_rr(ip, port, tr)), inv_dl, public_ip)
+                let target_list = str_split(targets, ",")
+                let primary = target_list[0]
+                cmap_set(cache, "dispatch|" + cid, targets)
+                cmap_set(cache, "dispatch_idx|" + cid, "0")
+                let _ = db_cdr(db, db_ok, cid, caller_id, translated, "ROUTING:" + primary)
+                let _ = db_cdr_detail(db, db_ok, cid, ip, primary, tr)
+                let _ = db_sip_tx(db, db_ok, cid, "send", "Trying", 100, "proxy", ip)
+                let _ = db_sip_tx(db, db_ok, cid, "send", "INVITE", 0, "proxy", primary)
+                return sip_resp(100, "Trying", data, dl, "")
+            } else {
+            if str_has_prefix(route_result, "dispatch|") {
+                let targets = route_result[9:]
+                let fwd = nat_fix_sdp(sip_insert(inv_msg, sip_via(ip, port, tr) + sip_rr(ip, port, tr)), inv_dl, public_ip)
+                let target_list = str_split(targets, ",")
+                let primary = target_list[0]
+                cmap_set(cache, "dispatch|" + cid, targets)
+                let _ = db_cdr(db, db_ok, cid, caller_id, translated, "DISPATCH:" + primary)
+                return sip_resp(100, "Trying", data, dl, "")
+            } else {
+                // Unknown action
+            }}}}
+        }
+
+        let _ = db_cdr(db, db_ok, cid, from_user, translated, "NOT_FOUND")
+        return sip_resp(404, "Not Found", data, dl, "nf")
+
+    } else {
+    // === ACK ===
+    if str_eq(method, "ACK") {
+        return nat_fix_sdp(sip_insert(data, sip_via(ip, port, tr)), dl, public_ip)
+    } else {
+    // === BYE ===
+    if str_eq(method, "BYE") {
+        if cmap_has(calls, cid) == 1 {
+            let _ = db_cdr(db, db_ok, cid, from_user, "", "COMPLETED")
+            let _ = db_cdr_code(db, db_ok, cid, "200")
+            let _ = db_sip_tx(db, db_ok, cid, "recv", "BYE", 0, ip, "proxy")
+            let _ = db_sip_tx(db, db_ok, cid, "send", "OK", 200, "proxy", ip)
+            let _ = rtp_process_delete(cid, db, db_ok, cache)
+            let _ = cmap_del(calls, cid)
+        }
+        return nat_fix_sdp(sip_insert(data, sip_via(ip, port, tr)), dl, public_ip)
+    } else {
+    // === CANCEL ===
+    if str_eq(method, "CANCEL") {
+        if cmap_has(calls, cid) == 1 {
+            let _ = db_cdr(db, db_ok, cid, from_user, "", "CANCELLED")
+            let _ = rtp_process_delete(cid, db, db_ok, cache)
+            let _ = cmap_del(calls, cid)
+        }
+        return sip_resp(200, "OK", data, dl, "")
+    } else {
+    // === OPTIONS ===
+    if str_eq(method, "OPTIONS") {
+        return sip_resp(200, "OK", data, dl, "opt")
+    } else {
+        return sip_resp(405, "Method Not Allowed", data, dl, "e")
+    }}}}}}
+
+    return ""
+}
+
+// ============ WORKERS ============
+
+fn udp_worker(id: int, port: int, reg: CMap, calls: CMap, cache: CMap) -> int {
+    let bind_ip = env_get_or("SIP_BIND_IP", "0.0.0.0")
+    let sock = game_udp_bind_addr(bind_ip, port)
+    if game_udp_fd(sock) < 0 { return 1 }
+    let db_url = env_get_or("SIP_DB_URL", "")
+    let realm = env_get_or("SIP_REALM", "mako.local")
+    let nid = env_get_or("SIP_NODE_ID", "node1")
+    let mut db_ok = 0
+    let mut db = sql_open_postgres("")
+    if len(db_url) > 0 { db = sql_open_postgres(db_url); db_ok = 1 }
+    let el = evloop_new()
+    let _ = evloop_add(el, game_udp_fd(sock), 1)
+    while 1 == 1 {
+        let n = evloop_wait(el, 0 - 1)
+        if n <= 0 { continue }
+        let mut ei = 0
+        while ei < n {
+            let data = game_udp_recv(sock)
+            let dl = len(data)
+            if dl > 0 {
+                let sender = game_udp_sender(sock)
+                // Get actual source IP:port from the packet
+                let sender_addr = game_udp_sender_addr(sock)
+                let mut src_ip = sender_addr
+                let colon = str_index(sender_addr, ":")
+                if colon > 0 { src_ip = sender_addr[0:colon] }
+                let reply = process_sip(data, dl, reg, calls, src_ip, port, "UDP", db, db_ok, cache, realm, nid)
+                if len(reply) > 0 { let _ = game_udp_send(sock, sender, reply) }
+            }
+            ei = ei + 1
+        }
+    }
+    return 0
+}
+
+fn tcp_worker(fd: int, reg: CMap, calls: CMap, port: int, cache: CMap) -> int {
+    let db_url = env_get_or("SIP_DB_URL", "")
+    let realm = env_get_or("SIP_REALM", "mako.local")
+    let nid = env_get_or("SIP_NODE_ID", "node1")
+    let mut db_ok = 0
+    let mut db = sql_open_postgres("")
+    if len(db_url) > 0 { db = sql_open_postgres(db_url); db_ok = 1 }
+    while 1 == 1 {
+        let c = tcp_accept(fd)
+        if c < 0 { continue }
+        let _ = tcp_nodelay(c)
+        let mut alive = 1
+        while alive == 1 {
+            let raw = tcp_read(c)
+            if len(raw) == 0 { alive = 0 } else {
+                let reply = process_sip(raw, len(raw), reg, calls, "127.0.0.1", port, "TCP", db, db_ok, cache, realm, nid)
+                if len(reply) > 0 { let _ = tcp_write(c, reply) }
+            }
+        }
+        let _ = tcp_close(c)
+    }
+    return 0
+}
+
+fn tls_worker(port: int, reg: CMap, calls: CMap, cache: CMap) -> int {
+    let fd = tcp_listen(port)
+    if fd < 0 { return 1 }
+    slog("  TLS: :" + string(port))
+    let db_url = env_get_or("SIP_DB_URL", "")
+    let realm = env_get_or("SIP_REALM", "mako.local")
+    let nid = env_get_or("SIP_NODE_ID", "node1")
+    let mut db_ok = 0
+    let mut db = sql_open_postgres("")
+    if len(db_url) > 0 { db = sql_open_postgres(db_url); db_ok = 1 }
+    while 1 == 1 {
+        let c = tcp_accept(fd)
+        if c < 0 { continue }
+        let _ = tcp_nodelay(c)
+        let mut alive = 1
+        while alive == 1 {
+            let raw = tcp_read(c)
+            if len(raw) == 0 { alive = 0 } else {
+                let reply = process_sip(raw, len(raw), reg, calls, "127.0.0.1", port, "TLS", db, db_ok, cache, realm, nid)
+                if len(reply) > 0 { let _ = tcp_write(c, reply) }
+            }
+        }
+        let _ = tcp_close(c)
+    }
+    return 0
+}
+
+fn wss_worker(port: int, reg: CMap, calls: CMap, cache: CMap) -> int {
+    let fd = tcp_listen(port)
+    if fd < 0 { return 1 }
+    slog("  WSS: :" + string(port))
+    let db_url = env_get_or("SIP_DB_URL", "")
+    let realm = env_get_or("SIP_REALM", "mako.local")
+    let nid = env_get_or("SIP_NODE_ID", "node1")
+    let mut db_ok = 0
+    let mut db = sql_open_postgres("")
+    if len(db_url) > 0 { db = sql_open_postgres(db_url); db_ok = 1 }
+    while 1 == 1 {
+        let c = tcp_accept(fd)
+        if c < 0 { continue }
+        let _ = tcp_nodelay(c)
+        let ws = ws_accept(c)
+        if ws < 0 { let _ = tcp_close(c); continue }
+        let mut alive = 1
+        while alive == 1 {
+            let msg = ws_recv(ws, 65536)
+            if len(msg) == 0 { alive = 0 } else {
+                let reply = process_sip(msg, len(msg), reg, calls, "127.0.0.1", port, "WS", db, db_ok, cache, realm, nid)
+                if len(reply) > 0 { let _ = ws_send_text(ws, reply) }
+            }
+        }
+        let _ = ws_close(ws)
+    }
+    return 0
+}
+
+// ============ MAIN ============
+
+fn main() {
+    let udp_port = 5060
+    let tls_port = 5061
+    let wss_port = 8443
+    let db_url = env_get_or("SIP_DB_URL", "")
+    let realm = env_get_or("SIP_REALM", "mako.local")
+    let node_id = env_get_or("SIP_NODE_ID", "node1")
+    let node_addr = env_get_or("SIP_NODE_ADDR", "127.0.0.1")
+    let node_region = env_get_or("SIP_REGION", "default")
+
+    let reg = cmap_new()
+    let calls = cmap_new()
+    let cache = cmap_new()
+
+    // Database schema
+    if len(db_url) > 0 {
+        let db = sql_open_postgres(db_url)
+
+        let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_ha1 TEXT NOT NULL, domain TEXT DEFAULT 'mako.local', display_name TEXT, email TEXT, max_contacts INT DEFAULT 5, enabled BOOLEAN DEFAULT true, created_at TIMESTAMP DEFAULT NOW())")
+
+        let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS registrations (aor TEXT PRIMARY KEY, contact TEXT NOT NULL, transport TEXT DEFAULT 'UDP', node_id TEXT DEFAULT '', user_agent TEXT, updated_at TIMESTAMP DEFAULT NOW(), created_at TIMESTAMP DEFAULT NOW())")
+
+        let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS gateways (id SERIAL PRIMARY KEY, name TEXT UNIQUE NOT NULL, address TEXT NOT NULL, port INT DEFAULT 5060, transport TEXT DEFAULT 'UDP', auth_user TEXT, auth_pass TEXT, caller_id TEXT, max_channels INT DEFAULT 100, enabled BOOLEAN DEFAULT true, created_at TIMESTAMP DEFAULT NOW())")
+
+        let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS dispatch_sets (id SERIAL PRIMARY KEY, name TEXT UNIQUE NOT NULL, algorithm TEXT DEFAULT 'round-robin', description TEXT, enabled BOOLEAN DEFAULT true, created_at TIMESTAMP DEFAULT NOW())")
+
+        let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS dispatch_members (id SERIAL PRIMARY KEY, set_id INT NOT NULL, gateway_id INT NOT NULL, priority INT DEFAULT 10, weight INT DEFAULT 100, enabled BOOLEAN DEFAULT true, created_at TIMESTAMP DEFAULT NOW())")
+
+        let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS routes (id SERIAL PRIMARY KEY, prefix TEXT NOT NULL, gateway_id INT, dispatch_set_id INT, priority INT DEFAULT 10, weight INT DEFAULT 100, cost_per_min NUMERIC(8,4) DEFAULT 0, time_start TIME DEFAULT '00:00', time_end TIME DEFAULT '23:59', enabled BOOLEAN DEFAULT true, description TEXT, created_at TIMESTAMP DEFAULT NOW())")
+
+        let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS routing_rules (id SERIAL PRIMARY KEY, match_prefix TEXT DEFAULT '', match_caller TEXT DEFAULT '', match_src_ip TEXT DEFAULT '', match_time_start TEXT DEFAULT '', match_time_end TEXT DEFAULT '', match_day TEXT DEFAULT '', action TEXT NOT NULL, priority INT DEFAULT 10, enabled BOOLEAN DEFAULT true, description TEXT, created_at TIMESTAMP DEFAULT NOW())")
+
+        let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS dids (id SERIAL PRIMARY KEY, number TEXT UNIQUE NOT NULL, destination_user TEXT NOT NULL, description TEXT, enabled BOOLEAN DEFAULT true, created_at TIMESTAMP DEFAULT NOW())")
+
+        let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS acl (id SERIAL PRIMARY KEY, source_ip TEXT DEFAULT '*', sip_user TEXT DEFAULT '*', action TEXT DEFAULT 'allow', priority INT DEFAULT 10, description TEXT, created_at TIMESTAMP DEFAULT NOW())")
+
+        let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS dialplan (id SERIAL PRIMARY KEY, match_prefix TEXT NOT NULL, callee_action TEXT NOT NULL DEFAULT '', caller_action TEXT DEFAULT '', direction TEXT DEFAULT 'outbound', priority INT DEFAULT 10, enabled BOOLEAN DEFAULT true, description TEXT, created_at TIMESTAMP DEFAULT NOW())")
+
+        let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS cdr (call_id TEXT PRIMARY KEY, caller TEXT, callee TEXT, status TEXT, gateway TEXT, started_at TIMESTAMP DEFAULT NOW(), ended_at TIMESTAMP, duration_sec INT)")
+
+        let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS ip_auth (id SERIAL PRIMARY KEY, ip_address TEXT UNIQUE NOT NULL, description TEXT, tenant TEXT DEFAULT 'default', account_id INT, max_channels INT DEFAULT 100, enabled BOOLEAN DEFAULT true, created_at TIMESTAMP DEFAULT NOW())")
+
+        let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS cluster_nodes (id TEXT PRIMARY KEY, address TEXT NOT NULL, port INT DEFAULT 5060, region TEXT DEFAULT 'default', weight INT DEFAULT 100, status TEXT DEFAULT 'active', last_heartbeat TIMESTAMP DEFAULT NOW(), started_at TIMESTAMP DEFAULT NOW())")
+
+        let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS header_rules (id SERIAL PRIMARY KEY, match_method TEXT DEFAULT '*', match_direction TEXT DEFAULT 'outbound', action TEXT NOT NULL, header_name TEXT NOT NULL, header_value TEXT DEFAULT '', priority INT DEFAULT 10, enabled BOOLEAN DEFAULT true, description TEXT, created_at TIMESTAMP DEFAULT NOW())")
+
+        let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL, description TEXT)")
+
+        // Indexes
+        let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_routes_pfx ON routes (prefix, enabled)")
+        let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_dids_num ON dids (number) WHERE enabled = true")
+        let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_acl_ip ON acl (source_ip)")
+        let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_cdr_time ON cdr (started_at)")
+        let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_users_name ON users (username) WHERE enabled = true")
+        let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_ipauth_ip ON ip_auth (ip_address) WHERE enabled = true")
+
+        // Register this node in the cluster
+        let _ = sql_exec_str4(db, "INSERT INTO cluster_nodes (id, address, port, region, status) VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO UPDATE SET address = $2, port = $3, region = $4, status = 'active', last_heartbeat = NOW()", node_id, node_addr, string(udp_port), node_region)
+
+        // Default STIR/SHAKEN config
+        let _ = sql_exec_str4(db, "INSERT INTO config (key, value, description) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING", "stir_shaken_enabled", "false", "Enable STIR/SHAKEN", "")
+        let _ = sql_exec_str4(db, "INSERT INTO config (key, value, description) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING", "stir_shaken_attestation", "A", "Default attestation level A/B/C", "")
+        let _ = sql_exec_str4(db, "INSERT INTO config (key, value, description) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING", "stir_shaken_cert_url", "https://certs.example.com/sti.pem", "STI certificate URL", "")
+
+        // Index for routing rules
+        let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_routing_rules_pri ON routing_rules (priority) WHERE enabled = true")
+
+        slog("  DB:      PostgreSQL (15 tables)")
+        slog("  Cluster: node=" + node_id + " region=" + node_region)
+    } else {
+        slog("  DB:      in-memory (standalone)")
+    }
+
+    slog("")
+    slog("Mako SIP Proxy")
+    slog("  Node:    " + node_id + " (" + node_addr + ")")
+    slog("  Realm:   " + realm)
+    slog("  UDP:     :" + string(udp_port) + " (8 workers)")
+    let tcp_fd = tcp_listen(udp_port)
+    if tcp_fd >= 0 { slog("  TCP:     :" + string(udp_port)) }
+    slog("  TLS:     :" + string(tls_port))
+    slog("  WSS:     :" + string(wss_port))
+    slog("  Auth:    IP + Digest")
+    slog("  Route:   longest-prefix → dispatcher → gateway")
+    slog("  Cluster: DB-shared registrations + heartbeat")
+    slog("")
+
+    crew t {
+        let _ = t.kick(udp_worker(0, udp_port, reg, calls, cache))
+        let _ = t.kick(udp_worker(1, udp_port, reg, calls, cache))
+        let _ = t.kick(udp_worker(2, udp_port, reg, calls, cache))
+        let _ = t.kick(udp_worker(3, udp_port, reg, calls, cache))
+        let _ = t.kick(udp_worker(4, udp_port, reg, calls, cache))
+        let _ = t.kick(udp_worker(5, udp_port, reg, calls, cache))
+        let _ = t.kick(udp_worker(6, udp_port, reg, calls, cache))
+        let _ = t.kick(udp_worker(7, udp_port, reg, calls, cache))
+        if tcp_fd >= 0 { let _ = t.kick(tcp_worker(tcp_fd, reg, calls, udp_port, cache)) }
+        let _ = t.kick(tls_worker(tls_port, reg, calls, cache))
+        let _ = t.kick(wss_worker(wss_port, reg, calls, cache))
+
+        // Heartbeat + stats loop
+        let hb_db_url = env_get_or("SIP_DB_URL", "")
+        let hb_node_id = env_get_or("SIP_NODE_ID", "node1")
+        let mut hb_db_ok = 0
+        let mut hb_db = sql_open_postgres("")
+        if len(hb_db_url) > 0 { hb_db = sql_open_postgres(hb_db_url); hb_db_ok = 1 }
+
+        while 1 == 1 {
+            sleep_ms(10000)
+
+            // Heartbeat: update our timestamp so other nodes know we're alive
+            if hb_db_ok == 1 {
+                let _ = sql_exec_str4(hb_db, "UPDATE cluster_nodes SET last_heartbeat = NOW(), status = 'active' WHERE id = $1", hb_node_id, "", "", "")
+
+                // Mark stale nodes as down (no heartbeat in 30s)
+                let _ = sql_exec_plain(hb_db, "UPDATE cluster_nodes SET status = 'stale' WHERE last_heartbeat < NOW() - INTERVAL '30 seconds' AND status = 'active'")
+
+                // Clean expired registrations (older than 1 hour)
+                let _ = sql_exec_plain(hb_db, "DELETE FROM registrations WHERE updated_at < NOW() - INTERVAL '3600 seconds'")
+            }
+
+            slog("[" + hb_node_id + "] regs=" + string(cmap_len(reg)) + " calls=" + string(cmap_len(calls)) + " cache=" + string(cmap_len(cache)))
+        }
+    }
+}

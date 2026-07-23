@@ -1,0 +1,11 @@
+// ============ LOGGING ============
+
+fn slog(msg: string) -> int {
+    print(f"{time_format(now_ms())} {msg}")
+    return 0
+}
+
+fn log_info(component: string, msg: string) -> int {
+    print(f"{time_format(now_ms())} [{component}] {msg}")
+    return 0
+}
