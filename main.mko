@@ -953,11 +953,106 @@ fn sip_tls_stream_poll(owner: int, reg: CMap, calls: CMap, db: SqlDB, db_ok: int
     return acted
 }
 
+fn sip_wss_drop_assoc(owner: int, item: string, handle: int, cache: CMap) -> int {
+    if handle > 0 { let _ = wss_pool_close(handle) }
+    let assoc_key = "wss_assoc|" + string(owner) + "|" + item
+    let _ = cmap_del(cache, assoc_key)
+    let _ = cmap_del(cache, "wss_at|" + assoc_key)
+    let _ = cmap_del(cache, "wss_buf|" + string(owner) + "|" + item)
+    let list_key = "wss_assoc_list|" + string(owner)
+    if cmap_has(cache, list_key) == 1 {
+        let current = str_split(cmap_get(cache, list_key), ",")
+        let mut kept = ""
+        let mut i = 0
+        while i < len(current) {
+            let candidate = str_trim_space(current[i])
+            if len(candidate) > 0 && not str_eq(candidate, item) {
+                if len(kept) == 0 { kept = candidate } else { kept = kept + "," + candidate }
+            }
+            i = i + 1
+        }
+        if len(kept) == 0 { let _ = cmap_del(cache, list_key) } else { cmap_set(cache, list_key, kept) }
+    }
+    return 0
+}
+
+// Drain responses arriving on persistent outbound WSS associations. Mako's
+// WSS pool exposes the underlying TLS fd for readiness polling while keeping
+// RFC 6455 framing (including ping/pong, masking, fragmentation, and close
+// handling) inside the runtime.
+fn sip_wss_stream_poll(owner: int, reg: CMap, calls: CMap, db: SqlDB, db_ok: int, cache: CMap, realm: string, node_id: string) -> int {
+    let list_key = "wss_assoc_list|" + string(owner)
+    if cmap_has(cache, list_key) == 0 { return 0 }
+    let targets = str_split(cmap_get(cache, list_key), ",")
+    let mut acted = 0
+    let mut idle_ms = 600000
+    match parse_int(env_get_or("SIP_WSS_IDLE_MS", "600000")) {
+        Ok(v) => { idle_ms = v }
+        Err(_) => {}
+    }
+    if idle_ms < 60000 { idle_ms = 60000 }
+    if idle_ms > 86400000 { idle_ms = 86400000 }
+    let now = mono_ms()
+    let mut i = 0
+    while i < len(targets) {
+        let item = str_trim_space(targets[i])
+        let assoc_key = "wss_assoc|" + string(owner) + "|" + item
+        if cmap_has(cache, assoc_key) == 1 {
+            let mut handle = -1
+            match parse_int(cmap_get(cache, assoc_key)) { Ok(v) => { handle = v } Err(_) => {} }
+            let mut last = now
+            if cmap_has(cache, "wss_at|" + assoc_key) == 1 {
+                match parse_int(cmap_get(cache, "wss_at|" + assoc_key)) { Ok(v) => { last = v } Err(_) => {} }
+            }
+            let mut expired = 0
+            if last > 0 && now - last > idle_ms { expired = 1 }
+            let fd = wss_pool_fd(handle)
+            if expired == 1 || fd < 0 {
+                let _ = sip_wss_drop_assoc(owner, item, handle, cache)
+            } else {
+                let el = evloop_new()
+                let _ = evloop_add(el, fd, 1)
+                let ready = evloop_wait(el, 0)
+                let _ = evloop_close(el)
+                if ready > 0 {
+                    let raw = wss_pool_recv(handle, 65536)
+                    if len(raw) == 0 {
+                        let _ = sip_wss_drop_assoc(owner, item, handle, cache)
+                    } else {
+                        cmap_set(cache, "wss_at|" + assoc_key, string(now))
+                        let buf_key = "wss_buf|" + string(owner) + "|" + item
+                        let mut buf = ""
+                        if cmap_has(cache, buf_key) == 1 { buf = cmap_get(cache, buf_key) }
+                        buf = stream_append(buf, raw)
+                        if len(buf) == 0 {
+                            let _ = sip_wss_drop_assoc(owner, item, handle, cache)
+                        } else {
+                            while stream_has_complete(buf) == 1 {
+                                let parts = stream_next_msg(buf)
+                                let msg = parts[0]
+                                buf = parts[1]
+                                if len(msg) == 0 { break }
+                                let reply = process_sip(msg, len(msg), reg, calls, peer_host(fd), peer_port(fd), "WSS", owner, db, db_ok, cache, realm, node_id)
+                                if len(reply) > 0 { let _ = sip_forward_reply(reply, cache, owner) }
+                                acted = acted + 1
+                            }
+                            cmap_set(cache, buf_key, buf)
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return acted
+}
+
 // Drain responses arriving on pooled outbound TCP and TLS associations.  A
 // reliable SIP transport is framed by Content-Length, so each association has
 // an independent reassembly buffer before responses enter transaction logic.
 fn sip_stream_poll(owner: int, reg: CMap, calls: CMap, db: SqlDB, db_ok: int, cache: CMap, realm: string, node_id: string) -> int {
-    let mut acted = sip_tls_stream_poll(owner, reg, calls, db, db_ok, cache, realm, node_id)
+    let mut acted = sip_wss_stream_poll(owner, reg, calls, db, db_ok, cache, realm, node_id)
+    acted = acted + sip_tls_stream_poll(owner, reg, calls, db, db_ok, cache, realm, node_id)
     let list_key = "tcp_assoc_list|" + string(owner)
     if cmap_has(cache, list_key) == 0 { return acted }
     let targets = str_split(cmap_get(cache, list_key), ",")
@@ -974,7 +1069,7 @@ fn sip_stream_poll(owner: int, reg: CMap, calls: CMap, db: SqlDB, db_ok: int, ca
                 let ready = evloop_wait(el, 0)
                 let _ = evloop_close(el)
                 if ready > 0 {
-                    let raw = tcp_read_fast(fd)
+                    let raw = tcp_read(fd)
                     if len(raw) == 0 {
                         let _ = tcp_close(fd)
                         let _ = cmap_del(cache, assoc_key)
@@ -1101,7 +1196,7 @@ fn tcp_worker(fd: int, reg: CMap, calls: CMap, port: int, cache: CMap) -> int {
                 continue
             }
             if alive == 1 {
-                let raw = tcp_read_fast(c)
+                let raw = tcp_read(c)
                 if len(raw) == 0 {
                     alive = 0
                 } else {
@@ -1362,7 +1457,7 @@ fn wss_worker(port: int, reg: CMap, calls: CMap, cache: CMap) -> int {
         if len(peer_ip) == 0 { peer_ip = "0.0.0.0" }
         // `ws_accept` accepts from a listening fd. This worker already owns
         // the accepted TCP fd, so validate and complete the upgrade in place.
-        let upgrade = tcp_read_fast(c)
+        let upgrade = tcp_read(c)
         if ws_upgrade_request_ok(upgrade) == 0 {
             let _ = tcp_close(c)
             continue

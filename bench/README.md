@@ -32,9 +32,9 @@ message size, worker count, and database/routing mode identical. Kamailio is
 not installed in this checkout; install or point `SIPP`/the proxy command at a
 separate candidate before comparing results.
 
-The latest pinned local run used Mako 0.4.5, `RATE=1000`, 2,000 calls, 1,000
+The latest pinned local run used Mako 0.4.15, `RATE=1000`, 2,000 calls, 1,000
 concurrent dialogs, and four workers. It completed 2,000/2,000 calls with
-zero failures, retransmissions, or timeouts, and achieved 660.72 CPS. The
+zero failures, retransmissions, or timeouts, and achieved 659.631 CPS. The
 dialog length was 1.003 seconds. A five-run soak at `RATE=750`, 1,000 calls,
 500 concurrent dialogs, and four workers also completed every call without
 failures or retransmissions. These are Mako baselines, not Kamailio
@@ -44,6 +44,7 @@ Additional validation commands:
 
 ```sh
 python3 bench/transport_matrix.py --binary ./main
+python3 bench/wss_outbound_matrix.py --binary ./main
 python3 bench/tls_ipv6_matrix.py --binary ./main
 python3 bench/fault_matrix.py --binary ./main
 python3 bench/abnf_corpus.py --binary ./main
@@ -59,6 +60,14 @@ unacknowledged-2xx cases through a real local UAS. These are independent
 process checks, but they do not replace PJSIP/Kamailio/OpenSIPS/Asterisk
 interoperability; those stacks must be installed and supplied as separate
 fixtures.
+
+`wss_outbound_matrix.py` verifies the WebRTC signaling egress path: a
+temporary CA signs a `localhost` WSS peer, the proxy registers a
+`transport=wss` contact, and an INVITE/180/200/ACK/BYE dialog is checked at a
+minimal RFC 6455 upstream over one persistent connection. Production
+deployments should set `SIP_UPSTREAM_CA`; insecure WSS is intentionally
+opt-in through `SIP_UPSTREAM_TLS_INSECURE=1` for lab use. Persistent idle
+associations expire according to `SIP_WSS_IDLE_MS` (default 10 minutes).
 
 `abnf_corpus.py` crosses 24 valid compact/long, quoted/unquoted, IPv4/IPv6,
 URI-escaped, and Via-parameter forms, then checks 13 one-rule invalid

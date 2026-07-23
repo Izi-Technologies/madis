@@ -12,6 +12,7 @@ MAKO_RUNTIME="$RUNTIME" "$MAKO" test tests
 MAKO_RUNTIME="$RUNTIME" "$MAKO" build --release --strip --no-incremental main.mko -o main
 
 python3 bench/transport_matrix.py --binary ./main --base-port 18560
+python3 bench/wss_outbound_matrix.py --binary ./main --base-port 19460
 python3 bench/tls_ipv6_matrix.py --binary ./main --base-port 18760
 python3 bench/fault_matrix.py --binary ./main --base-port 18960
 python3 bench/abnf_corpus.py --binary ./main --base-port 19260

@@ -15,6 +15,11 @@ ASAN_OPTIONS=${ASAN_OPTIONS:-detect_leaks=0} \
 UBSAN_OPTIONS=${UBSAN_OPTIONS:-halt_on_error=1} \
 python3 "$ROOT/bench/transport_matrix.py" --binary "$TMP/main" --base-port 18760
 
+echo "Running sanitized outbound WSS matrix"
+ASAN_OPTIONS=${ASAN_OPTIONS:-detect_leaks=0} \
+UBSAN_OPTIONS=${UBSAN_OPTIONS:-halt_on_error=1} \
+python3 "$ROOT/bench/wss_outbound_matrix.py" --binary "$TMP/main" --base-port 19460
+
 echo "Running sanitized trusted TLS/IPv6 matrix"
 ASAN_OPTIONS=${ASAN_OPTIONS:-detect_leaks=0} \
 UBSAN_OPTIONS=${UBSAN_OPTIONS:-halt_on_error=1} \

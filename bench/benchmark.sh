@@ -48,11 +48,11 @@ fi
 
 MAKO_VERSION=$($MAKO --version 2>/dev/null || true)
 case "$MAKO_VERSION" in
-    *"mako0.4.5"*) ;;
-    *) echo "Mako 0.4.5 required; got: $MAKO_VERSION" >&2; exit 2 ;;
+    *"mako0.4.15"*) ;;
+    *) echo "Mako 0.4.15 required; got: $MAKO_VERSION" >&2; exit 2 ;;
 esac
 if [ ! -f "$RUNTIME/mako_rt.h" ]; then
-    echo "Mako 0.4.5 runtime not found: $RUNTIME" >&2
+    echo "Mako 0.4.15 runtime not found: $RUNTIME" >&2
     exit 2
 fi
 

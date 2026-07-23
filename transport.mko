@@ -368,6 +368,62 @@ fn sip_forward_ws(target: string, msg: string, cache: CMap) -> int {
     return 0
 }
 
+// WSS outbound uses a bounded, persistent Mako association.  A CA bundle is
+// required in production; the insecure switch exists only for controlled
+// interoperability labs where the peer certificate is not publicly trusted.
+fn sip_forward_wss(target: string, msg: string, cache: CMap, owner: int) -> int {
+    if wss_available() == 0 { return 0 }
+    let host = sip_target_host(target)
+    let port = sip_target_port(target, 443)
+    if len(host) == 0 { return 0 }
+    let path = sip_target_path(target)
+    let item = host + ":" + string(port) + path
+    let assoc_key = "wss_assoc|" + string(owner) + "|" + item
+    let mut handle = -1
+    if cmap_has(cache, assoc_key) == 1 {
+        match parse_int(cmap_get(cache, assoc_key)) { Ok(v) => { handle = v } Err(_) => { handle = -1 } }
+    }
+    if handle > 0 {
+        let sent_existing = wss_pool_send(handle, msg)
+        if sent_existing >= 0 {
+            cmap_set(cache, "last_forward_target", item + ";wss;reused")
+            cmap_set(cache, "wss_at|" + assoc_key, string(mono_ms()))
+            return 1
+        }
+        let _ = sip_wss_drop_assoc(owner, item, handle, cache)
+        handle = -1
+    }
+
+    let key = base64_encode(random_bytes(16))
+    let ca = env_get_or("SIP_UPSTREAM_CA", "")
+    if len(ca) > 0 {
+        handle = wss_pool_open_ca(host, port, path, key, ca)
+    } else {
+        let insecure = str_to_lower(str_trim_space(env_get_or("SIP_UPSTREAM_TLS_INSECURE", "0")))
+        if not str_eq(insecure, "1") && not str_eq(insecure, "true") && not str_eq(insecure, "yes") {
+            return 0
+        }
+        handle = wss_pool_open_insecure(host, port, path, key)
+    }
+    if handle <= 0 { return 0 }
+    let sent = wss_pool_send(handle, msg)
+    if sent < 0 {
+        let _ = wss_pool_close(handle)
+        return 0
+    }
+    cmap_set(cache, assoc_key, string(handle))
+    let list_key = "wss_assoc_list|" + string(owner)
+    let mut list = ""
+    if cmap_has(cache, list_key) == 1 { list = cmap_get(cache, list_key) }
+    if not str_contains("," + list + ",", "," + item + ",") {
+        if len(list) == 0 { list = item } else { list = list + "," + item }
+        cmap_set(cache, list_key, list)
+    }
+    cmap_set(cache, "wss_at|" + assoc_key, string(mono_ms()))
+    cmap_set(cache, "last_forward_target", item + ";wss")
+    return 1
+}
+
 fn sip_forward_target(target: string, msg: string, transport: string, cache: CMap, out_fd: int) -> int {
     let mut tr = sip_transport_param(target, transport)
     let target_low = str_to_lower(target)
@@ -382,7 +438,8 @@ fn sip_forward_target(target: string, msg: string, transport: string, cache: CMa
     if len(resolved_targets) == 0 { resolved_targets = target }
     let mut default_port = 5060
     if str_eq(tr, "tls") || str_eq(tr, "sips") { default_port = 5061 }
-    if str_eq(tr, "ws") || str_eq(tr, "wss") { default_port = 80 }
+    if str_eq(tr, "ws") { default_port = 80 }
+    if str_eq(tr, "wss") { default_port = 443 }
     let mut sent = 0
     let mut chosen_target = ""
     let candidates = str_split(resolved_targets, ",")
@@ -396,10 +453,8 @@ fn sip_forward_target(target: string, msg: string, transport: string, cache: CMa
             if str_eq(tr, "tcp") { sent = sip_forward_tcp(send_target, msg, cache, out_fd) }
             if str_eq(tr, "tls") || str_eq(tr, "sips") { sent = sip_forward_tls(send_target, msg, cache, out_fd) }
             if str_eq(tr, "ws") { sent = sip_forward_ws(send_target, msg, cache) }
+            if str_eq(tr, "wss") { sent = sip_forward_wss(send_target, msg, cache, out_fd) }
             if len(tr) == 0 { sent = sip_forward_udp(send_target, msg, cache, out_fd) }
-            // WSS requires TLS + the WebSocket client framing layer. Fail
-            // closed until a WSS client association is available.
-            if str_eq(tr, "wss") { sent = 0 }
             let _ = dispatch_health_note(health_addr, sent, cache)
             if sent == 1 { chosen_target = send_target }
         }
@@ -430,6 +485,7 @@ fn sip_resend_target(target: string, msg: string, transport: string, cache: CMap
     if str_eq(tr, "tcp") { return sip_forward_tcp(target, msg, cache, out_fd) }
     if str_eq(tr, "tls") || str_eq(tr, "sips") { return sip_forward_tls(target, msg, cache, out_fd) }
     if str_eq(tr, "ws") { return sip_forward_ws(target, msg, cache) }
+    if str_eq(tr, "wss") { return sip_forward_wss(target, msg, cache, out_fd) }
     return 0
 }
 
