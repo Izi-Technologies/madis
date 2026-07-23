@@ -1,0 +1,620 @@
+#!/usr/bin/env bash
+#
+# Madis SIP Proxy — Linux installer
+# Supports Debian/Ubuntu and RHEL/CentOS/Fedora/Rocky/AlmaLinux
+#
+set -euo pipefail
+
+# ── defaults (override with env vars before running) ─────────────────────────
+MADIS_DB_NAME="${MADIS_DB_NAME:-madis}"
+MADIS_DB_USER="${MADIS_DB_USER:-madis}"
+MADIS_DB_PASS="${MADIS_DB_PASS:-}"
+MADIS_INSTALL_DIR="${MADIS_INSTALL_DIR:-/opt/madis}"
+MADIS_CONF_DIR="${MADIS_CONF_DIR:-/etc/madis}"
+MADIS_LOG_DIR="${MADIS_LOG_DIR:-/var/log/madis}"
+MADIS_USER="${MADIS_USER:-madis}"
+MADIS_SIP_PORT="${MADIS_SIP_PORT:-5060}"
+MADIS_TLS_PORT="${MADIS_TLS_PORT:-5061}"
+MADIS_WSS_PORT="${MADIS_WSS_PORT:-8443}"
+MADIS_ADMIN_PORT="${MADIS_ADMIN_PORT:-8080}"
+MADIS_ADMIN_TOKEN="${MADIS_ADMIN_TOKEN:-}"
+
+# ── colors ───────────────────────────────────────────────────────────────────
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+info()  { echo -e "${GREEN}[madis]${NC} $1"; }
+warn()  { echo -e "${YELLOW}[madis]${NC} $1"; }
+fail()  { echo -e "${RED}[madis]${NC} $1"; exit 1; }
+
+# ── preflight ────────────────────────────────────────────────────────────────
+[[ $EUID -eq 0 ]] || fail "Please run as root (sudo $0)"
+
+detect_distro() {
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        DISTRO_ID="${ID}"
+        DISTRO_FAMILY="${ID_LIKE:-$ID}"
+    elif [ -f /etc/redhat-release ]; then
+        DISTRO_ID="rhel"
+        DISTRO_FAMILY="rhel"
+    elif [ -f /etc/debian_version ]; then
+        DISTRO_ID="debian"
+        DISTRO_FAMILY="debian"
+    else
+        fail "Could not detect Linux distribution."
+    fi
+}
+
+detect_distro
+
+is_debian() {
+    [[ "$DISTRO_ID" == "debian" || "$DISTRO_ID" == "ubuntu" || \
+       "$DISTRO_ID" == "linuxmint" || "$DISTRO_FAMILY" == *"debian"* ]]
+}
+
+is_rhel() {
+    [[ "$DISTRO_ID" == "rhel" || "$DISTRO_ID" == "centos" || \
+       "$DISTRO_ID" == "fedora" || "$DISTRO_ID" == "rocky" || \
+       "$DISTRO_ID" == "almalinux" || "$DISTRO_FAMILY" == *"rhel"* || \
+       "$DISTRO_FAMILY" == *"fedora"* ]]
+}
+
+if is_debian; then
+    info "Detected Debian-based system ($DISTRO_ID)"
+elif is_rhel; then
+    info "Detected RHEL-based system ($DISTRO_ID)"
+else
+    fail "Unsupported distribution: $DISTRO_ID"
+fi
+
+# ── generate db password if not provided ─────────────────────────────────────
+if [ -z "$MADIS_DB_PASS" ]; then
+    MADIS_DB_PASS=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 24 || true)
+    info "Generated database password."
+fi
+
+if [ -z "$MADIS_ADMIN_TOKEN" ]; then
+    MADIS_ADMIN_TOKEN=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 32 || true)
+    info "Generated admin API token."
+fi
+
+# ── install system packages ──────────────────────────────────────────────────
+info "Installing system dependencies..."
+
+if is_debian; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq
+    apt-get install -y -qq \
+        postgresql postgresql-client \
+        build-essential gcc make \
+        libssl-dev libpq-dev \
+        curl wget git \
+        net-tools \
+        logrotate \
+        > /dev/null 2>&1
+elif is_rhel; then
+    if command -v dnf &> /dev/null; then
+        PKG_MGR="dnf"
+    else
+        PKG_MGR="yum"
+    fi
+    $PKG_MGR install -y -q \
+        postgresql-server postgresql \
+        gcc make \
+        openssl-devel libpq-devel \
+        curl wget git \
+        net-tools \
+        logrotate \
+        > /dev/null 2>&1
+fi
+
+info "System packages installed."
+
+# ── start and configure postgresql ───────────────────────────────────────────
+info "Setting up PostgreSQL..."
+
+if is_debian; then
+    systemctl enable postgresql > /dev/null 2>&1
+    systemctl start postgresql
+elif is_rhel; then
+    # RHEL-family needs initdb before first start
+    if [ ! -f /var/lib/pgsql/data/PG_VERSION ]; then
+        postgresql-setup --initdb 2>/dev/null || postgresql-setup initdb 2>/dev/null || true
+    fi
+    # allow md5 auth for local connections
+    PG_HBA=$(find /var/lib/pgsql -name pg_hba.conf 2>/dev/null | head -1)
+    if [ -n "$PG_HBA" ]; then
+        if grep -q "ident" "$PG_HBA"; then
+            sed -i 's/^\(host.*all.*all.*\)ident/\1md5/' "$PG_HBA"
+            sed -i 's/^\(local.*all.*all.*\)peer/\1md5/' "$PG_HBA"
+        fi
+    fi
+    systemctl enable postgresql > /dev/null 2>&1
+    systemctl start postgresql
+fi
+
+# wait for postgres to be ready
+for i in $(seq 1 10); do
+    if su - postgres -c "psql -c 'SELECT 1'" > /dev/null 2>&1; then
+        break
+    fi
+    sleep 1
+done
+
+# create db user and database
+su - postgres -c "psql -tAc \"SELECT 1 FROM pg_roles WHERE rolname='$MADIS_DB_USER'\"" | grep -q 1 || \
+    su - postgres -c "psql -c \"CREATE USER $MADIS_DB_USER WITH PASSWORD '$MADIS_DB_PASS';\""
+
+su - postgres -c "psql -tAc \"SELECT 1 FROM pg_database WHERE datname='$MADIS_DB_NAME'\"" | grep -q 1 || \
+    su - postgres -c "psql -c \"CREATE DATABASE $MADIS_DB_NAME OWNER $MADIS_DB_USER;\""
+
+su - postgres -c "psql -c \"GRANT ALL PRIVILEGES ON DATABASE $MADIS_DB_NAME TO $MADIS_DB_USER;\""
+
+info "PostgreSQL database '$MADIS_DB_NAME' ready."
+
+# ── create database schema ───────────────────────────────────────────────────
+info "Creating database schema..."
+
+PGPASSWORD="$MADIS_DB_PASS" psql -h 127.0.0.1 -U "$MADIS_DB_USER" -d "$MADIS_DB_NAME" -q <<'SCHEMA'
+
+-- SIP users and authentication
+CREATE TABLE IF NOT EXISTS users (
+    id              SERIAL PRIMARY KEY,
+    username        TEXT UNIQUE NOT NULL,
+    password_ha1    TEXT NOT NULL,
+    password_ha1_sha256 TEXT DEFAULT '',
+    domain          TEXT DEFAULT 'mako.local',
+    display_name    TEXT,
+    email           TEXT,
+    max_contacts    INT DEFAULT 5,
+    enabled         BOOLEAN DEFAULT true,
+    created_at      TIMESTAMP DEFAULT NOW()
+);
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_ha1_sha256 TEXT DEFAULT '';
+
+-- IP-based authentication (carriers, trunks)
+CREATE TABLE IF NOT EXISTS ip_auth (
+    id              SERIAL PRIMARY KEY,
+    ip_address      TEXT UNIQUE NOT NULL,
+    description     TEXT,
+    tenant          TEXT DEFAULT 'default',
+    account_id      INT,
+    max_channels    INT DEFAULT 100,
+    enabled         BOOLEAN DEFAULT true,
+    created_at      TIMESTAMP DEFAULT NOW()
+);
+
+-- Access control lists
+CREATE TABLE IF NOT EXISTS acl (
+    id              SERIAL PRIMARY KEY,
+    source_ip       TEXT DEFAULT '*',
+    sip_user        TEXT DEFAULT '*',
+    action          TEXT DEFAULT 'allow',
+    priority        INT DEFAULT 10,
+    description     TEXT,
+    created_at      TIMESTAMP DEFAULT NOW()
+);
+
+-- Registrations (legacy single-binding table)
+CREATE TABLE IF NOT EXISTS registrations (
+    aor             TEXT PRIMARY KEY,
+    contact         TEXT NOT NULL,
+    transport       TEXT DEFAULT 'UDP',
+    node_id         TEXT DEFAULT '',
+    user_agent      TEXT,
+    updated_at      TIMESTAMP DEFAULT NOW(),
+    created_at      TIMESTAMP DEFAULT NOW()
+);
+
+-- Registration bindings (multi-contact)
+CREATE TABLE IF NOT EXISTS registration_bindings (
+    id              SERIAL PRIMARY KEY,
+    aor             TEXT NOT NULL,
+    contact         TEXT NOT NULL,
+    transport       TEXT DEFAULT 'UDP',
+    node_id         TEXT DEFAULT '',
+    source_ip       TEXT DEFAULT '',
+    source_port     INT DEFAULT 0,
+    expires_at      TIMESTAMP DEFAULT NOW(),
+    updated_at      TIMESTAMP DEFAULT NOW(),
+    created_at      TIMESTAMP DEFAULT NOW(),
+    UNIQUE(aor, contact)
+);
+
+-- Gateways
+CREATE TABLE IF NOT EXISTS gateways (
+    id              SERIAL PRIMARY KEY,
+    name            TEXT UNIQUE NOT NULL,
+    address         TEXT NOT NULL,
+    port            INT DEFAULT 5060,
+    transport       TEXT DEFAULT 'UDP',
+    auth_user       TEXT,
+    auth_pass       TEXT,
+    caller_id       TEXT,
+    max_channels    INT DEFAULT 100,
+    enabled         BOOLEAN DEFAULT true,
+    created_at      TIMESTAMP DEFAULT NOW()
+);
+
+-- Dispatch sets (load balancing groups)
+CREATE TABLE IF NOT EXISTS dispatch_sets (
+    id              SERIAL PRIMARY KEY,
+    name            TEXT UNIQUE NOT NULL,
+    algorithm       TEXT DEFAULT 'round-robin',
+    description     TEXT,
+    enabled         BOOLEAN DEFAULT true,
+    created_at      TIMESTAMP DEFAULT NOW()
+);
+
+-- Dispatch members
+CREATE TABLE IF NOT EXISTS dispatch_members (
+    id              SERIAL PRIMARY KEY,
+    set_id          INT NOT NULL,
+    gateway_id      INT NOT NULL,
+    priority        INT DEFAULT 10,
+    weight          INT DEFAULT 100,
+    enabled         BOOLEAN DEFAULT true,
+    created_at      TIMESTAMP DEFAULT NOW()
+);
+
+-- Routes
+CREATE TABLE IF NOT EXISTS routes (
+    id              SERIAL PRIMARY KEY,
+    prefix          TEXT NOT NULL,
+    gateway_id      INT,
+    dispatch_set_id INT,
+    priority        INT DEFAULT 10,
+    weight          INT DEFAULT 100,
+    cost_per_min    NUMERIC(8,4) DEFAULT 0,
+    time_start      TIME DEFAULT '00:00',
+    time_end        TIME DEFAULT '23:59',
+    enabled         BOOLEAN DEFAULT true,
+    description     TEXT,
+    created_at      TIMESTAMP DEFAULT NOW()
+);
+
+-- Routing rules
+CREATE TABLE IF NOT EXISTS routing_rules (
+    id              SERIAL PRIMARY KEY,
+    match_prefix    TEXT DEFAULT '',
+    match_caller    TEXT DEFAULT '',
+    match_src_ip    TEXT DEFAULT '',
+    match_time_start TEXT DEFAULT '',
+    match_time_end  TEXT DEFAULT '',
+    match_day       TEXT DEFAULT '',
+    match_ani_group TEXT DEFAULT '',
+    action          TEXT NOT NULL,
+    priority        INT DEFAULT 10,
+    enabled         BOOLEAN DEFAULT true,
+    description     TEXT,
+    created_at      TIMESTAMP DEFAULT NOW()
+);
+
+-- DIDs (inbound numbers)
+CREATE TABLE IF NOT EXISTS dids (
+    id              SERIAL PRIMARY KEY,
+    number          TEXT UNIQUE NOT NULL,
+    destination_user TEXT NOT NULL,
+    description     TEXT,
+    enabled         BOOLEAN DEFAULT true,
+    created_at      TIMESTAMP DEFAULT NOW()
+);
+
+-- Dial plan
+CREATE TABLE IF NOT EXISTS dialplan (
+    id              SERIAL PRIMARY KEY,
+    match_prefix    TEXT NOT NULL,
+    callee_action   TEXT NOT NULL DEFAULT '',
+    caller_action   TEXT DEFAULT '',
+    direction       TEXT DEFAULT 'outbound',
+    priority        INT DEFAULT 10,
+    enabled         BOOLEAN DEFAULT true,
+    description     TEXT,
+    created_at      TIMESTAMP DEFAULT NOW()
+);
+
+-- Call detail records
+CREATE TABLE IF NOT EXISTS cdr (
+    call_id         TEXT PRIMARY KEY,
+    caller          TEXT,
+    callee          TEXT,
+    status          TEXT,
+    gateway         TEXT,
+    source_ip       TEXT,
+    destination     TEXT,
+    transport       TEXT,
+    from_uri        TEXT,
+    to_uri          TEXT,
+    user_agent      TEXT,
+    sip_code        INT,
+    started_at      TIMESTAMP DEFAULT NOW(),
+    ended_at        TIMESTAMP,
+    duration_sec    INT
+);
+
+-- SIP transaction log
+CREATE TABLE IF NOT EXISTS sip_transactions (
+    id              SERIAL PRIMARY KEY,
+    call_id         TEXT,
+    direction       TEXT,
+    method          TEXT,
+    source          TEXT,
+    ts              TIMESTAMP DEFAULT NOW()
+);
+
+-- Header manipulation rules
+CREATE TABLE IF NOT EXISTS header_rules (
+    id              SERIAL PRIMARY KEY,
+    match_method    TEXT DEFAULT '*',
+    match_direction TEXT DEFAULT 'outbound',
+    action          TEXT NOT NULL,
+    header_name     TEXT NOT NULL,
+    header_value    TEXT DEFAULT '',
+    priority        INT DEFAULT 10,
+    enabled         BOOLEAN DEFAULT true,
+    description     TEXT,
+    created_at      TIMESTAMP DEFAULT NOW()
+);
+
+-- Cluster nodes
+CREATE TABLE IF NOT EXISTS cluster_nodes (
+    id              TEXT PRIMARY KEY,
+    address         TEXT NOT NULL,
+    port            INT DEFAULT 5060,
+    region          TEXT DEFAULT 'default',
+    weight          INT DEFAULT 100,
+    status          TEXT DEFAULT 'active',
+    last_heartbeat  TIMESTAMP DEFAULT NOW(),
+    started_at      TIMESTAMP DEFAULT NOW()
+);
+
+-- Configuration key/value store
+CREATE TABLE IF NOT EXISTS config (
+    key             TEXT PRIMARY KEY,
+    value           TEXT NOT NULL,
+    description     TEXT
+);
+
+-- Security: ban list
+CREATE TABLE IF NOT EXISTS security_bans (
+    source_ip       TEXT PRIMARY KEY,
+    reason          TEXT DEFAULT '',
+    ban_count       INT DEFAULT 1,
+    expires_at      TIMESTAMP,
+    permanent       BOOLEAN DEFAULT false,
+    created_at      TIMESTAMP DEFAULT NOW()
+);
+
+-- Security: event log
+CREATE TABLE IF NOT EXISTS security_events (
+    id              SERIAL PRIMARY KEY,
+    event_type      TEXT NOT NULL,
+    source_ip       TEXT DEFAULT '',
+    sip_user        TEXT DEFAULT '',
+    severity        TEXT DEFAULT 'low',
+    details         TEXT DEFAULT '',
+    ts              TIMESTAMP DEFAULT NOW()
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_reg_bindings_aor_exp ON registration_bindings (aor, expires_at);
+CREATE INDEX IF NOT EXISTS idx_routes_pfx ON routes (prefix, enabled);
+CREATE INDEX IF NOT EXISTS idx_dids_num ON dids (number) WHERE enabled = true;
+CREATE INDEX IF NOT EXISTS idx_acl_ip ON acl (source_ip);
+CREATE INDEX IF NOT EXISTS idx_cdr_time ON cdr (started_at);
+CREATE INDEX IF NOT EXISTS idx_users_name ON users (username) WHERE enabled = true;
+CREATE INDEX IF NOT EXISTS idx_ipauth_ip ON ip_auth (ip_address) WHERE enabled = true;
+CREATE INDEX IF NOT EXISTS idx_routing_rules_pri ON routing_rules (priority) WHERE enabled = true;
+CREATE INDEX IF NOT EXISTS idx_security_events_ip_ts ON security_events (source_ip, ts);
+
+-- Default config values
+INSERT INTO config (key, value, description) VALUES
+    ('stir_shaken_enabled', 'false', 'Enable STIR/SHAKEN'),
+    ('stir_shaken_attestation', 'A', 'Default attestation level A/B/C'),
+    ('stir_shaken_cert_url', '', 'STI certificate URL (x5u)'),
+    ('stir_shaken_mode', 'auto', 'Verify mode: auto|hs256|rs256|jwks'),
+    ('stir_shaken_secret', '', 'HS256 secret (lab sign/verify)'),
+    ('stir_shaken_private_key', '', 'ES256 private key PEM/path for production signing'),
+    ('stir_shaken_public_key', '', 'RS256 public key PEM path or inline'),
+    ('stir_shaken_jwks', '', 'JWKS JSON path or inline'),
+    ('stir_shaken_jwks_url', '', 'JWKS HTTPS URL'),
+    ('security_enabled', 'true', 'Enable SIP security controls'),
+    ('security_max_auth_failures', '5', 'Auth failures before temporary ban'),
+    ('security_ban_duration_min', '30', 'Temporary ban duration in minutes')
+ON CONFLICT DO NOTHING;
+
+SCHEMA
+
+info "Database schema created."
+
+# ── create system user ───────────────────────────────────────────────────────
+if ! id "$MADIS_USER" &>/dev/null; then
+    useradd --system --no-create-home --shell /usr/sbin/nologin "$MADIS_USER"
+    info "Created system user '$MADIS_USER'."
+fi
+
+# ── create directories ───────────────────────────────────────────────────────
+mkdir -p "$MADIS_INSTALL_DIR"
+mkdir -p "$MADIS_CONF_DIR"
+mkdir -p "$MADIS_LOG_DIR"
+
+# ── copy source files ────────────────────────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+info "Copying source files to $MADIS_INSTALL_DIR..."
+cp "$SCRIPT_DIR"/*.mko "$MADIS_INSTALL_DIR/" 2>/dev/null || true
+if [ -d "$SCRIPT_DIR/tests" ]; then
+    cp -r "$SCRIPT_DIR/tests" "$MADIS_INSTALL_DIR/"
+fi
+
+# if a pre-built binary exists, copy that too
+if [ -f "$SCRIPT_DIR/main" ]; then
+    cp "$SCRIPT_DIR/main" "$MADIS_INSTALL_DIR/madis"
+    chmod +x "$MADIS_INSTALL_DIR/madis"
+    info "Installed pre-built binary."
+fi
+
+# ── write environment file ───────────────────────────────────────────────────
+cat > "$MADIS_CONF_DIR/madis.env" <<EOF
+# Madis SIP Proxy configuration
+# Database
+SIP_DB_URL=postgres://${MADIS_DB_USER}:${MADIS_DB_PASS}@127.0.0.1:5432/${MADIS_DB_NAME}
+
+# Network
+SIP_UDP_PORT=${MADIS_SIP_PORT}
+SIP_TLS_PORT=${MADIS_TLS_PORT}
+SIP_WSS_PORT=${MADIS_WSS_PORT}
+SIP_ADMIN_PORT=${MADIS_ADMIN_PORT}
+SIP_BIND_IP=0.0.0.0
+SIP_IPV6=1
+
+# Identity
+SIP_REALM=madis.local
+SIP_NODE_ID=node1
+SIP_NODE_ADDR=127.0.0.1
+SIP_REGION=default
+
+# Workers
+SIP_UDP_WORKERS=1
+SIP_TCP_WORKERS=1
+
+# Auth
+SIP_DIGEST_ALGORITHM=md5
+SIP_ADMIN_TOKEN=${MADIS_ADMIN_TOKEN}
+
+# TLS (uncomment and set paths to enable)
+# SIP_TLS_CERT=/etc/madis/tls/cert.pem
+# SIP_TLS_KEY=/etc/madis/tls/key.pem
+
+# Registration
+SIP_MAX_REG_EXPIRES=3600
+SIP_MIN_EXPIRES=60
+
+# STIR/SHAKEN (disabled by default)
+# STIR_SHAKEN_ENABLED=true
+# STIR_SHAKEN_CERT_URL=
+# STIR_SHAKEN_ATTESTATION=C
+# STIR_SHAKEN_PRIVATE_KEY=
+
+# Config file reload trigger (optional)
+# SIP_CONFIG_FILE=/etc/madis/reload.trigger
+EOF
+
+chmod 640 "$MADIS_CONF_DIR/madis.env"
+chown root:"$MADIS_USER" "$MADIS_CONF_DIR/madis.env"
+
+info "Configuration written to $MADIS_CONF_DIR/madis.env"
+
+# ── write systemd service ───────────────────────────────────────────────────
+cat > /etc/systemd/system/madis.service <<EOF
+[Unit]
+Description=Madis SIP Proxy
+After=network.target postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=${MADIS_USER}
+Group=${MADIS_USER}
+EnvironmentFile=${MADIS_CONF_DIR}/madis.env
+ExecStart=${MADIS_INSTALL_DIR}/madis
+WorkingDirectory=${MADIS_INSTALL_DIR}
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+StandardOutput=append:${MADIS_LOG_DIR}/madis.log
+StandardError=append:${MADIS_LOG_DIR}/madis-error.log
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=${MADIS_LOG_DIR}
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+info "Systemd service installed."
+
+# ── set up log rotation ─────────────────────────────────────────────────────
+cat > /etc/logrotate.d/madis <<EOF
+${MADIS_LOG_DIR}/*.log {
+    daily
+    missingok
+    rotate 14
+    compress
+    delaycompress
+    notifempty
+    copytruncate
+}
+EOF
+
+# ── fix ownership ────────────────────────────────────────────────────────────
+chown -R "$MADIS_USER":"$MADIS_USER" "$MADIS_INSTALL_DIR"
+chown -R "$MADIS_USER":"$MADIS_USER" "$MADIS_LOG_DIR"
+
+# ── open firewall ports (if firewall is active) ──────────────────────────────
+if command -v ufw &> /dev/null && ufw status | grep -q "active"; then
+    ufw allow "$MADIS_SIP_PORT"/udp > /dev/null 2>&1 || true
+    ufw allow "$MADIS_SIP_PORT"/tcp > /dev/null 2>&1 || true
+    ufw allow "$MADIS_TLS_PORT"/tcp > /dev/null 2>&1 || true
+    ufw allow "$MADIS_WSS_PORT"/tcp > /dev/null 2>&1 || true
+    info "Firewall rules added (ufw)."
+elif command -v firewall-cmd &> /dev/null && systemctl is-active firewalld &> /dev/null; then
+    firewall-cmd --permanent --add-port="$MADIS_SIP_PORT"/udp > /dev/null 2>&1 || true
+    firewall-cmd --permanent --add-port="$MADIS_SIP_PORT"/tcp > /dev/null 2>&1 || true
+    firewall-cmd --permanent --add-port="$MADIS_TLS_PORT"/tcp > /dev/null 2>&1 || true
+    firewall-cmd --permanent --add-port="$MADIS_WSS_PORT"/tcp > /dev/null 2>&1 || true
+    firewall-cmd --reload > /dev/null 2>&1 || true
+    info "Firewall rules added (firewalld)."
+fi
+
+# ── summary ──────────────────────────────────────────────────────────────────
+echo ""
+echo "==========================================="
+echo "  Madis SIP Proxy — installation complete"
+echo "==========================================="
+echo ""
+echo "  Install dir: $MADIS_INSTALL_DIR"
+echo "  Config:      $MADIS_CONF_DIR/madis.env"
+echo "  Logs:        $MADIS_LOG_DIR"
+echo ""
+echo "  ── Ports ──────────────────────────────"
+echo "  SIP UDP/TCP: $MADIS_SIP_PORT"
+echo "  SIP TLS:     $MADIS_TLS_PORT"
+echo "  WebSocket:   $MADIS_WSS_PORT"
+echo "  Admin HTTP:  $MADIS_ADMIN_PORT"
+echo ""
+echo "  ── Credentials (save these now) ───────"
+echo "  DB name:     $MADIS_DB_NAME"
+echo "  DB user:     $MADIS_DB_USER"
+echo "  DB password: $MADIS_DB_PASS"
+echo "  DB URL:      postgres://${MADIS_DB_USER}:****@127.0.0.1:5432/${MADIS_DB_NAME}"
+echo ""
+echo "  Admin token: $MADIS_ADMIN_TOKEN"
+echo "  (used as: Authorization: Bearer <token>)"
+echo ""
+echo "  These credentials are stored in:"
+echo "    $MADIS_CONF_DIR/madis.env"
+echo ""
+echo "  ── Next steps ─────────────────────────"
+echo ""
+echo "  Build from source (requires Mako 0.4.5):"
+echo "    cd $MADIS_INSTALL_DIR"
+echo "    MAKO_RUNTIME=/path/to/mako/runtime mako build --release --strip --no-incremental main.mko -o madis"
+echo ""
+echo "  Start the service:"
+echo "    systemctl start madis"
+echo "    systemctl enable madis"
+echo ""
+echo "  Check status:"
+echo "    systemctl status madis"
+echo "    curl -H 'Authorization: Bearer ${MADIS_ADMIN_TOKEN}' http://127.0.0.1:${MADIS_ADMIN_PORT}/healthz"
+echo ""

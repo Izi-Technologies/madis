@@ -30,6 +30,7 @@ RFC_COMPLIANCE.md
 # Environment / secrets
 .env
 .env.*
+madis.env
 
 # Editor / OS
 .DS_Store

@@ -1,0 +1,60 @@
+services:
+  madis:
+    build: .
+    container_name: madis
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "5060:5060/udp"
+      - "5060:5060/tcp"
+      - "5061:5061/tcp"
+      - "8443:8443/tcp"
+      - "8080:8080/tcp"
+    environment:
+      SIP_DB_URL: "postgres://madis:${MADIS_DB_PASS:-madis}@db:5432/madis"
+      SIP_UDP_PORT: "5060"
+      SIP_TLS_PORT: "5061"
+      SIP_WSS_PORT: "8443"
+      SIP_ADMIN_PORT: "8080"
+      SIP_ADMIN_TOKEN: "${MADIS_ADMIN_TOKEN:-changeme}"
+      SIP_BIND_IP: "0.0.0.0"
+      SIP_IPV6: "0"
+      SIP_REALM: "${MADIS_REALM:-madis.local}"
+      SIP_NODE_ID: "docker-node1"
+      SIP_DIGEST_ALGORITHM: "md5"
+      SIP_UDP_WORKERS: "1"
+      SIP_TCP_WORKERS: "1"
+      SIP_MAX_REG_EXPIRES: "3600"
+      SIP_MIN_EXPIRES: "60"
+    networks:
+      - madis-net
+
+  db:
+    image: postgres:16-alpine
+    container_name: madis-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: madis
+      POSTGRES_USER: madis
+      POSTGRES_PASSWORD: "${MADIS_DB_PASS:-madis}"
+    volumes:
+      - madis-pgdata:/var/lib/postgresql/data
+      - ./docker/init-db.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U madis"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - madis-net
+
+volumes:
+  madis-pgdata:
+
+networks:
+  madis-net:
+    driver: bridge

@@ -28,7 +28,33 @@ The proxy is split across a handful of `.mko` files. `main.mko` is the entry poi
 
 `parser` `headers` `auth` `registration` `routing` `dialplan` `nat` `transport` `stream` `rtpengine` `shaken` `security` `rfc` `db` `log` `ops`
 
-## Building
+## Installation
+
+### Linux (Debian/Ubuntu, RHEL/CentOS/Fedora/Rocky/Alma)
+
+The install script handles everything — system packages, PostgreSQL, database schema, credentials, systemd service, firewall rules, and log rotation.
+
+```sh
+sudo ./install.sh
+```
+
+It generates the database password and admin API token for you and prints them at the end. Everything goes into `/etc/madis/madis.env`.
+
+You can override defaults before running:
+
+```sh
+sudo MADIS_DB_NAME=mysipdb MADIS_SIP_PORT=5080 ./install.sh
+```
+
+### Docker
+
+```sh
+docker compose up -d
+```
+
+This starts Madis and a PostgreSQL instance together. See `docker-compose.yml` for details.
+
+## Building from source
 
 You'll need Mako 0.4.5.
 
@@ -46,12 +72,14 @@ MAKO_RUNTIME=/path/to/mako/runtime mako test tests
 
 ## Configuration
 
-A few environment variables control runtime behavior:
+Madis reads its config from environment variables (or `/etc/madis/madis.env` when installed via the script). The main ones:
 
+- `SIP_DB_URL` — PostgreSQL connection string
 - `SIP_ADMIN_PORT` — turns on the HTTP admin interface
 - `SIP_ADMIN_TOKEN` — if set, admin endpoints require a bearer token
 - `SIP_CONFIG_FILE` — path to a watched file; touching it triggers a config reload
 - `SIP_IPV6` — `1` by default, set to `0` if your host doesn't have IPv6
+- `SIP_TLS_CERT` / `SIP_TLS_KEY` — paths to TLS certificate and key
 
 ## License
 

@@ -1,0 +1,12 @@
+*.log
+.git
+.gitignore
+.claude
+.mako
+.env
+bench/__pycache__
+PRODUCTION.md
+RFC_COMPLIANCE.md
+CLAUDE.md
+CLAUDE.local.md
+install.sh
