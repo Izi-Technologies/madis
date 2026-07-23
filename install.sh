@@ -81,6 +81,71 @@ if [ -z "$MADIS_ADMIN_TOKEN" ]; then
     info "Generated admin API token."
 fi
 
+# ── detect public IP (GCP, AWS, Azure, or bare metal) ────────────────────────
+detect_public_ip() {
+    local pub_ip=""
+
+    # GCP metadata
+    pub_ip=$(curl -sf -m 3 -H "Metadata-Flavor: Google" \
+        "http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip" 2>/dev/null || true)
+    if [ -n "$pub_ip" ]; then
+        CLOUD_PROVIDER="GCP"
+        echo "$pub_ip"
+        return
+    fi
+
+    # AWS EC2 metadata (IMDSv2)
+    local token
+    token=$(curl -sf -m 2 -X PUT -H "X-aws-ec2-metadata-token-ttl-seconds: 60" \
+        "http://169.254.169.254/latest/api/token" 2>/dev/null || true)
+    if [ -n "$token" ]; then
+        pub_ip=$(curl -sf -m 2 -H "X-aws-ec2-metadata-token: $token" \
+            "http://169.254.169.254/latest/meta-data/public-ipv4" 2>/dev/null || true)
+        if [ -n "$pub_ip" ]; then
+            CLOUD_PROVIDER="AWS"
+            echo "$pub_ip"
+            return
+        fi
+    fi
+
+    # Azure IMDS
+    pub_ip=$(curl -sf -m 3 -H "Metadata: true" \
+        "http://169.254.169.254/metadata/instance/network/interface/0/ipv4/ipAddress/0/publicIpAddress?api-version=2021-02-01&format=text" 2>/dev/null || true)
+    if [ -n "$pub_ip" ]; then
+        CLOUD_PROVIDER="Azure"
+        echo "$pub_ip"
+        return
+    fi
+
+    # Fallback: external lookup
+    pub_ip=$(curl -sf -m 5 https://ifconfig.me 2>/dev/null || curl -sf -m 5 https://api.ipify.org 2>/dev/null || true)
+    if [ -n "$pub_ip" ]; then
+        CLOUD_PROVIDER="unknown"
+        echo "$pub_ip"
+        return
+    fi
+}
+
+CLOUD_PROVIDER="bare-metal"
+MADIS_PUBLIC_IP="${MADIS_PUBLIC_IP:-}"
+if [ -z "$MADIS_PUBLIC_IP" ]; then
+    MADIS_PUBLIC_IP=$(detect_public_ip)
+fi
+
+# Detect the private/bind IP
+MADIS_PRIVATE_IP="${MADIS_PRIVATE_IP:-}"
+if [ -z "$MADIS_PRIVATE_IP" ]; then
+    MADIS_PRIVATE_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "0.0.0.0")
+fi
+
+if [ -n "$MADIS_PUBLIC_IP" ] && [ "$MADIS_PUBLIC_IP" != "$MADIS_PRIVATE_IP" ]; then
+    info "Cloud/NAT detected ($CLOUD_PROVIDER)"
+    info "  Private IP: $MADIS_PRIVATE_IP (bind address)"
+    info "  Public IP:  $MADIS_PUBLIC_IP (SIP/SDP headers)"
+else
+    info "Public IP: ${MADIS_PUBLIC_IP:-not detected}"
+fi
+
 # ── install system packages ──────────────────────────────────────────────────
 info "Installing system dependencies..."
 
@@ -469,7 +534,8 @@ SIP_UDP_PORT=${MADIS_SIP_PORT}
 SIP_TLS_PORT=${MADIS_TLS_PORT}
 SIP_WSS_PORT=${MADIS_WSS_PORT}
 SIP_ADMIN_PORT=${MADIS_ADMIN_PORT}
-SIP_BIND_IP=0.0.0.0
+SIP_BIND_IP=${MADIS_PRIVATE_IP:-0.0.0.0}
+SIP_PUBLIC_IP=${MADIS_PUBLIC_IP:-}
 SIP_IPV6=1
 
 # Identity
@@ -586,7 +652,12 @@ echo "  Install dir: $MADIS_INSTALL_DIR"
 echo "  Config:      $MADIS_CONF_DIR/madis.env"
 echo "  Logs:        $MADIS_LOG_DIR"
 echo ""
-echo "  ── Ports ──────────────────────────────"
+echo "  ── Network ────────────────────────────"
+echo "  Bind IP:     ${MADIS_PRIVATE_IP:-0.0.0.0}"
+if [ -n "$MADIS_PUBLIC_IP" ] && [ "$MADIS_PUBLIC_IP" != "$MADIS_PRIVATE_IP" ]; then
+echo "  Public IP:   $MADIS_PUBLIC_IP (used in SIP/SDP headers)"
+echo "  Environment: $CLOUD_PROVIDER (NAT)"
+fi
 echo "  SIP UDP/TCP: $MADIS_SIP_PORT"
 echo "  SIP TLS:     $MADIS_TLS_PORT"
 echo "  WebSocket:   $MADIS_WSS_PORT"
