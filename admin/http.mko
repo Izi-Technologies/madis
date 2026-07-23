@@ -1,0 +1,404 @@
+fn parse_path(raw: string, n: int) -> string {
+    let mut i = 0
+    while i < n { if int(raw[i]) == 32 { i = i + 1; break }
+        i = i + 1 }
+    let s = i
+    while i < n {
+        let c = int(raw[i])
+        if c == 32 { return raw[s:i] }
+        if c == 63 { return raw[s:i] }
+        i = i + 1
+    }
+    return ""
+}
+
+// Query string after ? in request line (without leading ?)
+fn parse_query(raw: string, n: int) -> string {
+    let mut i = 0
+    while i < n { if int(raw[i]) == 32 { i = i + 1; break }
+        i = i + 1 }
+    while i < n {
+        let c = int(raw[i])
+        if c == 63 {
+            let s = i + 1
+            let mut e = s
+            while e < n {
+                let d = int(raw[e])
+                if d == 32 { break }
+                e = e + 1
+            }
+            return raw[s:e]
+        }
+        if c == 32 { break }
+        i = i + 1
+    }
+    return ""
+}
+
+fn query_val(q: string, name: string) -> string {
+    let needle = name + "="
+    let idx = str_index(q, needle)
+    if idx < 0 { return "" }
+    // Ensure start or &
+    if idx > 0 {
+        if int(q[idx - 1]) != 38 { return "" }
+    }
+    let s = idx + len(needle)
+    let mut e = s
+    while e < len(q) {
+        if int(q[e]) == 38 { break }
+        e = e + 1
+    }
+    return url_decode(q[s:e])
+}
+
+// Case-insensitive HTTP header value (first match). Returns trimmed value or "".
+fn parse_header(raw: string, n: int, name: string) -> string {
+    let low = str_to_lower(raw)
+    let needle = str_to_lower(name) + ":"
+    let idx = str_index(low, needle)
+    if idx < 0 { return "" }
+    let mut vs = idx + len(needle)
+    if vs < n { if int(raw[vs]) == 32 { vs = vs + 1 } }
+    let mut ve = vs
+    while ve < n {
+        let c = int(raw[ve])
+        if c == 13 { break }
+        if c == 10 { break }
+        ve = ve + 1
+    }
+    if ve <= vs { return "" }
+    return str_trim_space(raw[vs:ve])
+}
+
+// Authorization: Bearer <token>
+// Header name "authorization:" is 14 chars (not 15).
+fn parse_bearer(raw: string, n: int) -> string {
+    let val = parse_header(raw, n, "authorization")
+    if len(val) == 0 { return "" }
+    let vlow = str_to_lower(val)
+    if str_has_prefix(vlow, "bearer ") {
+        return str_trim_space(val[7:])
+    }
+    return val
+}
+
+// Complete RFC 6455 server upgrade for an already-read request.
+// Returns the HTTP 101 response body, or "" if the request is not a valid upgrade.
+fn ws_upgrade_response(raw: string) -> string {
+    if ws_upgrade_request_ok(raw) == 0 { return "" }
+    let key = parse_header(raw, len(raw), "Sec-WebSocket-Key")
+    if len(key) == 0 { return "" }
+    let acc = ws_accept_key(key)
+    if len(acc) == 0 { return "" }
+    return "HTTP/1.1 101 Switching Protocols\r\n"
+        + "Upgrade: websocket\r\n"
+        + "Connection: Upgrade\r\n"
+        + "Sec-WebSocket-Accept: " + acc + "\r\n"
+        + "\r\n"
+}
+
+fn parse_method(raw: string, n: int) -> string {
+    let mut i = 0
+    while i < n { if int(raw[i]) == 32 { return raw[0:i] }
+        i = i + 1 }
+    return ""
+}
+
+fn parse_cookie(raw: string, n: int, name: string) -> string {
+    let mut i = 0
+    while i < n { if int(raw[i]) == 10 { i = i + 1; break }
+        i = i + 1 }
+    while i + 7 < n {
+        if int(raw[i]) == 13 { break }
+        if i + 8 < n {
+            if str_eq(str_to_lower(raw[i:i + 7]), "cookie:") {
+                let mut vs = i + 7
+                if vs < n { if int(raw[vs]) == 32 { vs = vs + 1 } }
+                let mut ve = vs
+                while ve < n { if int(raw[ve]) == 13 { break }
+                    ve = ve + 1 }
+                let cookies = raw[vs:ve]
+                let idx = str_index(cookies, name + "=")
+                if idx >= 0 {
+                    let start = idx + len(name) + 1
+                    let clen = len(cookies)
+                    let mut end = start
+                    while end < clen { if int(cookies[end]) == 59 { break }
+                        end = end + 1 }
+                    return cookies[start:end]
+                }
+            }
+        }
+        while i < n { if int(raw[i]) == 10 { i = i + 1; break }
+            i = i + 1 }
+    }
+    return ""
+}
+
+fn parse_body(raw: string, n: int) -> string {
+    let mut i = 0
+    while i + 3 < n {
+        if int(raw[i]) == 13 { if int(raw[i+1]) == 10 { if int(raw[i+2]) == 13 { if int(raw[i+3]) == 10 { return raw[i+4:] } } } }
+        i = i + 1
+    }
+    return ""
+}
+
+fn hex_nibble(c: int) -> int {
+    if c >= 48 { if c <= 57 { return c - 48 } }
+    if c >= 65 { if c <= 70 { return c - 55 } }
+    if c >= 97 { if c <= 102 { return c - 87 } }
+    return 0 - 1
+}
+
+// Decode application/x-www-form-urlencoded values (+ and %XX).
+fn url_decode(s: string) -> string {
+    let mut b = str_builder()
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let c = int(s[i])
+        if c == 43 {
+            builder_write(b, " ")
+            i = i + 1
+        } else {
+            if c == 37 {
+                if i + 2 < n {
+                    let hi = hex_nibble(int(s[i + 1]))
+                    let lo = hex_nibble(int(s[i + 2]))
+                    if hi >= 0 {
+                        if lo >= 0 {
+                            builder_write_byte(b, byte(hi * 16 + lo))
+                            i = i + 3
+                        } else {
+                            builder_write_byte(b, byte(c))
+                            i = i + 1
+                        }
+                    } else {
+                        builder_write_byte(b, byte(c))
+                        i = i + 1
+                    }
+                } else {
+                    builder_write_byte(b, byte(c))
+                    i = i + 1
+                }
+            } else {
+                builder_write_byte(b, byte(c))
+                i = i + 1
+            }
+        }
+    }
+    return builder_string(b)
+}
+
+fn form_val(body: string, field: string) -> string {
+    let parts = str_split(body, "&")
+    let mut i = 0
+    while i < len(parts) {
+        let kv = str_split(parts[i], "=")
+        if len(kv) >= 2 {
+            if str_eq(url_decode(kv[0]), field) { return url_decode(kv[1]) }
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// Hex session id only (no + / =) — base64 tokens break browser cookies when they start with /
+fn session_token_new() -> string {
+    return sha256(random_bytes(32))
+}
+
+// Accept only 64-char lowercase hex session tokens.
+fn session_token_ok(tk: string) -> int {
+    if len(tk) != 64 { return 0 }
+    let mut i = 0
+    while i < 64 {
+        let c = int(tk[i])
+        let mut ok = 0
+        if c >= 48 { if c <= 57 { ok = 1 } }
+        if c >= 97 { if c <= 102 { ok = 1 } }
+        if ok == 0 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn http_resp(st: int, ctype: string, body: string, extra: string) -> string {
+    let mut sn = "OK"
+    if st == 302 { sn = "Found" }
+    if st == 403 { sn = "Forbidden" }
+    return "HTTP/1.1 " + string(st) + " " + sn + "\r\nContent-Type: " + ctype + "\r\nContent-Length: " + string(len(body)) + "\r\nConnection: keep-alive\r\n" + extra + "\r\n" + body
+}
+
+// Session cookie attributes. Secure is on by default (HTTPS via leba).
+// Set ADMIN_SECURE_COOKIE=0 for plain-HTTP local dev.
+fn cookie_secure_suffix() -> string {
+    let sec = env_get_or("ADMIN_SECURE_COOKIE", "1")
+    if str_eq(sec, "0") { return "" }
+    if str_eq(sec, "false") { return "" }
+    if str_eq(sec, "no") { return "" }
+    return "; Secure"
+}
+
+// Positive int from env (digits only); def if missing/invalid.
+fn env_pos_int(name: string, def: int) -> int {
+    let s = env_get_or(name, "")
+    if len(s) == 0 { return def }
+    let mut n = 0
+    let mut i = 0
+    while i < len(s) {
+        let c = int(s[i])
+        if c < 48 { return def }
+        if c > 57 { return def }
+        n = n * 10 + (c - 48)
+        i = i + 1
+    }
+    if n <= 0 { return def }
+    return n
+}
+
+// Default session lifetime: 24h. Override with ADMIN_SESSION_TTL_SECS.
+fn session_ttl_secs() -> int {
+    return env_pos_int("ADMIN_SESSION_TTL_SECS", 86400)
+}
+
+fn session_cookie_set(token: string) -> string {
+    let ttl = session_ttl_secs()
+    // SameSite=Lax so top-level navigations after login keep the cookie reliably
+    return "session=" + token + "; Path=/; HttpOnly; SameSite=Lax; Max-Age=" + string(ttl) + cookie_secure_suffix()
+}
+
+fn session_cookie_clear() -> string {
+    return "session=; Path=/; Max-Age=0; SameSite=Lax" + cookie_secure_suffix()
+}
+
+// Login lockout: ADMIN_LOGIN_MAX_FAILS (default 5) per ADMIN_LOGIN_LOCK_SECS (default 900).
+// Value in cmap: "fail_count|window_start_ms"
+fn login_is_locked(fails: CMap, user: string) -> int {
+    let mut key = user
+    if len(key) == 0 { key = "_" }
+    if cmap_has(fails, key) == 0 { return 0 }
+    let sp = str_split(cmap_get(fails, key), "|")
+    if len(sp) < 2 { return 0 }
+    let mut count = 0
+    let mut si = 0
+    while si < len(sp[0]) {
+        let c = int(sp[0][si])
+        if c < 48 { break }
+        if c > 57 { break }
+        count = count * 10 + (c - 48)
+        si = si + 1
+    }
+    let mut start = 0
+    let mut sj = 0
+    while sj < len(sp[1]) {
+        let c2 = int(sp[1][sj])
+        if c2 < 48 { break }
+        if c2 > 57 { break }
+        start = start * 10 + (c2 - 48)
+        sj = sj + 1
+    }
+    let lock_ms = env_pos_int("ADMIN_LOGIN_LOCK_SECS", 900) * 1000
+    let maxf = env_pos_int("ADMIN_LOGIN_MAX_FAILS", 5)
+    let now = now_ms()
+    if now - start > lock_ms {
+        let _ = cmap_del(fails, key)
+        return 0
+    }
+    if count >= maxf { return 1 }
+    return 0
+}
+
+fn login_record_fail(fails: CMap, user: string) {
+    let mut key = user
+    if len(key) == 0 { key = "_" }
+    let lock_ms = env_pos_int("ADMIN_LOGIN_LOCK_SECS", 900) * 1000
+    let now = now_ms()
+    if cmap_has(fails, key) == 0 {
+        cmap_set(fails, key, "1|" + string(now))
+        return
+    }
+    let sp = str_split(cmap_get(fails, key), "|")
+    if len(sp) < 2 {
+        cmap_set(fails, key, "1|" + string(now))
+        return
+    }
+    let mut start = 0
+    let mut sj = 0
+    while sj < len(sp[1]) {
+        let c2 = int(sp[1][sj])
+        if c2 < 48 { break }
+        if c2 > 57 { break }
+        start = start * 10 + (c2 - 48)
+        sj = sj + 1
+    }
+    if now - start > lock_ms {
+        cmap_set(fails, key, "1|" + string(now))
+        return
+    }
+    let mut count = 0
+    let mut si = 0
+    while si < len(sp[0]) {
+        let c = int(sp[0][si])
+        if c < 48 { break }
+        if c > 57 { break }
+        count = count * 10 + (c - 48)
+        si = si + 1
+    }
+    cmap_set(fails, key, string(count + 1) + "|" + string(start))
+}
+
+fn login_clear_fails(fails: CMap, user: string) {
+    let mut key = user
+    if len(key) == 0 { key = "_" }
+    if cmap_has(fails, key) == 1 { let _ = cmap_del(fails, key) }
+}
+
+// Session payload: "user|role|created_ms". Returns "" if expired/invalid.
+fn session_payload_valid(payload: string) -> string {
+    let sp = str_split(payload, "|")
+    if len(sp) < 2 { return "" }
+    let mut created = 0
+    if len(sp) >= 3 {
+        let mut k = 0
+        while k < len(sp[2]) {
+            let c = int(sp[2][k])
+            if c < 48 { break }
+            if c > 57 { break }
+            created = created * 10 + (c - 48)
+            k = k + 1
+        }
+    }
+    if created > 0 {
+        let ttl_ms = session_ttl_secs() * 1000
+        if now_ms() - created > ttl_ms { return "" }
+    }
+    return sp[0] + "|" + sp[1]
+}
+
+fn session_payload_new(user: string, role: string) -> string {
+    return user + "|" + role + "|" + string(now_ms())
+}
+
+fn redirect(path: string, cookie: string) -> string {
+    let mut extra = "Location: " + path + "\r\n"
+    if len(cookie) > 0 { extra = extra + "Set-Cookie: " + cookie + "\r\n" }
+    return "HTTP/1.1 302 Found\r\n" + extra + "Content-Length: 0\r\n\r\n"
+}
+
+fn check_role(required: string, actual: string) -> int {
+    if str_eq(required, "viewer") { return 1 }
+    if str_eq(required, "operator") { if str_eq(actual, "viewer") { return 0 }
+        return 1 }
+    if str_eq(required, "admin") { if str_eq(actual, "super_admin") { return 1 }
+        if str_eq(actual, "admin") { return 1 }
+        return 0 }
+    if str_eq(required, "super_admin") { if str_eq(actual, "super_admin") { return 1 }
+        return 0 }
+    return 0
+}
+
+// ============ REQUEST HANDLER ============
+

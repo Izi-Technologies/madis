@@ -1,0 +1,363 @@
+// Mako SIP Admin Panel — main entry point
+import "./log.mko"
+import "./ui.mko"
+import "./pages.mko"
+import "./http.mko"
+import "./handlers.mko"
+
+fn main() {
+    let db_url = env_get_or("SIP_DB_URL", "")
+    let mut db_ok = 0
+    let mut db = sql_open_postgres("")
+    if len(db_url) > 0 {
+        db = sql_open_postgres(db_url)
+        db_ok = 1
+        let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS admin_users (id SERIAL PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, role TEXT DEFAULT 'viewer', enabled BOOLEAN DEFAULT true, created_at TIMESTAMP DEFAULT NOW())")
+        let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS admin_sessions (token TEXT PRIMARY KEY, username TEXT NOT NULL, role TEXT NOT NULL, created_at TIMESTAMP DEFAULT NOW())")
+        let ac = sql_query_str(db, "SELECT COUNT(*) FROM admin_users", "")
+        if str_eq(ac, "0") {
+            // Bootstrap only when SIP_ADMIN_PASSWORD is set — never hardcode admin/admin.
+            let init = env_get_or("SIP_ADMIN_PASSWORD", "")
+            if len(init) > 0 {
+                let _ = sql_exec_str4(db, "INSERT INTO admin_users (username, password_hash, role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING", "admin", sha256(init), "super_admin", "")
+                slog("  Bootstrap admin created from SIP_ADMIN_PASSWORD")
+            } else {
+                slog("  WARNING: no admin users — set SIP_ADMIN_PASSWORD and restart to bootstrap")
+            }
+        }
+        // Default access policy if none configured (auth still required unless skip_auth)
+        let ac_n = sql_query_str(db, "SELECT COUNT(*) FROM access_control", "")
+        if str_eq(ac_n, "0") {
+            let _ = sql_exec_plain(db, "INSERT INTO access_control (source_ip, sip_user, action, skip_auth, description, priority, enabled) VALUES ('*', '*', 'allow', false, 'Default allow (digest auth required)', 100, true)")
+            slog("  Seeded default access_control allow *")
+        }
+    }
+    let sessions = cmap_new()
+    let login_fails = cmap_new()
+    let ttl = session_ttl_secs()
+    // Default loopback-only — leba (or nginx) terminates TLS and proxies in.
+    // Set ADMIN_BIND=0.0.0.0 only if you intentionally expose admin publicly.
+    let bind_host = env_get_or("ADMIN_BIND", "127.0.0.1")
+    let bind_port = env_pos_int("ADMIN_PORT", 8080)
+    slog("Mako SIP Admin on " + bind_host + ":" + string(bind_port) + " (session_ttl=" + string(ttl) + "s)")
+
+    let lfd = tcp_listen_addr(bind_host, bind_port)
+    if lfd < 0 { slog("ERROR: cannot bind " + bind_host + ":" + string(bind_port)); return }
+    let _ = io_set_nonblocking(lfd, 1)
+    let el = evloop_new()
+    let _ = evloop_add(el, lfd, 1)
+
+    // Crew owns long-lived WebSocket live sessions kicked from the accept loop.
+    crew ws_crew {
+    while 1 == 1 {
+        let n = evloop_wait(el, 0 - 1)
+        if n <= 0 { continue }
+        let mut i = 0
+        while i < n {
+            let fd = evloop_event_fd(el, i)
+            if fd == lfd {
+                let mut a = 1
+                while a == 1 {
+                    let cfd = nb_accept(lfd)
+                    if cfd < 0 { a = 0 } else { let _ = evloop_add(el, cfd, 1) }
+                }
+            } else {
+                let flags = evloop_event_flags(el, i)
+                if flags / 4 > 0 {
+                    let _ = evloop_del(el, fd)
+                    let _ = nb_close(fd)
+                } else {
+                    let raw = nb_read(fd)
+                    let rl = len(raw)
+                    if rl == 0 {
+                        let _ = evloop_del(el, fd)
+                        let _ = nb_close(fd)
+                    } else {
+                        let method = parse_method(raw, rl)
+                        let path = parse_path(raw, rl)
+                        let mut resp = ""
+                        let mut ws_handed_off = 0
+
+                        // Favicon (no auth) — browsers always request /favicon.ico
+                        if str_eq(path, "/favicon.ico") {
+                            resp = http_resp(200, "image/svg+xml", favicon_svg(), "Cache-Control: public, max-age=86400\r\n")
+                        }
+                        if str_eq(path, "/favicon.svg") {
+                            resp = http_resp(200, "image/svg+xml", favicon_svg(), "Cache-Control: public, max-age=86400\r\n")
+                        }
+
+                        // Login (no auth)
+                        if str_eq(path, "/admin/login") {
+                            if str_eq(method, "POST") {
+                                let body = parse_body(raw, rl)
+                                let u = form_val(body, "username")
+                                if login_is_locked(login_fails, u) == 1 {
+                                    resp = http_resp(200, "text/html", html_login_msg("Too many failed attempts. Wait a few minutes and try again."), "")
+                                } else {
+                                    let p = sha256(form_val(body, "password"))
+                                    if db_ok == 1 {
+                                        let stored = sql_query_str(db, "SELECT password_hash FROM admin_users WHERE username = $1 AND enabled = true", u)
+                                        if str_eq(stored, p) {
+                                            login_clear_fails(login_fails, u)
+                                            let role = sql_query_str(db, "SELECT role FROM admin_users WHERE username = $1", u)
+                                            let token = session_token_new()
+                                            let _ = sql_exec_str4(db, "INSERT INTO admin_sessions (token, username, role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING", token, u, role, "")
+                                            let _ = sql_exec_plain(db, "DELETE FROM admin_sessions WHERE created_at < NOW() - INTERVAL '" + string(session_ttl_secs()) + " seconds'")
+                                            cmap_set(sessions, token, session_payload_new(u, role))
+                                            slog("  login ok user=" + u)
+                                            resp = redirect("/admin", session_cookie_set(token))
+                                        } else {
+                                            login_record_fail(login_fails, u)
+                                            slog("  login fail user=" + u)
+                                            resp = http_resp(200, "text/html", html_login_msg("Invalid username or password."), "")
+                                        }
+                                    } else {
+                                        resp = http_resp(200, "text/html", html_login_msg("Database unavailable."), "")
+                                    }
+                                }
+                            } else {
+                                resp = http_resp(200, "text/html", html_login(), "")
+                            }
+                        }
+
+                        // Logout
+                        if str_eq(path, "/admin/logout") {
+                            let tk = parse_cookie(raw, rl, "session")
+                            if len(tk) > 0 {
+                                let _ = cmap_del(sessions, tk)
+                                if db_ok == 1 {
+                                    let _ = sql_exec_str4(db, "DELETE FROM admin_sessions WHERE token = $1", tk, "", "", "")
+                                }
+                            }
+                            resp = redirect("/admin/login", session_cookie_clear())
+                        }
+
+                        // Prometheus scrape without browser session:
+                        //   Authorization: Bearer $ADMIN_METRICS_TOKEN
+                        //   or GET /admin/api/prom?token=$ADMIN_METRICS_TOKEN
+                        if len(resp) == 0 {
+                            if str_eq(method, "GET") {
+                                let mtok = env_get_or("ADMIN_METRICS_TOKEN", "")
+                                if len(mtok) > 0 {
+                                    let q = parse_query(raw, rl)
+                                    let qtok = query_val(q, "token")
+                                    let btok = parse_bearer(raw, rl)
+                                    let mut ok_tok = 0
+                                    if str_eq(btok, mtok) { ok_tok = 1 }
+                                    if str_eq(qtok, mtok) { ok_tok = 1 }
+                                    if ok_tok == 1 {
+                                        if str_eq(path, "/admin/api/prom") {
+                                            let body = fetch_metrics_path("/metrics")
+                                            if len(body) == 0 {
+                                                resp = http_resp(502, "text/plain", "metrics unreachable\n", "")
+                                            } else {
+                                                resp = http_resp(200, "text/plain; version=0.0.4; charset=utf-8", body, "")
+                                            }
+                                        }
+                                        if str_eq(path, "/admin/api/stats") {
+                                            let body = fetch_metrics_json()
+                                            if len(body) == 0 {
+                                                resp = http_resp(502, "application/json", "{}", "")
+                                            } else {
+                                                resp = http_resp(200, "application/json", body, "")
+                                            }
+                                        }
+                                        if str_eq(path, "/admin/api/dialogs") {
+                                            let body = fetch_dialogs_json()
+                                            if len(body) == 0 {
+                                                resp = http_resp(502, "application/json", "[]", "")
+                                            } else {
+                                                resp = http_resp(200, "application/json", body, "")
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // All other routes need auth
+                        if len(resp) == 0 {
+                            let tk = parse_cookie(raw, rl, "session")
+                            let mut au = ""
+                            let mut ar = ""
+                            // Reject empty / malformed tokens immediately (never treat as logged-in)
+                            if session_token_ok(tk) == 1 {
+                                if cmap_has(sessions, tk) == 1 {
+                                    let valid = session_payload_valid(cmap_get(sessions, tk))
+                                    if len(valid) > 0 {
+                                        let sp = str_split(valid, "|")
+                                        if len(sp) >= 2 {
+                                            if len(sp[0]) > 0 {
+                                                au = sp[0]
+                                                ar = sp[1]
+                                            }
+                                        }
+                                    } else {
+                                        let _ = cmap_del(sessions, tk)
+                                    }
+                                } else {
+                                    // Restore from DB only for well-formed tokens + enabled users
+                                    if db_ok == 1 {
+                                        let db_user = sql_query_str(db, "SELECT s.username || '|' || s.role FROM admin_sessions s JOIN admin_users u ON u.username = s.username WHERE s.token = $1 AND u.enabled = true AND s.created_at > NOW() - INTERVAL '" + string(session_ttl_secs()) + " seconds' LIMIT 1", tk)
+                                        if len(db_user) > 0 {
+                                            let sp = str_split(db_user, "|")
+                                            if len(sp) >= 2 {
+                                                if len(sp[0]) > 0 {
+                                                    au = sp[0]
+                                                    ar = sp[1]
+                                                    cmap_set(sessions, tk, session_payload_new(au, ar))
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Require non-empty authenticated identity
+                            if len(au) == 0 {
+                                // WebSocket upgrade without session → close (no HTML redirect body)
+                                if str_eq(path, "/admin/ws/live") {
+                                    if ws_upgrade_request_ok(raw) == 1 {
+                                        resp = "HTTP/1.1 401 Unauthorized\r\nContent-Type: text/plain\r\nContent-Length: 12\r\nConnection: close\r\n\r\nunauthorized"
+                                    } else {
+                                        resp = redirect("/admin/login", session_cookie_clear())
+                                    }
+                                } else {
+                                    resp = redirect("/admin/login", session_cookie_clear())
+                                }
+                            } else {
+                                // Realtime dashboard WebSocket (auth required)
+                                if str_eq(path, "/admin/ws/live") {
+                                    if str_eq(method, "GET") {
+                                        let up = ws_upgrade_response(raw)
+                                        if len(up) > 0 {
+                                            let _ = evloop_del(el, fd)
+                                            // Blocking write for full 101 handshake before kick
+                                            let _ = io_set_nonblocking(fd, 0)
+                                            let wr = tcp_write_all(fd, up)
+                                            if wr < 0 {
+                                                let _ = nb_close(fd)
+                                            } else {
+                                                let _ = ws_crew.kick(ws_live_session(fd, db_url))
+                                                ws_handed_off = 1
+                                                slog("  ws live session user=" + au)
+                                            }
+                                        } else {
+                                            resp = http_resp(400, "text/plain", "bad websocket upgrade\n", "")
+                                        }
+                                    }
+                                }
+
+                                // Full page — / and /admin both open the command center
+                                if len(resp) == 0 {
+                                    if ws_handed_off == 0 {
+                                        if str_eq(path, "/admin") {
+                                            resp = http_resp(200, "text/html", html_page("Dashboard", au, ar, f_dashboard(db, db_ok)), "")
+                                        }
+                                        if str_eq(path, "/") {
+                                            resp = http_resp(200, "text/html", html_page("Dashboard", au, ar, f_dashboard(db, db_ok)), "")
+                                        }
+                                    }
+                                }
+
+                                // HTMX fragments (pass query string for filters / deep links)
+                                if len(resp) == 0 {
+                                    if ws_handed_off == 0 {
+                                        let q = parse_query(raw, rl)
+                                        let page = handle_page(path, q, db, db_ok)
+                                        if len(page) > 0 {
+                                            resp = http_resp(200, "text/html", page, "")
+                                        }
+                                    }
+                                }
+
+                                // Auth-proxied metrics (session required) — safe to expose via leba
+                                if len(resp) == 0 {
+                                    if str_eq(method, "GET") {
+                                        if str_eq(path, "/admin/api/prom") {
+                                            let body = fetch_metrics_path("/metrics")
+                                            if len(body) == 0 {
+                                                resp = http_resp(502, "text/plain", "metrics unreachable\n", "")
+                                            } else {
+                                                resp = http_resp(200, "text/plain; version=0.0.4; charset=utf-8", body, "")
+                                            }
+                                        }
+                                        if str_eq(path, "/admin/api/dialogs") {
+                                            let body = fetch_dialogs_json()
+                                            if len(body) == 0 {
+                                                resp = http_resp(502, "application/json", "[]", "")
+                                            } else {
+                                                resp = http_resp(200, "application/json", body, "")
+                                            }
+                                        }
+                                        if str_eq(path, "/admin/api/stats") {
+                                            let body = fetch_metrics_json()
+                                            if len(body) == 0 {
+                                                resp = http_resp(502, "application/json", "{}", "")
+                                            } else {
+                                                resp = http_resp(200, "application/json", body, "")
+                                            }
+                                        }
+                                        // Live dashboard snapshot (auth) — HTTP fallback when WS is not available at the edge
+                                        if str_eq(path, "/admin/api/live") {
+                                            let sip = sip_options_probe()
+                                            let body = live_snapshot_json(db, db_ok, sip)
+                                            resp = http_resp(200, "application/json", body, "Cache-Control: no-store\r\n")
+                                        }
+                                        // CDR CSV export (auth required)
+                                        if str_eq(path, "/admin/api/cdr.csv") {
+                                            let mut csv = "call_id,caller,callee,status,started_at,duration_sec,destination,source_ip\n"
+                                            if db_ok == 1 {
+                                                let data = tbl_query(db, db_ok, "SELECT COALESCE(call_id,'') || ',' || COALESCE(caller,'') || ',' || COALESCE(callee,'') || ',' || COALESCE(replace(status,',',';'),'') || ',' || COALESCE(to_char(started_at,'YYYY-MM-DD HH24:MI:SS'),'') || ',' || COALESCE(duration_sec::text,'') || ',' || COALESCE(destination,'') || ',' || COALESCE(source_ip,'') FROM cdr ORDER BY started_at DESC", 500)
+                                                let mut ci = 0
+                                                while ci < len(data) {
+                                                    csv = csv + data[ci] + "\n"
+                                                    ci = ci + 1
+                                                }
+                                            }
+                                            resp = http_resp(200, "text/csv; charset=utf-8", csv, "Content-Disposition: attachment; filename=\"cdr.csv\"\r\n")
+                                        }
+                                    }
+                                }
+
+                                // API endpoints
+                                if len(resp) == 0 {
+                                    if str_eq(method, "POST") {
+                                        let body = parse_body(raw, rl)
+                                        let result = handle_api(path, body, ar, au, db, db_ok)
+                                        if str_eq(result, "FORBIDDEN") {
+                                            resp = http_resp(403, "text/html", "<div class=\"alert err\">Forbidden</div>", "")
+                                        } else {
+                                            if str_eq(result, "OK") {
+                                                resp = http_resp(200, "text/html", "<div class=\"alert ok\">Done</div>", "")
+                                            } else {
+                                                if len(result) > 0 {
+                                                    resp = http_resp(200, "text/html", result, "")
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // 404
+                                if len(resp) == 0 {
+                                    if ws_handed_off == 0 {
+                                        resp = http_resp(404, "text/html", "<div class=\"alert err\">Not found</div>", "")
+                                    }
+                                }
+                            }
+                        }
+
+                        if ws_handed_off == 0 {
+                            if len(resp) > 0 {
+                                let _ = nb_write(fd, resp)
+                            }
+                        }
+                    }
+                }
+            }
+            i = i + 1
+        }
+    }
+    } // crew ws_crew
+}

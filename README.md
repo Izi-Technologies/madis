@@ -17,6 +17,7 @@ It's still a work in progress. Some parts are more polished than others.
 - RTPEngine integration for media relay
 - UDP, TCP, TLS, and WebSocket transports
 - Outbound WebRTC SIP signaling over persistent WSS
+- Separate Mako SIP WebUI/admin service under `admin/`
 - IPv6 support
 - DNS resolution with NAPTR/SRV lookups (RFC 3263)
 - Dialplan with pattern matching and rewriting
@@ -108,6 +109,22 @@ python3 bench/wss_outbound_matrix.py --binary ./main
 This validates WebRTC SIP signaling over WSS. ICE, DTLS-SRTP, and media relay
 remain separate media-plane responsibilities handled by the configured RTP
 engine.
+
+## WebUI / control plane
+
+The Mako SIP WebUI is included under [`admin/`](admin/). Build it as a
+separate service with Mako 0.4.15:
+
+```sh
+MAKO_RUNTIME=/path/to/mako/runtime \
+  mako build --release --strip --no-incremental admin/main.mko -o admin-bin
+```
+
+Run the admin service on loopback (`ADMIN_BIND=127.0.0.1`,
+`ADMIN_PORT=8080`) behind nginx or another TLS reverse proxy. It provides the
+authenticated `/admin` control plane, HTMX views, and a WebSocket live
+dashboard with polling fallback. If the standalone admin service owns port
+8080, set `SIP_ADMIN_PORT=0` for the SIP worker.
 
 ## License
 

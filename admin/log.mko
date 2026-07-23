@@ -1,0 +1,5 @@
+fn slog(msg: string) -> int {
+    print(time_format(now_ms()) + " " + msg)
+    return 0
+}
+

@@ -1,0 +1,320 @@
+fn handle_page(path: string, q: string, db: SqlDB, db_ok: int) -> string {
+    if str_eq(path, "/admin/dashboard") { return f_dashboard(db, db_ok) }
+    if str_eq(path, "/admin/users") { return f_users(db, db_ok) }
+    if str_eq(path, "/admin/access") { return f_access(db, db_ok) }
+    if str_eq(path, "/admin/gateways") { return f_gateways(db, db_ok) }
+    if str_eq(path, "/admin/routing") { return f_routing(db, db_ok) }
+    if str_eq(path, "/admin/dispatch") { return f_dispatch(db, db_ok) }
+    if str_eq(path, "/admin/ani") { return f_ani(db, db_ok) }
+    if str_eq(path, "/admin/dids") { return f_dids(db, db_ok) }
+    if str_eq(path, "/admin/dialplan") { return f_dialplan(db, db_ok) }
+    if str_eq(path, "/admin/headers") { return f_headers(db, db_ok) }
+    if str_eq(path, "/admin/regs") { return f_regs(db, db_ok) }
+    if str_eq(path, "/admin/cluster") { return f_cluster(db, db_ok) }
+    if str_eq(path, "/admin/cdr") { return f_cdr(db, db_ok) }
+    if str_eq(path, "/admin/metrics") { return f_metrics(db, db_ok) }
+    if str_eq(path, "/admin/dialogs") { return f_dialogs(db, db_ok) }
+    if str_eq(path, "/admin/transactions") { return f_transactions(db, db_ok, q) }
+    if str_eq(path, "/admin/security") { return f_security(db, db_ok) }
+    if str_eq(path, "/admin/logs") { return f_logs(db, db_ok) }
+    if str_eq(path, "/admin/config") { return f_config(db, db_ok) }
+    if str_eq(path, "/admin/admins") { return f_admins(db, db_ok) }
+    if str_eq(path, "/admin/account") { return f_account() }
+    if str_eq(path, "/admin/search") { return f_search(db, db_ok, q) }
+    if str_eq(path, "/admin/simulate") { return f_simulate(db, db_ok, q) }
+    if str_eq(path, "/admin/audit") { return f_audit(db, db_ok) }
+    return ""
+}
+
+// Best-effort audit trail for admin mutations.
+fn audit_log(db: SqlDB, db_ok: int, user: string, action: string, detail: string) -> int {
+    if db_ok == 0 { return 0 }
+    let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS admin_audit (id SERIAL PRIMARY KEY, ts TIMESTAMP DEFAULT NOW(), username TEXT, action TEXT, detail TEXT)")
+    let _ = sql_exec_str4(db, "INSERT INTO admin_audit (username, action, detail) VALUES ($1, $2, $3)", user, action, detail, "")
+    return 0
+}
+
+fn handle_api(path: string, body: string, role: string, user: string, db: SqlDB, db_ok: int) -> string {
+    // Toggle enable/disable
+    if str_eq(path, "/admin/api/toggle") {
+        if check_role("operator", role) == 0 { return "FORBIDDEN" }
+        let tbl = form_val(body, "table")
+        let key = form_val(body, "key")
+        let val = form_val(body, "val")
+        let _ = sql_exec_str4(db, "UPDATE " + tbl + " SET enabled = NOT enabled WHERE " + key + " = $1", val, "", "", "")
+        let _ = audit_log(db, db_ok, user, "toggle", tbl + " " + key + "=" + val)
+        return "OK"
+    }
+    if str_eq(path, "/admin/api/delete") {
+        if check_role("admin", role) == 0 { return "FORBIDDEN" }
+        let tbl = form_val(body, "table")
+        let key = form_val(body, "key")
+        let val = form_val(body, "val")
+        let _ = sql_exec_str4(db, "DELETE FROM " + tbl + " WHERE " + key + " = $1", val, "", "", "")
+        let _ = audit_log(db, db_ok, user, "delete", tbl + " " + key + "=" + val)
+        return "OK"
+    }
+    if str_eq(path, "/admin/api/users") {
+        if check_role("admin", role) == 0 { return "FORBIDDEN" }
+        let admin_user = user
+        let sip_user = form_val(body, "username")
+        let mut domain = form_val(body, "domain")
+        let pw = form_val(body, "password")
+        if len(sip_user) == 0 {
+            return "<div class=\"alert err\">Username is required.</div>" + f_users(db, db_ok)
+        }
+        if len(domain) == 0 {
+            // Prefer FQDN realm (same rules as sipproxy resolve_sip_realm)
+            let mut host = env_get_or("SIP_PUBLIC_HOST", "")
+            if len(host) == 0 { host = env_get_or("SIP_DOMAIN", "") }
+            if len(host) == 0 { host = env_get_or("SIP_FQDN", "") }
+            let r = env_get_or("SIP_REALM", "")
+            if len(host) > 0 {
+                if len(r) == 0 { domain = host } else {
+                    if str_eq(r, "mako.local") { domain = host } else { domain = r }
+                }
+            } else {
+                if len(r) > 0 { domain = r } else {
+                    if db_ok == 1 {
+                        let cr = sql_query_str(db, "SELECT value FROM config WHERE key = $1", "sip_realm")
+                        if len(cr) > 0 { domain = cr } else { domain = "mako.local" }
+                    } else { domain = "mako.local" }
+                }
+            }
+        }
+        if len(pw) < 6 {
+            return "<div class=\"alert err\">SIP password must be at least 6 characters.</div>" + f_users(db, db_ok)
+        }
+        let ha1 = sip_md5_hex(sip_user + ":" + domain + ":" + pw)
+        if len(ha1) != 32 {
+            return "<div class=\"alert err\">Failed to compute digest HA1 (internal error).</div>" + f_users(db, db_ok)
+        }
+        let _ = sql_exec_str4(db, "INSERT INTO users (username, password_ha1, domain) VALUES ($1, $2, $3) ON CONFLICT (username) DO UPDATE SET password_ha1 = $2, domain = $3, enabled = true", sip_user, ha1, domain, "")
+        let _ = audit_log(db, db_ok, admin_user, "user_save", sip_user + "@" + domain)
+        return "<div class=\"alert ok\">User <code>" + sip_user + "@" + domain + "</code> saved (digest HA1 updated).</div>" + f_users(db, db_ok)
+    }
+    if str_eq(path, "/admin/api/access") {
+        if check_role("admin", role) == 0 { return "FORBIDDEN" }
+        let _ = sql_exec_str4(db, "INSERT INTO access_control (source_ip, sip_user, action, skip_auth) VALUES ($1, $2, $3, $4)", form_val(body, "ip"), form_val(body, "sip_user"), form_val(body, "action"), form_val(body, "skip_auth"))
+        return f_access(db, db_ok)
+    }
+    if str_eq(path, "/admin/api/gateways") {
+        if check_role("admin", role) == 0 { return "FORBIDDEN" }
+        let _ = sql_exec_str4(db, "INSERT INTO gateways (name, address, port, transport) VALUES ($1, $2, $3, $4)", form_val(body, "name"), form_val(body, "address"), form_val(body, "port"), form_val(body, "transport"))
+        return f_gateways(db, db_ok)
+    }
+    if str_eq(path, "/admin/api/gateway_format") {
+        if check_role("operator", role) == 0 { return "FORBIDDEN" }
+        let _ = sql_exec_str4(db, "UPDATE gateways SET number_format = $2, tech_prefix = $3, caller_id_override = $4 WHERE name = $1", form_val(body, "name"), form_val(body, "number_format"), form_val(body, "tech_prefix"), form_val(body, "caller_id"))
+        return f_gateways(db, db_ok)
+    }
+    if str_eq(path, "/admin/api/gateway_test") {
+        if check_role("operator", role) == 0 { return "FORBIDDEN" }
+        let name = form_val(body, "name")
+        let mut host = ""
+        let mut port_s = "5060"
+        if db_ok == 1 {
+            host = sql_query_str(db, "SELECT address FROM gateways WHERE name = $1", name)
+            port_s = sql_query_str(db, "SELECT port::text FROM gateways WHERE name = $1", name)
+        }
+        if len(host) == 0 {
+            return "<div class=\"alert err\">Gateway not found.</div>" + f_gateways(db, db_ok)
+        }
+        let mut port = 5060
+        match parse_int(port_s) { Ok(v) => { port = v } Err(_) => {} }
+        let fd = udp_bind_addr("127.0.0.1", 0)
+        if fd < 0 {
+            return "<div class=\"alert err\">Could not bind UDP for probe.</div>" + f_gateways(db, db_ok)
+        }
+        let _ = io_set_nonblocking(fd, 1)
+        let lport = udp_local_port(fd)
+        let msg = "OPTIONS sip:" + host + " SIP/2.0\r\nVia: SIP/2.0/UDP 127.0.0.1:" + string(lport) + ";branch=z9hG4bK-admin-gw;rport\r\nFrom: <sip:admin@health>;tag=agw\r\nTo: <sip:" + host + ">\r\nCall-ID: admin-gw-" + string(now_ms()) + "\r\nCSeq: 1 OPTIONS\r\nMax-Forwards: 70\r\nContent-Length: 0\r\n\r\n"
+        let _ = udp_send_to(fd, host, port, msg)
+        let ready = io_read_ready(fd, 1200)
+        let mut status = "down"
+        let mut detail = "no response"
+        if ready > 0 {
+            let resp = udp_recv(fd, 2048)
+            if len(resp) > 0 {
+                // Clone before resp's temporary receive buffer is released.
+                detail = str_replace(resp, "", "")
+                if str_has_prefix(resp, "SIP/2.0 ") { status = "up" }
+            }
+        }
+        let _ = udp_close(fd)
+        if db_ok == 1 {
+            let mut code = "0"
+            if str_eq(status, "up") { code = "200" }
+            let _ = sql_exec_str4(db, "UPDATE gateways SET health_status = $2, last_health_code = $3::int, last_health_check = NOW() WHERE name = $1", name, status, code, "")
+        }
+        let mut alert = "err"
+        if str_eq(status, "up") { alert = "ok" }
+        return "<div class=\"alert " + alert + "\">Gateway <code>" + name + "</code> OPTIONS → <strong>" + status + "</strong> (" + detail + ")</div>" + f_gateways(db, db_ok)
+    }
+    if str_eq(path, "/admin/api/routes") {
+        if check_role("operator", role) == 0 { return "FORBIDDEN" }
+        let _ = sql_exec_str4(db, "INSERT INTO routes (prefix, gateway_id, priority, cost_per_min) SELECT $1, id, $3, $4 FROM gateways WHERE name = $2", form_val(body, "prefix"), form_val(body, "gateway"), form_val(body, "priority"), form_val(body, "cost"))
+        return f_routing(db, db_ok)
+    }
+    if str_eq(path, "/admin/api/routing") {
+        if check_role("operator", role) == 0 { return "FORBIDDEN" }
+        let _ = sql_exec_str4(db, "INSERT INTO routing_rules (match_prefix, match_caller, match_src_ip, action) VALUES ($1, $2, $3, $4)", form_val(body, "prefix"), form_val(body, "caller"), form_val(body, "src_ip"), form_val(body, "action"))
+        // Update optional fields that sql_exec_str4 can't handle (only 4 params)
+        let ani_g = form_val(body, "ani_group")
+        if len(ani_g) > 0 {
+            let _ = sql_exec_str4(db, "UPDATE routing_rules SET match_ani_group = $1 WHERE id = (SELECT MAX(id) FROM routing_rules)", ani_g, "", "", "")
+        }
+        let desc = form_val(body, "description")
+        if len(desc) > 0 {
+            let _ = sql_exec_str4(db, "UPDATE routing_rules SET description = $1 WHERE id = (SELECT MAX(id) FROM routing_rules)", desc, "", "", "")
+        }
+        let ts = form_val(body, "time_start")
+        if len(ts) > 0 {
+            let _ = sql_exec_str4(db, "UPDATE routing_rules SET match_time_start = $1, match_time_end = $2 WHERE id = (SELECT MAX(id) FROM routing_rules)", ts, form_val(body, "time_end"), "", "")
+        }
+        let dy = form_val(body, "day")
+        if len(dy) > 0 {
+            let _ = sql_exec_str4(db, "UPDATE routing_rules SET match_day = $1 WHERE id = (SELECT MAX(id) FROM routing_rules)", dy, "", "", "")
+        }
+        let pri = form_val(body, "priority")
+        if len(pri) > 0 {
+            let _ = sql_exec_str4(db, "UPDATE routing_rules SET priority = $1 WHERE id = (SELECT MAX(id) FROM routing_rules)", pri, "", "", "")
+        }
+        return f_routing(db, db_ok)
+    }
+    if str_eq(path, "/admin/api/dispatch") {
+        if check_role("admin", role) == 0 { return "FORBIDDEN" }
+        let _ = sql_exec_str4(db, "INSERT INTO dispatch_sets (name, algorithm) VALUES ($1, $2)", form_val(body, "name"), form_val(body, "algorithm"), "", "")
+        return f_dispatch(db, db_ok)
+    }
+    if str_eq(path, "/admin/api/dispatch_member") {
+        if check_role("admin", role) == 0 { return "FORBIDDEN" }
+        let _ = sql_exec_str4(db, "INSERT INTO dispatch_members (set_id, gateway_id, priority, weight) SELECT ds.id, g.id, $3, $4 FROM dispatch_sets ds, gateways g WHERE ds.name = $1 AND g.name = $2", form_val(body, "set_name"), form_val(body, "gateway"), form_val(body, "priority"), form_val(body, "weight"))
+        return f_dispatch(db, db_ok)
+    }
+    if str_eq(path, "/admin/api/ani_group") {
+        if check_role("operator", role) == 0 { return "FORBIDDEN" }
+        let _ = sql_exec_str4(db, "INSERT INTO ani_groups (name, description) VALUES ($1, $2)", form_val(body, "name"), form_val(body, "description"), "", "")
+        return f_ani(db, db_ok)
+    }
+    if str_eq(path, "/admin/api/ani_quick_route") {
+        if check_role("operator", role) == 0 { return "FORBIDDEN" }
+        let ag = form_val(body, "ani_group")
+        let ingress = form_val(body, "ingress")
+        let egress = form_val(body, "egress")
+        let direct = form_val(body, "direct_carrier")
+
+        // Build action string
+        let mut action = ""
+        let mut desc = ""
+
+        // Direct to single carrier (simplest)
+        if len(direct) > 0 {
+            action = "route:" + direct
+            desc = ag + " -> " + direct + " (carrier direct)"
+        } else {
+        // Ingress PBX + optional egress carrier
+        if len(ingress) > 0 {
+            if len(egress) > 0 {
+                action = "dispatch:" + ingress + "|egress:" + egress
+                desc = ag + " -> " + ingress + " -> " + egress
+            } else {
+                action = "dispatch:" + ingress
+                desc = ag + " -> " + ingress
+            }
+        } else {
+        // Egress carrier group only
+        if len(egress) > 0 {
+            action = "dispatch:" + egress
+            desc = ag + " -> " + egress + " (carrier group)"
+        } else {
+            return f_ani(db, db_ok)
+        }}}
+
+        // Delete existing route for this ANI group, then insert new
+        let _ = sql_exec_str4(db, "DELETE FROM routing_rules WHERE match_ani_group = $1", ag, "", "", "")
+        let _ = sql_exec_str4(db, "INSERT INTO routing_rules (match_ani_group, action, priority, description) VALUES ($1, $2, $3, $4)", ag, action, "10", desc)
+        return f_ani(db, db_ok)
+    }
+    if str_eq(path, "/admin/api/ani_group_update") {
+        if check_role("operator", role) == 0 { return "FORBIDDEN" }
+        let _ = sql_exec_str4(db, "UPDATE ani_groups SET name = $2, description = $3 WHERE id = $1", form_val(body, "id"), form_val(body, "name"), form_val(body, "description"), "")
+        return f_ani(db, db_ok)
+    }
+    if str_eq(path, "/admin/api/ani_range") {
+        if check_role("operator", role) == 0 { return "FORBIDDEN" }
+        let _ = sql_exec_str4(db, "INSERT INTO ani_ranges (group_id, range_start, range_end) SELECT id, $2, $3 FROM ani_groups WHERE name = $1", form_val(body, "group"), form_val(body, "range_start"), form_val(body, "range_end"), "")
+        return f_ani(db, db_ok)
+    }
+    if str_eq(path, "/admin/api/dids") {
+        if check_role("operator", role) == 0 { return "FORBIDDEN" }
+        let _ = sql_exec_str4(db, "INSERT INTO dids (number, destination_user) VALUES ($1, $2)", form_val(body, "number"), form_val(body, "destination"), "", "")
+        return f_dids(db, db_ok)
+    }
+    if str_eq(path, "/admin/api/dialplan") {
+        if check_role("operator", role) == 0 { return "FORBIDDEN" }
+        let _ = sql_exec_str4(db, "INSERT INTO dialplan (match_prefix, callee_action, caller_action, direction) VALUES ($1, $2, $3, $4)", form_val(body, "prefix"), form_val(body, "callee_action"), form_val(body, "caller_action"), form_val(body, "direction"))
+        return f_dialplan(db, db_ok)
+    }
+    if str_eq(path, "/admin/api/headers") {
+        if check_role("operator", role) == 0 { return "FORBIDDEN" }
+        let _ = sql_exec_str4(db, "INSERT INTO header_rules (match_method, match_direction, action, header_name) VALUES ($1, $2, $3, $4)", form_val(body, "method"), form_val(body, "direction"), form_val(body, "action"), form_val(body, "header_name"))
+        return f_headers(db, db_ok)
+    }
+    // acl merged into access_control
+    if str_eq(path, "/admin/api/ban") {
+        if check_role("admin", role) == 0 { return "FORBIDDEN" }
+        let perm = form_val(body, "permanent")
+        let _ = sql_exec_str4(db, "INSERT INTO security_bans (source_ip, reason, permanent) VALUES ($1, $2, $3) ON CONFLICT (source_ip) DO UPDATE SET reason = $2, permanent = $3::boolean", form_val(body, "ip"), form_val(body, "reason"), perm, "")
+        return f_security(db, db_ok)
+    }
+    if str_eq(path, "/admin/api/config") {
+        if check_role("admin", role) == 0 { return "FORBIDDEN" }
+        let _ = sql_exec_str4(db, "INSERT INTO config (key, value, description) VALUES ($1, $2, $3) ON CONFLICT (key) DO UPDATE SET value = $2, description = $3", form_val(body, "key"), form_val(body, "value"), form_val(body, "description"), "")
+        return f_config(db, db_ok)
+    }
+    if str_eq(path, "/admin/api/admins") {
+        if check_role("super_admin", role) == 0 { return "FORBIDDEN" }
+        let _ = sql_exec_str4(db, "INSERT INTO admin_users (username, password_hash, role) VALUES ($1, $2, $3)", form_val(body, "username"), sha256(form_val(body, "password")), form_val(body, "role"), "")
+        return f_admins(db, db_ok)
+    }
+    // Clear stuck live dialog(s) via metrics API on the SIP host
+    if str_eq(path, "/admin/api/dialog_clear") {
+        if check_role("operator", role) == 0 { return "FORBIDDEN" }
+        let all = form_val(body, "all")
+        let id = form_val(body, "id")
+        let mut pathq = "/dialogs/clear?"
+        if str_eq(all, "1") {
+            pathq = pathq + "all=1"
+        } else {
+            pathq = pathq + "id=" + id
+        }
+        let _ = fetch_metrics_path(pathq)
+        return f_dialogs(db, db_ok)
+    }
+    // Change own password (any logged-in admin user)
+    if str_eq(path, "/admin/api/password") {
+        if db_ok == 0 { return "<div class=\"alert err\">Database unavailable</div>" + f_account() }
+        if len(user) == 0 { return "FORBIDDEN" }
+        let oldp = form_val(body, "old_password")
+        let newp = form_val(body, "new_password")
+        let conf = form_val(body, "confirm_password")
+        if len(newp) < 12 {
+            return "<div class=\"alert err\">New password must be at least 12 characters.</div>" + f_account()
+        }
+        if not str_eq(newp, conf) {
+            return "<div class=\"alert err\">New password and confirmation do not match.</div>" + f_account()
+        }
+        let stored = sql_query_str(db, "SELECT password_hash FROM admin_users WHERE username = $1 AND enabled = true", user)
+        if not str_eq(stored, sha256(oldp)) {
+            return "<div class=\"alert err\">Current password is incorrect.</div>" + f_account()
+        }
+        let _ = sql_exec_str4(db, "UPDATE admin_users SET password_hash = $2 WHERE username = $1", user, sha256(newp), "", "")
+        // Invalidate other sessions for this user
+        let _ = sql_exec_str4(db, "DELETE FROM admin_sessions WHERE username = $1", user, "", "", "")
+        return "<div class=\"alert ok\">Password updated. Other sessions were signed out.</div>" + f_account()
+    }
+    return ""
+}
+
+// ============ MAIN ============
