@@ -1,82 +1,58 @@
-# Madis SIP Proxy
+# Madis
 
-A high-performance SIP proxy and registrar written in [Mako](https://github.com/mako-lang), designed for production VoIP infrastructure.
+A SIP proxy and registrar written in [Mako](https://github.com/mako-lang).
 
-## About
+## What is this?
 
-Madis is a modular SIP proxy that handles call routing, registration, authentication, NAT traversal, and media relay integration. It is built from the ground up for reliability, RFC compliance, and operational visibility.
+Madis started as an internal tool we needed for handling SIP routing, registration, and authentication. It does the usual proxy things — forwards requests, manages registrations, handles NAT, talks to RTPEngine for media relay — and tries to stay reasonably close to the relevant RFCs while doing it.
 
-### Key Features
+It's still a work in progress. Some parts are more polished than others.
 
-- **SIP Proxy & Registrar** — Full RFC 3261 proxy and registrar with multi-contact bindings, per-contact expiry, and database-backed persistence.
-- **Digest Authentication** — MD5 and SHA-256 digest auth with `auth`, `auth-int`, and `-sess` variants. Short-lived nonces with replay protection.
-- **STIR/SHAKEN** — ECDSA P-256 (ES256) call identity signing and verification for caller ID attestation.
-- **NAT Traversal** — Automatic `received`/`rport` handling per RFC 3581 with symmetric response routing.
-- **RTPEngine Integration** — Media relay control for calls traversing NAT boundaries.
-- **Multi-Transport** — UDP, TCP, TLS, and WebSocket ingress with connection pooling, idle management, and per-transport routing.
-- **IPv6** — Dual-stack support with separate v6-only UDP listener and bracketed address parsing.
-- **DNS Resolution** — RFC 3263 NAPTR/SRV resolution with priority/weight ordering, failover, and 60-second caching.
-- **Dialplan Engine** — Configurable call routing rules with pattern matching and rewriting.
-- **Forking & Transactions** — Full client/server transaction state machines with fork handling, 6xx cancellation, Timer A–J support, and retransmission.
-- **Operational Control Plane** — HTTP admin endpoints for health checks, readiness, Prometheus metrics, state inspection, and live configuration reload.
-- **Security Hardening** — 64 KiB message limits, 128-header cap, control-character rejection, and input validation before any database interaction.
+## What it does
 
-## Project Structure
+- Proxies and registers SIP endpoints (RFC 3261)
+- Digest auth (MD5, SHA-256) with nonce expiry
+- STIR/SHAKEN caller ID signing (ES256)
+- NAT handling via `rport`/`received` (RFC 3581)
+- RTPEngine integration for media relay
+- UDP, TCP, TLS, and WebSocket transports
+- IPv6 support
+- DNS resolution with NAPTR/SRV lookups (RFC 3263)
+- Dialplan with pattern matching and rewriting
+- Transaction state machines, forking, retransmission
+- A small HTTP admin interface for health checks, metrics, and config reload
 
-| Module | Purpose |
-|---|---|
-| `main.mko` | Entry point — pulls all modules into the proxy namespace |
-| `parser.mko` | SIP message parsing and URI extraction |
-| `headers.mko` | Header manipulation, compact-header support, validation |
-| `auth.mko` | Digest authentication and credential verification |
-| `registration.mko` | REGISTER handling, contact bindings, expiry management |
-| `routing.mko` | Request routing, loose routing, Record-Route |
-| `dialplan.mko` | Dial plan rules and number rewriting |
-| `nat.mko` | NAT detection and `rport`/`received` processing |
-| `transport.mko` | TCP, TLS, UDP, and WebSocket transport layer |
-| `stream.mko` | Stream-based transport framing |
-| `rtpengine.mko` | RTPEngine media relay integration |
-| `shaken.mko` | STIR/SHAKEN identity signing and verification |
-| `security.mko` | Input validation and security checks |
-| `rfc.mko` | RFC compliance enforcement |
-| `db.mko` | Database access layer |
-| `log.mko` | Structured logging |
-| `ops.mko` | Admin HTTP endpoints and operational tooling |
+## Modules
 
-## Requirements
+The proxy is split across a handful of `.mko` files. `main.mko` is the entry point and pulls everything else in:
 
-- **Mako 0.4.5** compiler and runtime
+`parser` `headers` `auth` `registration` `routing` `dialplan` `nat` `transport` `stream` `rtpengine` `shaken` `security` `rfc` `db` `log` `ops`
 
 ## Building
+
+You'll need Mako 0.4.5.
 
 ```sh
 MAKO_RUNTIME=/path/to/mako/runtime mako build --release --strip --no-incremental main.mko -o madis
 ```
 
-## Verification
+To run the checks and tests:
 
 ```sh
-# Type-check
 MAKO_RUNTIME=/path/to/mako/runtime mako check --no-incremental main.mko
-
-# Lint
 MAKO_RUNTIME=/path/to/mako/runtime mako lint main.mko
-
-# Run tests
 MAKO_RUNTIME=/path/to/mako/runtime mako test tests
 ```
 
 ## Configuration
 
-Madis is configured through environment variables:
+A few environment variables control runtime behavior:
 
-| Variable | Description |
-|---|---|
-| `SIP_ADMIN_PORT` | Enable the HTTP control plane on this port |
-| `SIP_ADMIN_TOKEN` | Bearer token for admin endpoint authentication |
-| `SIP_CONFIG_FILE` | Watched file path for triggering configuration reload |
-| `SIP_IPV6` | Set to `1` (default) to enable IPv6 UDP, `0` to disable |
+- `SIP_ADMIN_PORT` — turns on the HTTP admin interface
+- `SIP_ADMIN_TOKEN` — if set, admin endpoints require a bearer token
+- `SIP_CONFIG_FILE` — path to a watched file; touching it triggers a config reload
+- `SIP_IPV6` — `1` by default, set to `0` if your host doesn't have IPv6
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+[MIT](LICENSE)
