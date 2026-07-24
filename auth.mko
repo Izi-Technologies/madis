@@ -25,30 +25,65 @@ fn digest_challenge_value(realm: string, nonce: string, stale: int) -> string {
     return value
 }
 
-fn digest_challenge(realm: string, msg: string, n: int, tag: string) -> string {
-    let _ = n
-    let nonce = base64_encode(random_bytes(16))
-    let extra = sip_header_line("WWW-Authenticate", digest_challenge_value(realm, nonce, 0))
-    if len(tag) > 0 {
-        return sip_reply_with_to_tag(msg, 401, "Unauthorized", extra, "", tag)
+// CMap has no TTL primitive. Keep attacker-derived cache keys bounded with a
+// fixed ring; the ring stores the real key so eviction removes both entries.
+// This is deliberately shared by auth, ACL, and security caches.
+fn bounded_state_set(store: CMap, index: CMap, seq_key: string, ring_prefix: string, key: string, value: string, capacity: int) -> int {
+    if cmap_has(store, key) == 1 {
+        cmap_set(store, key, value)
+        return 0
     }
-    return sip_reply(msg, 401, "Unauthorized", extra, "")
+    let seq = cmap_incr(index, seq_key, 1)
+    let slot = seq - (seq / capacity) * capacity
+    let ring_key = ring_prefix + string(slot)
+    if cmap_has(index, ring_key) == 1 {
+        let old_key = cmap_get(index, ring_key)
+        if len(old_key) > 0 && not str_eq(old_key, key) { let _ = cmap_del(store, old_key) }
+    }
+    cmap_set(index, ring_key, key)
+    cmap_set(store, key, value)
+    return 0
 }
 
-fn digest_challenge_proxy(realm: string, msg: string, n: int, tag: string) -> string {
-    let _ = n
-    let nonce = base64_encode(random_bytes(16))
-    let extra = sip_header_line("Proxy-Authenticate", digest_challenge_value(realm, nonce, 0))
-    if len(tag) > 0 {
-        return sip_reply_with_to_tag(msg, 407, "Proxy Authentication Required", extra, "", tag)
+fn bounded_cache_set(cache: CMap, seq_key: string, ring_prefix: string, key: string, value: string, capacity: int) -> int {
+    let _ = bounded_state_set(cache, cache, seq_key, ring_prefix, key, value, capacity)
+    return 0
+}
+
+fn bounded_cache_pair_set(cache: CMap, seq_key: string, ring_prefix: string, key: string, value: string, at: int, capacity: int) -> int {
+    if cmap_has(cache, key) == 1 {
+        cmap_set(cache, key, value)
+        cmap_set(cache, key + "|at", string(at))
+        return 0
     }
-    return sip_reply(msg, 407, "Proxy Authentication Required", extra, "")
+    let seq = cmap_incr(cache, seq_key, 1)
+    let slot = seq - (seq / capacity) * capacity
+    let ring_key = ring_prefix + string(slot)
+    if cmap_has(cache, ring_key) == 1 {
+        let old_key = cmap_get(cache, ring_key)
+        if len(old_key) > 0 && not str_eq(old_key, key) {
+            let _ = cmap_del(cache, old_key)
+            let _ = cmap_del(cache, old_key + "|at")
+        }
+    }
+    cmap_set(cache, ring_key, key)
+    cmap_set(cache, key, value)
+    cmap_set(cache, key + "|at", string(at))
+    return 0
+}
+
+fn auth_nonce_cache_set(cache: CMap, nonce: string, created_at: int) -> int {
+    return bounded_cache_set(cache, "auth_nonce_seq", "auth_nonce_ring|", "nonce|" + nonce, string(created_at), 65536)
+}
+
+fn auth_nonce_used_set(cache: CMap, key: string, used_at: int) -> int {
+    return bounded_cache_set(cache, "auth_used_seq", "auth_used_ring|", key, string(used_at), 65536)
 }
 
 fn digest_challenge_cached_stale(realm: string, msg: string, n: int, tag: string, cache: CMap, proxy: int, stale: int) -> string {
     let _ = n
     let nonce = base64_encode(random_bytes(24))
-    cmap_set(cache, "nonce|" + nonce, string(mono_ms()))
+    let _ = auth_nonce_cache_set(cache, nonce, mono_ms())
     let mut extra = ""
     if proxy == 1 {
         extra = sip_header_line("Proxy-Authenticate", digest_challenge_value(realm, nonce, stale))
@@ -70,10 +105,6 @@ fn has_auth(msg: string, n: int) -> int {
     let pauth = sip_hdr(msg, "Proxy-Authorization", n)
     if len(pauth) > 5 { return 1 }
     return 0
-}
-
-fn extract_digest_field(auth: string, field: string) -> string {
-    return sip_auth_param(auth, field)
 }
 
 fn auth_username(msg: string, n: int) -> string {
@@ -157,9 +188,13 @@ fn db_digest_valid(db: SqlDB, db_ok: int, msg: string, n: int, method: string, f
     let mut domain = realm
     if len(domain) == 0 { domain = fallback_domain }
     let _ = domain
-    let mut ha1 = sql_query_str(db, "SELECT password_ha1 FROM users WHERE username = $1 AND enabled = true LIMIT 1", username)
+    let credentials = sql_query_str(db, "SELECT COALESCE(password_ha1,'') || '|' || COALESCE(password_ha1_sha256,'') FROM users WHERE username = $1 AND enabled = true LIMIT 1", username)
+    let credential_parts = str_split(credentials, "|")
+    let mut ha1 = ""
+    let mut sha_ha1 = ""
+    if len(credential_parts) >= 1 { ha1 = credential_parts[0] }
+    if len(credential_parts) >= 2 { sha_ha1 = credential_parts[1] }
     if str_has_prefix(algorithm, "sha-256") {
-        let sha_ha1 = sql_query_str(db, "SELECT password_ha1_sha256 FROM users WHERE username = $1 AND enabled = true LIMIT 1", username)
         if len(sha_ha1) == 64 { ha1 = sha_ha1 }
     }
     if str_has_prefix(algorithm, "sha-256") && len(ha1) != 64 { return 0 }
@@ -175,7 +210,7 @@ fn db_digest_valid(db: SqlDB, db_ok: int, msg: string, n: int, method: string, f
         let mut used_key = "nonce_used|" + nonce + "|" + username + "|" + method + "|" + uri
         if len(qop) > 0 { used_key = used_key + "|" + nc + "|" + cnonce }
         if cmap_has(cache, used_key) == 1 { return 0 }
-        cmap_set(cache, used_key, string(mono_ms()))
+        let _ = auth_nonce_used_set(cache, used_key, mono_ms())
         return 1
     }
     return 0
@@ -189,19 +224,24 @@ fn db_ip_auth(db: SqlDB, db_ok: int, src_ip: string, cache: CMap) -> int {
         if str_eq(cmap_get(cache, key), "1") { return 1 }
         return 0
     }
+    // The local health/interop path is intentionally usable without a
+    // database. Do not extend this exception to RFC1918/private networks.
+    if str_eq(src_ip, "127.0.0.1") || str_eq(src_ip, "::1") {
+        let _ = bounded_cache_set(cache, "auth_ip_seq", "auth_ip_ring|", key, "1", 16384)
+        return 1
+    }
     if db_ok == 0 {
-        if is_private_ip(src_ip) == 1 {
-            cmap_set(cache, key, "1")
-            return 1
-        }
-        cmap_set(cache, key, "0")
+        // A database outage must fail closed. Private address space is not
+        // proof of trust because a SIP listener may be reachable on a
+        // routed or spoofable interface.
+        let _ = bounded_cache_set(cache, "auth_ip_seq", "auth_ip_ring|", key, "0", 16384)
         return 0
     }
 
     // Check ip_auth table
     let r = sql_query_str(db, "SELECT id FROM ip_auth WHERE ip_address = $1 AND enabled = true LIMIT 1", src_ip)
     if len(r) > 0 {
-        cmap_set(cache, key, "1")
+        let _ = bounded_cache_set(cache, "auth_ip_seq", "auth_ip_ring|", key, "1", 16384)
         return 1
     }
     // Check CIDR/subnet (simplified: check /24 by stripping last octet)
@@ -209,12 +249,12 @@ fn db_ip_auth(db: SqlDB, db_ok: int, src_ip: string, cache: CMap) -> int {
     if len(dot_parts) == 4 {
         let subnet = dot_parts[0] + "." + dot_parts[1] + "." + dot_parts[2] + ".0/24"
         let r2 = sql_query_str(db, "SELECT id FROM ip_auth WHERE ip_address = $1 AND enabled = true LIMIT 1", subnet)
-        if len(r2) > 0 {
-            cmap_set(cache, key, "1")
+    if len(r2) > 0 {
+            let _ = bounded_cache_set(cache, "auth_ip_seq", "auth_ip_ring|", key, "1", 16384)
             return 1
         }
     }
-    cmap_set(cache, key, "0")
+    let _ = bounded_cache_set(cache, "auth_ip_seq", "auth_ip_ring|", key, "0", 16384)
     return 0
 }
 
@@ -231,9 +271,9 @@ fn db_auth_user(db: SqlDB, db_ok: int, username: string, domain: string, cache: 
 
     let result = sql_query_str(db, "SELECT id FROM users WHERE username = $1 AND enabled = true LIMIT 1", username)
     if len(result) > 0 {
-        cmap_set(cache, key, "1")
+        let _ = bounded_cache_set(cache, "auth_user_seq", "auth_user_ring|", key, "1", 16384)
         return 1
     }
-    cmap_set(cache, key, "0")
+    let _ = bounded_cache_set(cache, "auth_user_seq", "auth_user_ring|", key, "0", 16384)
     return 0
 }

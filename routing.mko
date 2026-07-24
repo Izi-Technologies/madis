@@ -129,7 +129,7 @@ fn dispatch_is_healthy(addr: string, cache: CMap) -> int {
         match parse_int(cmap_get(cache, until_key)) { Ok(v) => { until = v } Err(_) => {} }
         if until > mono_ms() { return 0 }
         let _ = cmap_del(cache, until_key)
-        cmap_set(cache, key, "half-open")
+        let _ = bounded_cache_set(cache, "health_state_seq", "health_state_ring|", key, "half-open", 16384)
     }
     if cmap_has(cache, key) == 1 {
         if str_eq(cmap_get(cache, key), "down") { return 0 }
@@ -141,8 +141,8 @@ fn dispatch_health_note(addr: string, ok: int, cache: CMap) -> int {
     let fail_key = "health_fail|" + addr
     let key = "health|" + addr
     if ok == 1 {
-        cmap_set(cache, key, "up")
-        cmap_set(cache, fail_key, "0")
+        let _ = bounded_cache_set(cache, "health_state_seq", "health_state_ring|", key, "up", 16384)
+        let _ = bounded_cache_set(cache, "health_fail_seq", "health_fail_ring|", fail_key, "0", 16384)
         let _ = cmap_del(cache, "health_until|" + addr)
         return 1
     }
@@ -150,29 +150,34 @@ fn dispatch_health_note(addr: string, ok: int, cache: CMap) -> int {
     if failures >= 3 {
         let mut backoff = failures * 1000
         if backoff > 60000 { backoff = 60000 }
-        cmap_set(cache, key, "down")
-        cmap_set(cache, "health_until|" + addr, string(mono_ms() + backoff))
+        let _ = bounded_cache_set(cache, "health_state_seq", "health_state_ring|", key, "down", 16384)
+        let _ = bounded_cache_set(cache, "health_until_seq", "health_until_ring|", "health_until|" + addr, string(mono_ms() + backoff), 16384)
     }
     return 0
 }
 
 // Resolve a dispatch set to comma-separated targets
 fn resolve_dispatch_set(db: SqlDB, set_name: string, from_user: string, call_id: string, cache: CMap) -> string {
-    let algo = sql_query_str(db, "SELECT algorithm FROM dispatch_sets WHERE name = $1 AND enabled = true", set_name)
-    if len(algo) == 0 { return "" }
-
-    let set_id_str = sql_query_str(db, "SELECT id FROM dispatch_sets WHERE name = $1", set_name)
+    // Fetch set metadata once instead of querying algorithm and id separately.
+    let set_info = sql_query_str(db, "SELECT id || '|' || algorithm FROM dispatch_sets WHERE name = $1 AND enabled = true", set_name)
+    let set_parts = str_split(set_info, "|")
+    if len(set_parts) < 2 { return "" }
+    let algo = set_parts[1]
+    let set_id_str = set_parts[0]
     let mut set_id = 0
     match parse_int(set_id_str) { Ok(v) => { set_id = v } Err(_) => { return "" } }
 
     let mut members = make([]string, 0, 8)
-    let mut mi = 0
-    while mi < 8 {
-        let m = sql_query_str(db, "SELECT g.address || ':' || g.port FROM dispatch_members dm JOIN gateways g ON dm.gateway_id = g.id WHERE dm.set_id = $1 AND dm.enabled = true AND g.enabled = true ORDER BY dm.priority ASC, dm.weight DESC LIMIT 1 OFFSET " + string(mi), set_id_str)
-        if len(m) == 0 { break }
-        if dispatch_is_healthy(m, cache) == 1 { members = append(members, m) }
-        mi = mi + 1
+    let member_rows = sql_query_rows_str(db, "SELECT g.address || ':' || g.port FROM dispatch_members dm JOIN gateways g ON dm.gateway_id = g.id WHERE dm.set_id = $1 AND dm.enabled = true AND g.enabled = true ORDER BY dm.priority ASC, dm.weight DESC LIMIT 8", set_id_str)
+    if sql_rows_ok(member_rows) == 1 {
+        while sql_rows_next(member_rows) == 1 {
+            let m = sql_rows_str(member_rows, 0)
+            if len(m) > 0 {
+                if dispatch_is_healthy(m, cache) == 1 { members = append(members, m) }
+            }
+        }
     }
+    let _ = sql_rows_close(member_rows)
 
     let count = len(members)
     if count == 0 { return "" }
@@ -219,10 +224,10 @@ fn ani_in_group(db: SqlDB, db_ok: int, number: string, group_name: string, cache
     // Query: check if number falls in any range of this group
     let hit = sql_query_str(db, "SELECT 1 FROM ani_ranges ar JOIN ani_groups ag ON ar.group_id = ag.id WHERE ag.name = $1 AND ag.enabled = true AND ar.enabled = true AND $1 >= ar.range_start AND $1 <= ar.range_end LIMIT 1", clean)
     if len(hit) > 0 {
-        cmap_set(cache, key, "1")
+        let _ = bounded_cache_set(cache, "ani_seq", "ani_ring|", key, "1", 16384)
         return 1
     }
-    cmap_set(cache, key, "0")
+    let _ = bounded_cache_set(cache, "ani_seq", "ani_ring|", key, "0", 16384)
     return 0
 }
 
@@ -232,12 +237,12 @@ fn db_route_call(db: SqlDB, db_ok: int, callee: string, caller: string, src_ip: 
     let now_time = current_time_int()
     let today = current_day_of_week()
 
-    // Evaluate rules by priority (up to 50 rules)
+    // Load the bounded rule set once; OFFSET queries made every rule add a
+    // database round trip to the INVITE hot path.
+    let rule_rows = sql_query_col_str(db, "SELECT match_prefix || '|' || COALESCE(match_caller,'') || '|' || COALESCE(match_src_ip,'') || '|' || COALESCE(match_time_start,'') || '|' || COALESCE(match_time_end,'') || '|' || COALESCE(match_day,'') || '|' || action || '|' || COALESCE(match_ani_group,'') FROM routing_rules WHERE enabled = true ORDER BY priority ASC LIMIT 50", 50)
     let mut ri = 0
-    while ri < 50 {
-        // Fetch rule ri (now includes match_ani_group)
-        let rule_data = sql_query_str(db, "SELECT match_prefix || '|' || COALESCE(match_caller,'') || '|' || COALESCE(match_src_ip,'') || '|' || COALESCE(match_time_start,'') || '|' || COALESCE(match_time_end,'') || '|' || COALESCE(match_day,'') || '|' || action || '|' || COALESCE(match_ani_group,'') FROM routing_rules WHERE enabled = true ORDER BY priority ASC LIMIT 1 OFFSET " + string(ri), "")
-        if len(rule_data) == 0 { break }
+    while ri < len(rule_rows) {
+        let rule_data = rule_rows[ri]
 
         let parts = str_split(rule_data, "|")
         if len(parts) < 7 {
@@ -336,7 +341,7 @@ fn db_route_call(db: SqlDB, db_ok: int, callee: string, caller: string, src_ip: 
                 let egress_targets = resolve_dispatch_set(db, egress_name, from_user, call_id, cache)
                 // Store egress for when the PBX sends the call back out
                 if len(egress_targets) > 0 {
-                    cmap_set(cache, "egress|" + call_id, egress_targets)
+                    let _ = bounded_cache_set(cache, "egress_seq", "egress_ring|", "egress|" + call_id, egress_targets, 65536)
                 }
                 if len(ingress_targets) > 0 { return "dispatch|" + ingress_targets }
             } else {

@@ -63,19 +63,6 @@ fn shaken_fetch_jwks(url: string) -> string {
     return shaken_load_material(url)
 }
 
-// Sign PASSporT with HS256 (lab / interop only). Identity alg=HS256.
-fn shaken_sign(orig_tn: string, dest_tn: string, attest: string, cert_url: string, secret: string) -> string {
-    if len(secret) == 0 { return "" }
-    let origid = base64_encode(random_bytes(16))
-    let iat = now_ms() / 1000
-    let payload = shaken_passport_payload(orig_tn, dest_tn, attest, origid, iat)
-    let token = jwt_sign(payload, secret)
-    if len(token) == 0 { return "" }
-    let mut info = cert_url
-    if len(info) == 0 { info = "https://localhost/sti.pem" }
-    return token + ";info=<" + info + ">;alg=HS256;ppt=shaken"
-}
-
 fn shaken_sign_cfg(orig_tn: string, dest_tn: string, attest: string, cert_url: string, cfg: []string) -> string {
     if len(cfg) < 5 { return "" }
     let material = shaken_load_material(cfg[3])
@@ -161,45 +148,12 @@ fn shaken_verify_cfg(msg: string, msglen: int, cfg: []string) -> string {
     return shaken_attest_from_payload(payload)
 }
 
-// Back-compat: secret-only HS256 verify
-fn shaken_verify(msg: string, msglen: int, secret: string) -> string {
-    let mut cfg = make([]string, 7)
-    cfg[0] = "1"
-    cfg[1] = ""
-    cfg[2] = "C"
-    cfg[3] = secret
-    cfg[4] = "hs256"
-    cfg[5] = ""
-    cfg[6] = ""
-    return shaken_verify_cfg(msg, msglen, cfg)
-}
-
-fn shaken_add_identity(msg: string, orig_tn: string, dest_tn: string, attest: string, cert_url: string, secret: string) -> string {
-    let identity_val = shaken_sign(orig_tn, dest_tn, attest, cert_url, secret)
-    if len(identity_val) == 0 { return msg }
-    let mut result = hdr_add(msg, "Identity", identity_val)
-    result = hdr_add(result, "P-Attestation-Indicator", attest)
-    return result
-}
-
 fn shaken_add_identity_cfg(msg: string, orig_tn: string, dest_tn: string, attest: string, cfg: []string) -> string {
     let identity_val = shaken_sign_cfg(orig_tn, dest_tn, attest, cfg[1], cfg)
     if len(identity_val) == 0 { return msg }
     let mut result = hdr_add(msg, "Identity", identity_val)
     result = hdr_add(result, "P-Attestation-Indicator", attest)
     return result
-}
-
-fn shaken_verify_and_annotate(msg: string, msglen: int, secret: string) -> string {
-    let mut cfg = make([]string, 7)
-    cfg[0] = "1"
-    cfg[1] = ""
-    cfg[2] = "C"
-    cfg[3] = secret
-    cfg[4] = "auto"
-    cfg[5] = ""
-    cfg[6] = ""
-    return shaken_verify_and_annotate_cfg(msg, msglen, cfg)
 }
 
 fn shaken_verify_and_annotate_cfg(msg: string, msglen: int, cfg: []string) -> string {
@@ -252,7 +206,7 @@ fn db_shaken_config(db: SqlDB, db_ok: int, cache: CMap) -> []string {
     }
 
     // Per-field cache (JWKS JSON may contain separators)
-    let ck = "shaken|v2|" + proxy_cache_epoch(cache)
+    let ck = "shaken|v2"
     if cmap_has(cache, ck) == 1 {
         result[0] = cmap_get(cache, "shaken|en")
         result[1] = cmap_get(cache, "shaken|cert")

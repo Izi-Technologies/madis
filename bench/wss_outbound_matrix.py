@@ -330,7 +330,10 @@ def exercise_proxy(udp_port: int, upstream_port: int, fixture: WssFixture) -> No
         ).encode()
         udp.sendto(register, ("127.0.0.1", udp_port))
         registration_response, _ = udp.recvfrom(8192)
-        require(response_status(registration_response) == 200, "WSS contact registration failed")
+        require(
+            response_status(registration_response) == 200,
+            f"WSS contact registration failed: {registration_response[:160]!r}",
+        )
 
         invite = (
             "INVITE sip:uas@example.test SIP/2.0\r\n"

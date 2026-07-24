@@ -9,16 +9,6 @@ fn sip_hdr(msg: string, name: string, msglen: int) -> string {
     return sip_header(msg, name)
 }
 
-fn sip_ruri(msg: string, n: int) -> string {
-    let _ = n
-    return sip_request_uri(msg)
-}
-
-fn sip_is_resp(msg: string, n: int) -> int {
-    let _ = n
-    return sip_is_response(msg)
-}
-
 // User/host from a name-addr or URI (From/To/Contact/R-URI)
 fn sip_user(uri: string) -> string {
     return sip_uri_user(uri)
@@ -115,18 +105,6 @@ fn sip_strip_top_via(msg: string) -> string {
         i = end + 2
     }
     return msg
-}
-
-// Insert raw header block after the start line (legacy multi-header blob)
-fn sip_insert(msg: string, hdrs: string) -> string {
-    if len(hdrs) == 0 { return msg }
-    let n = len(msg)
-    let mut i = 0
-    while i < n {
-        if int(msg[i]) == 10 { i = i + 1; break }
-        i = i + 1
-    }
-    return msg[0:i] + hdrs + msg[i:]
 }
 
 // Proxy hop: top Via + Record-Route (RFC 3261 §16.6)

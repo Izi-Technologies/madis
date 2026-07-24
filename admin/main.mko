@@ -76,9 +76,18 @@ fn main() {
                         let _ = nb_close(fd)
                     } else {
                         let method = parse_method(raw, rl)
-                        let path = parse_path(raw, rl)
+                        let mut path = parse_path(raw, rl)
                         let mut resp = ""
                         let mut ws_handed_off = 0
+
+                        if http_request_size_ok(raw, rl) == 0 {
+                            resp = http_resp(400, "text/plain", "invalid request size or body\n", "Connection: close\r\n")
+                            path = "__invalid_request__"
+                        }
+                        if len(resp) == 0 && str_eq(method, "POST") && http_post_origin_ok(raw, rl) == 0 {
+                            resp = http_resp(403, "text/plain", "cross-origin request rejected\n", "Connection: close\r\n")
+                            path = "__invalid_request__"
+                        }
 
                         // Favicon (no auth) — browsers always request /favicon.ico
                         if str_eq(path, "/favicon.ico") {
@@ -92,11 +101,12 @@ fn main() {
                         if str_eq(path, "/admin/login") {
                             if str_eq(method, "POST") {
                                 let body = parse_body(raw, rl)
-                                let u = form_val(body, "username")
+                                let fields = form_map(body)
+                                let u = form_get(fields, "username")
                                 if login_is_locked(login_fails, u) == 1 {
                                     resp = http_resp(200, "text/html", html_login_msg("Too many failed attempts. Wait a few minutes and try again."), "")
                                 } else {
-                                    let p = sha256(form_val(body, "password"))
+                                    let p = sha256(form_get(fields, "password"))
                                     if db_ok == 1 {
                                         let stored = sql_query_str(db, "SELECT password_hash FROM admin_users WHERE username = $1 AND enabled = true", u)
                                         if str_eq(stored, p) {
@@ -104,8 +114,8 @@ fn main() {
                                             let role = sql_query_str(db, "SELECT role FROM admin_users WHERE username = $1", u)
                                             let token = session_token_new()
                                             let _ = sql_exec_str4(db, "INSERT INTO admin_sessions (token, username, role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING", token, u, role, "")
-                                            let _ = sql_exec_plain(db, "DELETE FROM admin_sessions WHERE created_at < NOW() - INTERVAL '" + string(session_ttl_secs()) + " seconds'")
-                                            cmap_set(sessions, token, session_payload_new(u, role))
+                                            let _ = sql_exec_str4(db, "DELETE FROM admin_sessions WHERE created_at < NOW() - ($1 || ' seconds')::interval", string(session_ttl_secs()), "", "", "")
+                                            let _ = session_cache_set(sessions, token, session_payload_new(u, role))
                                             slog("  login ok user=" + u)
                                             resp = redirect("/admin", session_cookie_set(token))
                                         } else {
@@ -200,14 +210,14 @@ fn main() {
                                 } else {
                                     // Restore from DB only for well-formed tokens + enabled users
                                     if db_ok == 1 {
-                                        let db_user = sql_query_str(db, "SELECT s.username || '|' || s.role FROM admin_sessions s JOIN admin_users u ON u.username = s.username WHERE s.token = $1 AND u.enabled = true AND s.created_at > NOW() - INTERVAL '" + string(session_ttl_secs()) + " seconds' LIMIT 1", tk)
+                                        let db_user = sql_query_str2(db, "SELECT s.username || '|' || s.role FROM admin_sessions s JOIN admin_users u ON u.username = s.username WHERE s.token = $1 AND u.enabled = true AND s.created_at > NOW() - ($2 || ' seconds')::interval LIMIT 1", tk, string(session_ttl_secs()))
                                         if len(db_user) > 0 {
                                             let sp = str_split(db_user, "|")
                                             if len(sp) >= 2 {
                                                 if len(sp[0]) > 0 {
                                                     au = sp[0]
                                                     ar = sp[1]
-                                                    cmap_set(sessions, tk, session_payload_new(au, ar))
+                                                    let _ = session_cache_set(sessions, tk, session_payload_new(au, ar))
                                                 }
                                             }
                                         }
@@ -326,7 +336,8 @@ fn main() {
                                 if len(resp) == 0 {
                                     if str_eq(method, "POST") {
                                         let body = parse_body(raw, rl)
-                                        let result = handle_api(path, body, ar, au, db, db_ok)
+                                        let fields = form_map(body)
+                                        let result = handle_api(path, fields, ar, au, db, db_ok)
                                         if str_eq(result, "FORBIDDEN") {
                                             resp = http_resp(403, "text/html", "<div class=\"alert err\">Forbidden</div>", "")
                                         } else {

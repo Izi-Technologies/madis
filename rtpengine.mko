@@ -54,8 +54,17 @@ fn rtp_cookie() -> string {
     return base64_encode(random_bytes(6))
 }
 
+fn rtp_port_value(raw: string) -> int {
+    match parse_int(raw) {
+        Ok(v) => { if v > 0 && v <= 65535 { return v } }
+        Err(_) => {}
+    }
+    return 2223
+}
+
 // Send ng command to rtpengine and get response
 fn rtp_send(host: string, port: int, command: string) -> string {
+    if len(host) == 0 || port <= 0 || port > 65535 || len(command) > 65500 { return "" }
     // Use a non-blocking socket, bounded polling, and one retry. A lost
     // response should fail media rewriting without parking a SIP worker for
     // an unbounded interval.
@@ -91,14 +100,14 @@ fn rtp_config(db: SqlDB, db_ok: int, cache: CMap) -> []string {
     result[1] = "127.0.0.1"
     result[2] = "2223"
 
-    let key = "rtpengine_cfg|" + proxy_cache_epoch(cache)
+    let key = "rtpengine_cfg"
     if cmap_has(cache, key) == 1 {
         let cached = cmap_get(cache, key)
         let parts = str_split(cached, "|")
         if len(parts) >= 3 {
             result[0] = parts[0]
             result[1] = parts[1]
-            result[2] = parts[2]
+            result[2] = string(rtp_port_value(parts[2]))
         }
         return result
     }
@@ -111,6 +120,7 @@ fn rtp_config(db: SqlDB, db_ok: int, cache: CMap) -> []string {
         if len(host) > 0 { result[1] = host }
         if len(port) > 0 { result[2] = port }
     }
+    result[2] = string(rtp_port_value(result[2]))
 
     // Start from a fresh buffer.  Array elements are owned by `result`;
     // consuming result[0] with the in-place concat path would leave the
@@ -187,7 +197,7 @@ fn rtp_process_offer(msg: string, msglen: int, call_id: string, from_tag: string
 
     let new_sdp = rtp_offer(cfg[1], rtp_port, call_id, from_tag, sdp)
     if len(new_sdp) == 0 { return msg }
-    cmap_set(cache, "rtp_state|" + call_id, "offer|" + string(mono_ms()))
+    let _ = bounded_cache_set(cache, "rtp_seq", "rtp_ring|", "rtp_state|" + call_id, "offer|" + string(mono_ms()), 65536)
     let _ = msglen
     return msg_set_body(msg, new_sdp)
 }
@@ -208,7 +218,7 @@ fn rtp_process_answer(msg: string, msglen: int, call_id: string, from_tag: strin
 
     let new_sdp = rtp_answer(cfg[1], rtp_port, call_id, from_tag, to_tag, sdp)
     if len(new_sdp) == 0 { return msg }
-    cmap_set(cache, "rtp_state|" + call_id, "answer|" + string(mono_ms()))
+    let _ = bounded_cache_set(cache, "rtp_seq", "rtp_ring|", "rtp_state|" + call_id, "answer|" + string(mono_ms()), 65536)
     let _ = msglen
     return msg_set_body(msg, new_sdp)
 }

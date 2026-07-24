@@ -10,6 +10,15 @@ fn TestSipTargetIpv6Authority() {
     assert_eq(sip_target_port("sip:example.com", 5060), 5060)
 }
 
+fn TestSipTargetRejectsInvalidPorts() {
+    assert_eq(sip_target_port_state("sip:example.com:0"), -1)
+    assert_eq(sip_target_port_state("sip:example.com:65536"), -1)
+    assert_eq(sip_target_port_state("sip:example.com:not-a-port"), -1)
+    assert_eq(sip_target_port("sip:example.com:0", 5060), -1)
+    assert_eq(sip_target_port("sip:example.com:65536", 5060), -1)
+    assert_eq(sip_target_explicit_port("sip:example.com:0"), 0)
+}
+
 fn TestSipSrvSelectionAndCache() {
     let cache = cmap_new()
     let service = "_sip._udp.example.com"

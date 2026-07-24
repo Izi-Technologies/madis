@@ -84,63 +84,35 @@ fn hdr_set(msg: string, name: string, value: string) -> string {
     return hdr_add(cleaned, name, value)
 }
 
-// Modify header value (find and replace within the header value)
-fn hdr_modify(msg: string, name: string, old_val: string, new_val: string) -> string {
-    let current = sip_hdr(msg, name, len(msg))
-    if len(current) == 0 { return msg }
-    let updated = str_replace(current, old_val, new_val)
-    return hdr_set(msg, name, updated)
-}
-
-// Rename a header (copy value to new name, remove old)
-fn hdr_rename(msg: string, old_name: string, new_name: string) -> string {
-    let val = sip_hdr(msg, old_name, len(msg))
-    if len(val) == 0 { return msg }
-    let removed = hdr_remove(msg, old_name)
-    return hdr_add(removed, new_name, val)
-}
-
-// Copy header value to another header (keep original)
-fn hdr_copy(msg: string, from_name: string, to_name: string) -> string {
-    let val = sip_hdr(msg, from_name, len(msg))
-    if len(val) == 0 { return msg }
-    return hdr_add(msg, to_name, val)
-}
-
 // Apply DB-driven header rules
 // header_rules table: match_method, match_direction, action, header_name, header_value, priority
 fn db_apply_header_rules(db: SqlDB, db_ok: int, msg: string, method: string, direction: string, cache: CMap) -> string {
     if db_ok == 0 { return msg }
 
-    // Cache rules per direction (reload every 60s via cache expiry)
     let mut result = msg
 
-    // Query rules matching this method + direction (up to 20 rules)
-    let mut i = 0
-    while i < 20 {
-        // Get rule i for this direction
-        let rule = sql_query_str(db, "SELECT action || '|' || header_name || '|' || COALESCE(header_value,'') FROM header_rules WHERE (match_method = $1 OR match_method = '*') AND match_direction = $1 AND enabled = true ORDER BY priority ASC LIMIT 1 OFFSET " + string(i), direction)
-        if len(rule) == 0 { break }
-
-        let parts = str_split(rule, "|")
-        if len(parts) >= 2 {
-            let action = parts[0]
-            let hname = parts[1]
+    // Fetch the bounded direction set once, then apply method-specific rules
+    // in memory. This also avoids binding the direction as match_method.
+    let rule_rows = sql_query_rows_str(db, "SELECT match_method || '|' || action || '|' || header_name || '|' || COALESCE(header_value,'') FROM header_rules WHERE match_direction = $1 AND enabled = true ORDER BY priority ASC LIMIT 20", direction)
+    if sql_rows_ok(rule_rows) == 1 {
+        while sql_rows_next(rule_rows) == 1 {
+            let rule = sql_rows_str(rule_rows, 0)
+            let parts = str_split(rule, "|")
+            if len(parts) < 3 { continue }
+            let match_method = parts[0]
+            if not str_eq(match_method, "*") {
+                if not str_eq(str_to_upper(match_method), str_to_upper(method)) { continue }
+            }
+            let action = parts[1]
+            let hname = parts[2]
             let mut hval = ""
-            if len(parts) >= 3 { hval = parts[2] }
+            if len(parts) >= 4 { hval = parts[3] }
 
-            if str_eq(action, "add") {
-                result = hdr_add(result, hname, hval)
-            }
-            if str_eq(action, "remove") {
-                result = hdr_remove(result, hname)
-            }
-            if str_eq(action, "set") {
-                result = hdr_set(result, hname, hval)
-            }
+            if str_eq(action, "add") { result = hdr_add(result, hname, hval) }
+            if str_eq(action, "remove") { result = hdr_remove(result, hname) }
+            if str_eq(action, "set") { result = hdr_set(result, hname, hval) }
         }
-        i = i + 1
     }
-
+    let _ = sql_rows_close(rule_rows)
     return result
 }

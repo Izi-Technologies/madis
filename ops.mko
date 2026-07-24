@@ -11,6 +11,9 @@ fn proxy_config_reload(cache: CMap) -> int {
     match parse_int(proxy_cache_epoch(cache)) { Ok(v) => { epoch = v } Err(_) => {} }
     epoch = epoch + 1
     cmap_set(cache, "config_epoch", string(epoch))
+    let _ = cmap_del(cache, "rtpengine_cfg")
+    let _ = cmap_del(cache, "shaken|v2")
+    let _ = cmap_del(cache, "sec_enabled")
     cmap_set(cache, "config_reloaded_at", string(now_ms()))
     metric_add(7, 1)
     return epoch

@@ -54,3 +54,26 @@ without multiplying PostgreSQL work across operators. A deployment must use
 `SIP_ADMIN_PORT=0` for the SIP worker when `madis-admin.service` owns the
 WebUI port. Public HTTPS/WSS termination belongs in nginx or another reverse
 proxy; the admin process itself should remain loopback-bound.
+
+## Safety and performance notes
+
+POST forms are URL-decoded into one per-request `CMap`, avoiding repeated body
+scans on large mutations. Search, gateway, dispatch, and ANI lookups bind
+values through Mako's SQL API. Toggle/delete uses an allowlist for every SQL
+identifier because table and column names cannot be bound as parameters; any
+unknown pair is rejected before SQL execution. New routing rules use the
+connection-local insert id for optional updates, avoiding the concurrent
+`MAX(id)` race.
+
+The HTTP worker rejects requests larger than 128 KiB, rejects bodies without a
+valid `Content-Length`, and rejects truncated or overlong bodies. Process-local sessions are capped at 65,536
+entries; login-failure state is capped at 16,384 entries; session TTL is capped
+at seven days. Metrics/configuration values and database-backed page content
+are escaped before HTML, attribute, or JavaScript rendering. The metrics
+helper also rejects invalid configured ports before opening a socket. Browser
+POSTs require a matching `Origin`/`Host` pair, while Origin-less automation is
+still supported.
+
+The UI is the standalone admin service and does not require Leba. Keep it
+bound to loopback and terminate public HTTPS/WSS in nginx or another reverse
+proxy. The service is built and checked with Mako 0.4.15.

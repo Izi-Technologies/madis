@@ -23,7 +23,7 @@ fn peer_split(addr: string) -> []string {
                 if int(addr[rb + 1]) == 58 {
                     let ps = addr[rb + 2:]
                     match parse_int(ps) {
-                        Ok(v) => { out[1] = string(v) }
+                        Ok(v) => { if v > 0 && v <= 65535 { out[1] = string(v) } }
                         Err(_) => {}
                     }
                 }
@@ -46,7 +46,7 @@ fn peer_split(addr: string) -> []string {
     out[0] = addr[0:colon]
     let ps = addr[colon + 1:]
     match parse_int(ps) {
-        Ok(v) => { out[1] = string(v) }
+        Ok(v) => { if v > 0 && v <= 65535 { out[1] = string(v) } }
         Err(_) => {}
     }
     return out

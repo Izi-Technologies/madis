@@ -34,22 +34,50 @@ fn audit_log(db: SqlDB, db_ok: int, user: string, action: string, detail: string
     return 0
 }
 
-fn handle_api(path: string, body: string, role: string, user: string, db: SqlDB, db_ok: int) -> string {
+// Identifiers cannot be SQL-bound, so only allow the exact table/column pairs
+// rendered by the WebUI. The returned value is canonical and is the only
+// source used in the identifier portion of toggle/delete statements.
+fn admin_mutation_target(table: string, key: string) -> string {
+    if str_eq(table, "users") { if str_eq(key, "username") { return "users|username" } }
+    if str_eq(table, "access_control") { if str_eq(key, "id") { return "access_control|id" } }
+    if str_eq(table, "gateways") { if str_eq(key, "id") { return "gateways|id" } }
+    if str_eq(table, "routing_rules") { if str_eq(key, "id") { return "routing_rules|id" } }
+    if str_eq(table, "routes") { if str_eq(key, "id") { return "routes|id" } }
+    if str_eq(table, "dispatch_members") { if str_eq(key, "id") { return "dispatch_members|id" } }
+    if str_eq(table, "dispatch_sets") { if str_eq(key, "id") { return "dispatch_sets|id" } }
+    if str_eq(table, "dids") { if str_eq(key, "number") { return "dids|number" } }
+    if str_eq(table, "dialplan") { if str_eq(key, "id") { return "dialplan|id" } }
+    if str_eq(table, "header_rules") { if str_eq(key, "id") { return "header_rules|id" } }
+    if str_eq(table, "ani_groups") { if str_eq(key, "id") { return "ani_groups|id" } }
+    if str_eq(table, "ani_ranges") { if str_eq(key, "id") { return "ani_ranges|id" } }
+    if str_eq(table, "security_bans") { if str_eq(key, "source_ip") { return "security_bans|source_ip" } }
+    if str_eq(table, "config") { if str_eq(key, "key") { return "config|key" } }
+    if str_eq(table, "admin_users") { if str_eq(key, "username") { return "admin_users|username" } }
+    return ""
+}
+
+fn handle_api(path: string, fields: CMap, role: string, user: string, db: SqlDB, db_ok: int) -> string {
     // Toggle enable/disable
     if str_eq(path, "/admin/api/toggle") {
         if check_role("operator", role) == 0 { return "FORBIDDEN" }
-        let tbl = form_val(body, "table")
-        let key = form_val(body, "key")
-        let val = form_val(body, "val")
+        let target = admin_mutation_target(form_get(fields, "table"), form_get(fields, "key"))
+        if len(target) == 0 { return "<div class=\"alert err\">Invalid mutation target.</div>" }
+        let target_parts = str_split(target, "|")
+        let tbl = target_parts[0]
+        let key = target_parts[1]
+        let val = form_get(fields, "val")
         let _ = sql_exec_str4(db, "UPDATE " + tbl + " SET enabled = NOT enabled WHERE " + key + " = $1", val, "", "", "")
         let _ = audit_log(db, db_ok, user, "toggle", tbl + " " + key + "=" + val)
         return "OK"
     }
     if str_eq(path, "/admin/api/delete") {
         if check_role("admin", role) == 0 { return "FORBIDDEN" }
-        let tbl = form_val(body, "table")
-        let key = form_val(body, "key")
-        let val = form_val(body, "val")
+        let target = admin_mutation_target(form_get(fields, "table"), form_get(fields, "key"))
+        if len(target) == 0 { return "<div class=\"alert err\">Invalid mutation target.</div>" }
+        let target_parts = str_split(target, "|")
+        let tbl = target_parts[0]
+        let key = target_parts[1]
+        let val = form_get(fields, "val")
         let _ = sql_exec_str4(db, "DELETE FROM " + tbl + " WHERE " + key + " = $1", val, "", "", "")
         let _ = audit_log(db, db_ok, user, "delete", tbl + " " + key + "=" + val)
         return "OK"
@@ -57,9 +85,9 @@ fn handle_api(path: string, body: string, role: string, user: string, db: SqlDB,
     if str_eq(path, "/admin/api/users") {
         if check_role("admin", role) == 0 { return "FORBIDDEN" }
         let admin_user = user
-        let sip_user = form_val(body, "username")
-        let mut domain = form_val(body, "domain")
-        let pw = form_val(body, "password")
+        let sip_user = form_get(fields, "username")
+        let mut domain = form_get(fields, "domain")
+        let pw = form_get(fields, "password")
         if len(sip_user) == 0 {
             return "<div class=\"alert err\">Username is required.</div>" + f_users(db, db_ok)
         }
@@ -91,37 +119,42 @@ fn handle_api(path: string, body: string, role: string, user: string, db: SqlDB,
         }
         let _ = sql_exec_str4(db, "INSERT INTO users (username, password_ha1, domain) VALUES ($1, $2, $3) ON CONFLICT (username) DO UPDATE SET password_ha1 = $2, domain = $3, enabled = true", sip_user, ha1, domain, "")
         let _ = audit_log(db, db_ok, admin_user, "user_save", sip_user + "@" + domain)
-        return "<div class=\"alert ok\">User <code>" + sip_user + "@" + domain + "</code> saved (digest HA1 updated).</div>" + f_users(db, db_ok)
+        return "<div class=\"alert ok\">User <code>" + html_esc(sip_user) + "@" + html_esc(domain) + "</code> saved (digest HA1 updated).</div>" + f_users(db, db_ok)
     }
     if str_eq(path, "/admin/api/access") {
         if check_role("admin", role) == 0 { return "FORBIDDEN" }
-        let _ = sql_exec_str4(db, "INSERT INTO access_control (source_ip, sip_user, action, skip_auth) VALUES ($1, $2, $3, $4)", form_val(body, "ip"), form_val(body, "sip_user"), form_val(body, "action"), form_val(body, "skip_auth"))
+        let _ = sql_exec_str4(db, "INSERT INTO access_control (source_ip, sip_user, action, skip_auth) VALUES ($1, $2, $3, $4)", form_get(fields, "ip"), form_get(fields, "sip_user"), form_get(fields, "action"), form_get(fields, "skip_auth"))
         return f_access(db, db_ok)
     }
     if str_eq(path, "/admin/api/gateways") {
         if check_role("admin", role) == 0 { return "FORBIDDEN" }
-        let _ = sql_exec_str4(db, "INSERT INTO gateways (name, address, port, transport) VALUES ($1, $2, $3, $4)", form_val(body, "name"), form_val(body, "address"), form_val(body, "port"), form_val(body, "transport"))
+        let _ = sql_exec_str4(db, "INSERT INTO gateways (name, address, port, transport) VALUES ($1, $2, $3, $4)", form_get(fields, "name"), form_get(fields, "address"), form_get(fields, "port"), form_get(fields, "transport"))
         return f_gateways(db, db_ok)
     }
     if str_eq(path, "/admin/api/gateway_format") {
         if check_role("operator", role) == 0 { return "FORBIDDEN" }
-        let _ = sql_exec_str4(db, "UPDATE gateways SET number_format = $2, tech_prefix = $3, caller_id_override = $4 WHERE name = $1", form_val(body, "name"), form_val(body, "number_format"), form_val(body, "tech_prefix"), form_val(body, "caller_id"))
+        let _ = sql_exec_str4(db, "UPDATE gateways SET number_format = $2, tech_prefix = $3, caller_id_override = $4 WHERE name = $1", form_get(fields, "name"), form_get(fields, "number_format"), form_get(fields, "tech_prefix"), form_get(fields, "caller_id"))
         return f_gateways(db, db_ok)
     }
     if str_eq(path, "/admin/api/gateway_test") {
         if check_role("operator", role) == 0 { return "FORBIDDEN" }
-        let name = form_val(body, "name")
+        let name = form_get(fields, "name")
         let mut host = ""
         let mut port_s = "5060"
         if db_ok == 1 {
-            host = sql_query_str(db, "SELECT address FROM gateways WHERE name = $1", name)
-            port_s = sql_query_str(db, "SELECT port::text FROM gateways WHERE name = $1", name)
+            let gateway = sql_query_str(db, "SELECT address || '|' || port::text FROM gateways WHERE name = $1", name)
+            let gateway_parts = str_split(gateway, "|")
+            if len(gateway_parts) > 0 { host = gateway_parts[0] }
+            if len(gateway_parts) > 1 { port_s = gateway_parts[1] }
         }
         if len(host) == 0 {
             return "<div class=\"alert err\">Gateway not found.</div>" + f_gateways(db, db_ok)
         }
         let mut port = 5060
         match parse_int(port_s) { Ok(v) => { port = v } Err(_) => {} }
+        if len(host) > 255 || str_contains(host, "\r") || str_contains(host, "\n") || str_contains(host, " ") || port < 1 || port > 65535 {
+            return "<div class=\"alert err\">Gateway address or port is invalid.</div>" + f_gateways(db, db_ok)
+        }
         let fd = udp_bind_addr("127.0.0.1", 0)
         if fd < 0 {
             return "<div class=\"alert err\">Could not bind UDP for probe.</div>" + f_gateways(db, db_ok)
@@ -149,60 +182,63 @@ fn handle_api(path: string, body: string, role: string, user: string, db: SqlDB,
         }
         let mut alert = "err"
         if str_eq(status, "up") { alert = "ok" }
-        return "<div class=\"alert " + alert + "\">Gateway <code>" + name + "</code> OPTIONS → <strong>" + status + "</strong> (" + detail + ")</div>" + f_gateways(db, db_ok)
+        return "<div class=\"alert " + alert + "\">Gateway <code>" + html_esc(name) + "</code> OPTIONS → <strong>" + html_esc(status) + "</strong> (" + html_esc(detail) + ")</div>" + f_gateways(db, db_ok)
     }
     if str_eq(path, "/admin/api/routes") {
         if check_role("operator", role) == 0 { return "FORBIDDEN" }
-        let _ = sql_exec_str4(db, "INSERT INTO routes (prefix, gateway_id, priority, cost_per_min) SELECT $1, id, $3, $4 FROM gateways WHERE name = $2", form_val(body, "prefix"), form_val(body, "gateway"), form_val(body, "priority"), form_val(body, "cost"))
+        let _ = sql_exec_str4(db, "INSERT INTO routes (prefix, gateway_id, priority, cost_per_min) SELECT $1, id, $3, $4 FROM gateways WHERE name = $2", form_get(fields, "prefix"), form_get(fields, "gateway"), form_get(fields, "priority"), form_get(fields, "cost"))
         return f_routing(db, db_ok)
     }
     if str_eq(path, "/admin/api/routing") {
         if check_role("operator", role) == 0 { return "FORBIDDEN" }
-        let _ = sql_exec_str4(db, "INSERT INTO routing_rules (match_prefix, match_caller, match_src_ip, action) VALUES ($1, $2, $3, $4)", form_val(body, "prefix"), form_val(body, "caller"), form_val(body, "src_ip"), form_val(body, "action"))
+        let _ = sql_exec_str4(db, "INSERT INTO routing_rules (match_prefix, match_caller, match_src_ip, action) VALUES ($1, $2, $3, $4)", form_get(fields, "prefix"), form_get(fields, "caller"), form_get(fields, "src_ip"), form_get(fields, "action"))
+        // Use this connection's insert id. SELECT MAX(id) could update a
+        // different administrator's rule during concurrent requests.
+        let rule_id = string(sql_last_insert_id(db))
         // Update optional fields that sql_exec_str4 can't handle (only 4 params)
-        let ani_g = form_val(body, "ani_group")
+        let ani_g = form_get(fields, "ani_group")
         if len(ani_g) > 0 {
-            let _ = sql_exec_str4(db, "UPDATE routing_rules SET match_ani_group = $1 WHERE id = (SELECT MAX(id) FROM routing_rules)", ani_g, "", "", "")
+            let _ = sql_exec_str4(db, "UPDATE routing_rules SET match_ani_group = $1 WHERE id = $2", ani_g, rule_id, "", "")
         }
-        let desc = form_val(body, "description")
+        let desc = form_get(fields, "description")
         if len(desc) > 0 {
-            let _ = sql_exec_str4(db, "UPDATE routing_rules SET description = $1 WHERE id = (SELECT MAX(id) FROM routing_rules)", desc, "", "", "")
+            let _ = sql_exec_str4(db, "UPDATE routing_rules SET description = $1 WHERE id = $2", desc, rule_id, "", "")
         }
-        let ts = form_val(body, "time_start")
+        let ts = form_get(fields, "time_start")
         if len(ts) > 0 {
-            let _ = sql_exec_str4(db, "UPDATE routing_rules SET match_time_start = $1, match_time_end = $2 WHERE id = (SELECT MAX(id) FROM routing_rules)", ts, form_val(body, "time_end"), "", "")
+            let _ = sql_exec_str4(db, "UPDATE routing_rules SET match_time_start = $1, match_time_end = $2 WHERE id = $3", ts, form_get(fields, "time_end"), rule_id, "")
         }
-        let dy = form_val(body, "day")
+        let dy = form_get(fields, "day")
         if len(dy) > 0 {
-            let _ = sql_exec_str4(db, "UPDATE routing_rules SET match_day = $1 WHERE id = (SELECT MAX(id) FROM routing_rules)", dy, "", "", "")
+            let _ = sql_exec_str4(db, "UPDATE routing_rules SET match_day = $1 WHERE id = $2", dy, rule_id, "", "")
         }
-        let pri = form_val(body, "priority")
+        let pri = form_get(fields, "priority")
         if len(pri) > 0 {
-            let _ = sql_exec_str4(db, "UPDATE routing_rules SET priority = $1 WHERE id = (SELECT MAX(id) FROM routing_rules)", pri, "", "", "")
+            let _ = sql_exec_str4(db, "UPDATE routing_rules SET priority = $1 WHERE id = $2", pri, rule_id, "", "")
         }
         return f_routing(db, db_ok)
     }
     if str_eq(path, "/admin/api/dispatch") {
         if check_role("admin", role) == 0 { return "FORBIDDEN" }
-        let _ = sql_exec_str4(db, "INSERT INTO dispatch_sets (name, algorithm) VALUES ($1, $2)", form_val(body, "name"), form_val(body, "algorithm"), "", "")
+        let _ = sql_exec_str4(db, "INSERT INTO dispatch_sets (name, algorithm) VALUES ($1, $2)", form_get(fields, "name"), form_get(fields, "algorithm"), "", "")
         return f_dispatch(db, db_ok)
     }
     if str_eq(path, "/admin/api/dispatch_member") {
         if check_role("admin", role) == 0 { return "FORBIDDEN" }
-        let _ = sql_exec_str4(db, "INSERT INTO dispatch_members (set_id, gateway_id, priority, weight) SELECT ds.id, g.id, $3, $4 FROM dispatch_sets ds, gateways g WHERE ds.name = $1 AND g.name = $2", form_val(body, "set_name"), form_val(body, "gateway"), form_val(body, "priority"), form_val(body, "weight"))
+        let _ = sql_exec_str4(db, "INSERT INTO dispatch_members (set_id, gateway_id, priority, weight) SELECT ds.id, g.id, $3, $4 FROM dispatch_sets ds, gateways g WHERE ds.name = $1 AND g.name = $2", form_get(fields, "set_name"), form_get(fields, "gateway"), form_get(fields, "priority"), form_get(fields, "weight"))
         return f_dispatch(db, db_ok)
     }
     if str_eq(path, "/admin/api/ani_group") {
         if check_role("operator", role) == 0 { return "FORBIDDEN" }
-        let _ = sql_exec_str4(db, "INSERT INTO ani_groups (name, description) VALUES ($1, $2)", form_val(body, "name"), form_val(body, "description"), "", "")
+        let _ = sql_exec_str4(db, "INSERT INTO ani_groups (name, description) VALUES ($1, $2)", form_get(fields, "name"), form_get(fields, "description"), "", "")
         return f_ani(db, db_ok)
     }
     if str_eq(path, "/admin/api/ani_quick_route") {
         if check_role("operator", role) == 0 { return "FORBIDDEN" }
-        let ag = form_val(body, "ani_group")
-        let ingress = form_val(body, "ingress")
-        let egress = form_val(body, "egress")
-        let direct = form_val(body, "direct_carrier")
+        let ag = form_get(fields, "ani_group")
+        let ingress = form_get(fields, "ingress")
+        let egress = form_get(fields, "egress")
+        let direct = form_get(fields, "direct_carrier")
 
         // Build action string
         let mut action = ""
@@ -213,23 +249,25 @@ fn handle_api(path: string, body: string, role: string, user: string, db: SqlDB,
             action = "route:" + direct
             desc = ag + " -> " + direct + " (carrier direct)"
         } else {
-        // Ingress PBX + optional egress carrier
-        if len(ingress) > 0 {
-            if len(egress) > 0 {
-                action = "dispatch:" + ingress + "|egress:" + egress
-                desc = ag + " -> " + ingress + " -> " + egress
+            // Ingress PBX + optional egress carrier
+            if len(ingress) > 0 {
+                if len(egress) > 0 {
+                    action = "dispatch:" + ingress + "|egress:" + egress
+                    desc = ag + " -> " + ingress + " -> " + egress
+                } else {
+                    action = "dispatch:" + ingress
+                    desc = ag + " -> " + ingress
+                }
             } else {
-                action = "dispatch:" + ingress
-                desc = ag + " -> " + ingress
+                // Egress carrier group only
+                if len(egress) > 0 {
+                    action = "dispatch:" + egress
+                    desc = ag + " -> " + egress + " (carrier group)"
+                } else {
+                    return f_ani(db, db_ok)
+                }
             }
-        } else {
-        // Egress carrier group only
-        if len(egress) > 0 {
-            action = "dispatch:" + egress
-            desc = ag + " -> " + egress + " (carrier group)"
-        } else {
-            return f_ani(db, db_ok)
-        }}}
+        }
 
         // Delete existing route for this ANI group, then insert new
         let _ = sql_exec_str4(db, "DELETE FROM routing_rules WHERE match_ani_group = $1", ag, "", "", "")
@@ -238,51 +276,51 @@ fn handle_api(path: string, body: string, role: string, user: string, db: SqlDB,
     }
     if str_eq(path, "/admin/api/ani_group_update") {
         if check_role("operator", role) == 0 { return "FORBIDDEN" }
-        let _ = sql_exec_str4(db, "UPDATE ani_groups SET name = $2, description = $3 WHERE id = $1", form_val(body, "id"), form_val(body, "name"), form_val(body, "description"), "")
+        let _ = sql_exec_str4(db, "UPDATE ani_groups SET name = $2, description = $3 WHERE id = $1", form_get(fields, "id"), form_get(fields, "name"), form_get(fields, "description"), "")
         return f_ani(db, db_ok)
     }
     if str_eq(path, "/admin/api/ani_range") {
         if check_role("operator", role) == 0 { return "FORBIDDEN" }
-        let _ = sql_exec_str4(db, "INSERT INTO ani_ranges (group_id, range_start, range_end) SELECT id, $2, $3 FROM ani_groups WHERE name = $1", form_val(body, "group"), form_val(body, "range_start"), form_val(body, "range_end"), "")
+        let _ = sql_exec_str4(db, "INSERT INTO ani_ranges (group_id, range_start, range_end) SELECT id, $2, $3 FROM ani_groups WHERE name = $1", form_get(fields, "group"), form_get(fields, "range_start"), form_get(fields, "range_end"), "")
         return f_ani(db, db_ok)
     }
     if str_eq(path, "/admin/api/dids") {
         if check_role("operator", role) == 0 { return "FORBIDDEN" }
-        let _ = sql_exec_str4(db, "INSERT INTO dids (number, destination_user) VALUES ($1, $2)", form_val(body, "number"), form_val(body, "destination"), "", "")
+        let _ = sql_exec_str4(db, "INSERT INTO dids (number, destination_user) VALUES ($1, $2)", form_get(fields, "number"), form_get(fields, "destination"), "", "")
         return f_dids(db, db_ok)
     }
     if str_eq(path, "/admin/api/dialplan") {
         if check_role("operator", role) == 0 { return "FORBIDDEN" }
-        let _ = sql_exec_str4(db, "INSERT INTO dialplan (match_prefix, callee_action, caller_action, direction) VALUES ($1, $2, $3, $4)", form_val(body, "prefix"), form_val(body, "callee_action"), form_val(body, "caller_action"), form_val(body, "direction"))
+        let _ = sql_exec_str4(db, "INSERT INTO dialplan (match_prefix, callee_action, caller_action, direction) VALUES ($1, $2, $3, $4)", form_get(fields, "prefix"), form_get(fields, "callee_action"), form_get(fields, "caller_action"), form_get(fields, "direction"))
         return f_dialplan(db, db_ok)
     }
     if str_eq(path, "/admin/api/headers") {
         if check_role("operator", role) == 0 { return "FORBIDDEN" }
-        let _ = sql_exec_str4(db, "INSERT INTO header_rules (match_method, match_direction, action, header_name) VALUES ($1, $2, $3, $4)", form_val(body, "method"), form_val(body, "direction"), form_val(body, "action"), form_val(body, "header_name"))
+        let _ = sql_exec_str4(db, "INSERT INTO header_rules (match_method, match_direction, action, header_name) VALUES ($1, $2, $3, $4)", form_get(fields, "method"), form_get(fields, "direction"), form_get(fields, "action"), form_get(fields, "header_name"))
         return f_headers(db, db_ok)
     }
     // acl merged into access_control
     if str_eq(path, "/admin/api/ban") {
         if check_role("admin", role) == 0 { return "FORBIDDEN" }
-        let perm = form_val(body, "permanent")
-        let _ = sql_exec_str4(db, "INSERT INTO security_bans (source_ip, reason, permanent) VALUES ($1, $2, $3) ON CONFLICT (source_ip) DO UPDATE SET reason = $2, permanent = $3::boolean", form_val(body, "ip"), form_val(body, "reason"), perm, "")
+        let perm = form_get(fields, "permanent")
+        let _ = sql_exec_str4(db, "INSERT INTO security_bans (source_ip, reason, permanent) VALUES ($1, $2, $3) ON CONFLICT (source_ip) DO UPDATE SET reason = $2, permanent = $3::boolean", form_get(fields, "ip"), form_get(fields, "reason"), perm, "")
         return f_security(db, db_ok)
     }
     if str_eq(path, "/admin/api/config") {
         if check_role("admin", role) == 0 { return "FORBIDDEN" }
-        let _ = sql_exec_str4(db, "INSERT INTO config (key, value, description) VALUES ($1, $2, $3) ON CONFLICT (key) DO UPDATE SET value = $2, description = $3", form_val(body, "key"), form_val(body, "value"), form_val(body, "description"), "")
+        let _ = sql_exec_str4(db, "INSERT INTO config (key, value, description) VALUES ($1, $2, $3) ON CONFLICT (key) DO UPDATE SET value = $2, description = $3", form_get(fields, "key"), form_get(fields, "value"), form_get(fields, "description"), "")
         return f_config(db, db_ok)
     }
     if str_eq(path, "/admin/api/admins") {
         if check_role("super_admin", role) == 0 { return "FORBIDDEN" }
-        let _ = sql_exec_str4(db, "INSERT INTO admin_users (username, password_hash, role) VALUES ($1, $2, $3)", form_val(body, "username"), sha256(form_val(body, "password")), form_val(body, "role"), "")
+        let _ = sql_exec_str4(db, "INSERT INTO admin_users (username, password_hash, role) VALUES ($1, $2, $3)", form_get(fields, "username"), sha256(form_get(fields, "password")), form_get(fields, "role"), "")
         return f_admins(db, db_ok)
     }
     // Clear stuck live dialog(s) via metrics API on the SIP host
     if str_eq(path, "/admin/api/dialog_clear") {
         if check_role("operator", role) == 0 { return "FORBIDDEN" }
-        let all = form_val(body, "all")
-        let id = form_val(body, "id")
+        let all = form_get(fields, "all")
+        let id = form_get(fields, "id")
         let mut pathq = "/dialogs/clear?"
         if str_eq(all, "1") {
             pathq = pathq + "all=1"
@@ -296,9 +334,9 @@ fn handle_api(path: string, body: string, role: string, user: string, db: SqlDB,
     if str_eq(path, "/admin/api/password") {
         if db_ok == 0 { return "<div class=\"alert err\">Database unavailable</div>" + f_account() }
         if len(user) == 0 { return "FORBIDDEN" }
-        let oldp = form_val(body, "old_password")
-        let newp = form_val(body, "new_password")
-        let conf = form_val(body, "confirm_password")
+        let oldp = form_get(fields, "old_password")
+        let newp = form_get(fields, "new_password")
+        let conf = form_get(fields, "confirm_password")
         if len(newp) < 12 {
             return "<div class=\"alert err\">New password must be at least 12 characters.</div>" + f_account()
         }

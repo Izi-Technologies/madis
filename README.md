@@ -12,7 +12,7 @@ It's still a work in progress. Some parts are more polished than others.
 
 - Proxies and registers SIP endpoints (RFC 3261)
 - Digest auth (MD5, SHA-256) with nonce expiry
-- STIR/SHAKEN caller ID signing (ES256)
+- STIR/SHAKEN scaffolding (the current HMAC placeholder is not production ES256)
 - NAT handling via `rport`/`received` (RFC 3581)
 - RTPEngine integration for media relay
 - UDP, TCP, TLS, and WebSocket transports
@@ -137,6 +137,37 @@ cache and a single aggregate count query so multiple operators do not multiply
 database load; the first paint is not blocked by SIP or metrics probes. If the
 standalone admin service owns port
 8080, set `SIP_ADMIN_PORT=0` for the SIP worker.
+
+The control plane parses each form body once per request and uses bound SQL
+parameters for request and database-derived values. The generic toggle/delete
+actions accept only the fixed table/column pairs rendered by the UI; arbitrary
+SQL identifiers are rejected. Routing-rule updates use the connection-local
+insert id, so concurrent administrators cannot overwrite one another's new
+rule.
+
+The admin listener rejects oversized or truncated HTTP bodies, bounds sessions
+and login-failure state, caps session lifetime at seven days, and escapes
+database/configuration values at every HTML/JavaScript output boundary. Keep it
+loopback-bound and put HTTPS/WSS termination in a reverse proxy. Browser POSTs
+also require a matching `Origin`/`Host` pair; non-browser clients without an
+Origin remain supported.
+
+## Hardening and compliance scope
+
+The supported entry point is the modular `main.mko`; `sipproxy_full.mko` is a
+legacy reference archive and is not the deployment target. The proxy bounds
+attacker-derived caches (auth, ACL, bans, DNS, routing, rate limiting, dialog,
+RTP, and transaction state), validates explicit SIP target ports, fails closed
+for database-backed IP trust when the database is unavailable, and uses
+parameterized SQL for values. Transaction rings are sized for higher
+concurrency and swept incrementally to keep timer work bounded.
+
+The RFC gate exercises the implemented RFC 3261/3263/3581/6455 behavior,
+malformed input, transport matrices, WSS outbound signaling, auth cases, and
+fuzz traffic. Passing those checks is evidence for the tested behavior; it is
+not a formal claim of universal or mathematically provable 100% RFC
+compliance. Review the deployment-specific TLS, DNS, media, and interop
+requirements before production use.
 
 After installation:
 

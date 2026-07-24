@@ -6,10 +6,9 @@ fn db_check_acl(db: SqlDB, db_ok: int, src_ip: string, user: string, cache: CMap
         if str_eq(cmap_get(cache, key), "0") { return 0 }
         return 1
     }
-    if db_ok == 0 { cmap_set(cache, key, "1"); return 1 }
+    if db_ok == 0 { let _ = bounded_cache_set(cache, "acl_seq", "acl_ring|", key, "1", 16384); return 1 }
     let r = sql_query_str(db, "SELECT action FROM acl WHERE (source_ip = $1 OR source_ip = '*') ORDER BY priority DESC LIMIT 1", src_ip)
-    if str_eq(r, "deny") { cmap_set(cache, key, "0"); return 0 }
-    cmap_set(cache, key, "1")
+    if str_eq(r, "deny") { let _ = bounded_cache_set(cache, "acl_seq", "acl_ring|", key, "0", 16384); return 0 }
+    let _ = bounded_cache_set(cache, "acl_seq", "acl_ring|", key, "1", 16384)
     return 1
 }
-

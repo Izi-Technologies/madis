@@ -1,5 +1,14 @@
 // Probe local sipproxy with SIP OPTIONS. Returns "up", "down", or "error".
 // Via must include the ephemeral source port so the 200 OK is routed back to us.
+fn js_esc(s: string) -> string {
+    let mut out = s
+    out = str_replace(out, "\\", "\\\\")
+    out = str_replace(out, "'", "\\'")
+    out = str_replace(out, "\r", "\\r")
+    out = str_replace(out, "\n", "\\n")
+    return out
+}
+
 fn sip_options_probe() -> string {
     let fd = udp_bind_addr("127.0.0.1", 0)
     if fd < 0 { return "down" }
@@ -33,6 +42,7 @@ fn fetch_metrics_path(path: string) -> string {
         Ok(v) => { port = v }
         Err(_) => { port = 9090 }
     }
+    if port < 1 || port > 65535 { return "" }
     let c = tcp_connect(host, port)
     if c < 0 { return "" }
     let _ = tcp_set_timeout(c, 800)
@@ -356,8 +366,8 @@ fn f_dashboard(db: SqlDB, ok: int) -> string {
 
     let hero = "<div class=\"card\" id=\"dash-hero\" style=\"padding:26px;background:linear-gradient(135deg,rgba(15,23,42,.9),rgba(8,47,73,.55));border-color:rgba(34,211,238,.2);box-shadow:0 0 0 1px rgba(34,211,238,.08),0 20px 60px " + sip_glow + "\"><div style=\"display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap\"><div><div style=\"font-size:11px;text-transform:uppercase;letter-spacing:.14em;color:var(--faint);margin-bottom:8px\">Edge status</div><div style=\"display:flex;align-items:center;gap:10px;margin-bottom:8px\">" + sip_badge + "<span style=\"font-size:20px;font-weight:700;letter-spacing:-.02em\">Mako SIP Proxy</span></div><p id=\"dash-sip-note\" style=\"color:var(--muted);font-size:13.5px;max-width:520px\">" + sip_note + "</p></div><div style=\"display:flex;gap:8px;flex-wrap:wrap\"><a class=\"btn sm\" hx-get=\"/admin/dialogs\" hx-target=\"#c\">Active dialogs</a><a class=\"btn sm ghost\" hx-get=\"/admin/transactions\" hx-target=\"#c\">SIP trace</a></div></div>"
         + "<div style=\"display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-top:20px\">"
-        + "<div style=\"padding:12px 14px;border-radius:12px;background:rgba(2,6,23,.4);border:1px solid var(--border)\"><div style=\"font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:.08em\">Realm</div><div style=\"margin-top:4px\"><code>" + realm + "</code></div></div>"
-        + "<div style=\"padding:12px 14px;border-radius:12px;background:rgba(2,6,23,.4);border:1px solid var(--border)\"><div style=\"font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:.08em\">Public IP</div><div style=\"margin-top:4px\"><code>" + pubip + "</code></div></div>"
+        + "<div style=\"padding:12px 14px;border-radius:12px;background:rgba(2,6,23,.4);border:1px solid var(--border)\"><div style=\"font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:.08em\">Realm</div><div style=\"margin-top:4px\"><code>" + html_esc(realm) + "</code></div></div>"
+        + "<div style=\"padding:12px 14px;border-radius:12px;background:rgba(2,6,23,.4);border:1px solid var(--border)\"><div style=\"font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:.08em\">Public IP</div><div style=\"margin-top:4px\"><code>" + html_esc(pubip) + "</code></div></div>"
         + "<div style=\"padding:12px 14px;border-radius:12px;background:rgba(2,6,23,.4);border:1px solid var(--border)\"><div style=\"font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:.08em\">UDP / TCP</div><div style=\"margin-top:4px\"><code>:5060</code></div></div>"
         + "<div style=\"padding:12px 14px;border-radius:12px;background:rgba(2,6,23,.4);border:1px solid var(--border)\"><div style=\"font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:.08em\">TLS / WSS</div><div style=\"margin-top:4px\"><code>:5061 · :8443</code></div></div>"
         + "</div></div>"
@@ -365,8 +375,8 @@ fn f_dashboard(db: SqlDB, ok: int) -> string {
     let client_card = "<div class=\"card\"><h2>Client / softphone settings</h2>"
         + "<p style=\"color:var(--muted);font-size:13px;margin-bottom:12px\">Point any SIP UA (Linphone, MicroSIP, Zoiper, etc.) at this edge. No built-in softphone — external clients only.</p>"
         + "<table><tr><th>Setting</th><th>Value</th></tr>"
-        + "<tr><td>Domain / realm</td><td><code>" + realm + "</code></td></tr>"
-        + "<tr><td>Proxy host</td><td><code>proxy.mako-lang.com</code> or <code>" + pubip + "</code></td></tr>"
+        + "<tr><td>Domain / realm</td><td><code>" + html_esc(realm) + "</code></td></tr>"
+        + "<tr><td>Proxy host</td><td><code>proxy.mako-lang.com</code> or <code>" + html_esc(pubip) + "</code></td></tr>"
         + "<tr><td>UDP / TCP</td><td><code>5060</code></td></tr>"
         + "<tr><td>TLS (SIPS)</td><td><code>5061</code></td></tr>"
         + "<tr><td>WSS (behind leba TLS)</td><td><code>8443</code> internal · public WSS via HTTPS reverse proxy</td></tr>"
@@ -384,8 +394,8 @@ fn f_dashboard(db: SqlDB, ok: int) -> string {
     while fi < len(fails) {
         let fp = str_split(fails[fi], "|")
         if len(fp) >= 5 {
-            fail_rows = fail_rows + "<tr><td style=\"font-size:12px;color:var(--muted)\">" + fp[4] + "</td><td><strong>" + fp[1] + "</strong> → " + fp[2] + "</td><td><span class=\"badge r\">" + fp[3] + "</span></td>"
-                + "<td><a class=\"btn sm\" hx-get=\"/admin/transactions?cid=" + fp[0] + "\" hx-target=\"#c\" hx-push-url=\"true\">Trace</a></td></tr>"
+            fail_rows = fail_rows + "<tr><td style=\"font-size:12px;color:var(--muted)\">" + html_esc(fp[4]) + "</td><td><strong>" + html_esc(fp[1]) + "</strong> → " + html_esc(fp[2]) + "</td><td><span class=\"badge r\">" + html_esc(fp[3]) + "</span></td>"
+                + "<td><a class=\"btn sm\" hx-get=\"/admin/transactions?cid=" + html_esc(fp[0]) + "\" hx-target=\"#c\" hx-push-url=\"true\">Trace</a></td></tr>"
         }
         fi = fi + 1
     }
@@ -397,7 +407,7 @@ fn f_dashboard(db: SqlDB, ok: int) -> string {
     while ai < len(auths) {
         let ap = str_split(auths[ai], "|")
         if len(ap) >= 3 {
-            auth_rows = auth_rows + "<tr><td style=\"font-size:12px;color:var(--muted)\">" + ap[0] + "</td><td><code>" + ap[1] + "</code></td><td>" + ap[2] + "</td><td><span class=\"badge y\">" + ap[3] + "</span></td></tr>"
+            auth_rows = auth_rows + "<tr><td style=\"font-size:12px;color:var(--muted)\">" + html_esc(ap[0]) + "</td><td><code>" + html_esc(ap[1]) + "</code></td><td>" + html_esc(ap[2]) + "</td><td><span class=\"badge y\">" + html_esc(ap[3]) + "</span></td></tr>"
         }
         ai = ai + 1
     }
@@ -412,7 +422,7 @@ fn f_dashboard(db: SqlDB, ok: int) -> string {
             let mut hb = "y"
             if str_eq(gp[2], "up") { hb = "g" }
             if str_eq(gp[2], "down") { hb = "r" }
-            gw_rows = gw_rows + "<tr><td><strong>" + gp[0] + "</strong></td><td style=\"font-size:12px\"><code>" + gp[1] + "</code></td><td><span class=\"badge " + hb + "\">" + gp[2] + "</span></td><td style=\"font-size:12px;color:var(--muted)\">" + gp[3] + " @ " + gp[4] + "</td></tr>"
+            gw_rows = gw_rows + "<tr><td><strong>" + html_esc(gp[0]) + "</strong></td><td style=\"font-size:12px\"><code>" + html_esc(gp[1]) + "</code></td><td><span class=\"badge " + hb + "\">" + html_esc(gp[2]) + "</span></td><td style=\"font-size:12px;color:var(--muted)\">" + html_esc(gp[3]) + " @ " + html_esc(gp[4]) + "</td></tr>"
         }
         gi = gi + 1
     }
@@ -429,7 +439,7 @@ fn f_dashboard(db: SqlDB, ok: int) -> string {
 
     return "<div data-ws-live=\"/admin/ws/live\">"
         + "<div class=\"topbar\"><div><h1>Command center</h1><div style=\"color:var(--faint);font-size:12px;margin-top:4px\">Real-time control plane · WebSocket</div></div>"
-        + "<div class=\"user\"><span id=\"dash-ws-badge\" class=\"badge y\">CONNECTING</span> <span class=\"badge b\">prod</span> softphone domain <code>" + realm + "</code></div></div>"
+        + "<div class=\"user\"><span id=\"dash-ws-badge\" class=\"badge y\">CONNECTING</span> <span class=\"badge b\">prod</span> softphone domain <code>" + html_esc(realm) + "</code></div></div>"
         + hero + live_card + ops + client_card + tips_card
         + "<div class=\"stats\">"
         + "<div class=\"stat-card blue\"><div class=\"label\">Online now</div><div class=\"value\" data-live=\"online\">" + r + "</div></div>"
@@ -462,9 +472,11 @@ fn f_dashboard_cached(db: SqlDB, ok: int, cache: CMap) -> string {
 }
 
 fn f_metrics(db: SqlDB, ok: int) -> string {
-    let live = fetch_metrics_json()
-    let host = env_get_or("SIP_METRICS_HOST", "127.0.0.1")
-    let port = env_get_or("SIP_METRICS_PORT", "9090")
+    let mut live = fetch_metrics_json()
+    let mut host = env_get_or("SIP_METRICS_HOST", "127.0.0.1")
+    let mut port = env_get_or("SIP_METRICS_PORT", "9090")
+    host = html_esc(host)
+    port = html_esc(port)
     if len(live) < 2 {
         return "<div class=\"topbar\"><h1>Live Metrics</h1></div><div class=\"card\"><p style=\"color:var(--muted)\">Could not reach sipproxy metrics at <code>" + host + ":" + port + "</code>. Ensure mako-sip is running and <code>SIP_METRICS_PORT</code> matches.</p></div>"
     }
@@ -511,7 +523,8 @@ fn f_metrics(db: SqlDB, ok: int) -> string {
         rtp_badge = "g"
         rtp_label = "on → " + rtp_host + ":" + rtp_port
     }
-    let rtp_card = "<div class=\"card\" style=\"margin-bottom:14px\"><div style=\"display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px\"><div><strong>Media path</strong><div style=\"color:var(--muted);font-size:13px;margin-top:4px\">rtpengine <span class=\"badge " + rtp_badge + "\">" + rtp_label + "</span> · offer/answer ok <strong>" + rtpok + "</strong> · fail <strong>" + rtpf + "</strong></div></div><div style=\"font-size:12px;color:var(--muted)\">RTP UDP ports 30000–40000 · toggle via Config <code>rtpengine_enabled</code></div></div></div>"
+    live = html_esc(live)
+    let rtp_card = "<div class=\"card\" style=\"margin-bottom:14px\"><div style=\"display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px\"><div><strong>Media path</strong><div style=\"color:var(--muted);font-size:13px;margin-top:4px\">rtpengine <span class=\"badge " + rtp_badge + "\">" + html_esc(rtp_label) + "</span> · offer/answer ok <strong>" + rtpok + "</strong> · fail <strong>" + rtpf + "</strong></div></div><div style=\"font-size:12px;color:var(--muted)\">RTP UDP ports 30000–40000 · toggle via Config <code>rtpengine_enabled</code></div></div></div>"
     return "<div hx-get=\"/admin/metrics\" hx-trigger=\"every 5s\" hx-swap=\"outerHTML\"><div class=\"topbar\"><h1>Live Metrics</h1><div class=\"user\">Auto-refresh 5s · " + host + ":" + port + " · counters since process start (not concurrent users)</div></div>" + rtp_card + "<div class=\"stats\"><div class=\"stat-card blue\"><div class=\"label\">Packets</div><div class=\"value\">" + pkts + "</div></div><div class=\"stat-card green\"><div class=\"label\">REGISTER 200s</div><div class=\"value\">" + regok + "</div></div><div class=\"stat-card purple\"><div class=\"label\">INVITE</div><div class=\"value\">" + inv + "</div></div><div class=\"stat-card green\"><div class=\"label\">Local calls</div><div class=\"value\">" + local + "</div></div><div class=\"stat-card orange\"><div class=\"label\">Completed</div><div class=\"value\">" + done + "</div></div><div class=\"stat-card pink\"><div class=\"label\">Active</div><div class=\"value\">" + active + "</div></div><div class=\"stat-card blue\"><div class=\"label\">Avg duration</div><div class=\"value\">" + davg + "s</div></div><div class=\"stat-card orange\"><div class=\"label\">Max duration</div><div class=\"value\">" + dmax + "s</div></div><div class=\"stat-card green\"><div class=\"label\">RTP ok</div><div class=\"value\">" + rtpok + "</div></div><div class=\"stat-card orange\"><div class=\"label\">RTP fail</div><div class=\"value\">" + rtpf + "</div></div><div class=\"stat-card blue\"><div class=\"label\">INFO (DTMF)</div><div class=\"value\">" + infoc + "</div></div><div class=\"stat-card purple\"><div class=\"label\">UPDATE</div><div class=\"value\">" + upd + "</div></div><div class=\"stat-card green\"><div class=\"label\">PRACK</div><div class=\"value\">" + prk + "</div></div><div class=\"stat-card blue\"><div class=\"label\">MESSAGE</div><div class=\"value\">" + msgc + "</div></div><div class=\"stat-card purple\"><div class=\"label\">REFER</div><div class=\"value\">" + refc + "</div></div><div class=\"stat-card orange\"><div class=\"label\">Offline</div><div class=\"value\">" + offline + "</div></div><div class=\"stat-card pink\"><div class=\"label\">Auth fail</div><div class=\"value\">" + authf + "</div></div><div class=\"stat-card blue\"><div class=\"label\">BYE</div><div class=\"value\">" + bye + "</div></div><div class=\"stat-card purple\"><div class=\"label\">OPTIONS</div><div class=\"value\">" + opts + "</div></div><div class=\"stat-card blue\"><div class=\"label\">Responses</div><div class=\"value\">" + resp + "</div></div><div class=\"stat-card orange\"><div class=\"label\">Cancelled</div><div class=\"value\">" + cancel + "</div></div><div class=\"stat-card pink\"><div class=\"label\">Not found</div><div class=\"value\">" + nf + "</div></div></div><div class=\"card\"><h2>Prometheus scrape</h2><p style=\"color:var(--muted);font-size:13px;margin-bottom:8px\">Loopback on the proxy host, or use the auth-proxied admin path below from outside.</p><pre style=\"background:rgba(2,6,23,.45);padding:12px;border-radius:8px;font-size:12px;overflow:auto\"># on the SIP host
 curl http://" + host + ":" + port + "/metrics
 
@@ -525,7 +538,7 @@ fn f_dialogs(db: SqlDB, ok: int) -> string {
     let host = env_get_or("SIP_METRICS_HOST", "127.0.0.1")
     let port = env_get_or("SIP_METRICS_PORT", "9090")
     if len(raw) < 2 {
-        return "<div class=\"topbar\"><h1>Active Dialogs</h1></div><div class=\"card\"><p style=\"color:var(--muted)\">No dialog data — is mako-sip up on " + host + ":" + port + "?</p></div>"
+        return "<div class=\"topbar\"><h1>Active Dialogs</h1></div><div class=\"card\"><p style=\"color:var(--muted)\">No dialog data — is mako-sip up on " + html_esc(host) + ":" + html_esc(port) + "?</p></div>"
     }
     let mut rows = ""
     let mut n = 0
@@ -545,7 +558,7 @@ fn f_dialogs(db: SqlDB, ok: int) -> string {
             if str_eq(status, "ANSWERED") { b = "g" }
             if str_eq(status, "RINGING") { b = "y" }
             if str_eq(status, "PROGRESS") { b = "y" }
-            rows = rows + "<tr><td><code style=\"font-size:11px\">" + cid + "</code></td><td><strong>" + caller + "</strong></td><td>" + callee + "</td><td><span class=\"badge " + b + "\">" + status + "</span></td><td>" + age + "s</td><td style=\"font-size:12px;color:var(--muted)\">" + src + "</td><td style=\"font-size:12px;color:var(--muted)\">" + dst + "</td><td><button class=\"btn sm r\" hx-post=\"/admin/api/dialog_clear\" hx-vals='{\"id\":\"" + cid + "\"}' hx-target=\"#c\" hx-confirm=\"Clear this dialog from the live table?\">Clear</button></td></tr>"
+            rows = rows + "<tr><td><code style=\"font-size:11px\">" + html_esc(cid) + "</code></td><td><strong>" + html_esc(caller) + "</strong></td><td>" + html_esc(callee) + "</td><td><span class=\"badge " + b + "\">" + html_esc(status) + "</span></td><td>" + html_esc(age) + "s</td><td style=\"font-size:12px;color:var(--muted)\">" + html_esc(src) + "</td><td style=\"font-size:12px;color:var(--muted)\">" + html_esc(dst) + "</td><td><button class=\"btn sm r\" hx-post=\"/admin/api/dialog_clear\" hx-vals='{\"id\":\"" + html_esc(cid) + "\"}' hx-target=\"#c\" hx-confirm=\"Clear this dialog from the live table?\">Clear</button></td></tr>"
             n = n + 1
         }
         i = i + 1
@@ -712,6 +725,8 @@ fn f_transactions(db: SqlDB, ok: int, qstr: string) -> string {
                     let method = p[3]
                     let mut flow = ""
                     if len(p) >= 5 { flow = p[4] }
+                    let safe_ts = html_esc(ts)
+                    let safe_method = html_esc(method)
                     if nlegs == 0 {
                         first_m = method
                         t0 = ts
@@ -754,13 +769,15 @@ fn f_transactions(db: SqlDB, ok: int, qstr: string) -> string {
                     }
                     if show_chip == 1 {
                         if len(chips) < 420 {
-                            chips = chips + "<span class=\"tx-chip badge " + tx_method_badge(method) + "\">" + method + "</span>"
+                            chips = chips + "<span class=\"tx-chip badge " + tx_method_badge(method) + "\">" + safe_method + "</span>"
                         }
                     }
 
                     let b = tx_method_badge(method)
                     let left = tx_flow_left(flow)
                     let right = tx_flow_right(flow)
+                    let safe_left = html_esc(left)
+                    let safe_right = html_esc(right)
                     let mut arrow = "→"
                     let mut dir_lbl = "out"
                     let mut dir_cls = "out"
@@ -772,12 +789,12 @@ fn f_transactions(db: SqlDB, ok: int, qstr: string) -> string {
                     legs_rows = legs_rows
                         + "<tr class=\"tx-row " + dir_cls + "\">"
                         + "<td class=\"tx-n\">" + string(step) + "</td>"
-                        + "<td class=\"tx-t\">" + ts + "</td>"
+                        + "<td class=\"tx-t\">" + safe_ts + "</td>"
                         + "<td class=\"tx-dir\"><span class=\"tx-dir-pill " + dir_cls + "\">" + dir_lbl + " " + arrow + "</span></td>"
-                        + "<td class=\"tx-m\"><span class=\"badge " + b + "\">" + method + "</span></td>"
-                        + "<td class=\"tx-from\"><code>" + left + "</code></td>"
+                        + "<td class=\"tx-m\"><span class=\"badge " + b + "\">" + safe_method + "</span></td>"
+                        + "<td class=\"tx-from\"><code>" + safe_left + "</code></td>"
                         + "<td class=\"tx-arr\">→</td>"
-                        + "<td class=\"tx-to\"><code>" + right + "</code></td>"
+                        + "<td class=\"tx-to\"><code>" + safe_right + "</code></td>"
                         + "</tr>"
                 }
             }
@@ -829,8 +846,8 @@ fn f_transactions(db: SqlDB, ok: int, qstr: string) -> string {
 
         let mut parties = ""
         if len(caller) > 0 {
-            parties = "<strong>" + caller + "</strong>"
-            if len(callee) > 0 { parties = parties + " <span class=\"tx-to-arrow\">→</span> <strong>" + callee + "</strong>" }
+            parties = "<strong>" + html_esc(caller) + "</strong>"
+            if len(callee) > 0 { parties = parties + " <span class=\"tx-to-arrow\">→</span> <strong>" + html_esc(callee) + "</strong>" }
         } else {
             if str_eq(kind, "Register") {
                 parties = "<span class=\"tx-muted\">Registration</span>"
@@ -873,11 +890,11 @@ fn f_transactions(db: SqlDB, ok: int, qstr: string) -> string {
             + "<span class=\"badge " + oc_b + "\">" + oc_lbl + "</span>"
             + "</div>"
             + "<div class=\"tx-sum-meta\">"
-            + "<span class=\"tx-meta\" title=\"" + cid + "\"><code>" + short_cid + "</code></span>"
+            + "<span class=\"tx-meta\" title=\"" + html_esc(cid) + "\"><code>" + html_esc(short_cid) + "</code></span>"
             + "<span class=\"tx-meta\">" + string(nlegs) + " msgs</span>"
-            + "<span class=\"tx-meta\">" + time_lbl + "</span>"
+            + "<span class=\"tx-meta\">" + html_esc(time_lbl) + "</span>"
         if len(dur_lbl) > 0 {
-            cards = cards + "<span class=\"tx-meta\">" + dur_lbl + "</span>"
+            cards = cards + "<span class=\"tx-meta\">" + html_esc(dur_lbl) + "</span>"
         }
         cards = cards
             + "</div>"
@@ -885,8 +902,8 @@ fn f_transactions(db: SqlDB, ok: int, qstr: string) -> string {
             + "</summary>"
             + "<div class=\"tx-ladder\">"
             + "<div class=\"tx-ladder-bar\">"
-            + "<div><span class=\"tx-muted\">Call-ID</span> <code class=\"tx-full-cid\">" + cid + "</code> "
-            + "<button type=\"button\" class=\"btn sm ghost\" onclick=\"event.preventDefault();event.stopPropagation();copyCid('" + cid + "',this)\">Copy</button></div>"
+            + "<div><span class=\"tx-muted\">Call-ID</span> <code class=\"tx-full-cid\">" + html_esc(cid) + "</code> "
+            + "<button type=\"button\" class=\"btn sm ghost\" onclick=\"event.preventDefault();event.stopPropagation();copyCid('" + js_esc(cid) + "',this)\">Copy</button></div>"
             + "<div class=\"tx-ladder-legend\"><span class=\"tx-dir-pill in\">in ←</span> from network &nbsp; <span class=\"tx-dir-pill out\">out →</span> toward peer</div>"
             + "</div>"
             + "<div class=\"tx-table-wrap\"><table class=\"tx-table\">"
@@ -925,15 +942,15 @@ fn f_transactions(db: SqlDB, ok: int, qstr: string) -> string {
 
     let filters = "<div class=\"card\" style=\"margin-bottom:12px\"><form class=\"form-row\" style=\"margin:0\" "
         + "hx-get=\"/admin/transactions\" hx-target=\"#c\" hx-push-url=\"true\">"
-        + "<div><label>Call-ID</label><input name=\"cid\" value=\"" + filter_cid + "\" placeholder=\"paste Call-ID\"></div>"
+        + "<div><label>Call-ID</label><input name=\"cid\" value=\"" + html_esc(filter_cid) + "\" placeholder=\"paste Call-ID\"></div>"
         + "<div><label>Kind</label><select name=\"kind\">" + kind_opts + "</select></div>"
-        + "<div><label>Search</label><input name=\"q\" value=\"" + filter_q + "\" placeholder=\"user, method…\"></div>"
+        + "<div><label>Search</label><input name=\"q\" value=\"" + html_esc(filter_q) + "\" placeholder=\"user, method…\"></div>"
         + "<div style=\"flex:none\"><label style=\"color:transparent\">.</label><button type=\"submit\">Filter</button></div>"
         + "<div style=\"flex:none\"><label style=\"color:transparent\">.</label>"
         + "<a class=\"btn ghost\" hx-get=\"/admin/transactions\" hx-target=\"#c\" hx-push-url=\"true\">Clear</a></div>"
         + "</form></div>"
 
-    return "<div hx-get=\"" + refresh + "\" hx-trigger=\"every 15s\" hx-swap=\"outerHTML\">"
+    return "<div hx-get=\"" + html_esc(refresh) + "\" hx-trigger=\"every 15s\" hx-swap=\"outerHTML\">"
         + "<div class=\"topbar\"><div><h1>SIP Trace</h1>"
         + "<div style=\"color:var(--faint);font-size:12px;margin-top:4px\">Organized by Call-ID · expand for timed ladder · auto-refresh pauses while a call is open</div></div>"
         + "<div class=\"user\"><span class=\"badge b\">live</span></div></div>"
@@ -990,6 +1007,40 @@ fn tbl_query(db: SqlDB, ok: int, sql: string, max: int) -> []string {
     return rows
 }
 
+// Parameterized sibling for pages whose filters come from the request or
+// from database values. Identifiers stay in static SQL while the value is
+// bound through Mako's SQL facade.
+fn tbl_query_param(db: SqlDB, ok: int, sql: string, param: string, max: int) -> []string {
+    let mut rows = make([]string, 0, max)
+    if ok == 0 { return rows }
+    let mut lim = max
+    if lim < 1 { lim = 1 }
+    if lim > 500 { lim = 500 }
+    let q = sql + " LIMIT " + string(lim)
+    let rh = sql_query_rows_str(db, q, param)
+    if sql_rows_ok(rh) == 1 {
+        let mut n = 0
+        while sql_rows_next(rh) == 1 {
+            let v = sql_rows_str(rh, 0)
+            if len(v) == 0 { break }
+            rows = append(rows, v)
+            n = n + 1
+            if n >= lim { break }
+        }
+        let _ = sql_rows_close(rh)
+        return rows
+    }
+    let _ = sql_rows_close(rh)
+    let mut i = 0
+    while i < max {
+        let v = sql_query_str(db, sql + " LIMIT 1 OFFSET " + string(i), param)
+        if len(v) == 0 { break }
+        rows = append(rows, v)
+        i = i + 1
+    }
+    return rows
+}
+
 fn f_users(db: SqlDB, ok: int) -> string {
     let mut rows = ""
     let data = tbl_query(db, ok, "SELECT username || '|' || COALESCE(domain,'') || '|' || enabled FROM users ORDER BY id", 50)
@@ -1000,7 +1051,7 @@ fn f_users(db: SqlDB, ok: int) -> string {
             let mut b = "g"
             let mut st = "Active"
             if str_eq(p[2], "f") { b = "r"; st = "Disabled" }
-            rows = rows + "<tr><td>" + p[0] + "</td><td>" + p[1] + "</td><td><span class=\"badge " + b + "\">" + st + "</span></td><td><button class=\"btn sm\" hx-post=\"/admin/api/toggle\" hx-vals='{\"table\":\"users\",\"key\":\"username\",\"val\":\"" + p[0] + "\"}' hx-target=\"#c\">Toggle</button> <button class=\"btn sm r\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"users\",\"key\":\"username\",\"val\":\"" + p[0] + "\"}' hx-target=\"#c\" hx-confirm=\"Delete?\">Del</button></td></tr>"
+            rows = rows + "<tr><td>" + html_esc(p[0]) + "</td><td>" + html_esc(p[1]) + "</td><td><span class=\"badge " + b + "\">" + st + "</span></td><td><button class=\"btn sm\" hx-post=\"/admin/api/toggle\" hx-vals='{\"table\":\"users\",\"key\":\"username\",\"val\":\"" + html_esc(p[0]) + "\"}' hx-target=\"#c\">Toggle</button> <button class=\"btn sm r\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"users\",\"key\":\"username\",\"val\":\"" + html_esc(p[0]) + "\"}' hx-target=\"#c\" hx-confirm=\"Delete?\">Del</button></td></tr>"
         }
         i = i + 1
     }
@@ -1026,8 +1077,8 @@ fn f_users(db: SqlDB, ok: int) -> string {
     if len(pubhost) == 0 { pubhost = pubip }
     if len(pubhost) == 0 { pubhost = "YOUR_SERVER_HOST" }
     if len(pubip) == 0 { pubip = "YOUR_SERVER_IP" }
-    let help = "<div class=\"card\"><h2>Softphone setup</h2><p style=\"color:var(--muted);font-size:13px;margin-bottom:10px\">Passwords are stored as SIP digest HA1 (<code>MD5(user:realm:password)</code>), never in plain text. Realm defaults to the public FQDN when set. Re-save a user after realm changes so HA1 is recomputed.</p><table><tr><th>Username</th><td>SIP user from the table below</td></tr><tr><th>Password</th><td>the password you entered when adding the user</td></tr><tr><th>Domain / Realm</th><td><code>" + realm + "</code></td></tr><tr><th>Registrar / Proxy</th><td><code>" + pubhost + "</code> (or <code>" + pubip + "</code>)</td></tr><tr><th>Port</th><td><code>5060</code> (UDP/TCP), <code>5061</code> (TLS), <code>8443</code> (WSS)</td></tr><tr><th>Auth username</th><td>same as Username</td></tr></table></div>"
-    return help + "<div class=\"card\"><h2>SIP Users</h2><form hx-post=\"/admin/api/users\" hx-target=\"#c\"><div class=\"form-row\"><input name=\"username\" placeholder=\"Username\" required><input name=\"password\" type=\"password\" placeholder=\"Password (min 6)\" required minlength=\"6\"><input name=\"domain\" placeholder=\"Domain\" value=\"" + realm + "\"><button type=\"submit\">Add / Update User</button></div></form></div><div class=\"card\"><table><tr><th>Username</th><th>Domain</th><th>Enabled</th><th></th></tr>" + rows + "</table></div>"
+    let help = "<div class=\"card\"><h2>Softphone setup</h2><p style=\"color:var(--muted);font-size:13px;margin-bottom:10px\">Passwords are stored as SIP digest HA1 (<code>MD5(user:realm:password)</code>), never in plain text. Realm defaults to the public FQDN when set. Re-save a user after realm changes so HA1 is recomputed.</p><table><tr><th>Username</th><td>SIP user from the table below</td></tr><tr><th>Password</th><td>the password you entered when adding the user</td></tr><tr><th>Domain / Realm</th><td><code>" + html_esc(realm) + "</code></td></tr><tr><th>Registrar / Proxy</th><td><code>" + html_esc(pubhost) + "</code> (or <code>" + html_esc(pubip) + "</code>)</td></tr><tr><th>Port</th><td><code>5060</code> (UDP/TCP), <code>5061</code> (TLS), <code>8443</code> (WSS)</td></tr><tr><th>Auth username</th><td>same as Username</td></tr></table></div>"
+    return help + "<div class=\"card\"><h2>SIP Users</h2><form hx-post=\"/admin/api/users\" hx-target=\"#c\"><div class=\"form-row\"><input name=\"username\" placeholder=\"Username\" required><input name=\"password\" type=\"password\" placeholder=\"Password (min 6)\" required minlength=\"6\"><input name=\"domain\" placeholder=\"Domain\" value=\"" + html_esc(realm) + "\"><button type=\"submit\">Add / Update User</button></div></form></div><div class=\"card\"><table><tr><th>Username</th><th>Domain</th><th>Enabled</th><th></th></tr>" + rows + "</table></div>"
 }
 
 fn f_access(db: SqlDB, ok: int) -> string {
@@ -1044,7 +1095,7 @@ fn f_access(db: SqlDB, ok: int) -> string {
             let mut eb = "g"
             let mut est = "Active"
             if str_eq(p[7], "f") { eb = "r"; est = "Off" }
-            rows = rows + "<tr><td>" + p[0] + "</td><td>" + p[1] + "</td><td><span class=\"badge " + ab + "\">" + p[2] + "</span> " + sb + "</td><td>" + p[4] + "</td><td>" + p[5] + "</td><td>" + p[6] + "</td><td><span class=\"badge " + eb + "\">" + est + "</span></td><td>" + p[8] + "</td><td><button class=\"btn sm\" hx-post=\"/admin/api/toggle\" hx-vals='{\"table\":\"access_control\",\"key\":\"id\",\"val\":\"" + p[9] + "\"}' hx-target=\"#c\">Toggle</button> <button class=\"btn sm r\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"access_control\",\"key\":\"id\",\"val\":\"" + p[9] + "\"}' hx-target=\"#c\" hx-confirm=\"Delete?\">Del</button></td></tr>"
+            rows = rows + "<tr><td>" + html_esc(p[0]) + "</td><td>" + html_esc(p[1]) + "</td><td><span class=\"badge " + ab + "\">" + html_esc(p[2]) + "</span> " + sb + "</td><td>" + html_esc(p[4]) + "</td><td>" + html_esc(p[5]) + "</td><td>" + html_esc(p[6]) + "</td><td><span class=\"badge " + eb + "\">" + est + "</span></td><td>" + html_esc(p[8]) + "</td><td><button class=\"btn sm\" hx-post=\"/admin/api/toggle\" hx-vals='{\"table\":\"access_control\",\"key\":\"id\",\"val\":\"" + html_esc(p[9]) + "\"}' hx-target=\"#c\">Toggle</button> <button class=\"btn sm r\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"access_control\",\"key\":\"id\",\"val\":\"" + html_esc(p[9]) + "\"}' hx-target=\"#c\" hx-confirm=\"Delete?\">Del</button></td></tr>"
         }
         i = i + 1
     }
@@ -1072,10 +1123,10 @@ fn f_gateways(db: SqlDB, ok: int) -> string {
             let mut hwhen = ""
             if len(p) >= 12 { hwhen = p[11] }
             let mut tech_badge = ""
-            if len(p[5]) > 0 { tech_badge = " <span class=\"badge y\">prefix: " + p[5] + "</span>" }
+            if len(p[5]) > 0 { tech_badge = " <span class=\"badge y\">prefix: " + html_esc(p[5]) + "</span>" }
             let mut caller_badge = ""
-            if len(p[6]) > 0 { caller_badge = " <span class=\"badge b\">CID: " + p[6] + "</span>" }
-            cards = cards + "<div style=\"border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:10px;background:rgba(15,23,42,.6)\"><div style=\"display:flex;justify-content:space-between;align-items:start;margin-bottom:8px\"><div><strong style=\"font-size:15px\">" + p[0] + "</strong><div style=\"font-size:12px;color:var(--muted);margin-top:2px\">" + p[1] + ":" + p[2] + " / " + p[3] + "</div></div><div style=\"display:flex;gap:4px;align-items:center;flex-wrap:wrap\"><span class=\"badge " + hb + "\">health: " + hs + "</span><span class=\"badge " + eb + "\">" + est + "</span><button class=\"btn sm\" hx-post=\"/admin/api/gateway_test\" hx-vals='{\"name\":\"" + p[0] + "\"}' hx-target=\"#c\">Test OPTIONS</button><button class=\"btn sm\" hx-post=\"/admin/api/toggle\" hx-vals='{\"table\":\"gateways\",\"key\":\"id\",\"val\":\"" + p[8] + "\"}' hx-target=\"#c\">Toggle</button><button class=\"btn sm r\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"gateways\",\"key\":\"id\",\"val\":\"" + p[8] + "\"}' hx-target=\"#c\" hx-confirm=\"Delete?\">Del</button></div></div><div style=\"font-size:12px;color:var(--muted)\">Last probe: code=" + hcode + " at " + hwhen + "</div><div style=\"font-size:12px;color:var(--muted);margin-top:4px\">Format: <span class=\"badge g\">" + p[4] + "</span>" + tech_badge + caller_badge + "</div><form hx-post=\"/admin/api/gateway_format\" hx-target=\"#c\" style=\"margin-top:10px;padding-top:10px;border-top:1px solid var(--border)\"><input type=\"hidden\" name=\"name\" value=\"" + p[0] + "\"><div class=\"form-row\"><div><label style=\"font-size:11px;color:var(--muted)\">Number Format</label><select name=\"number_format\"><option>e164</option><option>e164_no_plus</option><option>national</option><option>tech_prefix</option></select></div><div><label style=\"font-size:11px;color:var(--muted)\">Tech Prefix</label><input name=\"tech_prefix\" value=\"" + p[5] + "\" placeholder=\"e.g. 0049#\"></div><div><label style=\"font-size:11px;color:var(--muted)\">Caller ID Override</label><input name=\"caller_id\" value=\"" + p[6] + "\" placeholder=\"+15551234567\"></div><div style=\"flex:none\"><label style=\"font-size:11px;color:transparent\">.</label><button type=\"submit\" class=\"btn sm\">Save Format</button></div></div></form></div>"
+            if len(p[6]) > 0 { caller_badge = " <span class=\"badge b\">CID: " + html_esc(p[6]) + "</span>" }
+            cards = cards + "<div style=\"border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:10px;background:rgba(15,23,42,.6)\"><div style=\"display:flex;justify-content:space-between;align-items:start;margin-bottom:8px\"><div><strong style=\"font-size:15px\">" + html_esc(p[0]) + "</strong><div style=\"font-size:12px;color:var(--muted);margin-top:2px\">" + html_esc(p[1]) + ":" + html_esc(p[2]) + " / " + html_esc(p[3]) + "</div></div><div style=\"display:flex;gap:4px;align-items:center;flex-wrap:wrap\"><span class=\"badge " + hb + "\">health: " + html_esc(hs) + "</span><span class=\"badge " + eb + "\">" + est + "</span><button class=\"btn sm\" hx-post=\"/admin/api/gateway_test\" hx-vals='{\"name\":\"" + html_esc(p[0]) + "\"}' hx-target=\"#c\">Test OPTIONS</button><button class=\"btn sm\" hx-post=\"/admin/api/toggle\" hx-vals='{\"table\":\"gateways\",\"key\":\"id\",\"val\":\"" + html_esc(p[8]) + "\"}' hx-target=\"#c\">Toggle</button><button class=\"btn sm r\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"gateways\",\"key\":\"id\",\"val\":\"" + html_esc(p[8]) + "\"}' hx-target=\"#c\" hx-confirm=\"Delete?\">Del</button></div></div><div style=\"font-size:12px;color:var(--muted)\">Last probe: code=" + html_esc(hcode) + " at " + html_esc(hwhen) + "</div><div style=\"font-size:12px;color:var(--muted);margin-top:4px\">Format: <span class=\"badge g\">" + html_esc(p[4]) + "</span>" + tech_badge + caller_badge + "</div><form hx-post=\"/admin/api/gateway_format\" hx-target=\"#c\" style=\"margin-top:10px;padding-top:10px;border-top:1px solid var(--border)\"><input type=\"hidden\" name=\"name\" value=\"" + html_esc(p[0]) + "\"><div class=\"form-row\"><div><label style=\"font-size:11px;color:var(--muted)\">Number Format</label><select name=\"number_format\"><option>e164</option><option>e164_no_plus</option><option>national</option><option>tech_prefix</option></select></div><div><label style=\"font-size:11px;color:var(--muted)\">Tech Prefix</label><input name=\"tech_prefix\" value=\"" + html_esc(p[5]) + "\" placeholder=\"e.g. 0049#\"></div><div><label style=\"font-size:11px;color:var(--muted)\">Caller ID Override</label><input name=\"caller_id\" value=\"" + html_esc(p[6]) + "\" placeholder=\"+15551234567\"></div><div style=\"flex:none\"><label style=\"font-size:11px;color:transparent\">.</label><button type=\"submit\" class=\"btn sm\">Save Format</button></div></div></form></div>"
         }
         i = i + 1
     }
@@ -1102,29 +1153,29 @@ fn describe_action(action: string) -> string {
             }
             pi = pi + 1
         }
-        return "<span class=\"badge b\">IN</span> <strong>" + ingress_desc + "</strong> &rarr; <span class=\"badge y\">OUT</span> <strong>" + egress_desc + "</strong>"
+        return "<span class=\"badge b\">IN</span> <strong>" + html_esc(ingress_desc) + "</strong> &rarr; <span class=\"badge y\">OUT</span> <strong>" + html_esc(egress_desc) + "</strong>"
     }
     if str_has_prefix(action, "route:") {
-        return "<span class=\"badge y\">OUT</span> Send to <strong>" + action[6:] + "</strong>"
+        return "<span class=\"badge y\">OUT</span> Send to <strong>" + html_esc(action[6:]) + "</strong>"
     }
     if str_has_prefix(action, "dispatch:") {
-        return "Dispatch to <strong>" + action[9:] + "</strong>"
+        return "Dispatch to <strong>" + html_esc(action[9:]) + "</strong>"
     }
     if str_has_prefix(action, "failover:") {
-        return "<span class=\"badge y\">OUT</span> Failover: <strong>" + str_replace(action[9:], ",", " &rarr; ") + "</strong>"
+        return "<span class=\"badge y\">OUT</span> Failover: <strong>" + html_esc(str_replace(action[9:], ",", " → ")) + "</strong>"
     }
     if str_has_prefix(action, "reject:") {
         let parts = str_split(action[7:], ":")
         if len(parts) >= 2 {
-            return "<span style=\"color:#ef4444\">Block: " + parts[0] + " " + parts[1] + "</span>"
+            return "<span style=\"color:#ef4444\">Block: " + html_esc(parts[0]) + " " + html_esc(parts[1]) + "</span>"
         }
-        return "<span style=\"color:#ef4444\">Block " + action[7:] + "</span>"
+        return "<span style=\"color:#ef4444\">Block " + html_esc(action[7:]) + "</span>"
     }
     if str_has_prefix(action, "redirect:") {
-        return "Redirect to <strong>" + action[9:] + "</strong>"
+        return "Redirect to <strong>" + html_esc(action[9:]) + "</strong>"
     }
     if str_has_prefix(action, "forward:") {
-        return "Forward to <strong>" + action[8:] + "</strong>"
+        return "Forward to <strong>" + html_esc(action[8:]) + "</strong>"
     }
     if str_eq(action, "lcr") {
         return "<span class=\"badge y\">OUT</span> Least-cost routing"
@@ -1164,24 +1215,24 @@ fn f_routing(db: SqlDB, ok: int) -> string {
 
             // Build condition text
             let mut conds = ""
-            if len(p[0]) > 0 { conds = conds + "<span class=\"badge b\">Callee: " + p[0] + "*</span> " }
-            if len(p[1]) > 0 { conds = conds + "<span class=\"badge b\">Caller: " + p[1] + "*</span> " }
-            if len(p[2]) > 0 { conds = conds + "<span class=\"badge y\">IP: " + p[2] + "</span> " }
-            if len(p[3]) > 0 { conds = conds + "<span class=\"badge b\">Time: " + p[3] + "-" + p[4] + "</span> " }
+            if len(p[0]) > 0 { conds = conds + "<span class=\"badge b\">Callee: " + html_esc(p[0]) + "*</span> " }
+            if len(p[1]) > 0 { conds = conds + "<span class=\"badge b\">Caller: " + html_esc(p[1]) + "*</span> " }
+            if len(p[2]) > 0 { conds = conds + "<span class=\"badge y\">IP: " + html_esc(p[2]) + "</span> " }
+            if len(p[3]) > 0 { conds = conds + "<span class=\"badge b\">Time: " + html_esc(p[3]) + "-" + html_esc(p[4]) + "</span> " }
             if len(p[5]) > 0 { conds = conds + "<span class=\"badge b\">" + describe_days(p[5]) + "</span> " }
-            if len(p[11]) > 0 { conds = conds + "<span class=\"badge y\">ANI: " + p[11] + "</span> " }
+            if len(p[11]) > 0 { conds = conds + "<span class=\"badge y\">ANI: " + html_esc(p[11]) + "</span> " }
             if len(conds) == 0 { conds = "<span class=\"badge b\">All calls</span>" }
 
             let action_desc = describe_action(p[6])
             let desc = p[9]
 
-            rule_cards = rule_cards + "<div style=\"display:flex;align-items:center;gap:12px;padding:12px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;background:rgba(2,6,23,.4)\"><div style=\"min-width:36px;text-align:center;font-weight:700;color:var(--faint);font-size:13px\">#" + p[7] + "</div><div style=\"flex:1\"><div style=\"margin-bottom:4px\">" + conds + "</div><div style=\"font-size:14px\">&rarr; " + action_desc + "</div>"
+            rule_cards = rule_cards + "<div style=\"display:flex;align-items:center;gap:12px;padding:12px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;background:rgba(2,6,23,.4)\"><div style=\"min-width:36px;text-align:center;font-weight:700;color:var(--faint);font-size:13px\">#" + html_esc(p[7]) + "</div><div style=\"flex:1\"><div style=\"margin-bottom:4px\">" + conds + "</div><div style=\"font-size:14px\">&rarr; " + action_desc + "</div>"
 
             if len(desc) > 0 {
                 rule_cards = rule_cards + "<div style=\"font-size:11px;color:var(--faint);margin-top:2px\">" + desc + "</div>"
             }
 
-            rule_cards = rule_cards + "</div><div style=\"display:flex;gap:4px;align-items:center\"><span class=\"badge " + eb + "\">" + est + "</span><button class=\"btn sm\" hx-post=\"/admin/api/toggle\" hx-vals='{\"table\":\"routing_rules\",\"key\":\"id\",\"val\":\"" + p[10] + "\"}' hx-target=\"#c\">Toggle</button><button class=\"btn sm r\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"routing_rules\",\"key\":\"id\",\"val\":\"" + p[10] + "\"}' hx-target=\"#c\" hx-confirm=\"Delete this rule?\">Del</button></div></div>"
+            rule_cards = rule_cards + "</div><div style=\"display:flex;gap:4px;align-items:center\"><span class=\"badge " + eb + "\">" + est + "</span><button class=\"btn sm\" hx-post=\"/admin/api/toggle\" hx-vals='{\"table\":\"routing_rules\",\"key\":\"id\",\"val\":\"" + html_esc(p[10]) + "\"}' hx-target=\"#c\">Toggle</button><button class=\"btn sm r\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"routing_rules\",\"key\":\"id\",\"val\":\"" + html_esc(p[10]) + "\"}' hx-target=\"#c\" hx-confirm=\"Delete this rule?\">Del</button></div></div>"
         }
         ai = ai + 1
     }
@@ -1193,7 +1244,7 @@ fn f_routing(db: SqlDB, ok: int) -> string {
     while si < len(sdata) {
         let p = str_split(sdata[si], "|")
         if len(p) >= 5 {
-            srows = srows + "<tr><td><strong>" + p[0] + "</strong></td><td>&rarr; " + p[1] + "</td><td>" + p[2] + "</td><td>$" + p[3] + "</td><td><button class=\"btn sm r\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"routes\",\"key\":\"id\",\"val\":\"" + p[4] + "\"}' hx-target=\"#c\" hx-confirm=\"Delete?\">Del</button></td></tr>"
+            srows = srows + "<tr><td><strong>" + html_esc(p[0]) + "</strong></td><td>&rarr; " + html_esc(p[1]) + "</td><td>" + html_esc(p[2]) + "</td><td>$" + html_esc(p[3]) + "</td><td><button class=\"btn sm r\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"routes\",\"key\":\"id\",\"val\":\"" + html_esc(p[4]) + "\"}' hx-target=\"#c\" hx-confirm=\"Delete?\">Del</button></td></tr>"
         }
         si = si + 1
     }
@@ -1218,7 +1269,7 @@ fn f_dispatch(db: SqlDB, ok: int) -> string {
 
             // Get members for this set
             let mut members = ""
-            let mdata = tbl_query(db, ok, "SELECT g.name || '|' || g.address || ':' || g.port || '|' || dm.priority || '|' || dm.weight || '|' || dm.enabled || '|' || dm.id FROM dispatch_members dm JOIN gateways g ON dm.gateway_id = g.id JOIN dispatch_sets ds ON dm.set_id = ds.id WHERE ds.name = '" + p[0] + "' ORDER BY dm.priority, dm.weight DESC", 30)
+            let mdata = tbl_query_param(db, ok, "SELECT g.name || '|' || g.address || ':' || g.port || '|' || dm.priority || '|' || dm.weight || '|' || dm.enabled || '|' || dm.id FROM dispatch_members dm JOIN gateways g ON dm.gateway_id = g.id JOIN dispatch_sets ds ON dm.set_id = ds.id WHERE ds.name = $1 ORDER BY dm.priority, dm.weight DESC", p[0], 30)
             let mut mi = 0
             while mi < len(mdata) {
                 let mp = str_split(mdata[mi], "|")
@@ -1232,7 +1283,7 @@ fn f_dispatch(db: SqlDB, ok: int) -> string {
             }
             if len(members) == 0 { members = "<div style=\"padding:12px;color:var(--faint);text-align:center;font-size:13px\">No servers in this group. Add gateways below.</div>" }
 
-            set_cards = set_cards + "<div class=\"card\" style=\"margin-bottom:12px\"><div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:12px\"><div style=\"display:flex;align-items:center;gap:8px\"><strong style=\"font-size:16px\">" + p[0] + "</strong><span class=\"badge " + dir_badge + "\">" + dir_label + "</span><span class=\"badge b\">" + p[1] + "</span><span class=\"badge " + eb + "\">" + est + "</span><span style=\"color:var(--muted);font-size:12px\">" + p[5] + " servers</span></div><div style=\"display:flex;gap:4px\"><button class=\"btn sm\" hx-post=\"/admin/api/toggle\" hx-vals='{\"table\":\"dispatch_sets\",\"key\":\"id\",\"val\":\"" + p[4] + "\"}' hx-target=\"#c\">Toggle</button><button class=\"btn sm r\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"dispatch_sets\",\"key\":\"id\",\"val\":\"" + p[4] + "\"}' hx-target=\"#c\" hx-confirm=\"Delete this group and all its members?\">Del</button></div></div><div style=\"background:rgba(2,6,23,.4);border-radius:8px;margin-bottom:10px\">" + members + "</div><form hx-post=\"/admin/api/dispatch_member\" hx-target=\"#c\"><input type=\"hidden\" name=\"set_name\" value=\"" + p[0] + "\"><div class=\"form-row\"><div style=\"flex:2\"><label style=\"font-size:11px;color:var(--muted)\">Add Server (gateway name)</label><input name=\"gateway\" placeholder=\"e.g. asterisk1, freeswitch2\" required></div><div><label style=\"font-size:11px;color:var(--muted)\">Priority</label><input name=\"priority\" value=\"10\"></div><div><label style=\"font-size:11px;color:var(--muted)\">Weight</label><input name=\"weight\" value=\"100\"></div><div style=\"flex:none\"><label style=\"font-size:11px;color:transparent\">.</label><button type=\"submit\" class=\"btn sm\">Add Server</button></div></div></form></div>"
+            set_cards = set_cards + "<div class=\"card\" style=\"margin-bottom:12px\"><div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:12px\"><div style=\"display:flex;align-items:center;gap:8px\"><strong style=\"font-size:16px\">" + html_esc(p[0]) + "</strong><span class=\"badge " + dir_badge + "\">" + dir_label + "</span><span class=\"badge b\">" + html_esc(p[1]) + "</span><span class=\"badge " + eb + "\">" + est + "</span><span style=\"color:var(--muted);font-size:12px\">" + html_esc(p[5]) + " servers</span></div><div style=\"display:flex;gap:4px\"><button class=\"btn sm\" hx-post=\"/admin/api/toggle\" hx-vals='{\"table\":\"dispatch_sets\",\"key\":\"id\",\"val\":\"" + html_esc(p[4]) + "\"}' hx-target=\"#c\">Toggle</button><button class=\"btn sm r\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"dispatch_sets\",\"key\":\"id\",\"val\":\"" + html_esc(p[4]) + "\"}' hx-target=\"#c\" hx-confirm=\"Delete this group and all its members?\">Del</button></div></div><div style=\"background:rgba(2,6,23,.4);border-radius:8px;margin-bottom:10px\">" + members + "</div><form hx-post=\"/admin/api/dispatch_member\" hx-target=\"#c\"><input type=\"hidden\" name=\"set_name\" value=\"" + html_esc(p[0]) + "\"><div class=\"form-row\"><div style=\"flex:2\"><label style=\"font-size:11px;color:var(--muted)\">Add Server (gateway name)</label><input name=\"gateway\" placeholder=\"e.g. asterisk1, freeswitch2\" required></div><div><label style=\"font-size:11px;color:var(--muted)\">Priority</label><input name=\"priority\" value=\"10\"></div><div><label style=\"font-size:11px;color:var(--muted)\">Weight</label><input name=\"weight\" value=\"100\"></div><div style=\"flex:none\"><label style=\"font-size:11px;color:transparent\">.</label><button type=\"submit\" class=\"btn sm\">Add Server</button></div></div></form></div>"
         }
         si = si + 1
     }
@@ -1249,7 +1300,7 @@ fn f_dids(db: SqlDB, ok: int) -> string {
         if len(p) >= 3 {
             let mut b = "g"
             if str_eq(p[2], "f") { b = "r" }
-            rows = rows + "<tr><td>" + p[0] + "</td><td>" + p[1] + "</td><td><span class=\"badge " + b + "\">" + p[2] + "</span></td><td><button class=\"btn sm r\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"dids\",\"key\":\"number\",\"val\":\"" + p[0] + "\"}' hx-target=\"#c\" hx-confirm=\"Delete?\">Del</button></td></tr>"
+            rows = rows + "<tr><td>" + html_esc(p[0]) + "</td><td>" + html_esc(p[1]) + "</td><td><span class=\"badge " + b + "\">" + html_esc(p[2]) + "</span></td><td><button class=\"btn sm r\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"dids\",\"key\":\"number\",\"val\":\"" + html_esc(p[0]) + "\"}' hx-target=\"#c\" hx-confirm=\"Delete?\">Del</button></td></tr>"
         }
         i = i + 1
     }
@@ -1263,7 +1314,7 @@ fn f_dialplan(db: SqlDB, ok: int) -> string {
     while i < len(data) {
         let p = str_split(data[i], "|")
         if len(p) >= 6 {
-            rows = rows + "<tr><td>" + p[0] + "</td><td><code>" + p[1] + "</code></td><td><code>" + p[2] + "</code></td><td>" + p[3] + "</td><td>" + p[4] + "</td><td><button class=\"btn sm r\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"dialplan\",\"key\":\"id\",\"val\":\"" + p[5] + "\"}' hx-target=\"#c\" hx-confirm=\"Delete?\">Del</button></td></tr>"
+            rows = rows + "<tr><td>" + html_esc(p[0]) + "</td><td><code>" + html_esc(p[1]) + "</code></td><td><code>" + html_esc(p[2]) + "</code></td><td>" + html_esc(p[3]) + "</td><td>" + html_esc(p[4]) + "</td><td><button class=\"btn sm r\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"dialplan\",\"key\":\"id\",\"val\":\"" + html_esc(p[5]) + "\"}' hx-target=\"#c\" hx-confirm=\"Delete?\">Del</button></td></tr>"
         }
         i = i + 1
     }
@@ -1277,7 +1328,7 @@ fn f_headers(db: SqlDB, ok: int) -> string {
     while i < len(data) {
         let p = str_split(data[i], "|")
         if len(p) >= 7 {
-            rows = rows + "<tr><td>" + p[0] + "</td><td>" + p[1] + "</td><td>" + p[2] + "</td><td>" + p[3] + "</td><td><code>" + p[4] + "</code></td><td>" + p[5] + "</td><td><button class=\"btn sm r\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"header_rules\",\"key\":\"id\",\"val\":\"" + p[6] + "\"}' hx-target=\"#c\" hx-confirm=\"Delete?\">Del</button></td></tr>"
+            rows = rows + "<tr><td>" + html_esc(p[0]) + "</td><td>" + html_esc(p[1]) + "</td><td>" + html_esc(p[2]) + "</td><td>" + html_esc(p[3]) + "</td><td><code>" + html_esc(p[4]) + "</code></td><td>" + html_esc(p[5]) + "</td><td><button class=\"btn sm r\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"header_rules\",\"key\":\"id\",\"val\":\"" + html_esc(p[6]) + "\"}' hx-target=\"#c\" hx-confirm=\"Delete?\">Del</button></td></tr>"
         }
         i = i + 1
     }
@@ -1324,12 +1375,12 @@ fn f_ani(db: SqlDB, ok: int) -> string {
 
             // Get ranges for this group
             let mut ranges = ""
-            let rdata = tbl_query(db, ok, "SELECT ar.range_start || '|' || ar.range_end || '|' || ar.id FROM ani_ranges ar JOIN ani_groups ag ON ar.group_id = ag.id WHERE ag.name = '" + p[0] + "' AND ar.enabled = true ORDER BY ar.range_start", 20)
+            let rdata = tbl_query_param(db, ok, "SELECT ar.range_start || '|' || ar.range_end || '|' || ar.id FROM ani_ranges ar JOIN ani_groups ag ON ar.group_id = ag.id WHERE ag.name = $1 AND ar.enabled = true ORDER BY ar.range_start", p[0], 20)
             let mut ri = 0
             while ri < len(rdata) {
                 let rp = str_split(rdata[ri], "|")
                 if len(rp) >= 3 {
-                    ranges = ranges + "<div style=\"display:flex;align-items:center;gap:8px;padding:4px 0\"><span class=\"badge b\">" + rp[0] + "</span><span style=\"color:var(--faint)\">&rarr;</span><span class=\"badge b\">" + rp[1] + "</span><button class=\"btn sm r\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"ani_ranges\",\"key\":\"id\",\"val\":\"" + rp[2] + "\"}' hx-target=\"#c\" hx-confirm=\"Remove range?\">Del</button></div>"
+                    ranges = ranges + "<div style=\"display:flex;align-items:center;gap:8px;padding:4px 0\"><span class=\"badge b\">" + html_esc(rp[0]) + "</span><span style=\"color:var(--faint)\">&rarr;</span><span class=\"badge b\">" + html_esc(rp[1]) + "</span><button class=\"btn sm r\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"ani_ranges\",\"key\":\"id\",\"val\":\"" + html_esc(rp[2]) + "\"}' hx-target=\"#c\" hx-confirm=\"Remove range?\">Del</button></div>"
                 }
                 ri = ri + 1
             }
@@ -1345,7 +1396,7 @@ fn f_ani(db: SqlDB, ok: int) -> string {
                 route_desc = describe_action(current_route)
             }
 
-            gcards = gcards + "<div class=\"card\" style=\"margin-bottom:12px\"><div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:12px\"><div style=\"display:flex;align-items:center;gap:8px\"><strong style=\"font-size:16px\">" + p[0] + "</strong><span class=\"badge " + eb + "\">" + est + "</span><span style=\"color:var(--muted);font-size:12px\">" + p[2] + " ranges</span></div><div style=\"display:flex;gap:4px\"><button class=\"btn sm\" hx-post=\"/admin/api/toggle\" hx-vals='{\"table\":\"ani_groups\",\"key\":\"id\",\"val\":\"" + p[4] + "\"}' hx-target=\"#c\">Toggle</button><button class=\"btn sm r\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"ani_groups\",\"key\":\"id\",\"val\":\"" + p[4] + "\"}' hx-target=\"#c\" hx-confirm=\"Delete group and all its ranges?\">Del</button></div></div><form hx-post=\"/admin/api/ani_group_update\" hx-target=\"#c\" style=\"margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--border)\"><input type=\"hidden\" name=\"id\" value=\"" + p[4] + "\"><div class=\"form-row\"><div><label style=\"font-size:11px;color:var(--muted)\">Group Name</label><input name=\"name\" value=\"" + p[0] + "\" required></div><div style=\"flex:2\"><label style=\"font-size:11px;color:var(--muted)\">Description</label><input name=\"description\" value=\"" + p[1] + "\"></div><div style=\"flex:none\"><label style=\"font-size:11px;color:transparent\">.</label><button type=\"submit\" class=\"btn sm\">Save</button></div></div></form><div style=\"margin-bottom:12px\"><div style=\"font-size:12px;font-weight:600;color:var(--muted);margin-bottom:6px\">Number Ranges</div>" + ranges + "<form hx-post=\"/admin/api/ani_range\" hx-target=\"#c\" style=\"margin-top:6px\"><input type=\"hidden\" name=\"group\" value=\"" + p[0] + "\"><div class=\"form-row\"><input name=\"range_start\" placeholder=\"Start (e.g. 8464440001)\" required><input name=\"range_end\" placeholder=\"End (e.g. 8464443000)\" required><button type=\"submit\" class=\"btn sm\">Add Range</button></div></form></div><div style=\"padding:12px;background:#f0f7ff;border-radius:8px;border:1px solid #bfdbfe\"><div style=\"font-size:12px;font-weight:600;color:#1e40af;margin-bottom:6px\">Call Routing</div><div style=\"font-size:13px;margin-bottom:8px\">Current: " + route_desc + "</div><form hx-post=\"/admin/api/ani_quick_route\" hx-target=\"#c\"><input type=\"hidden\" name=\"ani_group\" value=\"" + p[0] + "\"><div class=\"form-row\"><div><label style=\"font-size:11px;color:#1e40af\">Send to (Ingress PBX servers)</label><select name=\"ingress\">" + ingress_opts + "</select></div><div><label style=\"font-size:11px;color:#1e40af\">Then out via (Egress Carrier)</label><select name=\"egress\">" + egress_opts + "</select></div><div><label style=\"font-size:11px;color:#1e40af\">Or direct to carrier</label><select name=\"direct_carrier\">" + carrier_opts + "</select></div><div style=\"flex:none\"><label style=\"font-size:11px;color:transparent\">.</label><button type=\"submit\">Set Route</button></div></div></form></div></div>"
+            gcards = gcards + "<div class=\"card\" style=\"margin-bottom:12px\"><div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:12px\"><div style=\"display:flex;align-items:center;gap:8px\"><strong style=\"font-size:16px\">" + html_esc(p[0]) + "</strong><span class=\"badge " + eb + "\">" + est + "</span><span style=\"color:var(--muted);font-size:12px\">" + html_esc(p[2]) + " ranges</span></div><div style=\"display:flex;gap:4px\"><button class=\"btn sm\" hx-post=\"/admin/api/toggle\" hx-vals='{\"table\":\"ani_groups\",\"key\":\"id\",\"val\":\"" + html_esc(p[4]) + "\"}' hx-target=\"#c\">Toggle</button><button class=\"btn sm r\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"ani_groups\",\"key\":\"id\",\"val\":\"" + html_esc(p[4]) + "\"}' hx-target=\"#c\" hx-confirm=\"Delete group and all its ranges?\">Del</button></div></div><form hx-post=\"/admin/api/ani_group_update\" hx-target=\"#c\" style=\"margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--border)\"><input type=\"hidden\" name=\"id\" value=\"" + html_esc(p[4]) + "\"><div class=\"form-row\"><div><label style=\"font-size:11px;color:var(--muted)\">Group Name</label><input name=\"name\" value=\"" + html_esc(p[0]) + "\" required></div><div style=\"flex:2\"><label style=\"font-size:11px;color:var(--muted)\">Description</label><input name=\"description\" value=\"" + html_esc(p[1]) + "\"></div><div style=\"flex:none\"><label style=\"font-size:11px;color:transparent\">.</label><button type=\"submit\" class=\"btn sm\">Save</button></div></div></form><div style=\"margin-bottom:12px\"><div style=\"font-size:12px;font-weight:600;color:var(--muted);margin-bottom:6px\">Number Ranges</div>" + ranges + "<form hx-post=\"/admin/api/ani_range\" hx-target=\"#c\" style=\"margin-top:6px\"><input type=\"hidden\" name=\"group\" value=\"" + html_esc(p[0]) + "\"><div class=\"form-row\"><input name=\"range_start\" placeholder=\"Start (e.g. 8464440001)\" required><input name=\"range_end\" placeholder=\"End (e.g. 8464443000)\" required><button type=\"submit\" class=\"btn sm\">Add Range</button></div></form></div><div style=\"padding:12px;background:#f0f7ff;border-radius:8px;border:1px solid #bfdbfe\"><div style=\"font-size:12px;font-weight:600;color:#1e40af;margin-bottom:6px\">Call Routing</div><div style=\"font-size:13px;margin-bottom:8px\">Current: " + route_desc + "</div><form hx-post=\"/admin/api/ani_quick_route\" hx-target=\"#c\"><input type=\"hidden\" name=\"ani_group\" value=\"" + html_esc(p[0]) + "\"><div class=\"form-row\"><div><label style=\"font-size:11px;color:#1e40af\">Send to (Ingress PBX servers)</label><select name=\"ingress\">" + ingress_opts + "</select></div><div><label style=\"font-size:11px;color:#1e40af\">Then out via (Egress Carrier)</label><select name=\"egress\">" + egress_opts + "</select></div><div><label style=\"font-size:11px;color:#1e40af\">Or direct to carrier</label><select name=\"direct_carrier\">" + carrier_opts + "</select></div><div style=\"flex:none\"><label style=\"font-size:11px;color:transparent\">.</label><button type=\"submit\">Set Route</button></div></div></form></div></div>"
         }
         gi = gi + 1
     }
@@ -1356,14 +1407,14 @@ fn f_ani(db: SqlDB, ok: int) -> string {
 fn f_security(db: SqlDB, ok: int) -> string {
     // Active bans
     let mut ban_rows = ""
-    let bdata = tbl_query(db, ok, "SELECT source_ip || '|' || reason || '|' || ban_count || '|' || banned_at || '|' || expires_at || '|' || permanent || '|' || id FROM security_bans ORDER BY banned_at DESC", 50)
+    let bdata = tbl_query(db, ok, "SELECT source_ip || '|' || COALESCE(reason,'') || '|' || ban_count || '|' || COALESCE(to_char(created_at,'YYYY-MM-DD HH24:MI:SS'),'') || '|' || COALESCE(to_char(expires_at,'YYYY-MM-DD HH24:MI:SS'),'') || '|' || permanent || '|' || source_ip FROM security_bans ORDER BY created_at DESC", 50)
     let mut bi = 0
     while bi < len(bdata) {
         let p = str_split(bdata[bi], "|")
         if len(p) >= 7 {
             let mut perm = ""
             if str_eq(p[5], "t") { perm = "<span class=\"badge r\">PERMANENT</span>" } else { perm = "<span class=\"badge y\">temp</span>" }
-            ban_rows = ban_rows + "<tr><td><strong>" + p[0] + "</strong></td><td>" + p[1] + "</td><td>" + p[2] + "</td><td>" + perm + "</td><td style=\"font-size:11px\">" + p[4] + "</td><td><button class=\"btn sm\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"security_bans\",\"key\":\"id\",\"val\":\"" + p[6] + "\"}' hx-target=\"#c\" hx-confirm=\"Unban this IP?\">Unban</button></td></tr>"
+            ban_rows = ban_rows + "<tr><td><strong>" + html_esc(p[0]) + "</strong></td><td>" + html_esc(p[1]) + "</td><td>" + html_esc(p[2]) + "</td><td>" + perm + "</td><td style=\"font-size:11px\">" + html_esc(p[4]) + "</td><td><button class=\"btn sm\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"security_bans\",\"key\":\"source_ip\",\"val\":\"" + html_esc(p[6]) + "\"}' hx-target=\"#c\" hx-confirm=\"Unban this IP?\">Unban</button></td></tr>"
         }
         bi = bi + 1
     }
@@ -1378,7 +1429,7 @@ fn f_security(db: SqlDB, ok: int) -> string {
             let mut sb = "b"
             if str_eq(p[4], "high") { sb = "y" }
             if str_eq(p[4], "critical") { sb = "r" }
-            event_rows = event_rows + "<tr><td style=\"font-size:11px\">" + p[0] + "</td><td>" + p[1] + "</td><td>" + p[2] + "</td><td>" + p[3] + "</td><td><span class=\"badge " + sb + "\">" + p[4] + "</span></td></tr>"
+            event_rows = event_rows + "<tr><td style=\"font-size:11px\">" + html_esc(p[0]) + "</td><td>" + html_esc(p[1]) + "</td><td>" + html_esc(p[2]) + "</td><td>" + html_esc(p[3]) + "</td><td><span class=\"badge " + sb + "\">" + html_esc(p[4]) + "</span></td></tr>"
         }
         ei = ei + 1
     }
@@ -1418,7 +1469,7 @@ fn f_logs(db: SqlDB, ok: int) -> string {
             if str_contains(line, "error") { cls = " style=\"color:#ef4444\"" }
             if str_contains(line, "FAIL") { cls = " style=\"color:#ef4444\"" }
             if str_contains(line, "warning") { cls = " style=\"color:#f59e0b\"" }
-            proxy_rows = proxy_rows + "<div" + cls + " style=\"font-family:monospace;font-size:12px;padding:2px 0;border-bottom:1px solid var(--border)\">" + line + "</div>"
+            proxy_rows = proxy_rows + "<div" + cls + " style=\"font-family:monospace;font-size:12px;padding:2px 0;border-bottom:1px solid var(--border)\">" + html_esc(line) + "</div>"
         }
         pi = pi + 1
     }
@@ -1430,7 +1481,7 @@ fn f_logs(db: SqlDB, ok: int) -> string {
     while ai < alen {
         let line = admin_lines[ai]
         if len(line) > 0 {
-            admin_rows = admin_rows + "<div style=\"font-family:monospace;font-size:12px;padding:2px 0;border-bottom:1px solid var(--border)\">" + line + "</div>"
+            admin_rows = admin_rows + "<div style=\"font-family:monospace;font-size:12px;padding:2px 0;border-bottom:1px solid var(--border)\">" + html_esc(line) + "</div>"
         }
         ai = ai + 1
     }
@@ -1446,7 +1497,7 @@ fn f_logs(db: SqlDB, ok: int) -> string {
                 let mut b = "b"
                 if str_eq(p[1], "error") { b = "r" }
                 if str_eq(p[1], "warn") { b = "y" }
-                db_rows = db_rows + "<tr><td>" + p[0] + "</td><td><span class=\"badge " + b + "\">" + p[1] + "</span></td><td>" + p[2] + "</td><td style=\"font-family:monospace;font-size:12px\">" + p[3] + "</td></tr>"
+                db_rows = db_rows + "<tr><td>" + html_esc(p[0]) + "</td><td><span class=\"badge " + b + "\">" + html_esc(p[1]) + "</span></td><td>" + html_esc(p[2]) + "</td><td style=\"font-family:monospace;font-size:12px\">" + html_esc(p[3]) + "</td></tr>"
             }
             di = di + 1
         }
@@ -1480,7 +1531,7 @@ fn f_regs(db: SqlDB, ok: int) -> string {
             if len(p) >= 6 { exp = p[5] }
             let mut upd = ""
             if len(p) >= 7 { upd = p[6] }
-            rows = rows + "<tr><td><span class=\"badge " + b + "\">" + st + "</span></td><td><strong>" + p[0] + "</strong></td><td style=\"font-size:12px\"><code>" + p[1] + "</code></td><td>" + p[2] + "</td><td style=\"font-size:12px;color:var(--muted)\">" + p[3] + "</td><td style=\"font-size:11px;color:var(--muted)\">" + ua + "</td><td style=\"font-variant-numeric:tabular-nums\">" + ttl + "</td><td style=\"font-size:12px;color:var(--muted)\">" + exp + "</td><td style=\"font-size:12px;color:var(--muted)\">" + upd + "</td></tr>"
+            rows = rows + "<tr><td><span class=\"badge " + b + "\">" + html_esc(st) + "</span></td><td><strong>" + html_esc(p[0]) + "</strong></td><td style=\"font-size:12px\"><code>" + html_esc(p[1]) + "</code></td><td>" + html_esc(p[2]) + "</td><td style=\"font-size:12px;color:var(--muted)\">" + html_esc(p[3]) + "</td><td style=\"font-size:11px;color:var(--muted)\">" + html_esc(ua) + "</td><td style=\"font-variant-numeric:tabular-nums\">" + html_esc(ttl) + "</td><td style=\"font-size:12px;color:var(--muted)\">" + html_esc(exp) + "</td><td style=\"font-size:12px;color:var(--muted)\">" + html_esc(upd) + "</td></tr>"
         }
         i = i + 1
     }
@@ -1504,7 +1555,7 @@ fn f_cluster(db: SqlDB, ok: int) -> string {
             if len(p) >= 7 {
                 if len(p[6]) > 0 { lag = p[6] + "s" }
             }
-            rows = rows + "<tr><td><strong>" + p[0] + "</strong></td><td>" + p[1] + "</td><td>" + p[2] + "</td><td>" + p[3] + "</td><td><span class=\"badge " + b + "\">" + p[4] + "</span></td><td style=\"font-size:12px;color:var(--muted)\">" + p[5] + "</td><td style=\"font-variant-numeric:tabular-nums\">" + lag + "</td></tr>"
+            rows = rows + "<tr><td><strong>" + html_esc(p[0]) + "</strong></td><td>" + html_esc(p[1]) + "</td><td>" + html_esc(p[2]) + "</td><td>" + html_esc(p[3]) + "</td><td><span class=\"badge " + b + "\">" + html_esc(p[4]) + "</span></td><td style=\"font-size:12px;color:var(--muted)\">" + html_esc(p[5]) + "</td><td style=\"font-variant-numeric:tabular-nums\">" + html_esc(lag) + "</td></tr>"
         }
         i = i + 1
     }
@@ -1544,13 +1595,13 @@ fn f_cdr(db: SqlDB, ok: int) -> string {
             if len(dur) > 0 { dur_label = dur + "s" }
 
             let did = "cdr" + string(i)
-            let detail = "<div id=\"" + did + "\" style=\"display:none;margin:8px 12px 12px;padding:16px;background:rgba(2,6,23,.45);border:1px solid var(--border);border-radius:10px\"><div style=\"display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;font-size:13px\"><div><div style=\"color:var(--muted);font-size:11px\">Call-ID</div><code style=\"font-size:11px;word-break:break-all\">" + p[0] + "</code></div><div><div style=\"color:var(--muted);font-size:11px\">Status</div><span class=\"badge " + b + "\">" + p[3] + "</span></div><div><div style=\"color:var(--muted);font-size:11px\">Started</div>" + p[4] + "</div><div><div style=\"color:var(--muted);font-size:11px\">Caller</div><strong>" + p[1] + "</strong></div><div><div style=\"color:var(--muted);font-size:11px\">Callee</div><strong>" + p[2] + "</strong></div><div><div style=\"color:var(--muted);font-size:11px\">Destination</div>" + dest + "</div><div><div style=\"color:var(--muted);font-size:11px\">Source IP</div>" + src + "</div><div><div style=\"color:var(--muted);font-size:11px\">Transport</div>" + tr + "</div><div><div style=\"color:var(--muted);font-size:11px\">Duration</div>" + dur_label + "</div></div>"
+            let detail = "<div id=\"" + did + "\" style=\"display:none;margin:8px 12px 12px;padding:16px;background:rgba(2,6,23,.45);border:1px solid var(--border);border-radius:10px\"><div style=\"display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;font-size:13px\"><div><div style=\"color:var(--muted);font-size:11px\">Call-ID</div><code style=\"font-size:11px;word-break:break-all\">" + html_esc(p[0]) + "</code></div><div><div style=\"color:var(--muted);font-size:11px\">Status</div><span class=\"badge " + b + "\">" + html_esc(p[3]) + "</span></div><div><div style=\"color:var(--muted);font-size:11px\">Started</div>" + html_esc(p[4]) + "</div><div><div style=\"color:var(--muted);font-size:11px\">Caller</div><strong>" + html_esc(p[1]) + "</strong></div><div><div style=\"color:var(--muted);font-size:11px\">Callee</div><strong>" + html_esc(p[2]) + "</strong></div><div><div style=\"color:var(--muted);font-size:11px\">Destination</div>" + html_esc(dest) + "</div><div><div style=\"color:var(--muted);font-size:11px\">Source IP</div>" + html_esc(src) + "</div><div><div style=\"color:var(--muted);font-size:11px\">Transport</div>" + html_esc(tr) + "</div><div><div style=\"color:var(--muted);font-size:11px\">Duration</div>" + html_esc(dur_label) + "</div></div>"
                 + "<div style=\"margin-top:12px;display:flex;gap:8px;flex-wrap:wrap\">"
-                + "<a class=\"btn sm\" hx-get=\"/admin/transactions?cid=" + p[0] + "\" hx-target=\"#c\" hx-push-url=\"true\">Open SIP Trace</a>"
-                + "<button type=\"button\" class=\"btn sm ghost\" onclick=\"event.stopPropagation();copyCid('" + p[0] + "',this)\">Copy Call-ID</button>"
+                + "<a class=\"btn sm\" hx-get=\"/admin/transactions?cid=" + html_esc(p[0]) + "\" hx-target=\"#c\" hx-push-url=\"true\">Open SIP Trace</a>"
+                + "<button type=\"button\" class=\"btn sm ghost\" onclick=\"event.stopPropagation();copyCid('" + js_esc(p[0]) + "',this)\">Copy Call-ID</button>"
                 + "</div></div>"
 
-            rows = rows + "<tr style=\"cursor:pointer\" onclick=\"var d=document.getElementById('" + did + "');d.style.display=d.style.display=='none'?'block':'none'\"><td>" + icon + "</td><td><strong>" + p[1] + "</strong></td><td>" + p[2] + "</td><td><span class=\"badge " + b + "\">" + p[3] + "</span></td><td style=\"font-size:12px;font-variant-numeric:tabular-nums\">" + dur_label + "</td><td style=\"font-size:12px;color:var(--muted)\">" + p[4] + "</td><td style=\"font-size:12px\">" + dest + "</td></tr><tr><td colspan=\"7\" style=\"padding:0;border:none\">" + detail + "</td></tr>"
+            rows = rows + "<tr style=\"cursor:pointer\" onclick=\"var d=document.getElementById('" + did + "');d.style.display=d.style.display=='none'?'block':'none'\"><td>" + icon + "</td><td><strong>" + html_esc(p[1]) + "</strong></td><td>" + html_esc(p[2]) + "</td><td><span class=\"badge " + b + "\">" + html_esc(p[3]) + "</span></td><td style=\"font-size:12px;font-variant-numeric:tabular-nums\">" + html_esc(dur_label) + "</td><td style=\"font-size:12px;color:var(--muted)\">" + html_esc(p[4]) + "</td><td style=\"font-size:12px\">" + html_esc(dest) + "</td></tr><tr><td colspan=\"7\" style=\"padding:0;border:none\">" + detail + "</td></tr>"
         }
         i = i + 1
     }
@@ -1576,14 +1627,14 @@ fn f_config(db: SqlDB, ok: int) -> string {
     while i < len(data) {
         let p = str_split(data[i], "|")
         if len(p) >= 3 {
-            rows = rows + "<tr><td style=\"font-weight:500\">" + p[0] + "</td><td><form hx-post=\"/admin/api/config\" hx-target=\"#c\" style=\"display:flex;gap:4px\"><input type=\"hidden\" name=\"key\" value=\"" + p[0] + "\"><input type=\"hidden\" name=\"description\" value=\"" + p[2] + "\"><input name=\"value\" value=\"" + p[1] + "\" style=\"min-width:200px\"><button class=\"btn sm\" type=\"submit\">Save</button></form></td><td style=\"color:var(--muted);font-size:12px\">" + p[2] + "</td><td><button class=\"btn sm r\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"config\",\"key\":\"key\",\"val\":\"" + p[0] + "\"}' hx-target=\"#c\" hx-confirm=\"Delete?\">Del</button></td></tr>"
+            rows = rows + "<tr><td style=\"font-weight:500\">" + html_esc(p[0]) + "</td><td><form hx-post=\"/admin/api/config\" hx-target=\"#c\" style=\"display:flex;gap:4px\"><input type=\"hidden\" name=\"key\" value=\"" + html_esc(p[0]) + "\"><input type=\"hidden\" name=\"description\" value=\"" + html_esc(p[2]) + "\"><input name=\"value\" value=\"" + html_esc(p[1]) + "\" style=\"min-width:200px\"><button class=\"btn sm\" type=\"submit\">Save</button></form></td><td style=\"color:var(--muted);font-size:12px\">" + html_esc(p[2]) + "</td><td><button class=\"btn sm r\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"config\",\"key\":\"key\",\"val\":\"" + html_esc(p[0]) + "\"}' hx-target=\"#c\" hx-confirm=\"Delete?\">Del</button></td></tr>"
         }
         i = i + 1
     }
     let tls_cert = env_get_or("SIP_TLS_CERT", "(unset — SIPS disabled)")
     let tls_key = env_get_or("SIP_TLS_KEY", "(unset)")
     let pubip = env_get_or("SIP_PUBLIC_IP", "")
-    let note = "<div class=\"card\" style=\"margin-bottom:14px\"><h2>Runtime / transports</h2><p style=\"color:var(--muted);font-size:13px;line-height:1.6\"><strong>SIPS TLS (5061):</strong> <code>" + tls_cert + "</code> / <code>" + tls_key + "</code><br><strong>WSS (8443):</strong> plain WebSocket — terminate TLS at leba/proxy<br><strong>Public IP (SDP NAT):</strong> <code>" + pubip + "</code><br><strong>STIR/SHAKEN:</strong> Identity uses HMAC JWT placeholder when enabled — <em>not</em> production ES256 STI-PA. Keep <code>stir_shaken_enabled=false</code> unless testing.<br><strong>rtpengine:</strong> set <code>rtpengine_enabled=true</code> + host/port when media relay is installed. Default is SDP NAT rewrite only.</p></div>"
+    let note = "<div class=\"card\" style=\"margin-bottom:14px\"><h2>Runtime / transports</h2><p style=\"color:var(--muted);font-size:13px;line-height:1.6\"><strong>SIPS TLS (5061):</strong> <code>" + html_esc(tls_cert) + "</code> / <code>" + html_esc(tls_key) + "</code><br><strong>WSS (8443):</strong> plain WebSocket — terminate TLS at leba/proxy<br><strong>Public IP (SDP NAT):</strong> <code>" + html_esc(pubip) + "</code><br><strong>STIR/SHAKEN:</strong> Identity uses HMAC JWT placeholder when enabled — <em>not</em> production ES256 STI-PA. Keep <code>stir_shaken_enabled=false</code> unless testing.<br><strong>rtpengine:</strong> set <code>rtpengine_enabled=true</code> + host/port when media relay is installed. Default is SDP NAT rewrite only.</p></div>"
     return note + "<div class=\"card\"><h2>Configuration</h2><p style=\"color:var(--muted);font-size:12px;margin-bottom:12px\">Edit values inline and click Save. Rate limits and rtpengine apply after SIGHUP / ~10s heartbeat. Keys: <code>rate_limit_per_user</code>, <code>rtpengine_*</code>, <code>security_*</code>.</p><form hx-post=\"/admin/api/config\" hx-target=\"#c\"><div class=\"form-row\"><input name=\"key\" placeholder=\"New Key\" required><input name=\"value\" placeholder=\"Value\" required><input name=\"description\" placeholder=\"Description\"><button type=\"submit\">Add Setting</button></div></form></div><div class=\"card\"><table><tr><th>Key</th><th>Value</th><th>Description</th><th></th></tr>" + rows + "</table></div>"
 }
 
@@ -1597,7 +1648,7 @@ fn f_admins(db: SqlDB, ok: int) -> string {
             let mut b = "b"
             if str_eq(p[1], "super_admin") { b = "y" }
             if str_eq(p[1], "admin") { b = "g" }
-            rows = rows + "<tr><td>" + p[0] + "</td><td><span class=\"badge " + b + "\">" + p[1] + "</span></td><td>" + p[2] + "</td><td><button class=\"btn sm r\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"admin_users\",\"key\":\"username\",\"val\":\"" + p[0] + "\"}' hx-target=\"#c\" hx-confirm=\"Delete?\">Del</button></td></tr>"
+            rows = rows + "<tr><td>" + html_esc(p[0]) + "</td><td><span class=\"badge " + b + "\">" + html_esc(p[1]) + "</span></td><td>" + html_esc(p[2]) + "</td><td><button class=\"btn sm r\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"admin_users\",\"key\":\"username\",\"val\":\"" + html_esc(p[0]) + "\"}' hx-target=\"#c\" hx-confirm=\"Delete?\">Del</button></td></tr>"
         }
         i = i + 1
     }
@@ -1612,70 +1663,63 @@ fn f_account() -> string {
 fn f_search(db: SqlDB, ok: int, qstr: string) -> string {
     let q = query_val(qstr, "q")
     let form = "<div class=\"card\"><form class=\"form-row\" hx-get=\"/admin/search\" hx-target=\"#c\" hx-push-url=\"true\">"
-        + "<div style=\"flex:2\"><label>Search</label><input name=\"q\" value=\"" + q + "\" placeholder=\"username, call-id, IP, number…\" autofocus></div>"
+        + "<div style=\"flex:2\"><label>Search</label><input name=\"q\" value=\"" + html_esc(q) + "\" placeholder=\"username, call-id, IP, number…\" autofocus></div>"
         + "<div style=\"flex:none\"><label style=\"color:transparent\">.</label><button type=\"submit\">Search</button></div></form></div>"
     if len(q) == 0 {
         return "<div class=\"topbar\"><h1>Search</h1></div>" + form
             + "<div class=\"card\"><p style=\"color:var(--muted)\">Search SIP users, registrations, CDRs, bans, and Call-IDs.</p></div>"
     }
-    // Escape single quotes for naive LIKE (admin-only)
-    let mut qq = ""
-    let mut qi = 0
-    while qi < len(q) {
-        if int(q[qi]) != 39 { qq = qq + q[qi:qi + 1] }
-        qi = qi + 1
-    }
-    let like = "%" + qq + "%"
+    let like = "%" + q + "%"
 
     let mut out = ""
-    let users = tbl_query(db, ok, "SELECT username || '|' || COALESCE(domain,'') || '|' || enabled FROM users WHERE username ILIKE '" + like + "' OR domain ILIKE '" + like + "' ORDER BY username", 30)
+    let users = tbl_query_param(db, ok, "SELECT username || '|' || COALESCE(domain,'') || '|' || enabled FROM users WHERE username ILIKE $1 OR domain ILIKE $1 ORDER BY username", like, 30)
     let mut ur = ""
     let mut ui = 0
     while ui < len(users) {
         let p = str_split(users[ui], "|")
-        if len(p) >= 2 { ur = ur + "<tr><td>" + p[0] + "</td><td>" + p[1] + "</td><td>" + p[2] + "</td></tr>" }
+        if len(p) >= 2 { ur = ur + "<tr><td>" + html_esc(p[0]) + "</td><td>" + html_esc(p[1]) + "</td><td>" + html_esc(p[2]) + "</td></tr>" }
         ui = ui + 1
     }
     if len(ur) == 0 { ur = "<tr><td colspan=\"3\" style=\"color:var(--muted)\">No users</td></tr>" }
     out = out + "<div class=\"card\"><h2>SIP Users</h2><table><tr><th>User</th><th>Domain</th><th>Enabled</th></tr>" + ur + "</table></div>"
 
-    let regs = tbl_query(db, ok, "SELECT aor || '|' || contact || '|' || COALESCE(transport,'') FROM registrations WHERE aor ILIKE '" + like + "' OR contact ILIKE '" + like + "' ORDER BY updated_at DESC", 30)
+    let regs = tbl_query_param(db, ok, "SELECT aor || '|' || contact || '|' || COALESCE(transport,'') FROM registrations WHERE aor ILIKE $1 OR contact ILIKE $1 ORDER BY updated_at DESC", like, 30)
     let mut rr = ""
     let mut ri = 0
     while ri < len(regs) {
         let p = str_split(regs[ri], "|")
-        if len(p) >= 2 { rr = rr + "<tr><td>" + p[0] + "</td><td><code style=\"font-size:11px\">" + p[1] + "</code></td><td>" + p[2] + "</td></tr>" }
+        if len(p) >= 2 { rr = rr + "<tr><td>" + html_esc(p[0]) + "</td><td><code style=\"font-size:11px\">" + html_esc(p[1]) + "</code></td><td>" + html_esc(p[2]) + "</td></tr>" }
         ri = ri + 1
     }
     if len(rr) == 0 { rr = "<tr><td colspan=\"3\" style=\"color:var(--muted)\">No registrations</td></tr>" }
     out = out + "<div class=\"card\"><h2>Registrations</h2><table><tr><th>AOR</th><th>Contact</th><th>Transport</th></tr>" + rr + "</table></div>"
 
-    let cdrs = tbl_query(db, ok, "SELECT call_id || '|' || COALESCE(caller,'') || '|' || COALESCE(callee,'') || '|' || COALESCE(status,'') || '|' || to_char(started_at,'YYYY-MM-DD HH24:MI') FROM cdr WHERE call_id ILIKE '" + like + "' OR caller ILIKE '" + like + "' OR callee ILIKE '" + like + "' OR status ILIKE '" + like + "' ORDER BY started_at DESC", 30)
+    let cdrs = tbl_query_param(db, ok, "SELECT call_id || '|' || COALESCE(caller,'') || '|' || COALESCE(callee,'') || '|' || COALESCE(status,'') || '|' || to_char(started_at,'YYYY-MM-DD HH24:MI') FROM cdr WHERE call_id ILIKE $1 OR caller ILIKE $1 OR callee ILIKE $1 OR status ILIKE $1 ORDER BY started_at DESC", like, 30)
     let mut cr = ""
     let mut cii = 0
     while cii < len(cdrs) {
         let p = str_split(cdrs[cii], "|")
         if len(p) >= 5 {
-            cr = cr + "<tr><td style=\"font-size:12px\">" + p[4] + "</td><td>" + p[1] + " → " + p[2] + "</td><td><span class=\"badge b\">" + p[3] + "</span></td>"
-                + "<td><a class=\"btn sm\" hx-get=\"/admin/transactions?cid=" + p[0] + "\" hx-target=\"#c\" hx-push-url=\"true\">Trace</a></td></tr>"
+            cr = cr + "<tr><td style=\"font-size:12px\">" + html_esc(p[4]) + "</td><td>" + html_esc(p[1]) + " → " + html_esc(p[2]) + "</td><td><span class=\"badge b\">" + html_esc(p[3]) + "</span></td>"
+                + "<td><a class=\"btn sm\" hx-get=\"/admin/transactions?cid=" + html_esc(p[0]) + "\" hx-target=\"#c\" hx-push-url=\"true\">Trace</a></td></tr>"
         }
         cii = cii + 1
     }
     if len(cr) == 0 { cr = "<tr><td colspan=\"4\" style=\"color:var(--muted)\">No CDRs</td></tr>" }
     out = out + "<div class=\"card\"><h2>CDRs</h2><table><tr><th>Time</th><th>Parties</th><th>Status</th><th></th></tr>" + cr + "</table></div>"
 
-    let bans = tbl_query(db, ok, "SELECT source_ip || '|' || reason || '|' || ban_count FROM security_bans WHERE source_ip ILIKE '" + like + "' OR reason ILIKE '" + like + "' ORDER BY banned_at DESC", 20)
+    let bans = tbl_query_param(db, ok, "SELECT source_ip || '|' || COALESCE(reason,'') || '|' || ban_count FROM security_bans WHERE source_ip ILIKE $1 OR reason ILIKE $1 ORDER BY created_at DESC", like, 20)
     let mut br = ""
     let mut bi = 0
     while bi < len(bans) {
         let p = str_split(bans[bi], "|")
-        if len(p) >= 2 { br = br + "<tr><td><code>" + p[0] + "</code></td><td>" + p[1] + "</td><td>" + p[2] + "</td></tr>" }
+        if len(p) >= 2 { br = br + "<tr><td><code>" + html_esc(p[0]) + "</code></td><td>" + html_esc(p[1]) + "</td><td>" + html_esc(p[2]) + "</td></tr>" }
         bi = bi + 1
     }
     if len(br) == 0 { br = "<tr><td colspan=\"3\" style=\"color:var(--muted)\">No bans</td></tr>" }
     out = out + "<div class=\"card\"><h2>Bans</h2><table><tr><th>IP</th><th>Reason</th><th>Count</th></tr>" + br + "</table></div>"
 
-    return "<div class=\"topbar\"><h1>Search</h1><div class=\"user\">Results for <code>" + q + "</code></div></div>" + form + out
+    return "<div class=\"topbar\"><h1>Search</h1><div class=\"user\">Results for <code>" + html_esc(q) + "</code></div></div>" + form + out
 }
 
 // Route / dialplan simulator (prefix + DID + local user checks — mirrors proxy decision outline)
@@ -1685,8 +1729,8 @@ fn f_simulate(db: SqlDB, ok: int, qstr: string) -> string {
     let form = "<div class=\"card\"><h2>Route simulator</h2>"
         + "<p style=\"color:var(--muted);font-size:13px;margin-bottom:12px\">Enter a callee number (and optional caller) to see which DID, local user, routing rule, or gateway prefix would apply. This is a read-only decision preview — it does not place a call.</p>"
         + "<form class=\"form-row\" hx-get=\"/admin/simulate\" hx-target=\"#c\" hx-push-url=\"true\">"
-        + "<div><label>Callee / number</label><input name=\"number\" value=\"" + num + "\" placeholder=\"e.g. bob or 15551234567\" required></div>"
-        + "<div><label>Caller (optional)</label><input name=\"caller\" value=\"" + caller + "\" placeholder=\"alice\"></div>"
+        + "<div><label>Callee / number</label><input name=\"number\" value=\"" + html_esc(num) + "\" placeholder=\"e.g. bob or 15551234567\" required></div>"
+        + "<div><label>Caller (optional)</label><input name=\"caller\" value=\"" + html_esc(caller) + "\" placeholder=\"alice\"></div>"
         + "<div style=\"flex:none\"><label style=\"color:transparent\">.</label><button type=\"submit\">Simulate</button></div></form></div>"
 
     if len(num) == 0 {
@@ -1698,13 +1742,12 @@ fn f_simulate(db: SqlDB, ok: int, qstr: string) -> string {
     let mut dec_b = "r"
 
     // DID
-    let did = ""
     let mut did_u = ""
     if ok == 1 {
         did_u = sql_query_str(db, "SELECT destination_user FROM dids WHERE number = $1 AND enabled = true LIMIT 1", num)
     }
     if len(did_u) > 0 {
-        steps = steps + "<li><span class=\"badge g\">DID</span> Number <code>" + num + "</code> maps to user <strong>" + did_u + "</strong></li>"
+        steps = steps + "<li><span class=\"badge g\">DID</span> Number <code>" + html_esc(num) + "</code> maps to user <strong>" + html_esc(did_u) + "</strong></li>"
         // check reg
         let mut reg = ""
         if ok == 1 {
@@ -1713,21 +1756,21 @@ fn f_simulate(db: SqlDB, ok: int, qstr: string) -> string {
         if len(reg) > 0 {
             decision = "LOCAL-DID → " + reg
             dec_b = "g"
-            steps = steps + "<li><span class=\"badge g\">REG</span> User online at <code>" + reg + "</code></li>"
+            steps = steps + "<li><span class=\"badge g\">REG</span> User online at <code>" + html_esc(reg) + "</code></li>"
         } else {
             decision = "DID target offline → 480"
             dec_b = "y"
             steps = steps + "<li><span class=\"badge y\">REG</span> Destination user not registered</li>"
         }
     } else {
-        steps = steps + "<li><span class=\"badge b\">DID</span> No DID mapping for <code>" + num + "</code></li>"
+        steps = steps + "<li><span class=\"badge b\">DID</span> No DID mapping for <code>" + html_esc(num) + "</code></li>"
         // Local SIP user
         let mut lu = ""
         if ok == 1 {
             lu = sql_query_str(db, "SELECT username FROM users WHERE username = $1 AND enabled = true LIMIT 1", num)
         }
         if len(lu) > 0 {
-            steps = steps + "<li><span class=\"badge g\">USER</span> Local SIP user <strong>" + lu + "</strong> exists</li>"
+            steps = steps + "<li><span class=\"badge g\">USER</span> Local SIP user <strong>" + html_esc(lu) + "</strong> exists</li>"
             let mut reg2 = ""
             if ok == 1 {
                 reg2 = sql_query_str(db, "SELECT contact FROM registrations WHERE aor LIKE $1 || '@%' AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1", lu)
@@ -1735,7 +1778,7 @@ fn f_simulate(db: SqlDB, ok: int, qstr: string) -> string {
             if len(reg2) > 0 {
                 decision = "LOCAL → " + reg2
                 dec_b = "g"
-                steps = steps + "<li><span class=\"badge g\">REG</span> Registered at <code>" + reg2 + "</code></li>"
+                steps = steps + "<li><span class=\"badge g\">REG</span> Registered at <code>" + html_esc(reg2) + "</code></li>"
             } else {
                 decision = "Local user offline → 480 Temporarily Unavailable"
                 dec_b = "y"
@@ -1751,7 +1794,7 @@ fn f_simulate(db: SqlDB, ok: int, qstr: string) -> string {
             if len(rule) > 0 {
                 let rp = str_split(rule, "|")
                 let act = rp[0]
-                steps = steps + "<li><span class=\"badge g\">RULE</span> Matched routing rule action <code>" + act + "</code> (priority " + rp[2] + ")</li>"
+                steps = steps + "<li><span class=\"badge g\">RULE</span> Matched routing rule action <code>" + html_esc(act) + "</code> (priority " + html_esc(rp[2]) + ")</li>"
                 decision = "ROUTING → " + act
                 dec_b = "b"
             } else {
@@ -1761,7 +1804,7 @@ fn f_simulate(db: SqlDB, ok: int, qstr: string) -> string {
                     rt = sql_query_str(db, "SELECT g.name || ' @ ' || g.address || ':' || g.port || ' (prefix ' || r.prefix || ')' FROM routes r JOIN gateways g ON r.gateway_id = g.id WHERE r.enabled = true AND g.enabled = true AND ($1 LIKE r.prefix || '%' OR r.prefix = '*') ORDER BY length(r.prefix) DESC, r.priority ASC LIMIT 1", num)
                 }
                 if len(rt) > 0 {
-                    steps = steps + "<li><span class=\"badge g\">ROUTE</span> Gateway <code>" + rt + "</code></li>"
+                    steps = steps + "<li><span class=\"badge g\">ROUTE</span> Gateway <code>" + html_esc(rt) + "</code></li>"
                     decision = "GATEWAY → " + rt
                     dec_b = "b"
                 } else {
@@ -1777,14 +1820,14 @@ fn f_simulate(db: SqlDB, ok: int, qstr: string) -> string {
         dp = sql_query_str(db, "SELECT match_prefix || ' → callee:' || callee_action || ' caller:' || COALESCE(caller_action,'') FROM dialplan WHERE enabled = true AND $1 LIKE match_prefix || '%' ORDER BY priority ASC LIMIT 1", num)
     }
     if len(dp) > 0 {
-        steps = steps + "<li><span class=\"badge y\">DIALPLAN</span> Number translation: <code>" + dp + "</code></li>"
+        steps = steps + "<li><span class=\"badge y\">DIALPLAN</span> Number translation: <code>" + html_esc(dp) + "</code></li>"
     }
 
     let mut result = "<div class=\"card\"><h2>Result</h2>"
-        + "<p style=\"margin-bottom:12px\">Input <code>" + num + "</code>"
-    if len(caller) > 0 { result = result + " from <code>" + caller + "</code>" }
+        + "<p style=\"margin-bottom:12px\">Input <code>" + html_esc(num) + "</code>"
+    if len(caller) > 0 { result = result + " from <code>" + html_esc(caller) + "</code>" }
     result = result + "</p>"
-        + "<div style=\"font-size:18px;margin-bottom:14px\"><span class=\"badge " + dec_b + "\">" + decision + "</span></div>"
+        + "<div style=\"font-size:18px;margin-bottom:14px\"><span class=\"badge " + dec_b + "\">" + html_esc(decision) + "</span></div>"
         + "<ol style=\"margin-left:18px;color:var(--muted);font-size:13.5px;line-height:1.9\">" + steps + "</ol></div>"
 
     return "<div class=\"topbar\"><h1>Route Simulator</h1></div>" + form + result
@@ -1798,7 +1841,7 @@ fn f_audit(db: SqlDB, ok: int) -> string {
     while i < len(data) {
         let p = str_split(data[i], "|")
         if len(p) >= 4 {
-            rows = rows + "<tr><td style=\"font-size:12px;color:var(--muted)\">" + p[0] + "</td><td><strong>" + p[1] + "</strong></td><td><span class=\"badge b\">" + p[2] + "</span></td><td style=\"font-size:12px\">" + p[3] + "</td></tr>"
+            rows = rows + "<tr><td style=\"font-size:12px;color:var(--muted)\">" + html_esc(p[0]) + "</td><td><strong>" + html_esc(p[1]) + "</strong></td><td><span class=\"badge b\">" + html_esc(p[2]) + "</span></td><td style=\"font-size:12px\">" + html_esc(p[3]) + "</td></tr>"
         }
         i = i + 1
     }

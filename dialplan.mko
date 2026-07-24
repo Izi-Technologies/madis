@@ -23,12 +23,12 @@ fn num_apply_action(num: string, action: string) -> string {
         }
         if digits >= n { return "" }
         return num[digits:]
-    } else {
+    }
 
     // prepend:PREFIX
     if str_has_prefix(action, "prepend:") {
         return action[8:] + num
-    } else {
+    }
 
     // replace:OLD:NEW
     if str_has_prefix(action, "replace:") {
@@ -38,12 +38,12 @@ fn num_apply_action(num: string, action: string) -> string {
         let old = rest[0:colon]
         let new_str = rest[colon + 1:]
         return str_replace(num, old, new_str)
-    } else {
+    }
 
     // set:NUMBER
     if str_has_prefix(action, "set:") {
         return action[4:]
-    } else {
+    }
 
     // e164:CC — normalize to E.164 format
     if str_has_prefix(action, "e164:") {
@@ -56,25 +56,21 @@ fn num_apply_action(num: string, action: string) -> string {
         if str_has_prefix(num, "0") { return "+" + cc + num[1:] }
         // Just add +CC
         return "+" + cc + num
-    } else {
+    }
 
     // strip_plus
     if str_eq(action, "strip_plus") {
         if str_has_prefix(num, "+") { return num[1:] }
         return num
-    } else {
+    }
 
     // add_plus
     if str_eq(action, "add_plus") {
         if str_has_prefix(num, "+") { return num }
         return "+" + num
-    } else {
+    }
 
     // Unknown action — return unchanged
-        return num
-
-    }}}}}}}
-
     return num
 }
 
@@ -120,16 +116,17 @@ fn db_dialplan(db: SqlDB, db_ok: int, caller: string, callee: string, direction:
     let mut plen = len(callee)
     while plen > 0 {
         let pfx = callee[0:plen]
-        // Query: match prefix, direction, and number length
-        let callee_action = sql_query_str(db, "SELECT callee_action FROM dialplan WHERE match_prefix = $1 AND direction = $1 AND enabled = true ORDER BY priority ASC LIMIT 1", pfx)
-        if len(callee_action) > 0 {
-            result[0] = num_apply_chain(callee, callee_action)
-            // Also get caller action from same rule
-            let caller_action = sql_query_str(db, "SELECT caller_action FROM dialplan WHERE match_prefix = $1 AND direction = $1 AND enabled = true ORDER BY priority ASC LIMIT 1", pfx)
-            if len(caller_action) > 0 {
-                result[1] = num_apply_chain(caller, caller_action)
+        // Bind prefix and direction separately and fetch both actions in one
+        // query. The old code bound the prefix to both placeholders, so a
+        // direction-specific rule could never match.
+        let actions = sql_query_str2(db, "SELECT COALESCE(callee_action,'') || '|' || COALESCE(caller_action,'') FROM dialplan WHERE match_prefix = $1 AND direction = $2 AND enabled = true ORDER BY priority ASC LIMIT 1", pfx, direction)
+        let action_parts = str_split(actions, "|")
+        if len(action_parts) >= 1 && len(action_parts[0]) > 0 {
+            result[0] = num_apply_chain(callee, action_parts[0])
+            if len(action_parts) >= 2 {
+                if len(action_parts[1]) > 0 { result[1] = num_apply_chain(caller, action_parts[1]) }
             }
-            cmap_set(cache, key, result[0] + "|" + result[1])
+            let _ = bounded_cache_set(cache, "dp_seq", "dp_ring|", key, result[0] + "|" + result[1], 16384)
             return result
         }
         plen = plen - 1
@@ -141,7 +138,7 @@ fn db_dialplan(db: SqlDB, db_ok: int, caller: string, callee: string, direction:
         result[0] = num_apply_chain(callee, def_action)
     }
 
-    cmap_set(cache, key, result[0] + "|" + result[1])
+    let _ = bounded_cache_set(cache, "dp_seq", "dp_ring|", key, result[0] + "|" + result[1], 16384)
     return result
 }
 
@@ -151,7 +148,7 @@ fn db_lookup_did(db: SqlDB, db_ok: int, did_number: string, cache: CMap) -> stri
     if cmap_has(cache, key) == 1 { return cmap_get(cache, key) }
     if db_ok == 0 { return "" }
     let user = sql_query_str(db, "SELECT destination_user FROM dids WHERE number = $1 AND enabled = true LIMIT 1", did_number)
-    if len(user) > 0 { cmap_set(cache, key, user); return user }
+    if len(user) > 0 { let _ = bounded_cache_set(cache, "did_seq", "did_ring|", key, user, 16384); return user }
     return ""
 }
 
@@ -169,7 +166,7 @@ fn db_rate_ok(user: string, cache: CMap) -> int {
     let key = "rl|" + user
     let now = now_ms()
     if cmap_has(cache, key) == 0 {
-        cmap_set(cache, key, string(limit - 1) + "|" + string(now))
+        let _ = bounded_cache_set(cache, "rate_seq", "rate_ring|", key, string(limit - 1) + "|" + string(now), 16384)
         return 1
     }
     let st = cmap_get(cache, key)
@@ -183,7 +180,7 @@ fn db_rate_ok(user: string, cache: CMap) -> int {
     if tokens > limit { tokens = limit }
     if tokens <= 0 { return 0 }
     tokens = tokens - 1
-    cmap_set(cache, key, string(tokens) + "|" + string(now))
+    let _ = bounded_cache_set(cache, "rate_seq", "rate_ring|", key, string(tokens) + "|" + string(now), 16384)
     return 1
 }
 

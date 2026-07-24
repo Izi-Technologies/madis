@@ -37,20 +37,8 @@ fn sip_target_path(target: string) -> string {
 }
 
 fn sip_target_explicit_port(target: string) -> int {
-    let authority = sip_target_authority(target)
-    if len(authority) == 0 { return 0 }
-    let mut colon = str_index(authority, ":")
-    if int(authority[0]) == 91 {
-        let close = str_index(authority, "]")
-        if close >= 0 && close + 1 < len(authority) && int(authority[close + 1]) == 58 { colon = close + 1 }
-        else { colon = -1 }
-    } else if colon >= 0 && str_index(authority[colon + 1:], ":") >= 0 {
-        colon = -1
-    }
-    if colon < 0 || colon + 1 >= len(authority) { return 0 }
-    let mut valid = 0
-    match parse_int(authority[colon + 1:]) { Ok(_) => { valid = 1 } Err(_) => { valid = 0 } }
-    return valid
+    if sip_target_port_state(target) == 1 { return 1 }
+    return 0
 }
 
 fn sip_srv_service(target: string, transport: string) -> string {
@@ -146,8 +134,7 @@ fn sip_naptr_resolve_service(target: string, transport: string, cache: CMap) -> 
     }
     if fresh == 0 {
         records = dns_naptr_lookup(host)
-        cmap_set(cache, key, records)
-        cmap_set(cache, key + "|at", string(now))
+        let _ = bounded_cache_pair_set(cache, "dns_seq", "dns_ring|", key, records, now, 16384)
     }
     if len(records) == 0 { return "" }
     // A URI transport parameter (or sips scheme) is an explicit choice. A
@@ -197,8 +184,7 @@ fn sip_srv_resolve_targets(target: string, transport: string, cache: CMap) -> st
     }
     if fresh == 0 {
         records = dns_srv_lookup(service)
-        cmap_set(cache, key, records)
-        cmap_set(cache, key + "|at", string(now))
+        let _ = bounded_cache_pair_set(cache, "dns_seq", "dns_ring|", key, records, now, 16384)
     }
     if len(records) == 0 { return "" }
 
@@ -270,10 +256,58 @@ fn sip_srv_resolve_target(target: string, transport: string, cache: CMap) -> str
     return str_trim_space(str_split(targets, ",")[0])
 }
 
+// Persistent outbound associations are keyed by attacker- or database-derived
+// targets. Keep the per-worker list bounded and return the oldest item so the
+// caller can close its transport-specific handle before replacing it.
+fn sip_assoc_list_add(cache: CMap, list_key: string, item: string) -> string {
+    if len(item) == 0 { return "" }
+    let mut list = ""
+    if cmap_has(cache, list_key) == 1 { list = cmap_get(cache, list_key) }
+    if str_contains("," + list + ",", "," + item + ",") { return "" }
+    let values = str_split(list, ",")
+    let mut start = 0
+    let mut evicted = ""
+    if len(values) >= 1024 {
+        evicted = str_trim_space(values[0])
+        start = 1
+    }
+    let mut next = ""
+    let mut i = start
+    while i < len(values) {
+        let value = str_trim_space(values[i])
+        if len(value) > 0 {
+            if len(next) > 0 { next = next + "," }
+            next = next + value
+        }
+        i = i + 1
+    }
+    if len(next) > 0 { next = next + "," }
+    next = next + item
+    cmap_set(cache, list_key, next)
+    return evicted
+}
+
+fn sip_assoc_list_remove(cache: CMap, list_key: string, item: string) -> int {
+    if cmap_has(cache, list_key) == 0 { return 0 }
+    let values = str_split(cmap_get(cache, list_key), ",")
+    let mut kept = ""
+    let mut i = 0
+    while i < len(values) {
+        let value = str_trim_space(values[i])
+        if len(value) > 0 && not str_eq(value, item) {
+            if len(kept) > 0 { kept = kept + "," }
+            kept = kept + value
+        }
+        i = i + 1
+    }
+    if len(kept) == 0 { let _ = cmap_del(cache, list_key) } else { cmap_set(cache, list_key, kept) }
+    return 0
+}
+
 fn sip_forward_tcp(target: string, msg: string, cache: CMap, owner: int) -> int {
     let host = sip_target_host(target)
     let port = sip_target_port(target, 5060)
-    if len(host) == 0 { return 0 }
+    if len(host) == 0 || port <= 0 { return 0 }
     let assoc_key = "tcp_assoc|" + string(owner) + "|" + host + ":" + string(port)
     let mut fd = -1
     if cmap_has(cache, assoc_key) == 1 {
@@ -295,12 +329,15 @@ fn sip_forward_tcp(target: string, msg: string, cache: CMap, owner: int) -> int 
     if sent >= 0 {
         cmap_set(cache, assoc_key, string(fd))
         let list_key = "tcp_assoc_list|" + string(owner)
-        let mut list = ""
-        if cmap_has(cache, list_key) == 1 { list = cmap_get(cache, list_key) }
         let item = host + ":" + string(port)
-        if not str_contains("," + list + ",", "," + item + ",") {
-            if len(list) == 0 { list = item } else { list = list + "," + item }
-            cmap_set(cache, list_key, list)
+        let evicted = sip_assoc_list_add(cache, list_key, item)
+        if len(evicted) > 0 {
+            let old_key = "tcp_assoc|" + string(owner) + "|" + evicted
+            if cmap_has(cache, old_key) == 1 {
+                match parse_int(cmap_get(cache, old_key)) { Ok(old_fd) => { let _ = tcp_close(old_fd) } Err(_) => {} }
+                let _ = cmap_del(cache, old_key)
+                let _ = cmap_del(cache, "tcp_buf|" + string(owner) + "|" + evicted)
+            }
         }
         cmap_set(cache, "last_forward_target", host + ":" + string(port) + ";tcp")
         return 1
@@ -313,7 +350,7 @@ fn sip_forward_tls(target: string, msg: string, cache: CMap, owner: int) -> int 
     if tls_client_available() == 0 { return 0 }
     let host = sip_target_host(target)
     let port = sip_target_port(target, 5061)
-    if len(host) == 0 { return 0 }
+    if len(host) == 0 || port <= 0 { return 0 }
     let ca = env_get_or("SIP_UPSTREAM_CA", "")
     let item = host + ":" + string(port)
     let assoc_key = "tls_assoc|" + string(owner) + "|" + item
@@ -337,11 +374,14 @@ fn sip_forward_tls(target: string, msg: string, cache: CMap, owner: int) -> int 
     if sent >= 0 {
         cmap_set(cache, assoc_key, string(handle))
         let list_key = "tls_assoc_list|" + string(owner)
-        let mut list = ""
-        if cmap_has(cache, list_key) == 1 { list = cmap_get(cache, list_key) }
-        if not str_contains("," + list + ",", "," + item + ",") {
-            if len(list) == 0 { list = item } else { list = list + "," + item }
-            cmap_set(cache, list_key, list)
+        let evicted = sip_assoc_list_add(cache, list_key, item)
+        if len(evicted) > 0 {
+            let old_key = "tls_assoc|" + string(owner) + "|" + evicted
+            if cmap_has(cache, old_key) == 1 {
+                match parse_int(cmap_get(cache, old_key)) { Ok(old_handle) => { let _ = tls_pool_close(old_handle) } Err(_) => {} }
+                let _ = cmap_del(cache, old_key)
+                let _ = cmap_del(cache, "tls_buf|" + string(owner) + "|" + evicted)
+            }
         }
         cmap_set(cache, "last_forward_target", item + ";tls")
         return 1
@@ -353,7 +393,7 @@ fn sip_forward_tls(target: string, msg: string, cache: CMap, owner: int) -> int 
 fn sip_forward_ws(target: string, msg: string, cache: CMap) -> int {
     let host = sip_target_host(target)
     let port = sip_target_port(target, 80)
-    if len(host) == 0 { return 0 }
+    if len(host) == 0 || port <= 0 { return 0 }
     let path = sip_target_path(target)
     let key = base64_encode(random_bytes(16))
     let conn = ws_client_connect(host, port, path, key)
@@ -375,7 +415,7 @@ fn sip_forward_wss(target: string, msg: string, cache: CMap, owner: int) -> int 
     if wss_available() == 0 { return 0 }
     let host = sip_target_host(target)
     let port = sip_target_port(target, 443)
-    if len(host) == 0 { return 0 }
+    if len(host) == 0 || port <= 0 { return 0 }
     let path = sip_target_path(target)
     let item = host + ":" + string(port) + path
     let assoc_key = "wss_assoc|" + string(owner) + "|" + item
@@ -413,11 +453,15 @@ fn sip_forward_wss(target: string, msg: string, cache: CMap, owner: int) -> int 
     }
     cmap_set(cache, assoc_key, string(handle))
     let list_key = "wss_assoc_list|" + string(owner)
-    let mut list = ""
-    if cmap_has(cache, list_key) == 1 { list = cmap_get(cache, list_key) }
-    if not str_contains("," + list + ",", "," + item + ",") {
-        if len(list) == 0 { list = item } else { list = list + "," + item }
-        cmap_set(cache, list_key, list)
+    let evicted = sip_assoc_list_add(cache, list_key, item)
+    if len(evicted) > 0 {
+        let old_key = "wss_assoc|" + string(owner) + "|" + evicted
+        if cmap_has(cache, old_key) == 1 {
+            match parse_int(cmap_get(cache, old_key)) { Ok(old_handle) => { let _ = wss_pool_close(old_handle) } Err(_) => {} }
+            let _ = cmap_del(cache, old_key)
+            let _ = cmap_del(cache, "wss_at|" + old_key)
+            let _ = cmap_del(cache, "wss_buf|" + string(owner) + "|" + evicted)
+        }
     }
     cmap_set(cache, "wss_at|" + assoc_key, string(mono_ms()))
     cmap_set(cache, "last_forward_target", item + ";wss")
@@ -429,6 +473,7 @@ fn sip_forward_target(target: string, msg: string, transport: string, cache: CMa
     let target_low = str_to_lower(target)
     let mut explicit = 0
     if str_index(target_low, "transport=") >= 0 || sip_target_explicit_port(target) == 1 || str_has_prefix(target_low, "sips:") { explicit = 1 }
+    if sip_target_port_state(target) < 0 { return 0 }
     if explicit == 0 {
         let naptr_service = sip_naptr_resolve_service(target, tr, cache)
         let naptr_transport = sip_naptr_service_transport(naptr_service)
@@ -447,6 +492,7 @@ fn sip_forward_target(target: string, msg: string, transport: string, cache: CMa
     while i < len(candidates) && sent == 0 {
         let send_target = str_trim_space(candidates[i])
         if len(send_target) == 0 { i = i + 1; continue }
+        if sip_target_port_state(send_target) < 0 { i = i + 1; continue }
         let health_addr = sip_target_host(send_target) + ":" + string(sip_target_port(send_target, default_port))
         if dispatch_is_healthy(health_addr, cache) == 1 {
             if str_eq(tr, "udp") { sent = sip_forward_udp(send_target, msg, cache, out_fd) }
@@ -464,8 +510,8 @@ fn sip_forward_target(target: string, msg: string, transport: string, cache: CMa
         let cid = sip_header(msg, "Call-ID")
         let branch = sip_via_branch(sip_header(msg, "Via"))
         if len(cid) > 0 && len(branch) > 0 {
-            cmap_set(cache, "dialog_dst|" + cid, target)
-            cmap_set(cache, "dialog_branch|" + cid, branch)
+            let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_dst|" + cid, target, 65536)
+            let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_branch|" + cid, branch, 65536)
         }
     }
     if sent == 1 {

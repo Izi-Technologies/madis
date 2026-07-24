@@ -4,33 +4,28 @@
 fn sec_is_banned(db: SqlDB, db_ok: int, src_ip: string, cache: CMap) -> int {
     // Short TTL cache — check DB every ~5 seconds so unbans take effect quickly
     let key = "ban|" + src_ip
-    let ts_key = "ban_ts|" + src_ip
     let now = now_ms()
 
     if cmap_has(cache, key) == 1 {
-        // Check if cache is fresh (within 5 seconds)
-        if cmap_has(cache, ts_key) == 1 {
-            let mut cached_at = 0
-            match parse_int(cmap_get(cache, ts_key)) {
-                Ok(v) => { cached_at = v }
-                Err(_) => {}
-            }
-            if now - cached_at < 5000 {
-                if str_eq(cmap_get(cache, key), "1") { return 1 }
-                return 0
-            }
+        let cached = str_split(cmap_get(cache, key), "|")
+        let mut cached_at = 0
+        if len(cached) >= 2 {
+            match parse_int(cached[1]) { Ok(v) => { cached_at = v } Err(_) => {} }
+        }
+        // Check if cache is fresh (within 5 seconds).
+        if cached_at > 0 && now - cached_at < 5000 {
+            if len(cached) > 0 && str_eq(cached[0], "1") { return 1 }
+            return 0
         }
     }
 
     if db_ok == 0 { return 0 }
     let r = sql_query_str(db, "SELECT 1 FROM security_bans WHERE source_ip = $1 AND (permanent = true OR expires_at > NOW())", src_ip)
     if len(r) > 0 {
-        cmap_set(cache, key, "1")
-        cmap_set(cache, ts_key, string(now))
+        let _ = bounded_cache_set(cache, "ban_seq", "ban_ring|", key, "1|" + string(now), 16384)
         return 1
     }
-    cmap_set(cache, key, "0")
-    cmap_set(cache, ts_key, string(now))
+    let _ = bounded_cache_set(cache, "ban_seq", "ban_ring|", key, "0|" + string(now), 16384)
     return 0
 }
 
@@ -55,13 +50,19 @@ fn sec_auth_failure(db: SqlDB, db_ok: int, src_ip: string, sip_user: string, cac
         Ok(v) => { threshold = v }
         Err(_) => {}
     }
+    if threshold < 1 || threshold > 100000 { threshold = 5 }
 
     if count >= threshold {
         // Auto-ban
-        let ban_dur = sql_query_str(db, "SELECT value FROM config WHERE key = $1", "security_ban_duration_min")
-        let _ = sql_exec_str4(db, "INSERT INTO security_bans (source_ip, reason, expires_at, permanent) VALUES ($1, $2, NOW() + INTERVAL '" + ban_dur + " minutes', false) ON CONFLICT (source_ip) DO UPDATE SET ban_count = security_bans.ban_count + 1, reason = $2, expires_at = NOW() + INTERVAL '" + ban_dur + " minutes', permanent = false", src_ip, "auth_failures:" + count_str, "", "")
+        let ban_dur_raw = sql_query_str(db, "SELECT value FROM config WHERE key = $1", "security_ban_duration_min")
+        let mut ban_dur = 60
+        match parse_int(ban_dur_raw) {
+            Ok(v) => { if v >= 1 && v <= 10080 { ban_dur = v } }
+            Err(_) => {}
+        }
+        let _ = sql_exec_str4(db, "INSERT INTO security_bans (source_ip, reason, expires_at, permanent) VALUES ($1, $2, NOW() + ($3 || ' minutes')::interval, false) ON CONFLICT (source_ip) DO UPDATE SET ban_count = security_bans.ban_count + 1, reason = $2, expires_at = NOW() + ($3 || ' minutes')::interval, permanent = false", src_ip, "auth_failures:" + count_str, string(ban_dur), "")
         let _ = sql_exec_str4(db, "INSERT INTO security_events (event_type, source_ip, sip_user, severity) VALUES ($1, $2, $3, $4)", "auto_ban", src_ip, sip_user, "high")
-        cmap_set(cache, "ban|" + src_ip, "1")
+        let _ = bounded_cache_set(cache, "ban_seq", "ban_ring|", "ban|" + src_ip, "1|" + string(now_ms()), 16384)
         return 1
     }
     return 0

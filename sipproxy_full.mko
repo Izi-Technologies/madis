@@ -1697,7 +1697,7 @@ fn sec_auth_failure(db: SqlDB, db_ok: int, src_ip: string, sip_user: string, cac
     if count >= threshold {
         // Auto-ban
         let ban_dur = sql_query_str(db, "SELECT value FROM config WHERE key = $1", "security_ban_duration_min")
-        let _ = sql_exec_str4(db, "INSERT INTO security_bans (source_ip, reason, expires_at) VALUES ($1, $2, NOW() + INTERVAL '" + ban_dur + " minutes', false) ON CONFLICT (source_ip) DO UPDATE SET ban_count = security_bans.ban_count + 1, expires_at = NOW() + INTERVAL '" + ban_dur + " minutes'", src_ip, "auth_failures:" + count_str, "", "")
+        let _ = sql_exec_str4(db, "INSERT INTO security_bans (source_ip, reason, expires_at, permanent) VALUES ($1, $2, NOW() + ($3 || ' minutes')::interval, false) ON CONFLICT (source_ip) DO UPDATE SET ban_count = security_bans.ban_count + 1, expires_at = NOW() + ($3 || ' minutes')::interval", src_ip, "auth_failures:" + count_str, ban_dur, "")
         let _ = sql_exec_str4(db, "INSERT INTO security_events (event_type, source_ip, sip_user, severity) VALUES ($1, $2, $3, $4)", "auto_ban", src_ip, sip_user, "high")
         cmap_set(cache, "ban|" + src_ip, "1")
         return 1

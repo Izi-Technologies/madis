@@ -32,13 +32,13 @@ message size, worker count, and database/routing mode identical. Kamailio is
 not installed in this checkout; install or point `SIPP`/the proxy command at a
 separate candidate before comparing results.
 
-The latest pinned local run used Mako 0.4.15, `RATE=1000`, 2,000 calls, 1,000
-concurrent dialogs, and four workers. It completed 2,000/2,000 calls with
-zero failures, retransmissions, or timeouts, and achieved 659.631 CPS. The
-dialog length was 1.003 seconds. A five-run soak at `RATE=750`, 1,000 calls,
-500 concurrent dialogs, and four workers also completed every call without
-failures or retransmissions. These are Mako baselines, not Kamailio
-comparisons.
+Verified local baselines on 2026-07-24 with Mako 0.4.15 were: the default
+`RATE=100`, 1,000 calls, 200-call limit, and one worker completed 1,000/1,000
+calls with zero failures and a 102-call peak; the stress profile at
+`RATE=500`, 2,000 calls, 500-call limit, and four workers completed 2,000/2,000
+calls with zero failures and a 500-call peak, achieving 395.804 CPS. These
+are host-specific Madis baselines, not Kamailio comparisons or capacity
+guarantees.
 
 Additional validation commands:
 

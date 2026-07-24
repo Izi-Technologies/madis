@@ -107,10 +107,3 @@ fn via_add_received(msg: string, msglen: int, source_ip: string, source_port: in
     let _ = msglen
     return sip_msg_fix_top_via(msg, source_ip, source_port)
 }
-
-// received= from top Via (if present)
-fn via_received_ip(msg: string, msglen: int) -> string {
-    let _ = msglen
-    let via = sip_header(msg, "Via")
-    return sip_via_received(via)
-}
