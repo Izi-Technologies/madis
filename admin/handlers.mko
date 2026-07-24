@@ -1,5 +1,5 @@
-fn handle_page(path: string, q: string, db: SqlDB, db_ok: int) -> string {
-    if str_eq(path, "/admin/dashboard") { return f_dashboard(db, db_ok) }
+fn handle_page(path: string, q: string, db: SqlDB, db_ok: int, dashboard_cache: CMap) -> string {
+    if str_eq(path, "/admin/dashboard") { return f_dashboard_cached(db, db_ok, dashboard_cache) }
     if str_eq(path, "/admin/users") { return f_users(db, db_ok) }
     if str_eq(path, "/admin/access") { return f_access(db, db_ok) }
     if str_eq(path, "/admin/gateways") { return f_gateways(db, db_ok) }

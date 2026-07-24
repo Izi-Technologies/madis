@@ -44,4 +44,6 @@ The live deployment uses `/admin/login`, authenticated session cookies, HTMX
 page updates, and a WebSocket live dashboard with HTTP polling fallback. The
 dashboard refreshes its expensive database/metrics snapshot at most every
 three seconds and shares it across connected clients; the browser still gets
-one-second WebSocket updates.
+one-second WebSocket updates. The first paint does not wait on SIP or metrics
+probes, and the UI defers its optional browser asset so a slow third-party CDN
+cannot block the control plane.

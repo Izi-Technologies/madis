@@ -131,7 +131,8 @@ Run the admin service on loopback (`ADMIN_BIND=127.0.0.1`,
 authenticated `/admin` control plane, HTMX views, and a WebSocket live
 dashboard with polling fallback. Live dashboard snapshots use a short shared
 cache and a single aggregate count query so multiple operators do not multiply
-database load. If the standalone admin service owns port
+database load; the first paint is not blocked by SIP or metrics probes. If the
+standalone admin service owns port
 8080, set `SIP_ADMIN_PORT=0` for the SIP worker.
 
 After installation:

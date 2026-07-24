@@ -276,9 +276,11 @@ fn f_dashboard(db: SqlDB, ok: int) -> string {
         let ci = sql_query_str(db, "SELECT value FROM config WHERE key = $1", "sip_public_ip")
         if len(ci) > 0 { pubip = ci }
     }
-    let sip = sip_options_probe()
+    // The live WebSocket/HTTP snapshot updates this badge immediately after
+    // first paint. Do not block the initial HTML response on an 800ms probe.
+    let sip = "down"
     let mut sip_badge = "<span id=\"dash-sip-badge\" class=\"badge r\"><span class=\"status-dot down\"></span>DOWN</span>"
-    let mut sip_note = "No response on UDP 5060 — is mako-sip running?"
+    let mut sip_note = "Checking live SIP edge health…"
     let mut sip_glow = "rgba(248,113,113,.15)"
     if str_eq(sip, "up") {
         sip_badge = "<span id=\"dash-sip-badge\" class=\"badge g\"><span class=\"status-dot up\"></span>OPERATIONAL</span>"
@@ -292,7 +294,9 @@ fn f_dashboard(db: SqlDB, ok: int) -> string {
     }
     if len(pubip) == 0 { pubip = "(set sip_public_ip in Config)" }
 
-    let live = fetch_metrics_json()
+    // Metrics are also delivered by the live snapshot. Avoid a second blocking
+    // loopback connection during the initial page render.
+    let live = ""
     let mut pkts = "0"
     let mut inv = "0"
     let mut active = "0"
@@ -313,22 +317,23 @@ fn f_dashboard(db: SqlDB, ok: int) -> string {
         pkts = json_num(live, "packets")
         davg = json_num(live, "duration_avg_sec")
     }
+    let live_stats = "<div class=\"stats\" style=\"margin:0\" id=\"dash-metrics-stats\">"
+        + "<div class=\"stat-card blue\"><div class=\"label\">Packets</div><div class=\"value\" data-live=\"packets\">" + pkts + "</div></div>"
+        + "<div class=\"stat-card green\"><div class=\"label\">REGISTER OK</div><div class=\"value\" data-live=\"register_ok\">" + regok + "</div></div>"
+        + "<div class=\"stat-card purple\"><div class=\"label\">INVITE</div><div class=\"value\" data-live=\"invite\">" + inv + "</div></div>"
+        + "<div class=\"stat-card orange\"><div class=\"label\">Completed</div><div class=\"value\" data-live=\"completed\">" + done + "</div></div>"
+        + "<div class=\"stat-card pink\"><div class=\"label\">Active now</div><div class=\"value\" data-live=\"active\">" + active + "</div></div>"
+        + "<div class=\"stat-card blue\"><div class=\"label\">Avg call</div><div class=\"value\"><span data-live=\"duration_avg\">" + davg + "</span>s</div></div>"
+        + "<div class=\"stat-card orange\"><div class=\"label\">Offline</div><div class=\"value\" data-live=\"offline\">" + offline + "</div></div>"
+        + "<div class=\"stat-card pink\"><div class=\"label\">Auth fail</div><div class=\"value\" data-live=\"auth_fail\">" + authf + "</div></div>"
+        + "</div>"
     let mut live_card = ""
     if metrics_ok == 0 {
-        live_card = "<div class=\"card\" id=\"dash-live-telemetry\"><h2>Live edge telemetry <span id=\"dash-metrics-badge\" class=\"badge y\">WAITING</span></h2><p style=\"color:var(--muted);font-size:13px\">Metrics endpoint unreachable at 127.0.0.1:9090 — start mako-sip to unlock live counters. WebSocket will retry automatically.</p>"
-            + "<div class=\"stats\" style=\"margin:0;display:none\" id=\"dash-metrics-stats\"></div></div>"
+        live_card = "<div class=\"card\" id=\"dash-live-telemetry\"><div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px\"><h2 style=\"margin:0\">Live edge telemetry <span id=\"dash-metrics-badge\" class=\"badge y\">WAITING</span></h2><a class=\"btn sm ghost\" hx-get=\"/admin/metrics\" hx-target=\"#c\">Open metrics →</a></div><p id=\"dash-metrics-note\" style=\"color:var(--muted);font-size:13px\">Live telemetry is loading; counters will appear as soon as the WebSocket connects.</p>"
+            + str_replace(live_stats, "style=\"margin:0\"", "style=\"margin:0;display:none\"") + "</div>"
     } else {
         live_card = "<div class=\"card\" id=\"dash-live-telemetry\"><div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px\"><h2 style=\"margin:0\">Live edge telemetry <span id=\"dash-metrics-badge\" class=\"badge g\">LIVE</span></h2><a class=\"btn sm ghost\" hx-get=\"/admin/metrics\" hx-target=\"#c\">Open metrics →</a></div>"
-            + "<div class=\"stats\" style=\"margin:0\" id=\"dash-metrics-stats\">"
-            + "<div class=\"stat-card blue\"><div class=\"label\">Packets</div><div class=\"value\" data-live=\"packets\">" + pkts + "</div></div>"
-            + "<div class=\"stat-card green\"><div class=\"label\">REGISTER OK</div><div class=\"value\" data-live=\"register_ok\">" + regok + "</div></div>"
-            + "<div class=\"stat-card purple\"><div class=\"label\">INVITE</div><div class=\"value\" data-live=\"invite\">" + inv + "</div></div>"
-            + "<div class=\"stat-card orange\"><div class=\"label\">Completed</div><div class=\"value\" data-live=\"completed\">" + done + "</div></div>"
-            + "<div class=\"stat-card pink\"><div class=\"label\">Active now</div><div class=\"value\" data-live=\"active\">" + active + "</div></div>"
-            + "<div class=\"stat-card blue\"><div class=\"label\">Avg call</div><div class=\"value\"><span data-live=\"duration_avg\">" + davg + "</span>s</div></div>"
-            + "<div class=\"stat-card orange\"><div class=\"label\">Offline</div><div class=\"value\" data-live=\"offline\">" + offline + "</div></div>"
-            + "<div class=\"stat-card pink\"><div class=\"label\">Auth fail</div><div class=\"value\" data-live=\"auth_fail\">" + authf + "</div></div>"
-            + "</div></div>"
+            + live_stats + "</div>"
     }
 
     let mut tips = ""
@@ -436,6 +441,24 @@ fn f_dashboard(db: SqlDB, ok: int) -> string {
         + "<div class=\"stat-card green\"><div class=\"label\">Calls (24h)</div><div class=\"value\" data-live=\"calls24h\">" + c + "</div></div>"
         + "<div class=\"stat-card purple\"><div class=\"label\">Cluster nodes</div><div class=\"value\" data-live=\"nodes\">" + n + "</div></div>"
         + "</div></div>"
+}
+
+// Dashboard HTML is identical for all authenticated roles. Keep a short
+// process-wide copy so opening or refreshing the command center does not
+// rerun its table queries for every browser request.
+fn f_dashboard_cached(db: SqlDB, ok: int, cache: CMap) -> string {
+    let now = now_ms()
+    if cmap_has(cache, "html") == 1 && cmap_has(cache, "html_at") == 1 {
+        let mut at = 0
+        match parse_int(cmap_get(cache, "html_at")) { Ok(v) => { at = v } Err(_) => {} }
+        if at > 0 && now >= at && now - at < 3000 {
+            return cmap_get(cache, "html")
+        }
+    }
+    let body = f_dashboard(db, ok)
+    cmap_set(cache, "html", body)
+    cmap_set(cache, "html_at", string(now))
+    return body
 }
 
 fn f_metrics(db: SqlDB, ok: int) -> string {
