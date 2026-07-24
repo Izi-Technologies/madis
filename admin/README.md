@@ -18,6 +18,7 @@ worker binary and does not depend on Leba.
 From repo root:
 
 ```bash
+# Mako 0.4.15 is required.
 MAKO_RUNTIME=/path/to/mako/runtime \
   mako build --release --strip --no-incremental admin/main.mko -o admin-bin
 ```
@@ -47,3 +48,9 @@ three seconds and shares it across connected clients; the browser still gets
 one-second WebSocket updates. The first paint does not wait on SIP or metrics
 probes, and the UI defers its optional browser asset so a slow third-party CDN
 cannot block the control plane.
+
+The cache is intentionally short-lived so dashboard counts remain responsive
+without multiplying PostgreSQL work across operators. A deployment must use
+`SIP_ADMIN_PORT=0` for the SIP worker when `madis-admin.service` owns the
+WebUI port. Public HTTPS/WSS termination belongs in nginx or another reverse
+proxy; the admin process itself should remain loopback-bound.

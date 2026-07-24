@@ -83,7 +83,10 @@ MAKO_RUNTIME=/path/to/mako/runtime mako test tests
 Madis reads its config from environment variables (or `/etc/madis/madis.env` when installed via the script). The main ones:
 
 - `SIP_DB_URL` — PostgreSQL connection string
-- `SIP_ADMIN_PORT` — turns on the HTTP admin interface
+- `SIP_ADMIN_PORT` — turns on the SIP worker's local health/metrics interface;
+  set it to `0` when using the standalone WebUI service
+- `ADMIN_BIND` / `ADMIN_PORT` — bind address and port for the standalone Mako
+  SIP WebUI (defaults to `127.0.0.1:8080`)
 - `SIP_ADMIN_TOKEN` — if set, admin endpoints require a bearer token
 - `SIP_CONFIG_FILE` — path to a watched file; touching it triggers a config reload
 - `SIP_IPV6` — `1` by default, set to `0` if your host doesn't have IPv6
@@ -144,6 +147,12 @@ madis health
 madis webui
 madis logs admin
 ```
+
+The WebUI is a separate `madis-admin.service` process. It does not require
+Leba: terminate public TLS/WebSocket traffic in nginx or another reverse proxy
+and forward it to `ADMIN_BIND`/`ADMIN_PORT`. The installer builds the UI with
+Mako 0.4.15 when that compiler is available, or accepts a prebuilt
+`admin-bin` for offline packaging.
 
 ## License
 
