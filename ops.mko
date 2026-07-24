@@ -64,7 +64,8 @@ fn proxy_admin_worker(reg: CMap, calls: CMap, cache: CMap) -> int {
         if proxy_admin_authorized(c) == 0 {
             let _ = http_respond_json(c, 401, "{\"ok\":false,\"error\":\"unauthorized\"}\n")
         } else if str_eq(path, "/healthz") {
-            let body = "{\"ok\":true,\"version\":\"0.4.15\",\"calls\":" + string(cmap_len(calls)) + "}\n"
+            let version = env_get_or("MADIS_VERSION", "dev")
+            let body = "{\"ok\":true,\"version\":\"" + version + "\",\"calls\":" + string(cmap_len(calls)) + "}\n"
             let _ = http_respond_json(c, 200, body)
         } else if str_eq(path, "/readyz") {
             let ready = cmap_get(cache, "ready")

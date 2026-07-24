@@ -98,6 +98,14 @@ fn json_esc(s: string) -> string {
     return builder_string(b)
 }
 
+// Keep dashboard counts to one database round trip. The dashboard is a read
+// path, so returning a stable pipe-delimited row is considerably cheaper than
+// opening eight query plans for every live refresh.
+fn dashboard_counts(db: SqlDB, ok: int) -> string {
+    if ok == 0 { return "0|0|0|0|0|0|0|0" }
+    return sql_query_str(db, "SELECT (SELECT COUNT(*)::text FROM registrations WHERE expires_at IS NULL OR expires_at > NOW()) || '|' || (SELECT COUNT(*)::text FROM users WHERE enabled = true) || '|' || (SELECT COUNT(*)::text FROM gateways WHERE enabled = true) || '|' || (SELECT COUNT(*)::text FROM routes WHERE enabled = true) || '|' || (SELECT COUNT(*)::text FROM dids WHERE enabled = true) || '|' || (SELECT COUNT(*)::text FROM cluster_nodes WHERE status = 'active') || '|' || (SELECT COUNT(*)::text FROM cdr WHERE started_at > NOW() - INTERVAL '24 hours') || '|' || (SELECT COUNT(*)::text FROM access_control WHERE enabled = true)", "")
+}
+
 // Compact live snapshot for WebSocket dashboard push (JSON object).
 // sip is edge health: "up" | "down" | "error" (caller caches OPTIONS probe).
 fn live_snapshot_json(db: SqlDB, ok: int, sip: string) -> string {
@@ -109,15 +117,16 @@ fn live_snapshot_json(db: SqlDB, ok: int, sip: string) -> string {
     let mut n = "0"
     let mut c = "0"
     let mut ac = "0"
-    if ok == 1 {
-        r = sql_query_str(db, "SELECT COUNT(*) FROM registrations WHERE expires_at IS NULL OR expires_at > NOW()", "")
-        u = sql_query_str(db, "SELECT COUNT(*) FROM users WHERE enabled = true", "")
-        g = sql_query_str(db, "SELECT COUNT(*) FROM gateways WHERE enabled = true", "")
-        rt = sql_query_str(db, "SELECT COUNT(*) FROM routes WHERE enabled = true", "")
-        d = sql_query_str(db, "SELECT COUNT(*) FROM dids WHERE enabled = true", "")
-        n = sql_query_str(db, "SELECT COUNT(*) FROM cluster_nodes WHERE status = 'active'", "")
-        c = sql_query_str(db, "SELECT COUNT(*) FROM cdr WHERE started_at > NOW() - INTERVAL '24 hours'", "")
-        ac = sql_query_str(db, "SELECT COUNT(*) FROM access_control WHERE enabled = true", "")
+    let count_parts = str_split(dashboard_counts(db, ok), "|")
+    if len(count_parts) >= 8 {
+        r = count_parts[0]
+        u = count_parts[1]
+        g = count_parts[2]
+        rt = count_parts[3]
+        d = count_parts[4]
+        n = count_parts[5]
+        c = count_parts[6]
+        ac = count_parts[7]
     }
     let mut sip_s = sip
     if len(sip_s) == 0 { sip_s = "down" }
@@ -165,10 +174,28 @@ fn live_snapshot_json(db: SqlDB, ok: int, sip: string) -> string {
         + "}"
 }
 
+// A short process-wide cache prevents every connected browser from rerunning
+// the same Postgres and metrics work. The dashboard still emits once per
+// second, but the expensive snapshot is refreshed at most every 3 seconds.
+fn live_snapshot_cached(db: SqlDB, ok: int, sip: string, cache: CMap) -> string {
+    let now = now_ms()
+    if cmap_has(cache, "snapshot") == 1 && cmap_has(cache, "snapshot_at") == 1 {
+        let mut at = 0
+        match parse_int(cmap_get(cache, "snapshot_at")) { Ok(v) => { at = v } Err(_) => {} }
+        if at > 0 && now >= at && now - at < 3000 {
+            return cmap_get(cache, "snapshot")
+        }
+    }
+    let body = live_snapshot_json(db, ok, sip)
+    cmap_set(cache, "snapshot", body)
+    cmap_set(cache, "snapshot_at", string(now))
+    return body
+}
+
 // Authenticated WebSocket live feed: push snapshot ~1s until client disconnects.
 // Opens its own Postgres connection (SqlDB is not kick-sendable).
 // Push-only: client close is detected when ws_send_text fails (avoids blocking on ws_recv).
-fn ws_live_session(fd: int, db_url: string) -> int {
+fn ws_live_session(fd: int, db_url: string, live_cache: CMap) -> int {
     let _ = io_set_nonblocking(fd, 0)
     let _ = tcp_nodelay(fd)
     // Bound send so a half-open peer cannot hang the worker forever
@@ -187,7 +214,7 @@ fn ws_live_session(fd: int, db_url: string) -> int {
         if tick % 5 == 0 {
             sip = sip_options_probe()
         }
-        let snap = live_snapshot_json(db, db_ok, sip)
+        let snap = live_snapshot_cached(db, db_ok, sip, live_cache)
         let rc = ws_send_text(fd, snap)
         if rc < 0 {
             alive = 0
@@ -229,14 +256,17 @@ fn f_dashboard(db: SqlDB, ok: int) -> string {
     }
     if ok == 1 {
         // Online = not expired (honor expires_at). Do not use register_ok metric (cumulative 200s).
-        r = sql_query_str(db, "SELECT COUNT(*) FROM registrations WHERE expires_at IS NULL OR expires_at > NOW()", "")
-        u = sql_query_str(db, "SELECT COUNT(*) FROM users WHERE enabled = true", "")
-        g = sql_query_str(db, "SELECT COUNT(*) FROM gateways WHERE enabled = true", "")
-        rt = sql_query_str(db, "SELECT COUNT(*) FROM routes WHERE enabled = true", "")
-        d = sql_query_str(db, "SELECT COUNT(*) FROM dids WHERE enabled = true", "")
-        n = sql_query_str(db, "SELECT COUNT(*) FROM cluster_nodes WHERE status = 'active'", "")
-        c = sql_query_str(db, "SELECT COUNT(*) FROM cdr WHERE started_at > NOW() - INTERVAL '24 hours'", "")
-        ac = sql_query_str(db, "SELECT COUNT(*) FROM access_control WHERE enabled = true", "")
+        let count_parts = str_split(dashboard_counts(db, ok), "|")
+        if len(count_parts) >= 8 {
+            r = count_parts[0]
+            u = count_parts[1]
+            g = count_parts[2]
+            rt = count_parts[3]
+            d = count_parts[4]
+            n = count_parts[5]
+            c = count_parts[6]
+            ac = count_parts[7]
+        }
         let cr = sql_query_str(db, "SELECT value FROM config WHERE key = $1", "sip_realm")
         // Prefer env/FQDN; only use DB if still placeholder
         if len(cr) > 0 {
@@ -1758,4 +1788,3 @@ fn f_audit(db: SqlDB, ok: int) -> string {
 }
 
 // ============ HTTP HELPERS ============
-

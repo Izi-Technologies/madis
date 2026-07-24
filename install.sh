@@ -18,6 +18,10 @@ MADIS_TLS_PORT="${MADIS_TLS_PORT:-5061}"
 MADIS_WSS_PORT="${MADIS_WSS_PORT:-8443}"
 MADIS_ADMIN_PORT="${MADIS_ADMIN_PORT:-8080}"
 MADIS_ADMIN_TOKEN="${MADIS_ADMIN_TOKEN:-}"
+MADIS_ADMIN_PASSWORD="${MADIS_ADMIN_PASSWORD:-}"
+MADIS_VERSION="${MADIS_VERSION:-}"
+MADIS_MAKO_VERSION="0.4.15"
+MADIS_CLI_DIR="${MADIS_CLI_DIR:-/usr/local/bin}"
 
 # ── colors ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -79,6 +83,11 @@ fi
 if [ -z "$MADIS_ADMIN_TOKEN" ]; then
     MADIS_ADMIN_TOKEN=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 32 || true)
     info "Generated admin API token."
+fi
+
+if [ -z "$MADIS_ADMIN_PASSWORD" ]; then
+    MADIS_ADMIN_PASSWORD=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 24 || true)
+    info "Generated WebUI admin password."
 fi
 
 # ── detect public IP (GCP, AWS, Azure, or bare metal) ────────────────────────
@@ -510,10 +519,30 @@ mkdir -p "$MADIS_LOG_DIR"
 # ── copy source files ────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+if [ -z "$MADIS_VERSION" ] && [ -r "$SCRIPT_DIR/VERSION" ]; then
+    MADIS_VERSION=$(tr -d '[:space:]' < "$SCRIPT_DIR/VERSION")
+fi
+MADIS_VERSION="${MADIS_VERSION:-0.1.0}"
+
 info "Copying source files to $MADIS_INSTALL_DIR..."
 cp "$SCRIPT_DIR"/*.mko "$MADIS_INSTALL_DIR/" 2>/dev/null || true
 if [ -d "$SCRIPT_DIR/tests" ]; then
     cp -r "$SCRIPT_DIR/tests" "$MADIS_INSTALL_DIR/"
+fi
+if [ -d "$SCRIPT_DIR/admin" ]; then
+    mkdir -p "$MADIS_INSTALL_DIR/admin"
+    cp -r "$SCRIPT_DIR/admin/." "$MADIS_INSTALL_DIR/admin/"
+    info "Installed Mako SIP WebUI source."
+fi
+if [ -f "$SCRIPT_DIR/VERSION" ]; then
+    cp "$SCRIPT_DIR/VERSION" "$MADIS_INSTALL_DIR/VERSION"
+fi
+
+if [ -f "$SCRIPT_DIR/scripts/madis" ]; then
+    install -d "$MADIS_CLI_DIR"
+    install -m 0755 "$SCRIPT_DIR/scripts/madis" "$MADIS_CLI_DIR/madis"
+    ln -sf madis "$MADIS_CLI_DIR/madisctl"
+    info "Installed madis CLI as $MADIS_CLI_DIR/madis (and madisctl)."
 fi
 
 # if a pre-built binary exists, copy that too
@@ -523,9 +552,41 @@ if [ -f "$SCRIPT_DIR/main" ]; then
     info "Installed pre-built binary."
 fi
 
+# Build the standalone WebUI when Mako is available. A pre-built admin-bin
+# remains supported for offline/production packaging.
+if [ -f "$SCRIPT_DIR/admin-bin" ]; then
+    cp "$SCRIPT_DIR/admin-bin" "$MADIS_INSTALL_DIR/admin-bin"
+    chmod +x "$MADIS_INSTALL_DIR/admin-bin"
+    info "Installed pre-built WebUI binary."
+elif [ -f "$MADIS_INSTALL_DIR/admin/main.mko" ]; then
+    MADIS_MAKO_BIN="${MADIS_MAKO_BIN:-mako}"
+    if command -v "$MADIS_MAKO_BIN" >/dev/null 2>&1; then
+        MAKO_VERSION_TEXT=$("$MADIS_MAKO_BIN" --version 2>/dev/null || true)
+        if [[ "$MAKO_VERSION_TEXT" != *"0.4.15"* ]]; then
+            fail "Mako 0.4.15 is required to build the WebUI (found: ${MAKO_VERSION_TEXT:-unknown})."
+        fi
+        info "Building Mako SIP WebUI with ${MADIS_MAKO_BIN}..."
+        if [ -n "${MAKO_RUNTIME:-}" ]; then
+            (cd "$MADIS_INSTALL_DIR" && MAKO_RUNTIME="$MAKO_RUNTIME" "$MADIS_MAKO_BIN" \
+                build --release --strip --no-incremental admin/main.mko -o admin-bin)
+        else
+            (cd "$MADIS_INSTALL_DIR" && "$MADIS_MAKO_BIN" \
+                build --release --strip --no-incremental admin/main.mko -o admin-bin)
+        fi
+        chmod +x "$MADIS_INSTALL_DIR/admin-bin"
+        info "Built WebUI binary."
+    else
+        warn "Mako compiler not found; WebUI source was installed but admin-bin was not built."
+        warn "Install Mako 0.4.15 or set MADIS_MAKO_BIN, then build admin/main.mko."
+    fi
+fi
+
 # ── write environment file ───────────────────────────────────────────────────
 cat > "$MADIS_CONF_DIR/madis.env" <<EOF
 # Madis SIP Proxy configuration
+MADIS_VERSION=${MADIS_VERSION}
+MADIS_MAKO_VERSION=${MADIS_MAKO_VERSION}
+MADIS_INSTALL_DIR=${MADIS_INSTALL_DIR}
 # Database
 SIP_DB_URL=postgres://${MADIS_DB_USER}:${MADIS_DB_PASS}@127.0.0.1:5432/${MADIS_DB_NAME}
 
@@ -533,7 +594,9 @@ SIP_DB_URL=postgres://${MADIS_DB_USER}:${MADIS_DB_PASS}@127.0.0.1:5432/${MADIS_D
 SIP_UDP_PORT=${MADIS_SIP_PORT}
 SIP_TLS_PORT=${MADIS_TLS_PORT}
 SIP_WSS_PORT=${MADIS_WSS_PORT}
-SIP_ADMIN_PORT=${MADIS_ADMIN_PORT}
+# The WebUI runs as madis-admin.service; keep the SIP worker off its port.
+SIP_ADMIN_PORT=0
+SIP_ADMIN_PASSWORD=${MADIS_ADMIN_PASSWORD}
 SIP_BIND_IP=${MADIS_PRIVATE_IP:-0.0.0.0}
 SIP_PUBLIC_IP=${MADIS_PUBLIC_IP:-}
 SIP_IPV6=1
@@ -551,6 +614,14 @@ SIP_TCP_WORKERS=1
 # Auth
 SIP_DIGEST_ALGORITHM=md5
 SIP_ADMIN_TOKEN=${MADIS_ADMIN_TOKEN}
+
+# Standalone Mako SIP WebUI
+ADMIN_BIND=127.0.0.1
+ADMIN_PORT=${MADIS_ADMIN_PORT}
+ADMIN_SECURE_COOKIE=1
+ADMIN_SESSION_TTL_SECS=86400
+ADMIN_LOGIN_MAX_FAILS=5
+ADMIN_LOGIN_LOCK_SECS=900
 
 # TLS (uncomment and set paths to enable)
 # SIP_TLS_CERT=/etc/madis/tls/cert.pem
@@ -609,6 +680,39 @@ EOF
 systemctl daemon-reload
 info "Systemd service installed."
 
+cat > /etc/systemd/system/madis-admin.service <<EOF
+[Unit]
+Description=Madis SIP WebUI
+After=network.target postgresql.service
+Requires=postgresql.service
+ConditionPathExists=${MADIS_INSTALL_DIR}/admin-bin
+
+[Service]
+Type=simple
+User=${MADIS_USER}
+Group=${MADIS_USER}
+EnvironmentFile=${MADIS_CONF_DIR}/madis.env
+ExecStart=${MADIS_INSTALL_DIR}/admin-bin
+WorkingDirectory=${MADIS_INSTALL_DIR}
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+StandardOutput=append:${MADIS_LOG_DIR}/madis-admin.log
+StandardError=append:${MADIS_LOG_DIR}/madis-admin-error.log
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=${MADIS_LOG_DIR}
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+info "WebUI systemd service installed."
+systemctl daemon-reload
+
 # ── set up log rotation ─────────────────────────────────────────────────────
 cat > /etc/logrotate.d/madis <<EOF
 ${MADIS_LOG_DIR}/*.log {
@@ -649,6 +753,7 @@ echo "  Madis SIP Proxy — installation complete"
 echo "==========================================="
 echo ""
 echo "  Install dir: $MADIS_INSTALL_DIR"
+echo "  Version:     madis $MADIS_VERSION (Mako $MADIS_MAKO_VERSION)"
 echo "  Config:      $MADIS_CONF_DIR/madis.env"
 echo "  Logs:        $MADIS_LOG_DIR"
 echo ""
@@ -662,6 +767,8 @@ echo "  SIP UDP/TCP: $MADIS_SIP_PORT"
 echo "  SIP TLS:     $MADIS_TLS_PORT"
 echo "  WebSocket:   $MADIS_WSS_PORT"
 echo "  Admin HTTP:  $MADIS_ADMIN_PORT"
+echo "  WebUI:       http://127.0.0.1:${MADIS_ADMIN_PORT}/admin/login"
+echo "  CLI:         $MADIS_CLI_DIR/madis"
 echo ""
 echo "  ── Credentials (save these now) ───────"
 echo "  DB name:     $MADIS_DB_NAME"
@@ -671,6 +778,8 @@ echo "  DB URL:      postgres://${MADIS_DB_USER}:****@127.0.0.1:5432/${MADIS_DB_
 echo ""
 echo "  Admin token: $MADIS_ADMIN_TOKEN"
 echo "  (used as: Authorization: Bearer <token>)"
+echo "  WebUI user:  admin"
+echo "  WebUI pass:  $MADIS_ADMIN_PASSWORD"
 echo ""
 echo "  These credentials are stored in:"
 echo "    $MADIS_CONF_DIR/madis.env"
@@ -684,8 +793,11 @@ echo ""
 echo "  Start the service:"
 echo "    systemctl start madis"
 echo "    systemctl enable madis"
+echo "    systemctl start madis-admin"
+echo "    systemctl enable madis-admin"
 echo ""
 echo "  Check status:"
-echo "    systemctl status madis"
-echo "    curl -H 'Authorization: Bearer ${MADIS_ADMIN_TOKEN}' http://127.0.0.1:${MADIS_ADMIN_PORT}/healthz"
+echo "    madis status"
+echo "    madis health"
+echo "    madis webui"
 echo ""

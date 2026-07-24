@@ -319,7 +319,7 @@ fn html_head(title: string) -> string {
         + "      .catch(function(){ dashWsSetBadge('err'); });"
         + "  }"
         + "  tick();"
-        + "  window.__dashPoll=setInterval(tick,1000);"
+        + "  window.__dashPoll=setInterval(tick,5000);"
         + "}"
         + "function dashWsBind(){"
         + "  var root=document.querySelector('[data-ws-live]');"

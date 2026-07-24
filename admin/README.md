@@ -41,4 +41,7 @@ does not attempt to claim the same port.
 | `ADMIN_PORT` | `8080` | Listen port |
 
 The live deployment uses `/admin/login`, authenticated session cookies, HTMX
-page updates, and a WebSocket live dashboard with HTTP polling fallback.
+page updates, and a WebSocket live dashboard with HTTP polling fallback. The
+dashboard refreshes its expensive database/metrics snapshot at most every
+three seconds and shares it across connected clients; the browser still gets
+one-second WebSocket updates.

@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+# Madis service and control-plane CLI.
+set -euo pipefail
+
+MADIS_CONFIG="${MADIS_CONFIG:-/etc/madis/madis.env}"
+
+read_config_value() {
+    local key="$1"
+    local line=""
+    if [ -r "$MADIS_CONFIG" ]; then
+        line=$(grep -E "^${key}=" "$MADIS_CONFIG" | tail -n 1 || true)
+    fi
+    printf '%s' "${line#*=}"
+}
+
+MADIS_ROOT="${MADIS_INSTALL_DIR:-$(read_config_value MADIS_INSTALL_DIR)}"
+MADIS_ROOT="${MADIS_ROOT:-/opt/madis}"
+MADIS_VERSION="${MADIS_VERSION:-$(read_config_value MADIS_VERSION)}"
+if [ -z "$MADIS_VERSION" ] && [ -r "$MADIS_ROOT/VERSION" ]; then
+    MADIS_VERSION=$(tr -d '[:space:]' < "$MADIS_ROOT/VERSION")
+fi
+if [ -z "$MADIS_VERSION" ] && [ -r "$(cd "$(dirname "$0")" && pwd)/../VERSION" ]; then
+    MADIS_VERSION=$(tr -d '[:space:]' < "$(cd "$(dirname "$0")" && pwd)/../VERSION")
+fi
+MADIS_VERSION="${MADIS_VERSION:-dev}"
+MADIS_MAKO_VERSION="${MADIS_MAKO_VERSION:-$(read_config_value MADIS_MAKO_VERSION)}"
+MADIS_MAKO_VERSION="${MADIS_MAKO_VERSION:-0.4.15}"
+
+have_unit() {
+    systemctl cat "$1" >/dev/null 2>&1
+}
+
+service_action() {
+    local action="$1"
+    local unit
+    for unit in madis.service madis-admin.service; do
+        if have_unit "$unit"; then
+            systemctl "$action" "$unit"
+        elif [ "$action" = "start" ] || [ "$action" = "restart" ]; then
+            echo "madis: $unit is not installed; skipped" >&2
+        fi
+    done
+}
+
+cmd_version() {
+    echo "madis $MADIS_VERSION"
+    echo "mako $MADIS_MAKO_VERSION"
+}
+
+cmd_status() {
+    local unit active
+    for unit in madis.service madis-admin.service; do
+        if have_unit "$unit"; then
+            active=$(systemctl is-active "$unit" 2>/dev/null || true)
+            printf '%-20s %s\n' "$unit" "${active:-unknown}"
+        else
+            printf '%-20s %s\n' "$unit" "not-installed"
+        fi
+    done
+}
+
+cmd_health() {
+    local port url
+    port="$(read_config_value ADMIN_PORT)"
+    port="${port:-8080}"
+    url="${MADIS_HEALTH_URL:-http://127.0.0.1:${port}/admin/login}"
+    if ! have_unit madis-admin.service || ! systemctl is-active --quiet madis-admin.service; then
+        echo "madis: WebUI service is not active" >&2
+        return 1
+    fi
+    if ! command -v curl >/dev/null 2>&1; then
+        echo "madis: curl is required for health checks" >&2
+        return 1
+    fi
+    curl --fail --silent --show-error --output /dev/null "$url"
+    echo "healthy: $url"
+}
+
+cmd_webui() {
+    local configured host scheme port
+    configured="${MADIS_WEBUI_URL:-$(read_config_value MADIS_WEBUI_URL)}"
+    if [ -n "$configured" ]; then
+        echo "$configured"
+        return 0
+    fi
+    host="$(read_config_value MADIS_PUBLIC_HOST)"
+    host="${host:-$(read_config_value SIP_PUBLIC_HOST)}"
+    host="${host:-$(read_config_value SIP_PUBLIC_IP)}"
+    host="${host:-127.0.0.1}"
+    scheme="$(read_config_value MADIS_WEBUI_SCHEME)"
+    scheme="${scheme:-http}"
+    port="$(read_config_value ADMIN_PORT)"
+    port="${port:-8080}"
+    echo "${scheme}://${host}:${port}/admin/login"
+}
+
+cmd_logs() {
+    local which="${1:-all}" unit
+    if ! command -v journalctl >/dev/null 2>&1; then
+        echo "madis: journalctl is required for logs" >&2
+        return 1
+    fi
+    case "$which" in
+        sip) unit=madis.service ;;
+        admin|webui) unit=madis-admin.service ;;
+        all) journalctl --no-pager -n 100 -u madis.service -u madis-admin.service; return 0 ;;
+        *) echo "usage: madis logs [sip|admin|all]" >&2; return 2 ;;
+    esac
+    journalctl --no-pager -n 100 -u "$unit"
+}
+
+usage() {
+    cat <<'EOF'
+Usage: madis <command>
+
+Commands:
+  version             Show Madis and required Mako versions
+  status              Show SIP worker and WebUI service state
+  start|stop|restart  Manage both services
+  health              Check the local authenticated WebUI endpoint
+  webui               Print the WebUI login URL
+  logs [sip|admin]    Show recent service logs
+  config              Show the active config and install paths
+  help                Show this help
+EOF
+}
+
+case "${1:-help}" in
+    version|--version|-v) cmd_version ;;
+    status) cmd_status ;;
+    start|stop|restart) service_action "$1" ;;
+    health) cmd_health ;;
+    webui) cmd_webui ;;
+    logs) shift; cmd_logs "${1:-all}" ;;
+    config)
+        echo "config: $MADIS_CONFIG"
+        echo "install: $MADIS_ROOT"
+        echo "version: $MADIS_VERSION"
+        ;;
+    help|-h|--help) usage ;;
+    *) echo "madis: unknown command '$1'" >&2; usage >&2; exit 2 ;;
+esac

@@ -34,6 +34,7 @@ fn main() {
     }
     let sessions = cmap_new()
     let login_fails = cmap_new()
+    let live_cache = cmap_new()
     let ttl = session_ttl_secs()
     // Default loopback-only — leba (or nginx) terminates TLS and proxies in.
     // Set ADMIN_BIND=0.0.0.0 only if you intentionally expose admin publicly.
@@ -238,7 +239,7 @@ fn main() {
                                             if wr < 0 {
                                                 let _ = nb_close(fd)
                                             } else {
-                                                let _ = ws_crew.kick(ws_live_session(fd, db_url))
+                                                let _ = ws_crew.kick(ws_live_session(fd, db_url, live_cache))
                                                 ws_handed_off = 1
                                                 slog("  ws live session user=" + au)
                                             }
@@ -301,7 +302,7 @@ fn main() {
                                         // Live dashboard snapshot (auth) — HTTP fallback when WS is not available at the edge
                                         if str_eq(path, "/admin/api/live") {
                                             let sip = sip_options_probe()
-                                            let body = live_snapshot_json(db, db_ok, sip)
+                                            let body = live_snapshot_cached(db, db_ok, sip, live_cache)
                                             resp = http_resp(200, "application/json", body, "Cache-Control: no-store\r\n")
                                         }
                                         // CDR CSV export (auth required)

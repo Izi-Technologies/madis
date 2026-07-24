@@ -41,6 +41,9 @@ sudo ./install.sh
 ```
 
 It generates the database password and admin API token for you and prints them at the end. Everything goes into `/etc/madis/madis.env`.
+The installer also installs the Mako SIP WebUI source/binary and the `madis`
+CLI (`madisctl` is an alias) for service status, health checks, logs, and
+version reporting.
 
 You can override defaults before running:
 
@@ -59,6 +62,9 @@ This starts Madis and a PostgreSQL instance together. See `docker-compose.yml` f
 ## Building from source
 
 You'll need Mako 0.4.15.
+
+The current Madis release version is recorded in [`VERSION`](VERSION),
+separately from the required Mako compiler/runtime version.
 
 ```sh
 MAKO_RUNTIME=/path/to/mako/runtime mako build --release --strip --no-incremental main.mko -o madis
@@ -123,8 +129,20 @@ MAKO_RUNTIME=/path/to/mako/runtime \
 Run the admin service on loopback (`ADMIN_BIND=127.0.0.1`,
 `ADMIN_PORT=8080`) behind nginx or another TLS reverse proxy. It provides the
 authenticated `/admin` control plane, HTMX views, and a WebSocket live
-dashboard with polling fallback. If the standalone admin service owns port
+dashboard with polling fallback. Live dashboard snapshots use a short shared
+cache and a single aggregate count query so multiple operators do not multiply
+database load. If the standalone admin service owns port
 8080, set `SIP_ADMIN_PORT=0` for the SIP worker.
+
+After installation:
+
+```sh
+madis version
+madis status
+madis health
+madis webui
+madis logs admin
+```
 
 ## License
 
