@@ -1,0 +1,139 @@
+// Versioned language-neutral carrier API helpers for the standalone WebUI.
+// The endpoint is deliberately bounded and authenticated before any query.
+
+fn carrier_cap(s: string, max: int) -> string {
+    if max < 1 { return "" }
+    if len(s) <= max { return s }
+    return s[0:max]
+}
+
+fn carrier_json_escape(s: string) -> string {
+    let mut b = str_builder()
+    let mut i = 0
+    while i < len(s) {
+        let c = int(s[i])
+        if c == 34 { builder_write(b, "\\\"") }
+        else { if c == 92 { builder_write(b, "\\\\") } else { if c < 32 { builder_write_byte(b, byte(32)) } else { builder_write_byte(b, byte(c)) } } }
+        i = i + 1
+    }
+    return builder_string(b)
+}
+
+fn carrier_api_token_ok(raw: string, n: int) -> int {
+    let expected = env_get_or("SIP_CARRIER_API_TOKEN", "")
+    if len(expected) == 0 { return 0 }
+    let header = parse_header(raw, n, "Authorization")
+    if not str_has_prefix(str_to_lower(header), "bearer ") { return 0 }
+    let actual = str_trim_space(header[7:])
+    if len(actual) == 0 || len(actual) > 256 { return 0 }
+    return if str_eq(actual, expected) { 1 } else { 0 }
+}
+
+fn carrier_api_json_request_ok(raw: string, n: int) -> int {
+    let content_type = str_to_lower(parse_header(raw, n, "Content-Type"))
+    if not str_has_prefix(content_type, "application/json") { return 0 }
+    let body = parse_body(raw, n)
+    if len(body) == 0 || len(body) > 65536 { return 0 }
+    return 1
+}
+
+fn carrier_api_limit(q: string) -> int {
+    let mut limit = 100
+    let raw = query_val(q, "limit")
+    if len(raw) > 0 {
+        match parse_int(raw) { Ok(v) => { limit = v } Err(_) => {} }
+    }
+    if limit < 1 { limit = 1 }
+    if limit > 100 { limit = 100 }
+    return limit
+}
+
+fn carrier_api_capabilities() -> string {
+    return "{"
+        + "\"schema\":\"madis.capabilities.v1\","
+        + "\"version\":\"" + carrier_json_escape(carrier_cap(env_get_or("MADIS_VERSION", "dev"), 128)) + "\","
+        + "\"mako_version\":\"0.4.16\","
+        + "\"transports\":[\"udp\",\"tcp\",\"tls\",\"ws\",\"wss\"],"
+        + "\"contracts\":[\"billing-event-v1\",\"charging-request-v1\",\"diameter-rfc8506-v1\",\"diameter-rfc6733-peer-v1\",\"ims-cx-dx-v1\",\"ims-sh-v1\",\"ims-session-v1\",\"ss7-m3ua-envelope-v1\"],"
+        + "\"charging\":{\"outbox\":true,\"preauth_http_adapter\":true,\"diameter_native\":true,\"diameter_transport\":\"tcp_tls_sctp\",\"diameter_persistent_peer\":true,\"diameter_sctp\":true,\"diameter_sctp_runtime\":\"platform_dependent\",\"diameter_peer_failover\":false},"
+        + "\"ims\":{\"cx_dx_wire_contract\":true,\"cx_register_uar_sar\":true,\"sh_wire_contract\":true,\"hss_native\":false,\"scscf_service_logic\":false},"
+        + "\"ss7\":{\"native_sctp_m3ua\":false,\"external_adapter\":true},"
+        + "\"memory_safety\":{\"bounded_http_body\":true,\"bounded_outbox_page\":true,\"parameterized_sql\":true},"
+        + "\"extensions\":{}"
+        + "}"
+}
+
+fn carrier_api_events(db: SqlDB, ok: int, limit: int) -> string {
+    let rows = tbl_query(db, ok, "SELECT json_build_object('event_id', event_id, 'call_id', call_id, 'event_type', event_type, 'payload', payload_json, 'occurred_at', occurred_at, 'attempts', attempts)::text FROM billing_events WHERE delivered_at IS NULL ORDER BY occurred_at ASC, event_id ASC", limit)
+    let mut out = "{\"schema\":\"madis.billing.batch.v1\",\"events\":["
+    let mut truncated = 0
+    let mut i = 0
+    while i < len(rows) {
+        if len(out) + len(rows[i]) + 2 > 262144 { truncated = 1; break }
+        if i > 0 { out = out + "," }
+        out = out + rows[i]
+        i = i + 1
+    }
+    let mut trunc_text = "false"
+    if truncated == 1 { trunc_text = "true" }
+    return out + "],\"truncated\":" + trunc_text + "}"
+}
+
+fn carrier_api_event_id_ok(event_id: string) -> int {
+    if len(event_id) < 16 || len(event_id) > 128 { return 0 }
+    let mut i = 0
+    while i < len(event_id) {
+        let c = int(event_id[i])
+        let safe = (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 45 || c == 46 || c == 58 || c == 95
+        if not safe { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn carrier_api_ack(db: SqlDB, ok: int, event_id: string) -> int {
+    if ok == 0 || carrier_api_event_id_ok(event_id) == 0 { return -1 }
+    return sql_exec_str4(db, "UPDATE billing_events SET delivered_at = NOW(), attempts = attempts + 1 WHERE event_id = $1", event_id, "", "", "")
+}
+
+fn carrier_api_publish(db: SqlDB, ok: int, body: string) -> int {
+    if ok == 0 || len(body) == 0 || len(body) > 65536 { return -1 }
+    let event_type = json_get_string(body, "event_type")
+    if len(event_type) == 0 || len(event_type) > 128 { return -1 }
+    let mut event_id = json_get_string(body, "event_id")
+    if len(event_id) == 0 { event_id = sha256(body) }
+    if carrier_api_event_id_ok(event_id) == 0 { return -1 }
+    let subject = json_get_string(body, "session_id")
+    return sql_exec_str4(db, "INSERT INTO billing_events (event_id, call_id, event_type, payload_json) VALUES ($1, $2, $3, $4::jsonb) ON CONFLICT (event_id) DO NOTHING", event_id, carrier_cap(subject, 512), carrier_cap(event_type, 128), body)
+}
+
+fn carrier_api_route(method: string, path: string) -> int {
+    if str_eq(method, "GET") && str_eq(path, "/admin/api/v1/capabilities") { return 1 }
+    if str_eq(method, "GET") && str_eq(path, "/admin/api/v1/billing/events") { return 2 }
+    if str_eq(method, "POST") && str_eq(path, "/admin/api/v1/billing/events") { return 3 }
+    if str_eq(method, "POST") && str_eq(path, "/admin/api/v1/billing/events/ack") { return 4 }
+    return 0
+}
+
+fn carrier_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string, n: int) -> string {
+    let kind = carrier_api_route(method, path)
+    if kind == 1 { return http_resp(200, "application/json", carrier_api_capabilities(), "Cache-Control: no-store\r\n") }
+    if kind == 2 {
+        if ok == 0 { return http_resp(503, "application/json", "{\"ok\":false,\"error\":\"database unavailable\"}\n", "") }
+        return http_resp(200, "application/json", carrier_api_events(db, ok, carrier_api_limit(parse_query(raw, n))), "Cache-Control: no-store\r\n")
+    }
+    if kind == 3 {
+        if carrier_api_json_request_ok(raw, n) == 0 { return http_resp(400, "application/json", "{\"ok\":false,\"error\":\"application/json body required\"}\n", "") }
+        if ok == 0 { return http_resp(503, "application/json", "{\"ok\":false,\"error\":\"database unavailable\"}\n", "") }
+        let rc = carrier_api_publish(db, ok, parse_body(raw, n))
+        if rc < 0 { return http_resp(400, "application/json", "{\"ok\":false,\"error\":\"invalid event\"}\n", "") }
+        return http_resp(202, "application/json", "{\"ok\":true,\"accepted\":true}\n", "")
+    }
+    if kind == 4 {
+        if ok == 0 { return http_resp(503, "application/json", "{\"ok\":false,\"error\":\"database unavailable\"}\n", "") }
+        let rc = carrier_api_ack(db, ok, query_val(parse_query(raw, n), "event_id"))
+        if rc < 0 { return http_resp(400, "application/json", "{\"ok\":false,\"error\":\"invalid event_id\"}\n", "") }
+        return http_resp(200, "application/json", "{\"ok\":true,\"acknowledged\":true}\n", "")
+    }
+    return http_resp(404, "application/json", "{\"ok\":false,\"error\":\"not found\"}\n", "")
+}

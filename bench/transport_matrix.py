@@ -82,7 +82,8 @@ def main() -> int:
         }
     )
 
-    log = open(os.devnull, "w", encoding="utf-8")
+    log_path = os.environ.get("MADIS_TEST_LOG", os.devnull)
+    log = open(log_path, "w", encoding="utf-8")
     process = subprocess.Popen([args.binary], env=env, stdout=log, stderr=subprocess.STDOUT)
     try:
         wait_ready(admin_port, time.monotonic() + 8.0)

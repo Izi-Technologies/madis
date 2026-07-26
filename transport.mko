@@ -368,7 +368,11 @@ fn sip_forward_tls(target: string, msg: string, cache: CMap, owner: int) -> int 
         let _ = cmap_del(cache, assoc_key)
         handle = -1
     }
-    handle = tls_pool_open(host, port, ca)
+    handle = tls_pool_open_timeout(host, port, ca, 1200)
+    if handle > 0 && tls_pool_set_timeout(handle, 1200) < 0 {
+        let _ = tls_pool_close(handle)
+        handle = -1
+    }
     if handle < 0 { return 0 }
     let sent = tls_pool_send(handle, msg)
     if sent >= 0 {
@@ -506,7 +510,7 @@ fn sip_forward_target(target: string, msg: string, transport: string, cache: CMa
         }
         i = i + 1
     }
-    if sent == 1 && str_eq(sip_method(msg), "INVITE") {
+    if sent == 1 && str_eq(madis_method(msg), "INVITE") {
         let cid = sip_header(msg, "Call-ID")
         let branch = sip_via_branch(sip_header(msg, "Via"))
         if len(cid) > 0 && len(branch) > 0 {
@@ -515,7 +519,7 @@ fn sip_forward_target(target: string, msg: string, transport: string, cache: CMa
         }
     }
     if sent == 1 {
-        let method = sip_method(msg)
+        let method = madis_method(msg)
         if not str_eq(method, "ACK") && not str_eq(method, "") {
             let _ = sip_client_txn_record(msg, chosen_target, tr, out_fd, cache)
         }

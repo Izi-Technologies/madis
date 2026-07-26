@@ -4,6 +4,7 @@ import "./ui.mko"
 import "./pages.mko"
 import "./http.mko"
 import "./handlers.mko"
+pull . "../carrier_api.mko"
 
 fn main() {
     let db_url = env_get_or("SIP_DB_URL", "")
@@ -14,6 +15,8 @@ fn main() {
         db_ok = 1
         let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS admin_users (id SERIAL PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, role TEXT DEFAULT 'viewer', enabled BOOLEAN DEFAULT true, created_at TIMESTAMP DEFAULT NOW())")
         let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS admin_sessions (token TEXT PRIMARY KEY, username TEXT NOT NULL, role TEXT NOT NULL, created_at TIMESTAMP DEFAULT NOW())")
+        let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS billing_events (event_id TEXT PRIMARY KEY, call_id TEXT NOT NULL DEFAULT '', event_type TEXT NOT NULL, payload_json JSONB NOT NULL, occurred_at TIMESTAMP DEFAULT NOW(), available_at TIMESTAMP DEFAULT NOW(), delivered_at TIMESTAMP, attempts INT NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '', CONSTRAINT billing_event_id_size CHECK (char_length(event_id) BETWEEN 16 AND 128), CONSTRAINT billing_event_payload_size CHECK (octet_length(payload_json::text) <= 65536))")
+        let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_billing_events_pending ON billing_events (occurred_at, event_id) WHERE delivered_at IS NULL")
         let ac = sql_query_str(db, "SELECT COUNT(*) FROM admin_users", "")
         if str_eq(ac, "0") {
             // Bootstrap only when SIP_ADMIN_PASSWORD is set — never hardcode admin/admin.
@@ -51,8 +54,10 @@ fn main() {
 
     // Crew owns long-lived WebSocket live sessions kicked from the accept loop.
     crew ws_crew {
-    while 1 == 1 {
-        let n = evloop_wait(el, 0 - 1)
+    while shutdown_requested() == 0 {
+        // Keep the wait finite so SIGTERM can drain the worker without
+        // relying on systemd's SIGKILL fallback.
+        let n = evloop_wait(el, 100)
         if n <= 0 { continue }
         let mut i = 0
         while i < n {
@@ -180,10 +185,23 @@ fn main() {
                                                 resp = http_resp(502, "application/json", "[]", "")
                                             } else {
                                                 resp = http_resp(200, "application/json", body, "")
-                                            }
-                                        }
-                                    }
+        }
+    }
+    let _ = evloop_del(el, lfd)
+    let _ = nb_close(lfd)
+}
                                 }
+                            }
+                        }
+
+                        // Machine API: bearer token only, never a browser
+                        // session. This keeps carrier integrations independent
+                        // of HTML cookies and CSRF semantics.
+                        if len(resp) == 0 && carrier_api_route(method, path) > 0 {
+                            if carrier_api_token_ok(raw, rl) == 1 {
+                                resp = carrier_api_handle(db, db_ok, method, path, raw, rl)
+                            } else {
+                                resp = http_resp(401, "application/json", "{\"ok\":false,\"error\":\"carrier bearer token required\"}\n", "WWW-Authenticate: Bearer\r\n")
                             }
                         }
 

@@ -54,7 +54,9 @@ fn peer_split(addr: string) -> []string {
 
 fn peer_host(fd: int) -> string {
     let parts = peer_split(tcp_peer_addr(fd))
-    return parts[0]
+    // Do not return an element owned by the temporary array: the array drop
+    // releases its strings before the caller owns the result.
+    return "" + parts[0]
 }
 
 fn peer_port(fd: int) -> int {

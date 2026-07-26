@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://madis.example/schemas/charging-response.v1.json",
+  "title": "Madis online charging adapter response",
+  "type": "object",
+  "required": ["decision"],
+  "properties": {
+    "decision": {"enum": ["allow", "authorized", "deny"]},
+    "reservation_id": {"type": "string", "maxLength": 256},
+    "granted_service_unit": {"type": "object", "additionalProperties": true},
+    "valid_until": {"type": "string", "maxLength": 64},
+    "final_unit_action": {"type": "string", "maxLength": 64},
+    "extensions": {"type": "object", "additionalProperties": true}
+  },
+  "additionalProperties": true
+}

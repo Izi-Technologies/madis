@@ -1,0 +1,1015 @@
+// RFC 8506 Diameter Credit-Control client primitives.
+//
+// This module deliberately keeps the supported surface small and auditable:
+// CCR/CCA, CER/CEA, the mandatory base AVPs, SIP subscription identity, time
+// units, and bounded TCP/TLS/SCTP framing. It does not silently downgrade TLS
+// or pretend to implement relays, peer failover, or media quota timers.
+
+fn diameter_transport() -> string {
+    let transport = str_to_lower(str_trim_space(env_get_or("SIP_DIAMETER_TRANSPORT", "tcp")))
+    return if str_eq(transport, "sctp") { "sctp" } else { "tcp" }
+}
+
+fn diameter_u8(b: StrBuilder, value: int) {
+    let mut v = value
+    if v < 0 { v = 0 }
+    builder_write_byte(b, byte(v % 256))
+}
+
+fn diameter_u24(b: StrBuilder, value: int) {
+    let mut v = value
+    if v < 0 { v = 0 }
+    diameter_u8(b, v / 65536)
+    diameter_u8(b, v / 256)
+    diameter_u8(b, v)
+}
+
+fn diameter_u32(b: StrBuilder, value: int) {
+    let mut v = value
+    if v < 0 { v = 0 }
+    diameter_u8(b, v / 16777216)
+    diameter_u8(b, v / 65536)
+    diameter_u8(b, v / 256)
+    diameter_u8(b, v)
+}
+
+fn diameter_read_u24(s: string, at: int) -> int {
+    if at < 0 || at + 3 > len(s) { return -1 }
+    return int(s[at]) * 65536 + int(s[at + 1]) * 256 + int(s[at + 2])
+}
+
+fn diameter_read_u32(s: string, at: int) -> int {
+    if at < 0 || at + 4 > len(s) { return -1 }
+    return int(s[at]) * 16777216 + int(s[at + 1]) * 65536 + int(s[at + 2]) * 256 + int(s[at + 3])
+}
+
+fn diameter_pad_len(n: int) -> int {
+    let rem = n % 4
+    if rem == 0 { return 0 }
+    return 4 - rem
+}
+
+fn diameter_avp(code: int, flags: int, value: string) -> string {
+    if code < 0 || code > 16777215 || len(value) > 65519 { return "" }
+    let avp_len = 8 + len(value)
+    let b = str_builder()
+    diameter_u32(b, code)
+    diameter_u8(b, flags)
+    diameter_u24(b, avp_len)
+    builder_write(b, value)
+    let mut i = 0
+    while i < diameter_pad_len(avp_len) {
+        diameter_u8(b, 0)
+        i = i + 1
+    }
+    return builder_string(b)
+}
+
+// Vendor-specific AVPs carry the vendor identifier after the common header.
+// Force the V bit here so an application cannot emit a 3GPP AVP with a
+// standard header by mistake.
+fn diameter_avp_vendor(code: int, flags: int, vendor_id: int, value: string) -> string {
+    if code < 0 || code > 16777215 || vendor_id <= 0 || vendor_id > 4294967295 || len(value) > 65515 { return "" }
+    let mut avp_flags = flags
+    if avp_flags < 0 || avp_flags % 32 != 0 { return "" }
+    if (avp_flags / 128) % 2 == 0 { avp_flags = avp_flags + 128 }
+    let avp_len = 12 + len(value)
+    let b = str_builder()
+    diameter_u32(b, code)
+    diameter_u8(b, avp_flags)
+    diameter_u24(b, avp_len)
+    diameter_u32(b, vendor_id)
+    builder_write(b, value)
+    let mut i = 0
+    while i < diameter_pad_len(avp_len) {
+        diameter_u8(b, 0)
+        i = i + 1
+    }
+    return builder_string(b)
+}
+
+fn diameter_avp_vendor_m(code: int, vendor_id: int, value: string) -> string {
+    return diameter_avp_vendor(code, 64, vendor_id, value)
+}
+
+fn diameter_avp_vendor_u32(code: int, vendor_id: int, value: int) -> string {
+    let b = str_builder()
+    diameter_u32(b, value)
+    return diameter_avp_vendor_m(code, vendor_id, builder_string(b))
+}
+
+fn diameter_avp_vendor_string(code: int, vendor_id: int, value: string) -> string {
+    return diameter_avp_vendor_m(code, vendor_id, value)
+}
+
+fn diameter_grouped_vendor(code: int, vendor_id: int, children: string) -> string {
+    return diameter_avp_vendor_m(code, vendor_id, children)
+}
+
+fn diameter_avp_m(code: int, value: string) -> string {
+    return diameter_avp(code, 64, value)
+}
+
+fn madis_diameter_avp_u32(code: int, value: int) -> string {
+    let b = str_builder()
+    diameter_u32(b, value)
+    return diameter_avp_m(code, builder_string(b))
+}
+
+fn diameter_avp_string(code: int, value: string) -> string {
+    return diameter_avp_m(code, value)
+}
+
+fn diameter_grouped(code: int, children: string) -> string {
+    return diameter_avp_m(code, children)
+}
+
+fn diameter_header(flags: int, command: int, application: int, hop: int, end: int, body: string) -> string {
+    let total = 20 + len(body)
+    if total < 20 || total > 16777215 { return "" }
+    let b = str_builder()
+    diameter_u8(b, 1)
+    diameter_u24(b, total)
+    diameter_u8(b, flags)
+    diameter_u24(b, command)
+    diameter_u32(b, application)
+    diameter_u32(b, hop)
+    diameter_u32(b, end)
+    builder_write(b, body)
+    return builder_string(b)
+}
+
+fn diameter_message_valid(msg: string) -> int {
+    if len(msg) < 20 || int(msg[0]) != 1 { return 0 }
+    if int(msg[4]) % 32 != 0 { return 0 }
+    let declared = diameter_read_u24(msg, 1)
+    if declared < 20 || declared != len(msg) || declared > 1048576 { return 0 }
+    let mut at = 20
+    while at < declared {
+        if at + 8 > declared { return 0 }
+        let avp_len = diameter_read_u24(msg, at + 5)
+        if avp_len < 8 || at + avp_len > declared { return 0 }
+        let avp_code = diameter_read_u32(msg, at)
+        if avp_code <= 0 { return 0 }
+        let flags = int(msg[at + 4])
+        if flags % 32 != 0 { return 0 }
+        let vendor = (flags / 128) % 2
+        if vendor == 1 && avp_len < 12 { return 0 }
+        let padding = diameter_pad_len(avp_len)
+        let next = at + avp_len + padding
+        if next <= at || next > declared { return 0 }
+        let mut i = 0
+        while i < padding {
+            if msg[at + avp_len + i] != byte(0) { return 0 }
+            i = i + 1
+        }
+        at = next
+    }
+    return if at == declared { 1 } else { 0 }
+}
+
+fn diameter_find_avp(msg: string, code: int) -> string {
+    if diameter_message_valid(msg) == 0 || len(msg) < 20 { return "" }
+    let mut at = 20
+    while at < len(msg) {
+        let avp_code = diameter_read_u32(msg, at)
+        let avp_len = diameter_read_u24(msg, at + 5)
+        if avp_code == code {
+            let flags = int(msg[at + 4])
+            let vendor = (flags / 128) % 2
+            if vendor == 1 { at = at + avp_len + diameter_pad_len(avp_len); continue }
+            let value_at = at + 8 + (vendor * 4)
+            if value_at > at + avp_len { return "" }
+            return msg[value_at:at + avp_len]
+        }
+        at = at + avp_len + diameter_pad_len(avp_len)
+    }
+    return ""
+}
+
+fn diameter_find_vendor_avp(msg: string, code: int, vendor_id: int) -> string {
+    if diameter_message_valid(msg) == 0 || len(msg) < 20 || vendor_id <= 0 { return "" }
+    let mut at = 20
+    while at < len(msg) {
+        let avp_code = diameter_read_u32(msg, at)
+        let avp_len = diameter_read_u24(msg, at + 5)
+        let flags = int(msg[at + 4])
+        let vendor = (flags / 128) % 2
+        if avp_code == code && vendor == 1 && avp_len >= 12 && diameter_read_u32(msg, at + 8) == vendor_id {
+            return msg[at + 12:at + avp_len]
+        }
+        at = at + avp_len + diameter_pad_len(avp_len)
+    }
+    return ""
+}
+
+fn diameter_find_vendor_u32(msg: string, code: int, vendor_id: int) -> int {
+    let value = diameter_find_vendor_avp(msg, code, vendor_id)
+    if len(value) != 4 { return -1 }
+    return diameter_read_u32(value, 0)
+}
+
+fn diameter_find_grouped_vendor_avp(group: string, code: int, vendor_id: int) -> string {
+    if len(group) == 0 || vendor_id <= 0 { return "" }
+    let mut at = 0
+    while at < len(group) {
+        if at + 8 > len(group) { return "" }
+        let avp_code = diameter_read_u32(group, at)
+        let avp_len = diameter_read_u24(group, at + 5)
+        if avp_len < 8 || at + avp_len > len(group) { return "" }
+        let flags = int(group[at + 4])
+        if flags % 32 != 0 { return "" }
+        let vendor = (flags / 128) % 2
+        if avp_code == code && vendor == 1 && avp_len >= 12 && diameter_read_u32(group, at + 8) == vendor_id {
+            return group[at + 12:at + avp_len]
+        }
+        let padding = diameter_pad_len(avp_len)
+        let next = at + avp_len + padding
+        if next <= at || next > len(group) { return "" }
+        let mut i = 0
+        while i < padding {
+            if group[at + avp_len + i] != byte(0) { return "" }
+            i = i + 1
+        }
+        at = next
+    }
+    return ""
+}
+
+fn diameter_find_grouped_vendor_u32(group: string, code: int, vendor_id: int) -> int {
+    let value = diameter_find_grouped_vendor_avp(group, code, vendor_id)
+    if len(value) != 4 { return -1 }
+    return diameter_read_u32(value, 0)
+}
+
+fn diameter_find_grouped_avp(group: string, code: int) -> string {
+    let mut at = 0
+    while at < len(group) {
+        if at + 8 > len(group) { return "" }
+        let avp_code = diameter_read_u32(group, at)
+        let avp_len = diameter_read_u24(group, at + 5)
+        if avp_len < 8 || at + avp_len > len(group) { return "" }
+        let avp_code_ok = diameter_read_u32(group, at)
+        let flags = int(group[at + 4])
+        if avp_code_ok <= 0 || flags % 32 != 0 { return "" }
+        let vendor = (flags / 128) % 2
+        let padding = diameter_pad_len(avp_len)
+        let next = at + avp_len + padding
+        if next <= at || next > len(group) { return "" }
+        let mut i = 0
+        while i < padding {
+            if group[at + avp_len + i] != byte(0) { return "" }
+            i = i + 1
+        }
+        if avp_code == code && vendor == 0 {
+            let value_at = at + 8 + (vendor * 4)
+            if value_at > at + avp_len { return "" }
+            return group[value_at:at + avp_len]
+        }
+        at = next
+    }
+    return ""
+}
+
+fn diameter_find_u32(msg: string, code: int) -> int {
+    let value = diameter_find_avp(msg, code)
+    if len(value) != 4 { return -1 }
+    return diameter_read_u32(value, 0)
+}
+
+fn diameter_find_grouped_u32(msg: string, parent: int, child: int) -> int {
+    let group = diameter_find_avp(msg, parent)
+    let value = diameter_find_grouped_avp(group, child)
+    if len(value) != 4 { return -1 }
+    return diameter_read_u32(value, 0)
+}
+
+fn diameter_header_command(msg: string) -> int {
+    return diameter_read_u24(msg, 5)
+}
+
+fn diameter_header_flags(msg: string) -> int {
+    if len(msg) < 5 { return -1 }
+    return int(msg[4])
+}
+
+fn diameter_header_application(msg: string) -> int {
+    return diameter_read_u32(msg, 8)
+}
+
+fn diameter_hex_value(c: int) -> int {
+    if c >= 48 && c <= 57 { return c - 48 }
+    if c >= 65 && c <= 70 { return c - 55 }
+    if c >= 97 && c <= 102 { return c - 87 }
+    return -1
+}
+
+fn diameter_id(seed: string) -> int {
+    let digest = sha256(seed)
+    let mut value = 0
+    let mut i = 0
+    while i < 8 {
+        let nibble = diameter_hex_value(int(digest[i]))
+        if nibble < 0 { return 1 }
+        value = value * 16 + nibble
+        i = i + 1
+    }
+    if value == 0 { return 1 }
+    return value
+}
+
+fn diameter_identity_ok(value: string) -> int {
+    if len(value) < 1 || len(value) > 255 { return 0 }
+    let mut i = 0
+    while i < len(value) {
+        let c = int(value[i])
+        if c < 33 || c > 126 || c == 34 || c == 92 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn diameter_ipv4_bytes(raw: string) -> string {
+    let parts = str_split(raw, ".")
+    if len(parts) != 4 { return "" }
+    let b = str_builder()
+    let mut i = 0
+    while i < 4 {
+        match parse_int(str_trim_space(parts[i])) {
+            Ok(v) => {
+                if v < 0 || v > 255 { return "" }
+                diameter_u8(b, v)
+            }
+            Err(_) => { return "" }
+        }
+        i = i + 1
+    }
+    return builder_string(b)
+}
+
+fn diameter_host_ip_avp() -> string {
+    let ip = diameter_ipv4_bytes(env_get_or("SIP_DIAMETER_HOST_IP", "127.0.0.1"))
+    if len(ip) != 4 { return "" }
+    let b = str_builder()
+    diameter_u8(b, 0)
+    diameter_u8(b, 1)
+    builder_write(b, ip)
+    return diameter_avp_m(257, builder_string(b))
+}
+
+fn diameter_origin_host() -> string {
+    return env_get_or("SIP_DIAMETER_ORIGIN_HOST", "madis.localhost")
+}
+
+fn diameter_origin_realm() -> string {
+    return env_get_or("SIP_DIAMETER_ORIGIN_REALM", "localhost")
+}
+
+fn diameter_destination_realm() -> string {
+    return env_get_or("SIP_DIAMETER_DEST_REALM", diameter_origin_realm())
+}
+
+fn diameter_timeout_ms() -> int {
+    let mut wait_ms = 1000
+    match parse_int(env_get_or("SIP_DIAMETER_TIMEOUT_MS", "1000")) {
+        Ok(v) => { wait_ms = v }
+        Err(_) => {}
+    }
+    if wait_ms < 50 { wait_ms = 50 }
+    if wait_ms > 10000 { wait_ms = 10000 }
+    return wait_ms
+}
+
+fn diameter_service_context() -> string {
+    let value = env_get_or("SIP_DIAMETER_SERVICE_CONTEXT", "voice.sip@madis.local")
+    if len(value) < 1 || len(value) > 255 { return "voice.sip@madis.local" }
+    return value
+}
+
+fn diameter_subscription_type() -> int {
+    let mut value = 0
+    match parse_int(env_get_or("SIP_DIAMETER_SUBSCRIPTION_TYPE", "0")) {
+        Ok(v) => { value = v }
+        Err(_) => {}
+    }
+    if value < 0 || value > 3 { return 0 }
+    return value
+}
+
+fn diameter_subscription_id(identifier: string) -> string {
+    if len(identifier) < 1 || len(identifier) > 1024 { return "" }
+    let children = madis_diameter_avp_u32(450, diameter_subscription_type()) + diameter_avp_string(444, identifier)
+    return diameter_grouped(443, children)
+}
+
+fn diameter_service_parameter(value: string) -> string {
+    if len(value) == 0 || len(value) > 1024 { return "" }
+    let children = madis_diameter_avp_u32(441, 1) + diameter_avp(442, 64, value)
+    return diameter_grouped(440, children)
+}
+
+fn diameter_cc_time_group(code: int, seconds: int) -> string {
+    if seconds < 1 || seconds > 4294967295 { return "" }
+    return diameter_grouped(code, madis_diameter_avp_u32(420, seconds))
+}
+
+fn diameter_cc_request_type(kind: string) -> int {
+    let low = str_to_lower(str_trim_space(kind))
+    if str_eq(low, "initial") { return 1 }
+    if str_eq(low, "update") { return 2 }
+    if str_eq(low, "termination") { return 3 }
+    if str_eq(low, "event") { return 4 }
+    return -1
+}
+
+fn diameter_termination_cause() -> string {
+    // USER_REQUEST, RFC 6733 Termination-Cause enumerated value 4.
+    return madis_diameter_avp_u32(295, 4)
+}
+
+fn diameter_ccr_body(cid: string, caller: string, callee: string, kind: string, request_number: int, used_seconds: int) -> string {
+    let request_type = diameter_cc_request_type(kind)
+    if request_type < 1 || request_type > 4 || request_number < 0 || request_number > 4294967295 { return "" }
+    if (request_type == 1 || request_type == 4) && request_number != 0 { return "" }
+    if (request_type == 2 || request_type == 3) && request_number < 1 { return "" }
+    if len(cid) < 1 || len(cid) > 512 || len(caller) < 1 || len(caller) > 1024 { return "" }
+    let origin_host = diameter_origin_host()
+    let origin_realm = diameter_origin_realm()
+    let destination_realm = diameter_destination_realm()
+    if diameter_identity_ok(origin_host) == 0 || diameter_identity_ok(origin_realm) == 0 || diameter_identity_ok(destination_realm) == 0 { return "" }
+    let session_id = origin_host + ";" + sha256("madis.diameter.session|" + cid)[0:32]
+    let mut body = diameter_avp_string(263, session_id)
+        + diameter_avp_string(264, origin_host)
+        + diameter_avp_string(296, origin_realm)
+        + diameter_avp_string(283, destination_realm)
+        + madis_diameter_avp_u32(258, 4)
+        + diameter_avp_string(461, diameter_service_context())
+        + madis_diameter_avp_u32(416, request_type)
+        + madis_diameter_avp_u32(415, request_number)
+    let subscription = diameter_subscription_id(caller)
+    if len(subscription) == 0 { return "" }
+    body = body + subscription
+    let parameter = diameter_service_parameter(callee)
+    if len(parameter) > 0 { body = body + parameter }
+    let service_id = env_get_or("SIP_DIAMETER_SERVICE_ID", "")
+    if len(service_id) > 0 {
+        match parse_int(service_id) { Ok(v) => { if v > 0 { body = body + madis_diameter_avp_u32(439, v) } } Err(_) => {} }
+    }
+    if request_type == 1 {
+        let requested = env_get_or("SIP_DIAMETER_REQUESTED_SECONDS", "")
+        match parse_int(requested) { Ok(v) => { let unit = diameter_cc_time_group(437, v); if len(unit) > 0 { body = body + unit } } Err(_) => {} }
+    }
+    if (request_type == 2 || request_type == 3) && used_seconds > 0 {
+        let used = diameter_cc_time_group(446, used_seconds)
+        if len(used) > 0 { body = body + used }
+    }
+    if request_type == 3 { body = body + diameter_termination_cause() }
+    if request_type == 4 {
+        let action = env_get_or("SIP_DIAMETER_REQUESTED_ACTION", "0")
+        match parse_int(action) { Ok(v) => { if v >= 0 && v <= 4 { body = body + madis_diameter_avp_u32(436, v) } } Err(_) => {} }
+    }
+    return body
+}
+
+fn diameter_ccr_message(cid: string, caller: string, callee: string, kind: string, request_number: int, used_seconds: int) -> string {
+    let body = diameter_ccr_body(cid, caller, callee, kind, request_number, used_seconds)
+    if len(body) == 0 { return "" }
+    let session_id = diameter_origin_host() + ";" + sha256("madis.diameter.session|" + cid)[0:32]
+    let hop = diameter_id("hop|" + session_id + "|" + string(request_number) + "|" + kind)
+    let end = diameter_id("end|" + session_id + "|" + string(request_number) + "|" + kind)
+    return diameter_header(192, 272, 4, hop, end, body)
+}
+
+fn diameter_cc_hop_id(cid: string, kind: string, request_number: int) -> int {
+    let session_id = diameter_session_id(cid)
+    return diameter_id("hop|" + session_id + "|" + string(request_number) + "|" + kind)
+}
+
+fn diameter_cc_end_id(cid: string, kind: string, request_number: int) -> int {
+    let session_id = diameter_session_id(cid)
+    return diameter_id("end|" + session_id + "|" + string(request_number) + "|" + kind)
+}
+
+fn diameter_cer_message() -> string {
+    let host = diameter_origin_host()
+    let realm = diameter_origin_realm()
+    if diameter_identity_ok(host) == 0 || diameter_identity_ok(realm) == 0 { return "" }
+    let body = diameter_avp_string(264, host)
+        + diameter_avp_string(296, realm)
+        + diameter_host_ip_avp()
+        + madis_diameter_avp_u32(266, 0)
+        + diameter_avp_string(269, "Madis")
+        + madis_diameter_avp_u32(258, 4)
+    if len(body) < 1 { return "" }
+    let id = diameter_id("cer|" + host + "|" + string(now_ms()))
+    return diameter_header(128, 257, 0, id, id, body)
+}
+
+fn diameter_answer_matches_ids(response: string, session_id: string, kind: string, request_number: int, expected_hop: int, expected_end: int) -> int {
+    if diameter_message_valid(response) == 0 || len(response) < 20 { return 0 }
+    if diameter_header_command(response) != 272 || diameter_header_application(response) != 4 { return 0 }
+    let flags = diameter_header_flags(response)
+    if flags < 0 || flags % 32 != 0 || (flags / 128) % 2 != 0 { return 0 }
+    if expected_hop > 0 && diameter_read_u32(response, 12) != expected_hop { return 0 }
+    if expected_end > 0 && diameter_read_u32(response, 16) != expected_end { return 0 }
+    if not str_eq(diameter_find_avp(response, 263), session_id) { return 0 }
+    if diameter_find_u32(response, 416) != diameter_cc_request_type(kind) { return 0 }
+    if diameter_find_u32(response, 415) != request_number { return 0 }
+    let result = diameter_find_u32(response, 268)
+    if result != 2001 && result != 2002 && result != 4011 { return 0 }
+    let final_unit = diameter_find_avp(response, 430)
+    let qos_final_unit = diameter_find_avp(response, 669)
+    // This worker has no media quota supervisor or redirect/restrict action
+    // executor. Do not authorize a policy it cannot enforce.
+    if len(final_unit) > 0 || len(qos_final_unit) > 0 { return 0 }
+    if diameter_cc_request_type(kind) == 1 && result != 4011 {
+        let granted = diameter_find_avp(response, 431)
+        if len(granted) == 0 { return 0 }
+    }
+    return 1
+}
+
+fn diameter_answer_matches(response: string, session_id: string, kind: string, request_number: int) -> int {
+    return diameter_answer_matches_ids(response, session_id, kind, request_number, -1, -1)
+}
+
+fn diameter_read_tcp_message(fd: int) -> string {
+    let header = tcp_read_n(fd, 20)
+    if len(header) != 20 { return "" }
+    if int(header[0]) != 1 { return "" }
+    let total = diameter_read_u24(header, 1)
+    if total < 20 || total > 1048576 { return "" }
+    let rest = tcp_read_n(fd, total - 20)
+    if len(rest) != total - 20 { return "" }
+    return header + rest
+}
+
+fn diameter_read_tls_message(conn: TlsConn) -> string {
+    let mut header = ""
+    while len(header) < 20 {
+        let chunk = tls_read(conn, 20 - len(header))
+        if len(chunk) == 0 { return "" }
+        header = header + chunk
+    }
+    if int(header[0]) != 1 { return "" }
+    let total = diameter_read_u24(header, 1)
+    if total < 20 || total > 1048576 { return "" }
+    let mut rest = ""
+    while len(rest) < total - 20 {
+        let chunk = tls_read(conn, total - 20 - len(rest))
+        if len(chunk) == 0 { return "" }
+        rest = rest + chunk
+    }
+    return header + rest
+}
+
+fn diameter_read_sctp_message(fd: int) -> string {
+    if fd < 0 { return "" }
+    let header = sctp_read_n(fd, 20)
+    if len(header) != 20 || int(header[0]) != 1 { return "" }
+    let total = diameter_read_u24(header, 1)
+    if total < 20 || total > 1048576 { return "" }
+    let rest = sctp_read_n(fd, total - 20)
+    if len(rest) != total - 20 { return "" }
+    let message = header + rest
+    return if diameter_message_valid(message) == 1 { message } else { "" }
+}
+
+fn diameter_cea_valid(response: string) -> int {
+    if diameter_message_valid(response) == 0 || len(response) < 20 { return 0 }
+    if diameter_header_command(response) != 257 || diameter_header_application(response) != 0 { return 0 }
+    let flags = diameter_header_flags(response)
+    if flags < 0 || flags % 32 != 0 || (flags / 128) % 2 != 0 { return 0 }
+    if diameter_find_u32(response, 268) != 2001 { return 0 }
+    if diameter_find_u32(response, 258) != 4 { return 0 }
+    if len(diameter_find_avp(response, 264)) == 0 || len(diameter_find_avp(response, 296)) == 0 { return 0 }
+    return 1
+}
+
+fn diameter_cea_matches(response: string, expected_hop: int) -> int {
+    if diameter_cea_valid(response) == 0 { return 0 }
+    return if diameter_read_u32(response, 12) == expected_hop { 1 } else { 0 }
+}
+
+fn diameter_cc_exchange(cid: string, caller: string, callee: string, kind: string, request_number: int, used_seconds: int) -> string {
+    let host = str_trim_space(env_get_or("SIP_DIAMETER_HOST", ""))
+    let ccr = diameter_ccr_message(cid, caller, callee, kind, request_number, used_seconds)
+    let cer = diameter_cer_message()
+    if len(ccr) == 0 || len(cer) == 0 { return "" }
+    if str_eq(diameter_transport(), "sctp") {
+        return diameter_sctp_exchange_once(ccr, 4, 272)
+    }
+    let wait_ms = diameter_timeout_ms()
+    let use_tls = str_to_lower(str_trim_space(env_get_or("SIP_DIAMETER_TLS", "1")))
+    let secure = str_eq(use_tls, "1") || str_eq(use_tls, "true") || str_eq(use_tls, "yes")
+    let mut port = 3868
+    if secure { port = 5658 }
+    let configured_port = env_get_or("SIP_DIAMETER_PORT", "")
+    if len(configured_port) > 0 {
+        match parse_int(configured_port) { Ok(v) => { port = v } Err(_) => { return "" } }
+    }
+    if len(host) == 0 || len(host) > 512 || port < 1 || port > 65535 { return "" }
+    if secure {
+        if tls_client_available() != 1 { return "" }
+        let ca = env_get_or("SIP_DIAMETER_CA", "")
+        let client_cert = env_get_or("SIP_DIAMETER_CLIENT_CERT", "")
+        let client_key = env_get_or("SIP_DIAMETER_CLIENT_KEY", "")
+        let client = if len(client_cert) > 0 && len(client_key) > 0 {
+            tls_client_new_mtls(ca, client_cert, client_key)
+        } else {
+            tls_client_new(ca)
+        }
+        let fd = tcp_connect_timeout(host, port, wait_ms)
+        if fd < 0 { let _ = tls_client_free(client); return "" }
+        let _ = tcp_set_timeout(fd, wait_ms)
+        let conn = tls_connect(client, fd, host)
+        if tls_conn_fd(conn) < 0 { let _ = tcp_close(fd); let _ = tls_client_free(client); return "" }
+        if tls_write(conn, cer) < 0 { let _ = tls_conn_close(conn); let _ = tls_client_free(client); return "" }
+        let cea = diameter_read_tls_message(conn)
+        if diameter_cea_matches(cea, diameter_read_u32(cer, 12)) == 0 { let _ = tls_conn_close(conn); let _ = tls_client_free(client); return "" }
+        if tls_write(conn, ccr) < 0 { let _ = tls_conn_close(conn); let _ = tls_client_free(client); return "" }
+        let answer = diameter_read_tls_message(conn)
+        let _ = tls_conn_close(conn)
+        let _ = tls_client_free(client)
+        return answer
+    }
+    // Plain TCP is opt-in only. RFC 6733 requires transport security policy to
+    // be applied by the deployment when TLS is not negotiated on this socket.
+    if not str_eq(env_get_or("SIP_DIAMETER_ALLOW_PLAINTEXT", "0"), "1") { return "" }
+    let fd = tcp_connect_timeout(host, port, wait_ms)
+    if fd < 0 { return "" }
+    let _ = tcp_set_timeout(fd, wait_ms)
+    if tcp_write_all(fd, cer) < 0 { let _ = tcp_close(fd); return "" }
+    let cea = diameter_read_tcp_message(fd)
+    if diameter_cea_matches(cea, diameter_read_u32(cer, 12)) == 0 { let _ = tcp_close(fd); return "" }
+    if tcp_write_all(fd, ccr) < 0 { let _ = tcp_close(fd); return "" }
+    let answer = diameter_read_tcp_message(fd)
+    let _ = tcp_close(fd)
+    return answer
+}
+
+fn diameter_session_id(cid: string) -> string {
+    return diameter_origin_host() + ";" + sha256("madis.diameter.session|" + cid)[0:32]
+}
+
+fn diameter_cc_authorized(cid: string, caller: string, callee: string) -> int {
+    let response = diameter_cc_exchange(cid, caller, callee, "initial", 0, 0)
+    return diameter_answer_matches_ids(response, diameter_session_id(cid), "initial", 0, diameter_cc_hop_id(cid, "initial", 0), diameter_cc_end_id(cid, "initial", 0))
+}
+
+fn diameter_cc_update(cid: string, caller: string, callee: string, request_number: int, used_seconds: int) -> int {
+    if request_number < 1 { return 0 }
+    let response = diameter_cc_exchange(cid, caller, callee, "update", request_number, used_seconds)
+    return diameter_answer_matches_ids(response, diameter_session_id(cid), "update", request_number, diameter_cc_hop_id(cid, "update", request_number), diameter_cc_end_id(cid, "update", request_number))
+}
+
+fn diameter_cc_terminate(cid: string, caller: string, callee: string, request_number: int, used_seconds: int) -> int {
+    if request_number < 1 { return 0 }
+    let response = diameter_cc_exchange(cid, caller, callee, "termination", request_number, used_seconds)
+    return diameter_answer_matches_ids(response, diameter_session_id(cid), "termination", request_number, diameter_cc_hop_id(cid, "termination", request_number), diameter_cc_end_id(cid, "termination", request_number))
+}
+
+// ============ RFC 6733 peer transport ============
+
+fn diameter_app_vendor(application: int) -> int {
+    if application == 16777216 || application == 16777217 { return 10415 }
+    return 0
+}
+
+fn diameter_vendor_application_id(application: int) -> string {
+    let vendor = diameter_app_vendor(application)
+    if vendor == 0 { return "" }
+    let children = madis_diameter_avp_u32(266, vendor) + madis_diameter_avp_u32(258, application)
+    return diameter_grouped(260, children)
+}
+
+fn diameter_cer_message_for(application: int) -> string {
+    let host = diameter_origin_host()
+    let realm = diameter_origin_realm()
+    if diameter_identity_ok(host) == 0 || diameter_identity_ok(realm) == 0 { return "" }
+    let mut body = diameter_avp_string(264, host)
+        + diameter_avp_string(296, realm)
+        + diameter_host_ip_avp()
+        + madis_diameter_avp_u32(266, 0)
+        + diameter_avp_string(269, "Madis")
+    let vendor = diameter_app_vendor(application)
+    if vendor > 0 {
+        body = body + madis_diameter_avp_u32(265, vendor) + diameter_vendor_application_id(application)
+    } else {
+        body = body + madis_diameter_avp_u32(258, application)
+    }
+    let id = diameter_id("cer|" + host + "|" + string(application) + "|" + string(now_ms()))
+    return diameter_header(128, 257, 0, id, id, body)
+}
+
+fn diameter_cea_base_valid(response: string) -> int {
+    if diameter_message_valid(response) == 0 || len(response) < 20 { return 0 }
+    if diameter_header_command(response) != 257 || diameter_header_application(response) != 0 { return 0 }
+    let flags = diameter_header_flags(response)
+    if flags < 0 || flags % 32 != 0 || (flags / 128) % 2 != 0 { return 0 }
+    if diameter_find_u32(response, 268) != 2001 { return 0 }
+    if len(diameter_find_avp(response, 264)) == 0 || len(diameter_find_avp(response, 296)) == 0 { return 0 }
+    return 1
+}
+
+fn diameter_cea_base_matches(response: string, expected_hop: int) -> int {
+    if diameter_cea_base_valid(response) == 0 { return 0 }
+    return if diameter_read_u32(response, 12) == expected_hop { 1 } else { 0 }
+}
+
+fn diameter_message_has_vsa_application(msg: string, vendor_id: int, application: int) -> int {
+    if diameter_message_valid(msg) == 0 || vendor_id <= 0 || application <= 0 { return 0 }
+    let mut at = 20
+    while at < len(msg) {
+        let code = diameter_read_u32(msg, at)
+        let avp_len = diameter_read_u24(msg, at + 5)
+        let flags = int(msg[at + 4])
+        let vendor = (flags / 128) % 2
+        if code == 260 && vendor == 0 {
+            let group = msg[at + 8:at + avp_len]
+            let app_value = diameter_find_grouped_avp(group, 258)
+            let vendor_value = diameter_find_grouped_avp(group, 266)
+            if len(app_value) == 4 && len(vendor_value) == 4 && diameter_read_u32(app_value, 0) == application && diameter_read_u32(vendor_value, 0) == vendor_id { return 1 }
+        }
+        at = at + avp_len + diameter_pad_len(avp_len)
+    }
+    return 0
+}
+
+fn diameter_cea_supports_application(response: string, application: int) -> int {
+    if application == 4 { return if diameter_find_u32(response, 258) == 4 { 1 } else { 0 } }
+    let vendor = diameter_app_vendor(application)
+    if vendor <= 0 { return 0 }
+    return diameter_message_has_vsa_application(response, vendor, application)
+}
+
+fn diameter_peer_port() -> int {
+    let mut port = 5658
+    if str_eq(diameter_transport(), "sctp") { port = 3868 }
+    let configured = env_get_or("SIP_DIAMETER_PORT", "")
+    if len(configured) > 0 {
+        match parse_int(configured) { Ok(v) => { port = v } Err(_) => { return -1 } }
+    }
+    if port < 1 || port > 65535 { return -1 }
+    return port
+}
+
+fn diameter_peer_host() -> string {
+    let host = str_trim_space(env_get_or("SIP_DIAMETER_HOST", ""))
+    if len(host) == 0 || len(host) > 512 { return "" }
+    return host
+}
+
+fn diameter_peer_read_pool_message(handle: int) -> string {
+    if handle < 1 { return "" }
+    let mut header = ""
+    while len(header) < 20 {
+        let chunk = tls_pool_recv(handle, 20 - len(header))
+        if len(chunk) == 0 { return "" }
+        header = header + chunk
+    }
+    if int(header[0]) != 1 { return "" }
+    let total = diameter_read_u24(header, 1)
+    if total < 20 || total > 1048576 { return "" }
+    let mut rest = ""
+    while len(rest) < total - 20 {
+        let chunk = tls_pool_recv(handle, total - 20 - len(rest))
+        if len(chunk) == 0 { return "" }
+        rest = rest + chunk
+    }
+    let message = header + rest
+    return if diameter_message_valid(message) == 1 { message } else { "" }
+}
+
+fn diameter_peer_handle(cache: CMap) -> int {
+    if cmap_has(cache, "diameter.peer.handle") == 0 { return -1 }
+    match parse_int(cmap_get(cache, "diameter.peer.handle")) {
+        Ok(v) => { return v }
+        Err(_) => { return -1 }
+    }
+    return -1
+}
+
+fn diameter_peer_close_locked(cache: CMap) -> int {
+    let handle = diameter_peer_handle(cache)
+    if handle > 0 { let _ = tls_pool_close(handle) }
+    let _ = cmap_del(cache, "diameter.peer.handle")
+    let _ = cmap_del(cache, "diameter.peer.application")
+    cmap_set(cache, "diameter.peer.state", "CLOSED")
+    return 0
+}
+
+fn diameter_peer_open_locked(cache: CMap, application: int) -> int {
+    let existing = diameter_peer_handle(cache)
+    if existing > 0 && tls_pool_fd(existing) >= 0 {
+        let active_app = cmap_get(cache, "diameter.peer.application")
+        if str_eq(active_app, string(application)) { return existing }
+        let _ = diameter_peer_close_locked(cache)
+    } else if existing > 0 {
+        let _ = diameter_peer_close_locked(cache)
+    }
+    let use_tls = str_to_lower(str_trim_space(env_get_or("SIP_DIAMETER_TLS", "1")))
+    if not (str_eq(use_tls, "1") || str_eq(use_tls, "true") || str_eq(use_tls, "yes")) { return -1 }
+    let client_cert = env_get_or("SIP_DIAMETER_CLIENT_CERT", "")
+    let client_key = env_get_or("SIP_DIAMETER_CLIENT_KEY", "")
+    if (len(client_cert) > 0 && len(client_key) == 0) || (len(client_cert) == 0 && len(client_key) > 0) { return -1 }
+    let host = diameter_peer_host()
+    let port = diameter_peer_port()
+    if len(host) == 0 || port < 1 || tls_client_available() != 1 { return -1 }
+    let ca = env_get_or("SIP_DIAMETER_CA", "")
+    let timeout_ms = diameter_timeout_ms()
+    let handle = if len(client_cert) > 0 {
+        tls_pool_open_mtls_full(host, port, ca, client_cert, client_key, timeout_ms, timeout_ms)
+    } else {
+        tls_pool_open_timeout(host, port, ca, timeout_ms)
+    }
+    if handle < 1 { return -1 }
+    if tls_pool_fd(handle) < 0 || tls_pool_set_timeout(handle, timeout_ms) < 0 {
+        let _ = tls_pool_close(handle)
+        return -1
+    }
+    cmap_set(cache, "diameter.peer.state", "OPENING")
+    let cer = diameter_cer_message_for(application)
+    if len(cer) == 0 || tls_pool_send(handle, cer) != len(cer) {
+        let _ = tls_pool_close(handle)
+        cmap_set(cache, "diameter.peer.state", "CLOSED")
+        return -1
+    }
+    let cea = diameter_peer_read_pool_message(handle)
+    if diameter_cea_base_matches(cea, diameter_read_u32(cer, 12)) == 0 || diameter_cea_supports_application(cea, application) == 0 {
+        let _ = tls_pool_close(handle)
+        cmap_set(cache, "diameter.peer.state", "CLOSED")
+        return -1
+    }
+    cmap_set(cache, "diameter.peer.handle", string(handle))
+    cmap_set(cache, "diameter.peer.application", string(application))
+    cmap_set(cache, "diameter.peer.state", "OPEN")
+    return handle
+}
+
+fn diameter_peer_answer_matches(request: string, response: string, application: int, command: int) -> int {
+    if diameter_message_valid(request) == 0 || diameter_message_valid(response) == 0 { return 0 }
+    if diameter_header_command(response) != command || diameter_header_application(response) != application { return 0 }
+    let flags = diameter_header_flags(response)
+    if flags < 0 || flags % 32 != 0 || (flags / 128) % 2 != 0 { return 0 }
+    if diameter_read_u32(request, 12) != diameter_read_u32(response, 12) { return 0 }
+    if diameter_read_u32(request, 16) != diameter_read_u32(response, 16) { return 0 }
+    return 1
+}
+
+// SCTP is intentionally one request per association until the native Mako
+// Diameter manager is used here. Deployments must provide RFC 3329/NDS or
+// equivalent protection outside SCTP; there is no implicit plaintext fallback.
+fn diameter_sctp_exchange_once(request: string, application: int, command: int) -> string {
+    if len(request) < 20 || diameter_message_valid(request) == 0 { return "" }
+    if diameter_header_application(request) != application || diameter_header_command(request) != command { return "" }
+    if sctp_available() != 1 { return "" }
+    if not str_eq(str_trim_space(env_get_or("SIP_DIAMETER_ALLOW_PLAINTEXT", "0")), "1") { return "" }
+    let host = diameter_peer_host()
+    let port = diameter_peer_port()
+    let timeout_ms = diameter_timeout_ms()
+    if len(host) == 0 || port < 1 || timeout_ms < 1 { return "" }
+    let fd = sctp_connect_timeout(host, port, timeout_ms)
+    if fd < 0 || sctp_set_timeout(fd, timeout_ms) < 0 {
+        if fd >= 0 { let _ = sctp_close(fd) }
+        return ""
+    }
+    let cer = diameter_cer_message_for(application)
+    if len(cer) == 0 || sctp_write_all(fd, cer) != len(cer) {
+        let _ = sctp_close(fd)
+        return ""
+    }
+    let cea = diameter_read_sctp_message(fd)
+    if diameter_cea_base_matches(cea, diameter_read_u32(cer, 12)) == 0 || diameter_cea_supports_application(cea, application) == 0 {
+        let _ = sctp_close(fd)
+        return ""
+    }
+    if sctp_write_all(fd, request) != len(request) {
+        let _ = sctp_close(fd)
+        return ""
+    }
+    let response = diameter_read_sctp_message(fd)
+    let _ = sctp_close(fd)
+    return if diameter_peer_answer_matches(request, response, application, command) == 1 { response } else { "" }
+}
+
+fn diameter_base_answer(request: string, command: int) -> string {
+    if diameter_message_valid(request) == 0 { return "" }
+    let body = madis_diameter_avp_u32(268, 2001)
+        + diameter_avp_string(264, diameter_origin_host())
+        + diameter_avp_string(296, diameter_origin_realm())
+    return diameter_header(0, command, 0, diameter_read_u32(request, 12), diameter_read_u32(request, 16), body)
+}
+
+fn diameter_peer_receive_answer(cache: CMap, handle: int, request: string, application: int, command: int) -> string {
+    let mut count = 0
+    while count < 8 {
+        let response = diameter_peer_read_pool_message(handle)
+        if len(response) == 0 { return "" }
+        let response_command = diameter_header_command(response)
+        let response_flags = diameter_header_flags(response)
+        if response_command == 280 && response_flags >= 0 && (response_flags / 128) % 2 == 1 {
+            let dwa = diameter_base_answer(response, 280)
+            if len(dwa) == 0 || tls_pool_send(handle, dwa) != len(dwa) { return "" }
+            count = count + 1
+            continue
+        }
+        if response_command == 282 && response_flags >= 0 && (response_flags / 128) % 2 == 1 {
+            let dpa = diameter_base_answer(response, 282)
+            if len(dpa) > 0 { let _ = tls_pool_send(handle, dpa) }
+            let _ = diameter_peer_close_locked(cache)
+            return ""
+        }
+        return if diameter_peer_answer_matches(request, response, application, command) == 1 { response } else { "" }
+    }
+    return ""
+}
+
+// Serialize the full send/receive exchange. Diameter requests on one peer
+// connection cannot be interleaved: the lock covers CER reuse and the answer.
+fn diameter_peer_exchange(cache: CMap, peer_lock: Mutex, request: string, application: int, command: int) -> string {
+    if len(request) < 20 || diameter_message_valid(request) == 0 { return "" }
+    if diameter_header_application(request) != application || diameter_header_command(request) != command { return "" }
+    let request_flags = diameter_header_flags(request)
+    if request_flags < 0 || (request_flags / 128) % 2 != 1 { return "" }
+    if str_eq(diameter_transport(), "sctp") {
+        mutex_lock(peer_lock)
+        let response = diameter_sctp_exchange_once(request, application, command)
+        mutex_unlock(peer_lock)
+        return response
+    }
+    mutex_lock(peer_lock)
+    let mut handle = diameter_peer_open_locked(cache, application)
+    if handle < 1 {
+        mutex_unlock(peer_lock)
+        return ""
+    }
+    let sent = tls_pool_send(handle, request)
+    if sent != len(request) {
+        let _ = diameter_peer_close_locked(cache)
+        handle = diameter_peer_open_locked(cache, application)
+        if handle < 1 || tls_pool_send(handle, request) != len(request) {
+            let _ = diameter_peer_close_locked(cache)
+            mutex_unlock(peer_lock)
+            return ""
+        }
+    }
+    let response = diameter_peer_receive_answer(cache, handle, request, application, command)
+    if len(response) == 0 { let _ = diameter_peer_close_locked(cache) }
+    mutex_unlock(peer_lock)
+    return response
+}
+
+fn diameter_peer_watchdog(cache: CMap, peer_lock: Mutex) -> int {
+    mutex_lock(peer_lock)
+    let handle = diameter_peer_handle(cache)
+    if handle < 1 || tls_pool_fd(handle) < 0 {
+        let _ = diameter_peer_close_locked(cache)
+        mutex_unlock(peer_lock)
+        return 0
+    }
+    let id = diameter_id("dwr|" + diameter_origin_host() + "|" + string(now_ms()))
+    let request = diameter_header(128, 280, 0, id, id, diameter_avp_string(264, diameter_origin_host()) + diameter_avp_string(296, diameter_origin_realm()))
+    let sent = tls_pool_send(handle, request)
+    let response = if sent == len(request) { diameter_peer_read_pool_message(handle) } else { "" }
+    let ok = diameter_peer_answer_matches(request, response, 0, 280)
+    if ok == 0 { let _ = diameter_peer_close_locked(cache) }
+    mutex_unlock(peer_lock)
+    return ok
+}
+
+fn madis_diameter_peer_state(cache: CMap) -> string {
+    if cmap_has(cache, "diameter.peer.state") == 0 { return "CLOSED" }
+    return cmap_get(cache, "diameter.peer.state")
+}
+
+fn diameter_peer_is_open(cache: CMap) -> int {
+    return if str_eq(madis_diameter_peer_state(cache), "OPEN") { 1 } else { 0 }
+}
+
+fn diameter_cc_exchange_shared(cid: string, caller: string, callee: string, kind: string, request_number: int, used_seconds: int, cache: CMap, peer_lock: Mutex) -> string {
+    let persistent = str_to_lower(str_trim_space(env_get_or("SIP_DIAMETER_PERSISTENT", "0")))
+    if not (str_eq(persistent, "1") || str_eq(persistent, "true") || str_eq(persistent, "yes")) {
+        return diameter_cc_exchange(cid, caller, callee, kind, request_number, used_seconds)
+    }
+    let request = diameter_ccr_message(cid, caller, callee, kind, request_number, used_seconds)
+    if len(request) == 0 { return "" }
+    return diameter_peer_exchange(cache, peer_lock, request, 4, 272)
+}
+
+fn diameter_cc_authorized_shared(cid: string, caller: string, callee: string, cache: CMap, peer_lock: Mutex) -> int {
+    let response = diameter_cc_exchange_shared(cid, caller, callee, "initial", 0, 0, cache, peer_lock)
+    return diameter_answer_matches_ids(response, diameter_session_id(cid), "initial", 0, diameter_cc_hop_id(cid, "initial", 0), diameter_cc_end_id(cid, "initial", 0))
+}
+
+fn diameter_cc_update_shared(cid: string, caller: string, callee: string, request_number: int, used_seconds: int, cache: CMap, peer_lock: Mutex) -> int {
+    if request_number < 1 { return 0 }
+    let response = diameter_cc_exchange_shared(cid, caller, callee, "update", request_number, used_seconds, cache, peer_lock)
+    return diameter_answer_matches_ids(response, diameter_session_id(cid), "update", request_number, diameter_cc_hop_id(cid, "update", request_number), diameter_cc_end_id(cid, "update", request_number))
+}
+
+fn diameter_cc_terminate_shared(cid: string, caller: string, callee: string, request_number: int, used_seconds: int, cache: CMap, peer_lock: Mutex) -> int {
+    if request_number < 1 { return 0 }
+    let response = diameter_cc_exchange_shared(cid, caller, callee, "termination", request_number, used_seconds, cache, peer_lock)
+    return diameter_answer_matches_ids(response, diameter_session_id(cid), "termination", request_number, diameter_cc_hop_id(cid, "termination", request_number), diameter_cc_end_id(cid, "termination", request_number))
+}

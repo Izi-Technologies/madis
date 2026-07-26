@@ -1,0 +1,136 @@
+// RFC 8506/RFC 6733 wire tests. No sockets or external OCS are used.
+pull . "../diameter.mko"
+pull . "../ims_diameter.mko"
+
+fn TestDiameterCCRHeaderAndMandatoryAVPs() {
+    let msg = diameter_ccr_message("call-8506", "+15550001", "+15550002", "initial", 0, 0)
+    assert_eq(diameter_message_valid(msg), 1)
+    assert_eq(diameter_header_command(msg), 272)
+    assert_eq(diameter_header_application(msg), 4)
+    assert_eq((diameter_header_flags(msg) / 128) % 2, 1)
+    assert_eq(diameter_find_u32(msg, 258), 4)
+    assert_eq(diameter_find_u32(msg, 416), 1)
+    assert_eq(diameter_find_u32(msg, 415), 0)
+    assert_eq_str(diameter_find_avp(msg, 461), diameter_service_context())
+    assert(len(diameter_find_avp(msg, 443)) > 0)
+}
+
+fn TestDiameterGroupedUnitsAndPadding() {
+    let unit = diameter_cc_time_group(437, 60)
+    let msg = diameter_header(192, 272, 4, 1, 2, unit)
+    assert_eq(diameter_message_valid(msg), 1)
+    assert_eq(diameter_find_grouped_u32(msg, 437, 420), 60)
+    let padded = diameter_header(0, 257, 0, 1, 1, diameter_avp_string(269, "x"))
+    assert_eq(diameter_message_valid(padded), 1)
+    assert_eq_str(diameter_find_avp(padded, 269), "x")
+}
+
+fn TestDiameterCEAAndCCAValidation() {
+    let cea_body = madis_diameter_avp_u32(268, 2001)
+        + madis_diameter_avp_u32(258, 4)
+        + diameter_avp_string(264, "cc.example.net")
+        + diameter_avp_string(296, "example.net")
+    let cea = diameter_header(0, 257, 0, 1, 1, cea_body)
+    assert_eq(diameter_cea_valid(cea), 1)
+    assert_eq(diameter_cea_matches(cea, 1), 1)
+    assert_eq(diameter_cea_matches(cea, 2), 0)
+
+    let sid = diameter_session_id("call-cca")
+    let base = diameter_avp_string(263, sid)
+        + madis_diameter_avp_u32(268, 2001)
+        + madis_diameter_avp_u32(416, 1)
+        + madis_diameter_avp_u32(415, 0)
+    let no_grant = diameter_header(64, 272, 4, 1, 1, base)
+    assert_eq(diameter_answer_matches(no_grant, sid, "initial", 0), 0)
+    let grant = diameter_header(64, 272, 4, 1, 1, base + diameter_cc_time_group(431, 60))
+    assert_eq(diameter_answer_matches(grant, sid, "initial", 0), 1)
+    assert_eq(diameter_answer_matches_ids(grant, sid, "initial", 0, 2, 1), 0)
+}
+
+fn TestDiameterMalformedAndSequenceGuards() {
+    let msg = diameter_ccr_message("call-bad", "+15550001", "+15550002", "initial", 0, 0)
+    assert_eq(diameter_message_valid(msg[0:len(msg) - 1]), 0)
+    assert_eq(diameter_message_valid(""), 0)
+    assert_eq(len(diameter_ipv4_bytes("127.0.0.1")), 4)
+    assert_eq(len(diameter_ipv4_bytes("127.0.0.999")), 0)
+    assert_eq(diameter_message_valid(diameter_header(1, 257, 0, 1, 1, "")), 0)
+    let vendor_lookalike = diameter_header(0, 257, 0, 1, 1, diameter_avp(258, 128, "abcd"))
+    assert_eq(diameter_find_u32(vendor_lookalike, 258), -1)
+    assert_eq_str(diameter_ccr_message("call-seq", "+1", "+2", "initial", 1, 0), "")
+    assert_eq_str(diameter_ccr_message("call-seq", "+1", "+2", "termination", 0, 1), "")
+}
+
+fn TestDiameterVendorAVPAndPeerBase() {
+    let avp = diameter_avp_vendor_u32(628, 10415, 7)
+    let msg = diameter_header(0, 257, 0, 1, 1, avp)
+    assert_eq(diameter_message_valid(msg), 1)
+    assert_eq((int(msg[24]) / 128) % 2, 1)
+    assert_eq(diameter_find_vendor_u32(msg, 628, 10415), 7)
+    assert_eq(diameter_find_vendor_u32(msg, 628, 99999), -1)
+
+    let cer = diameter_cer_message_for(16777216)
+    assert_eq(diameter_message_valid(cer), 1)
+    assert_eq(diameter_header_command(cer), 257)
+    assert_eq(diameter_find_u32(cer, 265), 10415)
+    let vsa = diameter_find_avp(cer, 260)
+    assert_eq(diameter_find_grouped_avp(vsa, 266)[0], byte(0))
+    assert_eq(diameter_read_u32(diameter_find_grouped_avp(vsa, 258), 0), 16777216)
+    let cea_body = madis_diameter_avp_u32(268, 2001)
+        + diameter_avp_string(264, "hss.example.com")
+        + diameter_avp_string(296, "example.com")
+        + madis_diameter_avp_u32(265, 10415)
+        + diameter_grouped(260, madis_diameter_avp_u32(266, 10415) + madis_diameter_avp_u32(258, 16777216))
+    let cea = diameter_header(0, 257, 0, diameter_read_u32(cer, 12), diameter_read_u32(cer, 16), cea_body)
+    assert_eq(diameter_cea_supports_application(cea, 16777216), 1)
+    assert_eq(diameter_cea_supports_application(cea, 16777217), 0)
+}
+
+fn TestIMS_CxAndShWireContracts() {
+    let uar = ims_cx_uar("sip:alice@example.com", "alice@example.com", "visited.example", 0)
+    assert_eq(diameter_message_valid(uar), 1)
+    assert_eq(diameter_header_command(uar), 300)
+    assert_eq(diameter_header_application(uar), 16777216)
+    assert_eq(diameter_find_u32(uar, 277), 1)
+    assert_eq_str(diameter_find_avp(uar, 1), "alice@example.com")
+    assert_eq_str(diameter_find_vendor_avp(uar, 601, 10415), "sip:alice@example.com")
+    assert_eq_str(diameter_find_vendor_avp(uar, 600, 10415), "visited.example")
+    assert_eq(diameter_find_vendor_u32(uar, 623, 10415), 0)
+
+    let sar = ims_cx_sar("sip:alice@example.com", "alice@example.com", "sip:scscf.example.com", 1, 0)
+    assert_eq(diameter_message_valid(sar), 1)
+    assert_eq(diameter_header_command(sar), 301)
+    assert_eq(diameter_find_vendor_u32(sar, 614, 10415), 1)
+    assert_eq(diameter_find_vendor_u32(sar, 624, 10415), 0)
+
+    let udr = ims_sh_udr("sip:alice@example.com", 13, "ifc", "sip:as.example.com")
+    assert_eq(diameter_message_valid(udr), 1)
+    assert_eq(diameter_header_command(udr), 306)
+    assert_eq(diameter_header_application(udr), 16777217)
+    let identity = diameter_find_vendor_avp(udr, 700, 10415)
+    assert_eq_str(diameter_find_grouped_vendor_avp(identity, 601, 10415), "sip:alice@example.com")
+    assert_eq(diameter_find_vendor_u32(udr, 703, 10415), 13)
+    assert_eq_str(diameter_find_vendor_avp(udr, 704, 10415), "ifc")
+
+    let pur = ims_sh_pur("sip:alice@example.com", 0, "<Sh-Data version=\"1\"/>")
+    assert_eq(diameter_message_valid(pur), 1)
+    assert_eq_str(diameter_find_vendor_avp(pur, 702, 10415), "<Sh-Data version=\"1\"/>")
+}
+
+fn TestIMS_AnswerCorrelationAndResult() {
+    let request = ims_cx_uar("sip:alice@example.com", "alice@example.com", "visited.example", 0)
+    let session_id = diameter_find_avp(request, 263)
+    let vsa = ims_vsa(16777216)
+    let body = diameter_avp_string(263, session_id)
+        + vsa
+        + madis_diameter_avp_u32(268, 2001)
+        + madis_diameter_avp_u32(277, 1)
+        + diameter_avp_string(264, "hss.example.com")
+        + diameter_avp_string(296, "example.com")
+    let answer = diameter_header(0, 300, 16777216, diameter_read_u32(request, 12), diameter_read_u32(request, 16), body)
+    assert_eq(ims_answer_valid(request, answer, 16777216, 300), 1)
+    assert_eq(ims_answer_success(request, answer, 16777216, 300), 1)
+    let wrong = diameter_header(0, 300, 16777216, 9, diameter_read_u32(request, 16), body)
+    assert_eq(ims_answer_valid(request, wrong, 16777216, 300), 0)
+    let no_vsa = diameter_header(0, 300, 16777216, diameter_read_u32(request, 12), diameter_read_u32(request, 16), diameter_avp_string(263, session_id) + madis_diameter_avp_u32(268, 2001) + madis_diameter_avp_u32(277, 1) + diameter_avp_string(264, "hss.example.com") + diameter_avp_string(296, "example.com"))
+    assert_eq(ims_answer_valid(request, no_vsa, 16777216, 300), 0)
+}

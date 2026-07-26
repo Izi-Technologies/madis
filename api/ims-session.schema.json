@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://madis.example/schemas/ims-session.v1.json",
+  "title": "Madis IMS session integration envelope",
+  "type": "object",
+  "required": ["schema", "session_id", "role", "sip_dialog"],
+  "properties": {
+    "schema": {"const": "madis.ims.session.v1"},
+    "session_id": {"type": "string", "minLength": 1, "maxLength": 256},
+    "role": {"enum": ["pcscf", "icscf", "scscf", "tas", "charging", "media"]},
+    "public_user_identity": {"type": "string", "maxLength": 512},
+    "private_user_identity": {"type": "string", "maxLength": 512},
+    "sip_dialog": {"type": "object", "additionalProperties": true},
+    "service_data": {"type": "object", "additionalProperties": true},
+    "extensions": {"type": "object", "additionalProperties": true}
+  },
+  "additionalProperties": true
+}

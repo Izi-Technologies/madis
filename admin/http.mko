@@ -133,14 +133,31 @@ fn parse_cookie(raw: string, n: int, name: string) -> string {
                 while ve < n { if int(raw[ve]) == 13 { break }
                     ve = ve + 1 }
                 let cookies = raw[vs:ve]
-                let idx = str_index(cookies, name + "=")
-                if idx >= 0 {
-                    let start = idx + len(name) + 1
-                    let clen = len(cookies)
-                    let mut end = start
-                    while end < clen { if int(cookies[end]) == 59 { break }
-                        end = end + 1 }
-                    return cookies[start:end]
+                let clen = len(cookies)
+                let mut ci = 0
+                while ci < clen {
+                    while ci < clen {
+                        let ws = int(cookies[ci])
+                        if ws != 32 && ws != 9 && ws != 59 { break }
+                        ci = ci + 1
+                    }
+                    let cs = ci
+                    while ci < clen {
+                        let cc = int(cookies[ci])
+                        if cc == 61 || cc == 59 { break }
+                        ci = ci + 1
+                    }
+                    let ce = ci
+                    if ci < clen && int(cookies[ci]) == 61 {
+                        let start = ci + 1
+                        let mut end = start
+                        while end < clen { if int(cookies[end]) == 59 { break }
+                            end = end + 1 }
+                        if str_eq(cookies[cs:ce], name) { return cookies[start:end] }
+                        ci = end
+                    }
+                    while ci < clen && int(cookies[ci]) != 59 { ci = ci + 1 }
+                    if ci < clen { ci = ci + 1 }
                 }
             }
         }
@@ -159,11 +176,83 @@ fn parse_body(raw: string, n: int) -> string {
     return ""
 }
 
+// The admin listener handles one complete HTTP request per read. Reject
+// ambiguous framing and malformed header lines before any route/auth logic.
+// Transfer-Encoding is intentionally unsupported; accepting it here would
+// make a proxy in front of the admin service disagree about message length.
+fn http_headers_safe(raw: string, n: int) -> int {
+    if n < 4 { return 0 }
+    let mut boundary = -1
+    let mut i = 0
+    while i + 3 < n {
+        if int(raw[i]) == 13 && int(raw[i + 1]) == 10 && int(raw[i + 2]) == 13 && int(raw[i + 3]) == 10 {
+            boundary = i
+            break
+        }
+        i = i + 1
+    }
+    if boundary < 0 || boundary + 4 > 65536 { return 0 }
+
+    // Reject C0 controls except HTAB/CR/LF and reject bare line endings.
+    i = 0
+    while i < boundary + 4 {
+        let c = int(raw[i])
+        if c == 0 || c == 127 { return 0 }
+        if c < 32 && c != 9 && c != 10 && c != 13 { return 0 }
+        if c == 10 {
+            if i == 0 || int(raw[i - 1]) != 13 { return 0 }
+        }
+        if c == 13 {
+            if i + 1 >= boundary + 4 || int(raw[i + 1]) != 10 { return 0 }
+        }
+        i = i + 1
+    }
+
+    // The request line is the first line; every later line must have a
+    // token-like field name and exactly one Content-Length at most.
+    let mut line = 0
+    let mut line_number = 0
+    let mut content_lengths = 0
+    while line < boundary + 2 {
+        let mut end = line
+        while end + 1 < boundary + 4 {
+            if int(raw[end]) == 13 && int(raw[end + 1]) == 10 { break }
+            end = end + 1
+        }
+        if end >= boundary + 2 { return 0 }
+        if line_number > 0 {
+            if end == line { return 0 }
+            let colon = str_index(raw[line:end], ":")
+            if colon <= 0 { return 0 }
+            let name = raw[line:line + colon]
+            let mut ni = 0
+            while ni < len(name) {
+                let nc = int(name[ni])
+                if (nc >= 65 && nc <= 90) || (nc >= 97 && nc <= 122) || (nc >= 48 && nc <= 57) || nc == 45 {
+                    ni = ni + 1
+                } else {
+                    return 0
+                }
+            }
+            let lname = str_to_lower(name)
+            if str_eq(lname, "content-length") {
+                content_lengths = content_lengths + 1
+                if content_lengths > 1 { return 0 }
+            }
+            if str_eq(lname, "transfer-encoding") { return 0 }
+        }
+        line = end + 2
+        line_number = line_number + 1
+    }
+    return 1
+}
+
 // Admin requests are single-read, single-request messages. Reject oversized
 // or truncated bodies instead of parsing a partial form or retaining an
 // attacker-controlled amount of data in the connection worker.
 fn http_request_size_ok(raw: string, n: int) -> int {
     if n < 0 || n > 131072 { return 0 }
+    if http_headers_safe(raw, n) == 0 { return 0 }
     let body = parse_body(raw, n)
     let cl = parse_header(raw, n, "Content-Length")
     if len(cl) == 0 {
@@ -175,6 +264,7 @@ fn http_request_size_ok(raw: string, n: int) -> int {
     while i < len(cl) {
         let c = int(cl[i])
         if c < 48 || c > 57 { return 0 }
+        if size > 6553 { return 0 }
         size = size * 10 + (c - 48)
         if size > 65536 { return 0 }
         i = i + 1
@@ -302,8 +392,19 @@ fn session_token_ok(tk: string) -> int {
 
 fn http_resp(st: int, ctype: string, body: string, extra: string) -> string {
     let mut sn = "OK"
+    if st == 200 { sn = "OK" }
+    if st == 201 { sn = "Created" }
+    if st == 202 { sn = "Accepted" }
     if st == 302 { sn = "Found" }
+    if st == 400 { sn = "Bad Request" }
+    if st == 401 { sn = "Unauthorized" }
     if st == 403 { sn = "Forbidden" }
+    if st == 404 { sn = "Not Found" }
+    if st == 405 { sn = "Method Not Allowed" }
+    if st == 429 { sn = "Too Many Requests" }
+    if st == 500 { sn = "Internal Server Error" }
+    if st == 502 { sn = "Bad Gateway" }
+    if st == 503 { sn = "Service Unavailable" }
     return "HTTP/1.1 " + string(st) + " " + sn + "\r\nContent-Type: " + ctype + "\r\nContent-Length: " + string(len(body)) + "\r\nConnection: keep-alive\r\n" + extra + "\r\n" + body
 }
 

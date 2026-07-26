@@ -1,0 +1,35 @@
+pull . "../admin/http.mko"
+
+fn TestAdminHttpFramingAndCookieBoundaries() {
+    let base = "POST /admin/login HTTP/1.1\r\nHost: admin.example\r\nContent-Length: 3\r\n\r\nabc"
+    assert_eq(http_request_size_ok(base, len(base)), 1)
+
+    let incomplete = "POST /admin/login HTTP/1.1\r\nHost: admin.example\r\nContent-Length: 0\r\n"
+    assert_eq(http_request_size_ok(incomplete, len(incomplete)), 0)
+
+    let duplicate = "POST /admin/login HTTP/1.1\r\nHost: admin.example\r\nContent-Length: 0\r\nContent-Length: 0\r\n\r\n"
+    assert_eq(http_request_size_ok(duplicate, len(duplicate)), 0)
+
+    let folded = "POST /admin/login HTTP/1.1\r\nHost: admin.example\r\n Content-Length: 0\r\n\r\n"
+    assert_eq(http_request_size_ok(folded, len(folded)), 0)
+
+    let chunked = "POST /admin/login HTTP/1.1\r\nHost: admin.example\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n"
+    assert_eq(http_request_size_ok(chunked, len(chunked)), 0)
+
+    let overflow = "POST /admin/login HTTP/1.1\r\nHost: admin.example\r\nContent-Length: 999999999999999999999999\r\n\r\n"
+    assert_eq(http_request_size_ok(overflow, len(overflow)), 0)
+
+    let prefixed = "GET / HTTP/1.1\r\nCookie: not_session=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n\r\n"
+    assert_eq_str(parse_cookie(prefixed, len(prefixed), "session"), "")
+}
+
+fn TestAdminHttpOriginAndFormDecoding() {
+    let same = "POST /admin/api/config HTTP/1.1\r\nHost: admin.example\r\nOrigin: https://admin.example\r\nContent-Length: 8\r\n\r\na=b+c%21"
+    assert_eq(http_post_origin_ok(same, len(same)), 1)
+    assert_eq(http_request_size_ok(same, len(same)), 1)
+    let fields = form_map(parse_body(same, len(same)))
+    assert_eq_str(form_get(fields, "a"), "b c!")
+
+    let cross = "POST /admin/api/config HTTP/1.1\r\nHost: admin.example\r\nOrigin: https://evil.example\r\nContent-Length: 0\r\n\r\n"
+    assert_eq(http_post_origin_ok(cross, len(cross)), 0)
+}

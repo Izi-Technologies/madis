@@ -1,6 +1,14 @@
 // ============ RFC 3261 COMPLIANCE ============
 // Policy-layer helpers; parse/hop IDs use platform sip_* builtins.
 
+extern "C" fn madis_cmap_has2(cache: CMap, prefix: string, suffix: string) -> int;
+extern "C" fn madis_cmap_get2(cache: CMap, prefix: string, suffix: string) -> string;
+extern "C" fn madis_cmap_get_i64(cache: CMap, prefix: string, suffix: string, fallback: int) -> int;
+extern "C" fn madis_cmap_has3i(cache: CMap, prefix: string, middle: string, suffix: int) -> int;
+extern "C" fn madis_cmap_get3i(cache: CMap, prefix: string, middle: string, suffix: int) -> string;
+extern "C" fn madis_cmap_del3i(cache: CMap, prefix: string, middle: string, suffix: int) -> int;
+extern "C" fn madis_cmap_set_i64(cache: CMap, prefix: string, suffix: string, value: int);
+
 // --- Max-Forwards (Section 16.6 step 3) ---
 fn sip_get_max_forwards(msg: string, n: int) -> int {
     let mf = sip_hdr(msg, "Max-Forwards", n)
@@ -306,7 +314,7 @@ fn rfc_bounded_state_set(store: CMap, index: CMap, seq_key: string, ring_prefix:
 fn sip_dialog_observe(msg: string, reply: string, calls: CMap, cache: CMap) -> int {
     let cid = sip_header(msg, "Call-ID")
     if len(cid) == 0 { return 0 }
-    let method = sip_method(msg)
+    let method = madis_method(msg)
     let from_tag = sip_addr_tag(sip_header(msg, "From"))
     let mut to_tag = sip_addr_tag(sip_header(msg, "To"))
     if len(to_tag) == 0 && len(reply) > 0 { to_tag = sip_addr_tag(sip_header(reply, "To")) }
@@ -388,14 +396,14 @@ fn sip_server_txn_record(request: string, response: string, ip: string, port: in
     cmap_set(cache, "server_port|" + key, string(port))
     cmap_set(cache, "server_transport|" + key, str_to_lower(transport))
     cmap_set(cache, "server_owner|" + key, string(owner))
-    cmap_set(cache, "server_method|" + key, sip_method(request))
+    cmap_set(cache, "server_method|" + key, madis_method(request))
     cmap_set(cache, "server_cid|" + key, sip_header(request, "Call-ID"))
     cmap_set(cache, "server_attempt|" + key, "0")
     let request_branch = sip_via_branch(sip_header(request, "Via"))
     let request_cid = sip_header(request, "Call-ID")
     if len(request_branch) > 0 { cmap_set(cache, "server_ack_branch|" + request_branch, key) }
     if len(request_cid) > 0 { cmap_set(cache, "server_ack_cid|" + request_cid, key) }
-    let method = str_to_upper(sip_method(request))
+    let method = str_to_upper(madis_method(request))
     let is_invite = if str_eq(method, "INVITE") { 1 } else { 0 }
     let is_2xx = if is_invite == 1 && code >= 200 && code < 300 { 1 } else { 0 }
     if is_2xx == 1 {
@@ -419,7 +427,7 @@ fn sip_server_txn_record(request: string, response: string, ip: string, port: in
 }
 
 fn sip_server_txn_ack(request: string, cache: CMap) -> int {
-    if not str_eq(sip_method(request), "ACK") { return 0 }
+    if not str_eq(madis_method(request), "ACK") { return 0 }
     let branch = sip_via_branch(sip_header(request, "Via"))
     let cid = sip_header(request, "Call-ID")
     let mut ack_key = ""
@@ -449,70 +457,52 @@ fn sip_server_txn_tick(cache: CMap, owner: int) -> int {
     // ACKs are queued by owner so an incremental transaction sweep does not
     // make a completed INVITE wait for the 8192-slot cursor to wrap.
     let owner_s = string(owner)
-    let ack_cursor_key = "server_ack_scan|" + owner_s
-    let mut ack_start = 0
-    if cmap_has(cache, ack_cursor_key) == 1 {
-        match parse_int(cmap_get(cache, ack_cursor_key)) { Ok(v) => { ack_start = v } Err(_) => {} }
-    }
-    let mut ack_end = 0
-    if cmap_has(cache, "server_ack_seq|" + owner_s) == 1 {
-        match parse_int(cmap_get(cache, "server_ack_seq|" + owner_s)) { Ok(v) => { ack_end = v } Err(_) => {} }
-    }
+    let mut ack_start = madis_cmap_get_i64(cache, "server_ack_scan|", owner_s, 0)
+    let ack_end = madis_cmap_get_i64(cache, "server_ack_seq|", owner_s, 0)
     let mut ack_scanned = 0
     while ack_scanned < 64 && ack_start < ack_end {
         ack_start = ack_start + 1
         let ack_slot = ack_start - (ack_start / 8192) * 8192
-        let ack_ring_key = "server_ack_ring|" + owner_s + "|" + string(ack_slot)
-        if cmap_has(cache, ack_ring_key) == 1 {
-            let ack_key = cmap_get(cache, ack_ring_key)
-            if len(ack_key) > 2 && cmap_has(cache, "server_resp|" + ack_key) == 1 {
+        if madis_cmap_has3i(cache, "server_ack_ring|", owner_s + "|", ack_slot) == 1 {
+            let ack_key = madis_cmap_get3i(cache, "server_ack_ring|", owner_s + "|", ack_slot)
+            if len(ack_key) > 2 && madis_cmap_has2(cache, "server_resp|", ack_key) == 1 {
                 let _ = sip_server_txn_cleanup(ack_key, cache)
                 acted = acted + 1
             }
-            let _ = cmap_del(cache, ack_ring_key)
+            let _ = madis_cmap_del3i(cache, "server_ack_ring|", owner_s + "|", ack_slot)
         }
         ack_scanned = ack_scanned + 1
     }
-    cmap_set(cache, ack_cursor_key, string(ack_start))
-    let cursor_key = "server_scan|" + string(owner)
-    let mut start = 0
-    if cmap_has(cache, cursor_key) == 1 {
-        match parse_int(cmap_get(cache, cursor_key)) { Ok(v) => { start = v } Err(_) => {} }
-    }
+    madis_cmap_set_i64(cache, "server_ack_scan|", owner_s, ack_start)
+    let mut start = madis_cmap_get_i64(cache, "server_scan|", owner_s, 0)
     let mut scanned = 0
     while scanned < 2048 {
         let slot = (start + scanned) - ((start + scanned) / 8192) * 8192
-        let ring_key = "server_ring|" + string(slot)
-        if cmap_has(cache, ring_key) == 1 {
-            let key = cmap_get(cache, ring_key)
-            if len(key) > 2 && cmap_has(cache, "server_resp|" + key) == 1 {
-                let mut txn_owner = -1
-                match parse_int(cmap_get(cache, "server_owner|" + key)) { Ok(v) => { txn_owner = v } Err(_) => {} }
+        if madis_cmap_has3i(cache, "server_ring|", "", slot) == 1 {
+            let key = madis_cmap_get3i(cache, "server_ring|", "", slot)
+            if len(key) > 2 && madis_cmap_has2(cache, "server_resp|", key) == 1 {
+                let txn_owner = madis_cmap_get_i64(cache, "server_owner|", key, -1)
                 if txn_owner == owner {
-                    let mut exp = 0
-                    match parse_int(cmap_get(cache, "server_exp|" + key)) { Ok(v) => { exp = v } Err(_) => {} }
-                    let req = cmap_get(cache, "server_req|" + key)
-                    let branch = sip_via_branch(sip_header(req, "Via"))
-                    let cid = cmap_get(cache, "server_cid|" + key)
-                    let acked = (len(branch) > 0 && cmap_has(cache, "server_acked|" + branch) == 1) || (len(cid) > 0 && cmap_has(cache, "server_acked_cid|" + cid) == 1)
+                    let exp = madis_cmap_get_i64(cache, "server_exp|", key, 0)
+                    let req = madis_cmap_get2(cache, "server_req|", key)
+                    let via = sip_header(req, "Via")
+                    let branch = sip_via_branch(via)
+                    let cid = madis_cmap_get2(cache, "server_cid|", key)
+                    let acked = (len(branch) > 0 && madis_cmap_has2(cache, "server_acked|", branch) == 1) || (len(cid) > 0 && madis_cmap_has2(cache, "server_acked_cid|", cid) == 1)
                     if acked || (exp > 0 && now >= exp) {
                         let _ = sip_server_txn_cleanup(key, cache)
                         acted = acted + 1
                     } else {
-                        let tr = cmap_get(cache, "server_transport|" + key)
-                        let mut is_2xx = 0
-                        if cmap_has(cache, "server_2xx|" + key) == 1 {
-                            match parse_int(cmap_get(cache, "server_2xx|" + key)) { Ok(v) => { is_2xx = v } Err(_) => {} }
-                        }
-                        if str_eq(tr, "udp") && (is_2xx == 1 || cmap_has(cache, "server_method|" + key) == 1) {
-                            let mut next = 0
-                            match parse_int(cmap_get(cache, "server_next|" + key)) { Ok(v) => { next = v } Err(_) => {} }
+                        let tr = madis_cmap_get2(cache, "server_transport|", key)
+                        let is_2xx = madis_cmap_get_i64(cache, "server_2xx|", key, 0)
+                        if str_eq(tr, "udp") && (is_2xx == 1 || madis_cmap_has2(cache, "server_method|", key) == 1) {
+                            let next = madis_cmap_get_i64(cache, "server_next|", key, 0)
                             if next > 0 && now >= next {
-                                let mut port = 5060
-                                match parse_int(cmap_get(cache, "server_port|" + key)) { Ok(v) => { port = v } Err(_) => {} }
-                                let _ = udp_send_to(owner, cmap_get(cache, "server_host|" + key), port, cmap_get(cache, "server_resp|" + key))
-                                let mut attempt = 0
-                                match parse_int(cmap_get(cache, "server_attempt|" + key)) { Ok(v) => { attempt = v } Err(_) => {} }
+                                let port = madis_cmap_get_i64(cache, "server_port|", key, 5060)
+                                let host = madis_cmap_get2(cache, "server_host|", key)
+                                let response = madis_cmap_get2(cache, "server_resp|", key)
+                                let _ = udp_send_to(owner, host, port, response)
+                                let mut attempt = madis_cmap_get_i64(cache, "server_attempt|", key, 0)
                                 attempt = attempt + 1
                                 let mut interval = sip_t1_ms()
                                 let mut i = 0
@@ -522,8 +512,8 @@ fn sip_server_txn_tick(cache: CMap, owner: int) -> int {
                                     if interval > sip_t2_ms() { interval = sip_t2_ms() }
                                     i = i + 1
                                 }
-                                cmap_set(cache, "server_attempt|" + key, string(attempt))
-                                cmap_set(cache, "server_next|" + key, string(now + interval))
+                                madis_cmap_set_i64(cache, "server_attempt|", key, attempt)
+                                madis_cmap_set_i64(cache, "server_next|", key, now + interval)
                                 acted = acted + 1
                             }
                         }
@@ -533,7 +523,7 @@ fn sip_server_txn_tick(cache: CMap, owner: int) -> int {
         }
         scanned = scanned + 1
     }
-    cmap_set(cache, cursor_key, string((start + 2048) - ((start + 2048) / 8192) * 8192))
+    madis_cmap_set_i64(cache, "server_scan|", owner_s, (start + 2048) - ((start + 2048) / 8192) * 8192)
     return acted
 }
 
@@ -598,7 +588,7 @@ fn sip_client_txn_cleanup(key: string, cache: CMap) -> int {
 // Retain an outbound request for the client transaction layer. Reliable
 // transports still need Timer B/F expiry, while UDP also needs A/E retries.
 fn sip_client_txn_record(msg: string, target: string, transport: string, owner: int, cache: CMap) -> int {
-    let method = sip_method(msg)
+    let method = madis_method(msg)
     if len(method) == 0 || str_eq(method, "ACK") { return 0 }
     let key = sip_transaction_key(msg, len(msg))
     if len(key) <= 2 { return 0 }

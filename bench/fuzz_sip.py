@@ -64,11 +64,18 @@ def main() -> int:
             "SIP_TLS_PORT": str(args.base_port + 1),
             "SIP_WSS_PORT": str(args.base_port + 2),
             "SIP_ADMIN_PORT": str(admin_port),
-            "SIP_UDP_WORKERS": "2",
-            "SIP_TCP_WORKERS": "1",
+            "SIP_UDP_WORKERS": os.environ.get("SIP_UDP_WORKERS", "2"),
+            "SIP_TCP_WORKERS": os.environ.get("SIP_TCP_WORKERS", "1"),
         }
     )
-    process = subprocess.Popen([args.binary], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    log_path = os.environ.get("SIP_FUZZ_LOG", "")
+    log = open(log_path, "wb") if log_path else None
+    process = subprocess.Popen(
+        [args.binary],
+        env=env,
+        stdout=log if log is not None else subprocess.DEVNULL,
+        stderr=subprocess.STDOUT if log is not None else subprocess.DEVNULL,
+    )
     rng = random.Random(args.seed)
     try:
         deadline = time.monotonic() + 8
@@ -119,6 +126,8 @@ def main() -> int:
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=5)
+        if log is not None:
+            log.close()
 
 
 if __name__ == "__main__":

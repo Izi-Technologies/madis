@@ -64,6 +64,8 @@ fn TestAdversarialHeaderName() {
     assert_eq(sip_validate_message(bad_cseq_method, len(bad_cseq_method)), 0)
     let bad_branch = str_replace(adversarial_request("sip:example.com", "1 REGISTER", "", ""), "branch=z9hG4bK-adversarial", "branch=not-a-cookie")
     assert_eq(sip_validate_message(bad_branch, len(bad_branch)), 0)
+    let nul_header = str_replace(adversarial_request("sip:example.com", "1 REGISTER", "", ""), "Via:", "Via\0:")
+    assert_eq(sip_validate_message(nul_header, len(nul_header)), 0)
 }
 
 fn TestAdversarialSipUriGrammar() {

@@ -161,6 +161,25 @@ CREATE TABLE IF NOT EXISTS cdr (
     duration_sec    INT
 );
 
+-- Versioned, idempotent billing/charging outbox. payload_json is deliberately
+-- extensible: carrier applications own the data/schema inside the envelope.
+CREATE TABLE IF NOT EXISTS billing_events (
+    event_id        TEXT PRIMARY KEY,
+    call_id         TEXT NOT NULL DEFAULT '',
+    event_type      TEXT NOT NULL,
+    payload_json    JSONB NOT NULL,
+    occurred_at     TIMESTAMP DEFAULT NOW(),
+    available_at    TIMESTAMP DEFAULT NOW(),
+    delivered_at    TIMESTAMP,
+    attempts        INT NOT NULL DEFAULT 0,
+    last_error      TEXT NOT NULL DEFAULT '',
+    CONSTRAINT billing_event_id_size CHECK (char_length(event_id) BETWEEN 16 AND 128),
+    CONSTRAINT billing_event_payload_size CHECK (octet_length(payload_json::text) <= 65536)
+);
+
+CREATE INDEX IF NOT EXISTS idx_billing_events_pending ON billing_events (occurred_at, event_id) WHERE delivered_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_billing_events_call ON billing_events (call_id, occurred_at);
+
 CREATE TABLE IF NOT EXISTS sip_transactions (
     id              SERIAL PRIMARY KEY,
     call_id         TEXT,

@@ -1,0 +1,23 @@
+// Contract tests stay local: no database, sockets, or charging service.
+pull . "../billing.mko"
+pull . "../charging.mko"
+
+fn TestBillingEventIdentityAndEscaping() {
+    let a = billing_event_id("call-1|TRYING", "cdr.lifecycle")
+    let b = billing_event_id("call-1|TRYING", "cdr.lifecycle")
+    let c = billing_event_id("call-1|COMPLETED", "cdr.lifecycle")
+    assert_eq_str(a, b)
+    assert(not str_eq(a, c))
+    assert(str_contains(billing_json_escape("quote=\" slash=\\"), "\\\""))
+    assert_eq(len(billing_cap("abcdef", 3)), 3)
+}
+
+fn TestChargingContractUsesRFC8506RequestTypes() {
+    assert_eq_str(charging_cc_request_type("initial"), "INITIAL_REQUEST")
+    assert_eq_str(charging_cc_request_type("update"), "UPDATE_REQUEST")
+    assert_eq_str(charging_cc_request_type("termination"), "TERMINATION_REQUEST")
+    let request = charging_request_json("call-2", "+15550001", "+15550002")
+    assert_eq_str(json_get_string(request, "schema"), "madis.charging.request.v1")
+    assert_eq_str(json_get_string(request, "cc_request_type"), "INITIAL_REQUEST")
+    assert_eq(json_get_int(request, "cc_request_number"), 0)
+}

@@ -1,0 +1,89 @@
+// Carrier billing event foundation.
+//
+// The SIP worker writes a small, idempotent outbox record. It never calls a
+// remote billing service from this module. Consumers in any language can
+// read /admin/api/v1/billing/events or the PostgreSQL outbox and acknowledge
+// delivery after their own transaction commits.
+
+fn billing_cap(s: string, max: int) -> string {
+    if max < 1 { return "" }
+    if len(s) <= max { return s }
+    return s[0:max]
+}
+
+// Safe JSON string escaping. Control bytes are deliberately normalized to a
+// space because the Mako string API does not expose a hex formatter.
+// This preserves valid JSON and prevents control-byte/header injection.
+fn billing_json_escape(s: string) -> string {
+    let mut b = str_builder()
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let c = int(s[i])
+        if c == 34 {
+            builder_write(b, "\\\"")
+        } else {
+            if c == 92 {
+                builder_write(b, "\\\\")
+            } else {
+                if c < 32 {
+                    builder_write_byte(b, byte(32))
+                } else {
+                    builder_write_byte(b, byte(c))
+                }
+            }
+        }
+        i = i + 1
+    }
+    return builder_string(b)
+}
+
+fn billing_mode() -> string {
+    let mode = str_to_lower(str_trim_space(env_get_or("SIP_BILLING_MODE", "outbox")))
+    if str_eq(mode, "off") { return "off" }
+    if str_eq(mode, "preauth") { return "preauth" }
+    return "outbox"
+}
+
+fn billing_event_id(subject: string, event_type: string) -> string {
+    // A deterministic key makes retries safe and prevents double charging for
+    // repeated SIP retransmissions or a worker restart.
+    return sha256("madis.billing.event.v1|" + billing_cap(subject, 256) + "|" + billing_cap(event_type, 128))
+}
+
+fn billing_cdr_payload(event_id: string, cid: string, caller: string, callee: string, status: string) -> string {
+    let tenant = billing_cap(env_get_or("SIP_BILLING_TENANT", "default"), 128)
+    let call_id = billing_cap(cid, 256)
+    let from = billing_cap(caller, 512)
+    let to = billing_cap(callee, 512)
+    let state = billing_cap(status, 64)
+    return "{"
+        + "\"schema\":\"madis.billing.event.v1\","
+        + "\"schema_version\":1,"
+        + "\"event_id\":\"" + billing_json_escape(event_id) + "\","
+        + "\"event_type\":\"cdr.lifecycle\","
+        + "\"tenant_id\":\"" + billing_json_escape(tenant) + "\","
+        + "\"subject\":{\"call_id\":\"" + billing_json_escape(call_id) + "\"},"
+        + "\"occurred_at_ms\":" + string(now_ms()) + ","
+        + "\"data\":{\"caller\":\"" + billing_json_escape(from) + "\",\"callee\":\"" + billing_json_escape(to) + "\",\"status\":\"" + billing_json_escape(state) + "\"},"
+        + "\"extensions\":{}"
+        + "}"
+}
+
+fn billing_emit(db: SqlDB, db_ok: int, event_id: string, subject: string, event_type: string, payload: string) -> int {
+    if db_ok == 0 { return 0 }
+    if str_eq(billing_mode(), "off") { return 0 }
+    if len(event_id) == 0 || len(event_type) == 0 || len(payload) == 0 { return -1 }
+    if len(event_id) > 128 || len(subject) > 512 || len(event_type) > 128 || len(payload) > 65536 { return -1 }
+    // Values remain bound parameters. ON CONFLICT is the idempotency fence.
+    return sql_exec_str4(db, "INSERT INTO billing_events (event_id, call_id, event_type, payload_json) VALUES ($1, $2, $3, $4::jsonb) ON CONFLICT (event_id) DO NOTHING", event_id, billing_cap(subject, 512), billing_cap(event_type, 128), payload)
+}
+
+fn billing_emit_cdr(db: SqlDB, db_ok: int, cid: string, caller: string, callee: string, status: string) -> int {
+    if db_ok == 0 { return 0 }
+    if str_eq(billing_mode(), "off") { return 0 }
+    let event_type = "cdr.lifecycle"
+    let event_id = billing_event_id(cid + "|" + status, event_type)
+    let payload = billing_cdr_payload(event_id, cid, caller, callee, status)
+    return billing_emit(db, db_ok, event_id, cid, event_type, payload)
+}

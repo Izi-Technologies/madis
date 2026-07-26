@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://madis.example/schemas/ss7-m3ua-envelope.v1.json",
+  "title": "Madis external SS7/SIGTRAN envelope",
+  "type": "object",
+  "required": ["schema", "direction", "routing", "payload"],
+  "properties": {
+    "schema": {"const": "madis.ss7.m3ua.envelope.v1"},
+    "direction": {"enum": ["ingress", "egress"]},
+    "routing": {
+      "type": "object",
+      "required": ["routing_context"],
+      "properties": {
+        "routing_context": {"type": "integer", "minimum": 0},
+        "network_appearance": {"type": "integer", "minimum": 0},
+        "originating_point_code": {"type": "integer", "minimum": 0},
+        "destination_point_code": {"type": "integer", "minimum": 0},
+        "service_indicator": {"type": "integer", "minimum": 0, "maximum": 15},
+        "sls": {"type": "integer", "minimum": 0, "maximum": 255}
+      },
+      "additionalProperties": true
+    },
+    "payload": {
+      "type": "object",
+      "required": ["protocol", "base64"],
+      "properties": {
+        "protocol": {"enum": ["sccp", "isup", "tcap", "mtp3-user"]},
+        "base64": {"type": "string", "maxLength": 65536}
+      },
+      "additionalProperties": true
+    },
+    "extensions": {"type": "object", "additionalProperties": true}
+  },
+  "additionalProperties": true
+}

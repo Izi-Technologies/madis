@@ -1,0 +1,144 @@
+// Online charging adapter boundary.
+//
+// This module supports the bounded native RFC 8506 client in diameter.mko and
+// a language-neutral JSON/HTTPS adapter. The native path is opt-in; the
+// default remains the local outbox so SIP does not inherit remote latency.
+// The default mode is outbox and therefore does not add network latency to
+// SIP. `preauth` is opt-in and fail-closed by default.
+
+pull . "./diameter.mko"
+
+fn charging_cc_request_type(kind: string) -> string {
+    if str_eq(str_to_lower(kind), "initial") { return "INITIAL_REQUEST" }
+    if str_eq(str_to_lower(kind), "update") { return "UPDATE_REQUEST" }
+    if str_eq(str_to_lower(kind), "termination") { return "TERMINATION_REQUEST" }
+    if str_eq(str_to_lower(kind), "event") { return "EVENT_REQUEST" }
+    return "INITIAL_REQUEST"
+}
+
+fn charging_request_json_kind(cid: string, caller: string, callee: string, kind: string, request_number: int, used_seconds: int) -> string {
+    let event_id = billing_event_id(cid + "|" + kind + "|" + string(request_number), "charging.credit_control")
+    let tenant = billing_json_escape(billing_cap(env_get_or("SIP_BILLING_TENANT", "default"), 128))
+    let sid = billing_json_escape(billing_cap(cid, 256))
+    let from = billing_json_escape(billing_cap(caller, 512))
+    let to = billing_json_escape(billing_cap(callee, 512))
+    return "{"
+        + "\"schema\":\"madis.charging.request.v1\","
+        + "\"event_id\":\"" + billing_json_escape(event_id) + "\","
+        + "\"tenant_id\":\"" + tenant + "\","
+        + "\"session_id\":\"" + sid + "\","
+        + "\"cc_request_type\":\"" + charging_cc_request_type(kind) + "\","
+        + "\"cc_request_number\":" + string(request_number) + ","
+        + "\"service_context_id\":\"voice.sip\","
+        + "\"subscription_id\":\"" + from + "\","
+        + "\"requested_service_unit\":{\"time_seconds\":0},"
+        + "\"used_service_unit\":{\"time_seconds\":" + string(used_seconds) + "},"
+        + "\"destination\":\"" + to + "\","
+        + "\"extensions\":{}"
+        + "}"
+}
+
+fn charging_request_json(cid: string, caller: string, callee: string) -> string {
+    return charging_request_json_kind(cid, caller, callee, "initial", 0, 0)
+}
+
+fn charging_timeout_ms() -> int {
+    let mut wait_ms = 150
+    match parse_int(env_get_or("SIP_CHARGING_TIMEOUT_MS", "150")) {
+        Ok(v) => { wait_ms = v }
+        Err(_) => {}
+    }
+    if wait_ms < 20 { wait_ms = 20 }
+    if wait_ms > 1000 { wait_ms = 1000 }
+    return wait_ms
+}
+
+fn charging_fail_open() -> int {
+    let v = str_to_lower(str_trim_space(env_get_or("SIP_CHARGING_FAIL_OPEN", "0")))
+    if str_eq(v, "1") || str_eq(v, "true") || str_eq(v, "yes") { return 1 }
+    return 0
+}
+
+fn charging_protocol() -> string {
+    let protocol = str_to_lower(str_trim_space(env_get_or("SIP_CHARGING_PROTOCOL", "http")))
+    if str_eq(protocol, "diameter") { return "diameter" }
+    return "http"
+}
+
+fn charging_https_post(url: string, body: string) -> string {
+    if len(url) < 9 || len(url) > 2048 { return "" }
+    let target = url[8:]
+    let slash = str_index(target, "/")
+    let mut authority = target
+    let mut path = "/"
+    if slash >= 0 {
+        authority = target[0:slash]
+        path = target[slash:]
+    }
+    let mut host = authority
+    let mut port = 443
+    if len(authority) > 0 && int(authority[0]) == 91 {
+        let close = str_index(authority, "]")
+        if close < 2 { return "" }
+        host = authority[1:close]
+        if close + 1 < len(authority) {
+            if int(authority[close + 1]) != 58 { return "" }
+            match parse_int(authority[close + 2:]) { Ok(v) => { port = v } Err(_) => { return "" } }
+        }
+    } else {
+        let colon = str_index(authority, ":")
+        if colon >= 0 {
+            host = authority[0:colon]
+            match parse_int(authority[colon + 1:]) { Ok(v) => { port = v } Err(_) => { return "" } }
+        }
+    }
+    if len(host) == 0 || len(host) > 512 || len(path) > 2048 || port < 1 || port > 65535 { return "" }
+    let ca = env_get_or("SIP_CHARGING_CA", "")
+    return tls_post(host, port, path, body, ca)
+}
+
+fn charging_exchange(cid: string, caller: string, callee: string, kind: string, request_number: int, used_seconds: int, cache: CMap, peer_lock: Mutex) -> int {
+    if str_eq(charging_protocol(), "diameter") {
+        let mut result = 0
+        if str_eq(str_to_lower(kind), "initial") {
+            result = diameter_cc_authorized_shared(cid, caller, callee, cache, peer_lock)
+        } else {
+            if str_eq(str_to_lower(kind), "update") {
+                result = diameter_cc_update_shared(cid, caller, callee, request_number, used_seconds, cache, peer_lock)
+            } else {
+                if str_eq(str_to_lower(kind), "termination") {
+                    result = diameter_cc_terminate_shared(cid, caller, callee, request_number, used_seconds, cache, peer_lock)
+                }
+            }
+        }
+        if result == 1 { return 1 }
+        return if charging_fail_open() == 1 { 1 } else { 0 }
+    }
+    let url = str_trim_space(env_get_or("SIP_CHARGING_URL", ""))
+    if len(url) == 0 { return if charging_fail_open() == 1 { 1 } else { 0 } }
+    let request = charging_request_json_kind(cid, caller, callee, kind, request_number, used_seconds)
+    let mut response = ""
+    let low = str_to_lower(url)
+    if str_has_prefix(low, "https://") { response = charging_https_post(url, request) }
+    else { if str_has_prefix(low, "http://") { response = http_post_timeout(url, request, charging_timeout_ms()) } }
+    let status = http_last_status()
+    if status < 200 || status >= 300 || len(response) == 0 || len(response) > 65536 {
+        return if charging_fail_open() == 1 { 1 } else { 0 }
+    }
+    let decision = str_to_lower(str_trim_space(json_get_string(response, "decision")))
+    if str_eq(decision, "allow") || str_eq(decision, "authorized") { return 1 }
+    return 0
+}
+
+fn charging_pre_authorize(cid: string, caller: string, callee: string, cache: CMap, peer_lock: Mutex) -> int {
+    if not str_eq(billing_mode(), "preauth") { return 1 }
+    return charging_exchange(cid, caller, callee, "initial", 0, 0, cache, peer_lock)
+}
+
+fn charging_session_event(cid: string, caller: string, callee: string, kind: string, request_number: int, used_seconds: int, cache: CMap, peer_lock: Mutex) -> int {
+    if not str_eq(billing_mode(), "preauth") { return 1 }
+    // A post-call update must never prevent SIP BYE/CANCEL from completing.
+    let result = charging_exchange(cid, caller, callee, kind, request_number, used_seconds, cache, peer_lock)
+    if result == 0 { return if charging_fail_open() == 1 { 1 } else { 0 } }
+    return 1
+}

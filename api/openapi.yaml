@@ -1,0 +1,53 @@
+openapi: 3.0.3
+info:
+  title: Madis Carrier Integration API
+  version: 1.0.0
+  description: Versioned JSON outbox plus RFC 8506 charging and 3GPP Cx/Sh integration boundaries for Madis.
+servers:
+  - url: /admin
+security:
+  - bearerAuth: []
+paths:
+  /api/v1/capabilities:
+    get:
+      operationId: capabilities
+      responses:
+        '200': {description: Runtime capabilities}
+  /api/v1/billing/events:
+    get:
+      operationId: pendingEvents
+      parameters:
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100}}
+      responses:
+        '200': {description: Pending events}
+    post:
+      operationId: publishEvent
+      requestBody:
+        required: true
+        content:
+          application/json: {schema: {$ref: '#/components/schemas/BillingEvent'}}
+      responses:
+        '202': {description: Accepted idempotently}
+  /api/v1/billing/events/ack:
+    post:
+      operationId: acknowledgeEvent
+      parameters:
+        - {name: event_id, in: query, required: true, schema: {type: string}}
+      responses:
+        '200': {description: Acknowledged}
+components:
+  securitySchemes:
+    bearerAuth: {type: http, scheme: bearer}
+  schemas:
+    BillingEvent:
+      type: object
+      required: [schema, event_type, data]
+      additionalProperties: true
+      properties:
+        schema: {type: string}
+        event_id: {type: string}
+        event_type: {type: string}
+        tenant_id: {type: string}
+        session_id: {type: string}
+        data: {type: object, additionalProperties: true}
+        extensions: {type: object, additionalProperties: true}

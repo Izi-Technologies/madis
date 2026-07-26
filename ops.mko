@@ -55,9 +55,13 @@ fn proxy_admin_worker(reg: CMap, calls: CMap, cache: CMap) -> int {
         slog("  Admin:   bind failed on :" + string(port))
         return 1
     }
+    // http_accept uses the raw accept(2) primitive. Keep the listener
+    // nonblocking so SIGTERM cannot strand this worker in accept.
+    let _ = io_set_nonblocking(fd, 1)
     let _ = register_listener(fd)
     slog("  Admin:   http://127.0.0.1:" + string(port) + " (/healthz, /readyz, /metrics)")
     while shutdown_requested() == 0 {
+        if io_read_ready(fd, 100) <= 0 { continue }
         let c = http_accept(fd)
         if c < 0 {
             if should_stop_accepting() == 1 { break }

@@ -1,7 +1,9 @@
 # Build artifacts
 main
+main.c
 *.o
 *.a
+main.dSYM/
 
 # Log files
 *.log
@@ -11,6 +13,7 @@ main
 
 # Benchmark cache
 bench/__pycache__/
+sdk/python/__pycache__/
 bench/sipp_stat.csv
 
 # AI tooling

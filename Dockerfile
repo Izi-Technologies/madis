@@ -10,11 +10,19 @@ ARG MAKO_RUNTIME=/usr/local/lib/mako/runtime
 COPY . /src
 WORKDIR /src
 
-# If the binary is pre-built, just use it. Otherwise build from source.
+# If the binary is pre-built, just use it. Otherwise emit C and link the
+# Mako 0.4.16 output with Madis' small native ownership bridge.
 RUN if [ -f /src/main ]; then \
         cp /src/main /src/madis; \
     elif [ -x "$MAKO_BINARY" ]; then \
-        MAKO_RUNTIME="$MAKO_RUNTIME" "$MAKO_BINARY" build --release --strip --no-incremental main.mko -o madis; \
+        rm -f /src/main.c; \
+        if ! MAKO_RUNTIME="$MAKO_RUNTIME" "$MAKO_BINARY" build --emit-c --release --strip --no-incremental main.mko -o /tmp/madis-mako > /tmp/mako-build.log 2>&1; then \
+            test -s /src/main.c || (cat /tmp/mako-build.log && exit 1); \
+        fi; \
+        cc -std=c11 -O3 -DNDEBUG -w -I"$MAKO_RUNTIME" -I/usr/include/postgresql \
+            -DMAKO_HAS_OPENSSL -DMAKO_USE_OPENSSL -DMAKO_HAS_LIBPQ \
+            /src/main.c /src/madis_memory.c -o /src/madis \
+            -pthread -lm -ldl -lresolv -lssl -lcrypto -lpq; \
     else \
         echo "No pre-built binary and no Mako compiler found." && \
         echo "Either place a compiled 'main' binary in the repo root," && \

@@ -2,8 +2,8 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
-MAKO=${MAKO:-/Users/loreste/mako/target/release/mako}
-RUNTIME=${BENCH_RUNTIME:-/Users/loreste/mako/runtime}
+MAKO=${MAKO:-mako}
+RUNTIME=${BENCH_RUNTIME:-${MAKO_RUNTIME:-/Users/loreste/mako/runtime}}
 SIPP=${SIPP:-/opt/homebrew/bin/sipp}
 
 PROXY_PORT=${PROXY_PORT:-15060}
@@ -46,18 +46,13 @@ if [ ! -x "$SIPP" ]; then
     exit 2
 fi
 
-MAKO_VERSION=$($MAKO --version 2>/dev/null || true)
-case "$MAKO_VERSION" in
-    *"mako0.4.15"*) ;;
-    *) echo "Mako 0.4.15 required; got: $MAKO_VERSION" >&2; exit 2 ;;
-esac
 if [ ! -f "$RUNTIME/mako_rt.h" ]; then
-    echo "Mako 0.4.15 runtime not found: $RUNTIME" >&2
+    echo "Mako 0.4.16 runtime not found: $RUNTIME" >&2
     exit 2
 fi
 
 echo "Building proxy with runtime: $RUNTIME"
-MAKO_RUNTIME="$RUNTIME" "$MAKO" build --release --strip --no-incremental main.mko -o main
+MAKO_BIN="$MAKO" MAKO_RUNTIME="$RUNTIME" "$ROOT/scripts/build-native.sh" main.mko main
 
 echo "Starting UAS on UDP :$UAS_PORT"
 "$SIPP" -sn uas -i 127.0.0.1 -p "$UAS_PORT" -nostdin -skip_rlimit \

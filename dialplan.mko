@@ -186,8 +186,9 @@ fn db_rate_ok(user: string, cache: CMap) -> int {
 
 fn db_cdr(db: SqlDB, db_ok: int, cid: string, caller: string, callee: string, status: string) -> int {
     if db_ok == 0 { return 0 }
-    let _ = sql_exec_str4(db, "INSERT INTO cdr (call_id, caller, callee, status) VALUES ($1, $2, $3, $4) ON CONFLICT (call_id) DO UPDATE SET status = $4, ended_at = NOW()", cid, caller, callee, status)
-    return 0
+    let result = sql_exec_str4(db, "INSERT INTO cdr (call_id, caller, callee, status) VALUES ($1, $2, $3, $4) ON CONFLICT (call_id) DO UPDATE SET status = $4, ended_at = NOW()", cid, caller, callee, status)
+    let _ = billing_emit_cdr(db, db_ok, cid, caller, callee, status)
+    return result
 }
 
 fn db_cdr_detail(db: SqlDB, db_ok: int, cid: string, src_ip: string, dest: string, transport: string) -> int {

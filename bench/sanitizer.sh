@@ -2,13 +2,14 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-MAKO=${MAKO:-/Users/loreste/mako/target/release/mako}
-RUNTIME=${MAKO_RUNTIME_PATH:-/Users/loreste/mako/runtime}
+MAKO=${MAKO:-mako}
+RUNTIME=${MAKO_RUNTIME_PATH:-${MAKO_RUNTIME:-/Users/loreste/mako/runtime}}
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/mako-sip-sanitize.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT HUP INT TERM
 
 echo "Building ASan/UBSan proxy"
-MAKO_RUNTIME="$RUNTIME" "$MAKO" build --release --sanitize address,undefined --no-incremental main.mko -o "$TMP/main"
+MAKO_BIN="$MAKO" MAKO_RUNTIME="$RUNTIME" MADIS_SANITIZE=address,undefined \
+  "$ROOT/scripts/build-native.sh" main.mko "$TMP/main"
 
 echo "Running sanitized transport matrix"
 ASAN_OPTIONS=${ASAN_OPTIONS:-detect_leaks=0} \

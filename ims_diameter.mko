@@ -1,0 +1,263 @@
+// 3GPP IMS Diameter application contracts.
+//
+// This module contains wire builders and answer validation for the Cx/Dx and
+// Sh applications. It does not invent a subscriber database or claim to be
+// an HSS. Requests are sent through the RFC 6733 peer in diameter.mko.
+
+pull . "./diameter.mko"
+
+fn ims_cx_application() -> int { return 16777216 }
+fn ims_sh_application() -> int { return 16777217 }
+fn ims_3gpp_vendor() -> int { return 10415 }
+
+fn ims_cx_uar_command() -> int { return 300 }
+fn ims_cx_sar_command() -> int { return 301 }
+fn ims_cx_lir_command() -> int { return 302 }
+fn ims_cx_mar_command() -> int { return 303 }
+fn ims_cx_rtr_command() -> int { return 304 }
+fn ims_cx_ppr_command() -> int { return 305 }
+fn ims_sh_udr_command() -> int { return 306 }
+fn ims_sh_pur_command() -> int { return 307 }
+fn ims_sh_snr_command() -> int { return 308 }
+fn ims_sh_pnr_command() -> int { return 309 }
+
+fn ims_text_ok(value: string, maximum: int) -> int {
+    if len(value) < 1 || len(value) > maximum { return 0 }
+    let mut i = 0
+    while i < len(value) {
+        let c = int(value[i])
+        if c < 32 || c == 127 || c == 34 || c == 92 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn ims_uri_avp(code: int, value: string) -> string {
+    if ims_text_ok(value, 2048) == 0 { return "" }
+    return diameter_avp_vendor_string(code, ims_3gpp_vendor(), value)
+}
+
+fn ims_u32_avp(code: int, value: int) -> string {
+    if value < 0 || value > 4294967295 { return "" }
+    return diameter_avp_vendor_u32(code, ims_3gpp_vendor(), value)
+}
+
+fn ims_grouped_avp(code: int, children: string) -> string {
+    if len(children) == 0 { return "" }
+    return diameter_grouped_vendor(code, ims_3gpp_vendor(), children)
+}
+
+fn ims_octets_avp(code: int, value: string) -> string {
+    if len(value) < 1 || len(value) > 65519 { return "" }
+    return diameter_avp_vendor_m(code, ims_3gpp_vendor(), value)
+}
+
+fn ims_session_id(seed: string) -> string {
+    if ims_text_ok(seed, 1024) == 0 { return "" }
+    return diameter_origin_host() + ";ims-" + sha256("madis.ims.session|" + seed)[0:32]
+}
+
+fn ims_vsa(application: int) -> string {
+    if application != ims_cx_application() && application != ims_sh_application() { return "" }
+    let children = madis_diameter_avp_u32(266, ims_3gpp_vendor()) + madis_diameter_avp_u32(258, application)
+    return diameter_grouped(260, children)
+}
+
+fn ims_base_request_body(session_id: string, application: int) -> string {
+    let origin_host = diameter_origin_host()
+    let origin_realm = diameter_origin_realm()
+    let destination_realm = diameter_destination_realm()
+    if len(session_id) == 0 || diameter_identity_ok(origin_host) == 0 || diameter_identity_ok(origin_realm) == 0 || diameter_identity_ok(destination_realm) == 0 { return "" }
+    let vsa = ims_vsa(application)
+    if len(vsa) == 0 { return "" }
+    let mut body = diameter_avp_string(263, session_id)
+        + vsa
+        + madis_diameter_avp_u32(277, 1)
+        + diameter_avp_string(264, origin_host)
+        + diameter_avp_string(296, origin_realm)
+        + diameter_avp_string(283, destination_realm)
+    let destination_host = str_trim_space(env_get_or("SIP_IMS_DEST_HOST", ""))
+    if len(destination_host) > 0 {
+        if diameter_identity_ok(destination_host) == 0 { return "" }
+        body = body + diameter_avp_string(293, destination_host)
+    }
+    return body
+}
+
+fn ims_request(application: int, command: int, session_id: string, body: string) -> string {
+    if len(body) == 0 || len(session_id) == 0 { return "" }
+    if diameter_identity_ok(diameter_origin_host()) == 0 || diameter_identity_ok(diameter_origin_realm()) == 0 || diameter_identity_ok(diameter_destination_realm()) == 0 { return "" }
+    let hop = diameter_id("ims-hop|" + session_id + "|" + string(application) + "|" + string(command))
+    let end = diameter_id("ims-end|" + session_id + "|" + string(application) + "|" + string(command))
+    let message = diameter_header(192, command, application, hop, end, body)
+    return if diameter_message_valid(message) == 1 { message } else { "" }
+}
+
+fn ims_cx_uar(public_identity: string, private_identity: string, visited_network: string, authorization_type: int) -> string {
+    if ims_text_ok(public_identity, 2048) == 0 || ims_text_ok(private_identity, 1024) == 0 || ims_text_ok(visited_network, 2048) == 0 || authorization_type < 0 || authorization_type > 2 { return "" }
+    let session_id = ims_session_id("uar|" + private_identity + "|" + public_identity)
+    let body = ims_base_request_body(session_id, ims_cx_application())
+        + diameter_avp_string(1, private_identity)
+        + ims_uri_avp(601, public_identity)
+        + ims_uri_avp(600, visited_network)
+        + ims_u32_avp(623, authorization_type)
+    return ims_request(ims_cx_application(), ims_cx_uar_command(), session_id, body)
+}
+
+fn ims_cx_sar(public_identity: string, private_identity: string, server_name: string, assignment_type: int, user_data_available: int) -> string {
+    if ims_text_ok(public_identity, 2048) == 0 || ims_text_ok(server_name, 2048) == 0 || assignment_type < 0 || assignment_type > 8 || user_data_available < 0 || user_data_available > 1 { return "" }
+    if len(private_identity) > 0 && ims_text_ok(private_identity, 1024) == 0 { return "" }
+    let session_id = ims_session_id("sar|" + public_identity + "|" + server_name)
+    let mut body = ims_base_request_body(session_id, ims_cx_application())
+    if len(private_identity) > 0 { body = body + diameter_avp_string(1, private_identity) }
+    body = body + ims_uri_avp(601, public_identity)
+        + ims_uri_avp(602, server_name)
+        + ims_u32_avp(614, assignment_type)
+        + ims_u32_avp(624, user_data_available)
+    return ims_request(ims_cx_application(), ims_cx_sar_command(), session_id, body)
+}
+
+fn ims_cx_lir(public_identity: string, originating_request: int) -> string {
+    if ims_text_ok(public_identity, 2048) == 0 || originating_request < 0 || originating_request > 1 { return "" }
+    let session_id = ims_session_id("lir|" + public_identity)
+    let body = ims_base_request_body(session_id, ims_cx_application())
+        + diameter_avp_vendor_u32(633, ims_3gpp_vendor(), originating_request)
+        + ims_uri_avp(601, public_identity)
+    return ims_request(ims_cx_application(), ims_cx_lir_command(), session_id, body)
+}
+
+fn ims_cx_mar(public_identity: string, private_identity: string, server_name: string, scheme: string, item_number: int, number_of_items: int) -> string {
+    if ims_text_ok(public_identity, 2048) == 0 || ims_text_ok(private_identity, 1024) == 0 || ims_text_ok(server_name, 2048) == 0 || ims_text_ok(scheme, 128) == 0 { return "" }
+    if item_number < 0 || item_number > 4294967295 || number_of_items < 1 || number_of_items > 32 { return "" }
+    let auth_item = ims_grouped_avp(612, ims_u32_avp(613, item_number) + ims_uri_avp(608, scheme))
+    let session_id = ims_session_id("mar|" + private_identity + "|" + public_identity)
+    let body = ims_base_request_body(session_id, ims_cx_application())
+        + diameter_avp_string(1, private_identity)
+        + ims_uri_avp(601, public_identity)
+        + ims_u32_avp(607, number_of_items)
+        + auth_item
+        + ims_uri_avp(602, server_name)
+    return ims_request(ims_cx_application(), ims_cx_mar_command(), session_id, body)
+}
+
+fn ims_cx_rtr(public_identity: string, private_identity: string, destination_host: string, reason_code: int) -> string {
+    if ims_text_ok(public_identity, 2048) == 0 || ims_text_ok(private_identity, 1024) == 0 || ims_text_ok(destination_host, 2048) == 0 || reason_code < 0 || reason_code > 2 { return "" }
+    let session_id = ims_session_id("rtr|" + private_identity + "|" + public_identity)
+    let body = ims_base_request_body(session_id, ims_cx_application())
+        + diameter_avp_string(293, destination_host)
+        + diameter_avp_string(1, private_identity)
+        + ims_uri_avp(601, public_identity)
+        + ims_grouped_avp(615, ims_u32_avp(616, reason_code))
+    return ims_request(ims_cx_application(), ims_cx_rtr_command(), session_id, body)
+}
+
+fn ims_sh_user_identity(public_identity: string) -> string {
+    if ims_text_ok(public_identity, 2048) == 0 { return "" }
+    return ims_grouped_avp(700, ims_uri_avp(601, public_identity))
+}
+
+fn ims_sh_udr(public_identity: string, data_reference: int, service_indication: string, server_name: string) -> string {
+    if data_reference < 0 || data_reference > 25 { return "" }
+    if len(service_indication) > 0 && ims_text_ok(service_indication, 2048) == 0 { return "" }
+    if len(server_name) > 0 && ims_text_ok(server_name, 2048) == 0 { return "" }
+    let session_id = ims_session_id("udr|" + public_identity + "|" + string(data_reference))
+    let mut body = ims_base_request_body(session_id, ims_sh_application())
+        + ims_sh_user_identity(public_identity)
+        + ims_u32_avp(703, data_reference)
+    if len(service_indication) > 0 { body = body + ims_uri_avp(704, service_indication) }
+    if len(server_name) > 0 { body = body + ims_uri_avp(602, server_name) }
+    return ims_request(ims_sh_application(), ims_sh_udr_command(), session_id, body)
+}
+
+fn ims_sh_pur(public_identity: string, data_reference: int, user_data: string) -> string {
+    if data_reference < 0 || data_reference > 25 || len(user_data) < 1 || len(user_data) > 65519 { return "" }
+    let session_id = ims_session_id("pur|" + public_identity + "|" + string(data_reference))
+    let body = ims_base_request_body(session_id, ims_sh_application())
+        + ims_sh_user_identity(public_identity)
+        + ims_u32_avp(703, data_reference)
+        + ims_octets_avp(702, user_data)
+    return ims_request(ims_sh_application(), ims_sh_pur_command(), session_id, body)
+}
+
+fn ims_sh_snr(public_identity: string, data_reference: int, subscription_type: int, service_indication: string) -> string {
+    if data_reference < 0 || data_reference > 25 || subscription_type < 0 || subscription_type > 1 { return "" }
+    if len(service_indication) > 0 && ims_text_ok(service_indication, 2048) == 0 { return "" }
+    let session_id = ims_session_id("snr|" + public_identity + "|" + string(data_reference))
+    let mut body = ims_base_request_body(session_id, ims_sh_application())
+        + ims_sh_user_identity(public_identity)
+        + ims_u32_avp(705, subscription_type)
+        + ims_u32_avp(703, data_reference)
+    if len(service_indication) > 0 { body = body + ims_uri_avp(704, service_indication) }
+    return ims_request(ims_sh_application(), ims_sh_snr_command(), session_id, body)
+}
+
+fn ims_grouped_u32(group: string, code: int) -> int {
+    let value = diameter_find_grouped_avp(group, code)
+    if len(value) != 4 { return -1 }
+    return diameter_read_u32(value, 0)
+}
+
+fn ims_answer_result(response: string) -> int {
+    let standard = diameter_find_u32(response, 268)
+    if standard > 0 { return standard }
+    let experimental = diameter_find_avp(response, 297)
+    if len(experimental) == 0 || ims_grouped_u32(experimental, 266) != ims_3gpp_vendor() { return -1 }
+    return ims_grouped_u32(experimental, 298)
+}
+
+fn ims_answer_valid(request: string, response: string, application: int, command: int) -> int {
+    if diameter_peer_answer_matches(request, response, application, command) == 0 { return 0 }
+    if diameter_find_avp(response, 263) != diameter_find_avp(request, 263) { return 0 }
+    let vsa = diameter_find_avp(response, 260)
+    if ims_grouped_u32(vsa, 266) != ims_3gpp_vendor() || ims_grouped_u32(vsa, 258) != application { return 0 }
+    if diameter_find_u32(response, 277) != 1 { return 0 }
+    if len(diameter_find_avp(response, 264)) == 0 || len(diameter_find_avp(response, 296)) == 0 { return 0 }
+    return if ims_answer_result(response) > 0 { 1 } else { 0 }
+}
+
+fn ims_answer_success(request: string, response: string, application: int, command: int) -> int {
+    if ims_answer_valid(request, response, application, command) == 0 { return 0 }
+    let result = ims_answer_result(response)
+    if result == 2001 || result == 2002 || result == 2003 || result == 2004 { return 1 }
+    return 0
+}
+
+fn ims_cx_exchange(cache: CMap, peer_lock: Mutex, request: string, command: int) -> string {
+    return diameter_peer_exchange(cache, peer_lock, request, ims_cx_application(), command)
+}
+
+fn ims_sh_exchange(cache: CMap, peer_lock: Mutex, request: string, command: int) -> string {
+    return diameter_peer_exchange(cache, peer_lock, request, ims_sh_application(), command)
+}
+
+fn ims_cx_uar_authorized(cache: CMap, peer_lock: Mutex, public_identity: string, private_identity: string, visited_network: string, authorization_type: int) -> int {
+    let request = ims_cx_uar(public_identity, private_identity, visited_network, authorization_type)
+    let response = ims_cx_exchange(cache, peer_lock, request, ims_cx_uar_command())
+    return ims_answer_success(request, response, ims_cx_application(), ims_cx_uar_command())
+}
+
+fn ims_cx_sar_accepted(cache: CMap, peer_lock: Mutex, public_identity: string, private_identity: string, server_name: string, assignment_type: int, user_data_available: int) -> int {
+    let request = ims_cx_sar(public_identity, private_identity, server_name, assignment_type, user_data_available)
+    let response = ims_cx_exchange(cache, peer_lock, request, ims_cx_sar_command())
+    return ims_answer_success(request, response, ims_cx_application(), ims_cx_sar_command())
+}
+
+fn ims_sh_udr_accepted(cache: CMap, peer_lock: Mutex, public_identity: string, data_reference: int, service_indication: string, server_name: string) -> int {
+    let request = ims_sh_udr(public_identity, data_reference, service_indication, server_name)
+    let response = ims_sh_exchange(cache, peer_lock, request, ims_sh_udr_command())
+    return ims_answer_success(request, response, ims_sh_application(), ims_sh_udr_command())
+}
+
+fn ims_cx_registration_enabled() -> int {
+    let value = str_to_lower(str_trim_space(env_get_or("SIP_IMS_CX", "0")))
+    return if str_eq(value, "1") || str_eq(value, "true") || str_eq(value, "yes") { 1 } else { 0 }
+}
+
+// Registration is fail-closed when Cx mode is explicitly enabled. Local SIP
+// digest remains an access-control check; Cx is the HSS authorization and
+// S-CSCF assignment check layered on top of it.
+fn ims_cx_register_gate(cache: CMap, peer_lock: Mutex, public_identity: string, private_identity: string, visited_network: string, server_name: string) -> int {
+    if ims_cx_registration_enabled() == 0 { return 1 }
+    if ims_cx_uar_authorized(cache, peer_lock, public_identity, private_identity, visited_network, 0) == 0 { return 0 }
+    return ims_cx_sar_accepted(cache, peer_lock, public_identity, private_identity, server_name, 1, 0)
+}

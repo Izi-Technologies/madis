@@ -1,0 +1,28 @@
+name: madis-ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Madis
+        uses: actions/checkout@v4
+
+      - name: Checkout pinned Mako compiler
+        uses: actions/checkout@v4
+        with:
+          repository: loreste/mako
+          ref: v0.4.16
+          path: .ci/mako
+
+      - name: Build Mako 0.4.16
+        run: cargo build --release --manifest-path .ci/mako/Cargo.toml
+
+      - name: Run Madis checks
+        env:
+          MAKO_BIN: ${{ github.workspace }}/.ci/mako/target/release/mako
+          MAKO_RUNTIME: ${{ github.workspace }}/.ci/mako/runtime
+        run: ./scripts/ci.sh

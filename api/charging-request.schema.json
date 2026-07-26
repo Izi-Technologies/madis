@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://madis.example/schemas/charging-request.v1.json",
+  "title": "Madis online charging adapter request",
+  "type": "object",
+  "required": ["schema", "event_id", "session_id", "cc_request_type"],
+  "properties": {
+    "schema": {"const": "madis.charging.request.v1"},
+    "event_id": {"type": "string", "minLength": 16, "maxLength": 128},
+    "tenant_id": {"type": "string", "maxLength": 128},
+    "session_id": {"type": "string", "maxLength": 256},
+    "cc_request_type": {"enum": ["INITIAL_REQUEST", "UPDATE_REQUEST", "TERMINATION_REQUEST", "EVENT_REQUEST"]},
+    "cc_request_number": {"type": "integer", "minimum": 0},
+    "service_context_id": {"type": "string", "maxLength": 256},
+    "subscription_id": {"type": "string", "maxLength": 512},
+    "requested_service_unit": {"type": "object", "additionalProperties": true},
+    "used_service_unit": {"type": "object", "additionalProperties": true},
+    "destination": {"type": "string", "maxLength": 512},
+    "extensions": {"type": "object", "additionalProperties": true}
+  },
+  "additionalProperties": true
+}

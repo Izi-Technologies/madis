@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://madis.example/schemas/billing-event.v1.json",
+  "title": "Madis billing event envelope",
+  "type": "object",
+  "required": ["schema", "event_id", "event_type", "data"],
+  "properties": {
+    "schema": {"type": "string", "minLength": 1, "maxLength": 512},
+    "schema_version": {"type": "integer", "minimum": 1},
+    "event_id": {"type": "string", "minLength": 16, "maxLength": 128},
+    "event_type": {"type": "string", "minLength": 1, "maxLength": 128},
+    "tenant_id": {"type": "string", "maxLength": 128},
+    "session_id": {"type": "string", "maxLength": 512},
+    "subject": {"type": "object", "additionalProperties": true},
+    "occurred_at_ms": {"type": "integer", "minimum": 0},
+    "data": {"type": "object", "additionalProperties": true},
+    "extensions": {"type": "object", "additionalProperties": true}
+  },
+  "additionalProperties": true
+}

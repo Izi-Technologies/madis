@@ -18,9 +18,10 @@ MADIS_TLS_PORT="${MADIS_TLS_PORT:-5061}"
 MADIS_WSS_PORT="${MADIS_WSS_PORT:-8443}"
 MADIS_ADMIN_PORT="${MADIS_ADMIN_PORT:-8080}"
 MADIS_ADMIN_TOKEN="${MADIS_ADMIN_TOKEN:-}"
+MADIS_CARRIER_API_TOKEN="${MADIS_CARRIER_API_TOKEN:-}"
 MADIS_ADMIN_PASSWORD="${MADIS_ADMIN_PASSWORD:-}"
 MADIS_VERSION="${MADIS_VERSION:-}"
-MADIS_MAKO_VERSION="0.4.15"
+MADIS_MAKO_VERSION="0.4.16"
 MADIS_CLI_DIR="${MADIS_CLI_DIR:-/usr/local/bin}"
 
 # ── colors ───────────────────────────────────────────────────────────────────
@@ -83,6 +84,11 @@ fi
 if [ -z "$MADIS_ADMIN_TOKEN" ]; then
     MADIS_ADMIN_TOKEN=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 32 || true)
     info "Generated admin API token."
+fi
+
+if [ -z "$MADIS_CARRIER_API_TOKEN" ]; then
+    MADIS_CARRIER_API_TOKEN=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 48 || true)
+    info "Generated carrier integration API token."
 fi
 
 if [ -z "$MADIS_ADMIN_PASSWORD" ]; then
@@ -410,6 +416,25 @@ CREATE TABLE IF NOT EXISTS cdr (
     duration_sec    INT
 );
 
+-- Versioned, idempotent billing/charging outbox. payload_json is deliberately
+-- extensible: carrier applications own the data/schema inside the envelope.
+CREATE TABLE IF NOT EXISTS billing_events (
+    event_id        TEXT PRIMARY KEY,
+    call_id         TEXT NOT NULL DEFAULT '',
+    event_type      TEXT NOT NULL,
+    payload_json    JSONB NOT NULL,
+    occurred_at     TIMESTAMP DEFAULT NOW(),
+    available_at    TIMESTAMP DEFAULT NOW(),
+    delivered_at    TIMESTAMP,
+    attempts        INT NOT NULL DEFAULT 0,
+    last_error      TEXT NOT NULL DEFAULT '',
+    CONSTRAINT billing_event_id_size CHECK (char_length(event_id) BETWEEN 16 AND 128),
+    CONSTRAINT billing_event_payload_size CHECK (octet_length(payload_json::text) <= 65536)
+);
+
+CREATE INDEX IF NOT EXISTS idx_billing_events_pending ON billing_events (occurred_at, event_id) WHERE delivered_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_billing_events_call ON billing_events (call_id, occurred_at);
+
 -- SIP transaction log
 CREATE TABLE IF NOT EXISTS sip_transactions (
     id              SERIAL PRIMARY KEY,
@@ -526,6 +551,14 @@ MADIS_VERSION="${MADIS_VERSION:-0.1.0}"
 
 info "Copying source files to $MADIS_INSTALL_DIR..."
 cp "$SCRIPT_DIR"/*.mko "$MADIS_INSTALL_DIR/" 2>/dev/null || true
+if [ -f "$SCRIPT_DIR/madis_memory.c" ]; then
+    cp "$SCRIPT_DIR/madis_memory.c" "$MADIS_INSTALL_DIR/madis_memory.c"
+fi
+for support_dir in api sdk; do
+    if [ -d "$SCRIPT_DIR/$support_dir" ]; then
+        cp -r "$SCRIPT_DIR/$support_dir" "$MADIS_INSTALL_DIR/"
+    fi
+done
 if [ -d "$SCRIPT_DIR/tests" ]; then
     cp -r "$SCRIPT_DIR/tests" "$MADIS_INSTALL_DIR/"
 fi
@@ -545,11 +578,36 @@ if [ -f "$SCRIPT_DIR/scripts/madis" ]; then
     info "Installed madis CLI as $MADIS_CLI_DIR/madis (and madisctl)."
 fi
 
-# if a pre-built binary exists, copy that too
+# If a pre-built binary exists, copy that too. Otherwise build the SIP worker
+# from emitted C so the external Mako 0.4.16 ownership bridge is linked.
 if [ -f "$SCRIPT_DIR/main" ]; then
     cp "$SCRIPT_DIR/main" "$MADIS_INSTALL_DIR/madis"
     chmod +x "$MADIS_INSTALL_DIR/madis"
     info "Installed pre-built binary."
+elif [ -f "$MADIS_INSTALL_DIR/main.mko" ]; then
+    MADIS_MAKO_BIN="${MADIS_MAKO_BIN:-mako}"
+    if ! command -v "$MADIS_MAKO_BIN" >/dev/null 2>&1; then
+        fail "Mako 0.4.16 is required to build the SIP worker; install it or provide MADIS_MAKO_BIN."
+    fi
+    MAKO_VERSION_TEXT=$($MADIS_MAKO_BIN --version 2>/dev/null || true)
+    [[ "$MAKO_VERSION_TEXT" == *"0.4.16"* ]] || fail "Mako 0.4.16 is required (found: ${MAKO_VERSION_TEXT:-unknown})."
+    MADIS_MAKO_RUNTIME="${MAKO_RUNTIME:-/usr/local/share/mako/runtime}"
+    [ -d "$MADIS_MAKO_RUNTIME" ] || fail "Mako runtime not found at $MADIS_MAKO_RUNTIME; set MAKO_RUNTIME."
+    info "Building Madis SIP worker with Mako 0.4.16..."
+    rm -f "$MADIS_INSTALL_DIR/main.c"
+    emit_log="$MADIS_INSTALL_DIR/mako-build.log"
+    if ! (cd "$MADIS_INSTALL_DIR" && MAKO_RUNTIME="$MADIS_MAKO_RUNTIME" "$MADIS_MAKO_BIN" \
+        build --emit-c --release --strip --no-incremental main.mko -o .mako-ignored >"$emit_log" 2>&1); then
+        [ -s "$MADIS_INSTALL_DIR/main.c" ] || { cat "$emit_log" >&2; fail "Mako C emission failed."; }
+    fi
+    cc -std=c11 -O3 -DNDEBUG -w \
+        -I"$MADIS_MAKO_RUNTIME" -I/usr/include/postgresql \
+        -DMAKO_HAS_OPENSSL -DMAKO_USE_OPENSSL -DMAKO_HAS_LIBPQ \
+        "$MADIS_INSTALL_DIR/main.c" "$MADIS_INSTALL_DIR/madis_memory.c" \
+        -o "$MADIS_INSTALL_DIR/madis" -pthread -lm -ldl -lresolv -lssl -lcrypto -lpq
+    chmod +x "$MADIS_INSTALL_DIR/madis"
+    rm -f "$MADIS_INSTALL_DIR/main.c" "$MADIS_INSTALL_DIR/.mako-ignored" "$emit_log"
+    info "Built Madis SIP worker."
 fi
 
 # Build the standalone WebUI when Mako is available. A pre-built admin-bin
@@ -562,8 +620,8 @@ elif [ -f "$MADIS_INSTALL_DIR/admin/main.mko" ]; then
     MADIS_MAKO_BIN="${MADIS_MAKO_BIN:-mako}"
     if command -v "$MADIS_MAKO_BIN" >/dev/null 2>&1; then
         MAKO_VERSION_TEXT=$("$MADIS_MAKO_BIN" --version 2>/dev/null || true)
-        if [[ "$MAKO_VERSION_TEXT" != *"0.4.15"* ]]; then
-            fail "Mako 0.4.15 is required to build the WebUI (found: ${MAKO_VERSION_TEXT:-unknown})."
+        if [[ "$MAKO_VERSION_TEXT" != *"0.4.16"* ]]; then
+            fail "Mako 0.4.16 is required to build the WebUI (found: ${MAKO_VERSION_TEXT:-unknown})."
         fi
         info "Building Mako SIP WebUI with ${MADIS_MAKO_BIN}..."
         if [ -n "${MAKO_RUNTIME:-}" ]; then
@@ -577,7 +635,7 @@ elif [ -f "$MADIS_INSTALL_DIR/admin/main.mko" ]; then
         info "Built WebUI binary."
     else
         warn "Mako compiler not found; WebUI source was installed but admin-bin was not built."
-        warn "Install Mako 0.4.15 or set MADIS_MAKO_BIN, then build admin/main.mko."
+        warn "Install Mako 0.4.16 or set MADIS_MAKO_BIN, then build admin/main.mko."
     fi
 fi
 
@@ -610,10 +668,39 @@ SIP_REGION=default
 # Workers
 SIP_UDP_WORKERS=1
 SIP_TCP_WORKERS=1
+# Optional fixed Mako crew/kick pool; 0 keeps one pthread per kicked listener.
+SIP_SCHED_WORKERS=0
 
 # Auth
 SIP_DIGEST_ALGORITHM=md5
 SIP_ADMIN_TOKEN=${MADIS_ADMIN_TOKEN}
+SIP_CARRIER_API_TOKEN=${MADIS_CARRIER_API_TOKEN}
+
+# Billing / online charging. Outbox is local and non-blocking for SIP.
+SIP_BILLING_MODE=outbox
+SIP_BILLING_TENANT=default
+# SIP_BILLING_MODE=preauth is fail-closed and opt-in.
+# SIP_CHARGING_PROTOCOL=http
+# SIP_CHARGING_URL=
+# SIP_CHARGING_FAIL_OPEN=0
+# SIP_CHARGING_TIMEOUT_MS=150
+# Native RFC 8506 Diameter CC over verified TLS/TCP (or explicitly protected SCTP):
+# SIP_DIAMETER_HOST=
+# SIP_DIAMETER_PORT=5658  # 3868 for explicitly enabled plaintext
+# SIP_DIAMETER_TLS=1
+# SIP_DIAMETER_TRANSPORT=tcp  # sctp requires platform SCTP and external protection
+# SIP_DIAMETER_ALLOW_PLAINTEXT=0
+# SIP_DIAMETER_PERSISTENT=1  # serialized verified-TLS peer reuse
+# SIP_DIAMETER_CA=
+# SIP_DIAMETER_CLIENT_CERT=
+# SIP_DIAMETER_CLIENT_KEY=
+# SIP_DIAMETER_ORIGIN_HOST=madis.localhost
+# SIP_DIAMETER_ORIGIN_REALM=localhost
+# SIP_DIAMETER_DEST_REALM=localhost
+# SIP_IMS_CX=1              # fail-closed Cx UAR/SAR on REGISTER
+# SIP_IMS_VISITED_NETWORK=
+# SIP_IMS_SERVER_NAME=
+# SIP_IMS_DEST_HOST=
 
 # Standalone Mako SIP WebUI
 ADMIN_BIND=127.0.0.1
@@ -777,6 +864,7 @@ echo "  DB password: $MADIS_DB_PASS"
 echo "  DB URL:      postgres://${MADIS_DB_USER}:****@127.0.0.1:5432/${MADIS_DB_NAME}"
 echo ""
 echo "  Admin token: $MADIS_ADMIN_TOKEN"
+echo "  Carrier API token: $MADIS_CARRIER_API_TOKEN"
 echo "  (used as: Authorization: Bearer <token>)"
 echo "  WebUI user:  admin"
 echo "  WebUI pass:  $MADIS_ADMIN_PASSWORD"
@@ -786,9 +874,9 @@ echo "    $MADIS_CONF_DIR/madis.env"
 echo ""
 echo "  ── Next steps ─────────────────────────"
 echo ""
-echo "  Build from source (requires Mako 0.4.15):"
+echo "  Build from source (requires Mako 0.4.16):"
 echo "    cd $MADIS_INSTALL_DIR"
-echo "    MAKO_RUNTIME=/path/to/mako/runtime mako build --release --strip --no-incremental main.mko -o madis"
+echo "    MAKO_BIN=mako MAKO_RUNTIME=/path/to/mako/runtime ./scripts/build-native.sh main.mko madis"
 echo ""
 echo "  Start the service:"
 echo "    systemctl start madis"

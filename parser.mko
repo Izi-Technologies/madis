@@ -164,7 +164,7 @@ fn sip_cseq_valid(msg: string, is_response: int) -> int {
     while i < len(cseq) && (int(cseq[i]) == 32 || int(cseq[i]) == 9) { i = i + 1 }
     if i != len(cseq) { return 0 }
     if is_response == 0 {
-        let method = sip_method(msg)
+        let method = madis_method(msg)
         // SIP method names are case-sensitive.  A lowercase CSeq method is
         // not equivalent to the request-line method.
         if not str_eq(method, cseq_method) { return 0 }
@@ -202,15 +202,19 @@ fn sip_build_transaction_request(msg: string, method: string) -> string {
     if first_end < 0 { return "" }
     let first_space = str_index(msg[0:first_end], " ")
     if first_space < 0 { return "" }
-    let header_block = msg[0:header_end]
-    let lines = str_split(header_block, "\r\n")
-    if len(lines) < 2 { return "" }
     let mut out = method + msg[first_space:first_end] + "\r\n"
     let cseq_no = sip_cseq_number(msg)
     if len(cseq_no) == 0 { return "" }
-    let mut i = 1
-    while i < len(lines) {
-        let line = lines[i]
+    // header_end points at the CRLF that terminates the final header line;
+    // include that delimiter in the scan window so the final line is seen.
+    let scan_end = header_end + 2
+    let mut line_start = first_end + 2
+    while line_start < scan_end {
+        let rel_end = str_index(msg[line_start:scan_end], "\r\n")
+        if rel_end < 0 { return "" }
+        let line_end = line_start + rel_end
+        if line_end == line_start { break }
+        let line = msg[line_start:line_end]
         let low = str_to_lower(line)
         if str_has_prefix(low, "cseq:") {
             out = out + "CSeq: " + cseq_no + " " + method + "\r\n"
@@ -220,7 +224,7 @@ fn sip_build_transaction_request(msg: string, method: string) -> string {
         } else {
             out = out + line + "\r\n"
         }
-        i = i + 1
+        line_start = line_end + 2
     }
     return out + "\r\n"
 }
@@ -238,6 +242,40 @@ fn sip_hex_char(c: int) -> int {
     if c >= 65 && c <= 70 { return 1 }
     if c >= 97 && c <= 102 { return 1 }
     return 0
+}
+
+fn sip_range_eq_ci(text: string, start: int, end: int, literal: string) -> int {
+    if start < 0 || end < start || end - start != len(literal) { return 0 }
+    let mut i = 0
+    while i < len(literal) {
+        let a = int(text[start + i])
+        let b = int(literal[i])
+        let aa = if a >= 65 && a <= 90 { a + 32 } else { a }
+        let bb = if b >= 65 && b <= 90 { b + 32 } else { b }
+        if aa != bb { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn sip_range_int(text: string, start: int, end: int) -> int {
+    if start < 0 || end <= start || end > len(text) { return -1 }
+    let mut value = 0
+    let mut i = start
+    while i < end {
+        let c = int(text[i])
+        if c < 48 || c > 57 { return -1 }
+        value = value * 10 + c - 48
+        if value > 2147483647 { return -1 }
+        i = i + 1
+    }
+    return value
+}
+
+fn sip_uri_port_range_valid(text: string, start: int, end: int) -> int {
+    let value = sip_range_int(text, start, end)
+    if value <= 0 || value > 65535 { return 0 }
+    return 1
 }
 
 fn sip_uri_percent_valid(value: string) -> int {
@@ -361,50 +399,93 @@ fn sip_uri_syntax_valid(uri: string) -> int {
         let param_end = if question >= 0 && question > semi { question } else { len(rest) }
         let param_text = rest[semi + 1:param_end]
         if len(param_text) == 0 { return 0 }
-        let params = str_split(param_text, ";")
-        let mut pi = 0
-        while pi < len(params) {
-            let param = params[pi]
-            let eq = str_index(param, "=")
-            let pname = if eq >= 0 { param[0:eq] } else { param }
-            if len(pname) == 0 { return 0 }
-            let mut ni = 0
-            while ni < len(pname) {
-                if sip_token_char(int(pname[ni])) == 0 { return 0 }
-                ni = ni + 1
-            }
-            if eq >= 0 && sip_uri_component_valid(param[eq + 1:]) == 0 { return 0 }
-            pi = pi + 1
-        }
+        if sip_uri_params_valid(param_text) == 0 { return 0 }
     }
     if question >= 0 {
         let query = rest[question + 1:]
         if len(query) == 0 { return 0 }
-        let headers = str_split(query, "&")
-        let mut hi = 0
-        while hi < len(headers) {
-            let header = headers[hi]
-            let eq = str_index(header, "=")
-            if eq <= 0 { return 0 }
-            let hname = header[0:eq]
-            let mut ni = 0
-            while ni < len(hname) {
-                if sip_token_char(int(hname[ni])) == 0 { return 0 }
-                ni = ni + 1
-            }
-            if sip_uri_component_valid(header[eq + 1:]) == 0 { return 0 }
-            hi = hi + 1
+        if sip_uri_query_valid(query) == 0 { return 0 }
+    }
+    return 1
+}
+
+fn sip_uri_range_component_valid(text: string, start: int, end: int) -> int {
+    if start < 0 || end <= start || end > len(text) { return 0 }
+    let mut i = start
+    while i < end {
+        let c = int(text[i])
+        if c == 37 {
+            if i + 2 >= end || sip_hex_char(int(text[i + 1])) == 0 || sip_hex_char(int(text[i + 2])) == 0 { return 0 }
+            i = i + 3
+        } else {
+            if c == 32 || c == 9 || c == 13 || c == 10 || c == 60 || c == 62 { return 0 }
+            i = i + 1
         }
     }
     return 1
 }
 
+fn sip_uri_range_token_valid(text: string, start: int, end: int) -> int {
+    if start < 0 || end <= start || end > len(text) { return 0 }
+    let mut i = start
+    while i < end {
+        if sip_token_char(int(text[i])) == 0 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+// Scan URI parameter pairs without allocating a split array. This matters on
+// the ingress path, where a hostile peer can repeat validation thousands of
+// times per second.
+fn sip_uri_params_valid(text: string) -> int {
+    let mut valid = 1
+    let mut start = 0
+    while start < len(text) && valid == 1 {
+        let mut end = start
+        while end < len(text) && int(text[end]) != 59 { end = end + 1 }
+        let mut eq = -1
+        let mut i = start
+        while i < end {
+            if int(text[i]) == 61 { eq = i; break }
+            i = i + 1
+        }
+        let name_end = if eq >= 0 { eq } else { end }
+        if sip_uri_range_token_valid(text, start, name_end) == 0 { valid = 0 }
+        if valid == 1 && eq >= 0 && sip_uri_range_component_valid(text, eq + 1, end) == 0 { valid = 0 }
+        if end >= len(text) { break }
+        start = end + 1
+        if start >= len(text) { valid = 0 }
+    }
+    return valid
+}
+
+fn sip_uri_query_valid(text: string) -> int {
+    let mut valid = 1
+    let mut start = 0
+    while start < len(text) && valid == 1 {
+        let mut end = start
+        while end < len(text) && int(text[end]) != 38 { end = end + 1 }
+        let mut eq = -1
+        let mut i = start
+        while i < end {
+            if int(text[i]) == 61 { eq = i; break }
+            i = i + 1
+        }
+        if eq <= start || sip_uri_range_token_valid(text, start, eq) == 0 { valid = 0 }
+        if valid == 1 && sip_uri_range_component_valid(text, eq + 1, end) == 0 { valid = 0 }
+        if end >= len(text) { break }
+        start = end + 1
+        if start >= len(text) { valid = 0 }
+    }
+    return valid
+}
+
 fn sip_request_uri_valid(msg: string) -> int {
-    let method = sip_method(msg)
     let uri = sip_request_uri(msg)
     if len(uri) == 0 { return 0 }
     if str_eq(uri, "*") {
-        if str_eq(str_to_lower(method), "options") { return 1 }
+        if str_eq(str_to_upper(madis_method(msg)), "OPTIONS") { return 1 }
         return 0
     }
     return sip_uri_syntax_valid(uri)
@@ -428,49 +509,59 @@ fn sip_via_valid(msg: string) -> int {
         ti = ti + 1
     }
     let rest = str_trim_space(top[space + 1:])
-    let parts = str_split(rest, ";")
-    if len(parts) == 0 { return 0 }
-    let hostport = str_trim_space(parts[0])
-    if sip_hostport_valid(hostport) == 0 { return 0 }
+    let valid = sip_via_params_valid(rest)
+    return valid
+}
+
+fn sip_via_params_valid(rest: string) -> int {
+    let mut valid = 1
     let mut branch = ""
-    let mut pi = 1
-    while pi < len(parts) {
-        let param = str_trim_space(parts[pi])
-        if len(param) == 0 { return 0 }
-        let eq = str_index(param, "=")
-        let pname = if eq >= 0 { str_trim_space(param[0:eq]) } else { param }
-        if len(pname) == 0 { return 0 }
-        let mut ni = 0
-        while ni < len(pname) {
-            if sip_token_char(int(pname[ni])) == 0 { return 0 }
-            ni = ni + 1
+    let first_end = str_index(rest, ";")
+    if first_end < 0 { return 0 }
+    let mut start = first_end + 1
+    while start < len(rest) && valid == 1 {
+        let mut end = start
+        while end < len(rest) && int(rest[end]) != 59 { end = end + 1 }
+        let mut left = start
+        while left < end && (int(rest[left]) == 32 || int(rest[left]) == 9) { left = left + 1 }
+        let mut right = end
+        while right > left && (int(rest[right - 1]) == 32 || int(rest[right - 1]) == 9) { right = right - 1 }
+        let mut eq = -1
+        let mut i = left
+        while i < right {
+            if int(rest[i]) == 61 { eq = i; break }
+            i = i + 1
         }
-        if eq >= 0 {
-            let pvalue = str_trim_space(param[eq + 1:])
-            if len(pvalue) == 0 || sip_uri_component_valid(pvalue) == 0 { return 0 }
-            let pname_low = str_to_lower(pname)
-            if str_eq(pname_low, "branch") { branch = pvalue }
-            if str_eq(pname_low, "rport") && sip_uri_port_valid(pvalue) == 0 { return 0 }
-            if str_eq(pname_low, "ttl") {
-                match parse_int(pvalue) {
-                    Ok(v) => { if v < 0 || v > 255 { return 0 } }
-                    Err(_) => { return 0 }
-                }
+        let mut name_end = if eq >= 0 { eq } else { right }
+        while name_end > left && (int(rest[name_end - 1]) == 32 || int(rest[name_end - 1]) == 9) { name_end = name_end - 1 }
+        if sip_uri_range_token_valid(rest, left, name_end) == 0 { valid = 0 }
+        let name_is_branch = sip_range_eq_ci(rest, left, name_end, "branch")
+        let name_is_rport = sip_range_eq_ci(rest, left, name_end, "rport")
+        let name_is_ttl = sip_range_eq_ci(rest, left, name_end, "ttl")
+        let name_is_received = sip_range_eq_ci(rest, left, name_end, "received")
+        let name_is_maddr = sip_range_eq_ci(rest, left, name_end, "maddr")
+        if valid == 1 && eq >= 0 {
+            let mut value_start = eq + 1
+            while value_start < right && (int(rest[value_start]) == 32 || int(rest[value_start]) == 9) { value_start = value_start + 1 }
+            if value_start >= right || sip_uri_range_component_valid(rest, value_start, right) == 0 { valid = 0 }
+            if name_is_branch == 1 { branch = str_trim_space(rest[value_start:right]) }
+            if name_is_rport == 1 && sip_uri_port_range_valid(rest, value_start, right) == 0 { valid = 0 }
+            if name_is_ttl == 1 {
+                let ttl = sip_range_int(rest, value_start, right)
+                if ttl < 0 || ttl > 255 { valid = 0 }
             }
-            if str_eq(pname_low, "received") || str_eq(pname_low, "maddr") {
-                if sip_hostport_valid(pvalue) == 0 { return 0 }
-            }
-        } else if str_eq(str_to_lower(pname), "branch") {
-            return 0
+            if (name_is_received == 1 || name_is_maddr == 1) && sip_hostport_valid(str_trim_space(rest[value_start:right])) == 0 { valid = 0 }
+        } else if name_is_branch == 1 {
+            valid = 0
         }
-        pi = pi + 1
+        if end >= len(rest) { break }
+        start = end + 1
     }
-    if len(branch) > 0 {
-        // RFC 3261's magic cookie must be followed by a branch identifier.
+    if valid == 1 && len(branch) > 0 {
         let branch_low = str_to_lower(branch)
-        if len(branch) <= 7 || not str_has_prefix(branch_low, "z9hg4bk") { return 0 }
+        if len(branch) <= 7 || not str_has_prefix(branch_low, "z9hg4bk") { valid = 0 }
     }
-    return 1
+    return valid
 }
 
 fn sip_call_id_valid(value: string) -> int {
@@ -504,14 +595,127 @@ fn sip_name_addr_valid(value: string) -> int {
 // Cheap ingress validation before any DB lookup or header allocation. Stream
 // workers already frame messages, but UDP and WebSocket input need the same
 // limits and control-character checks.
+fn sip_ingress_header_safe(msg: string, n: int) -> int {
+    if n < 1 || n > 1048576 { return 0 }
+    let mut i = 0
+    while i + 3 < n {
+        if int(msg[i]) == 13 && int(msg[i + 1]) == 10 && int(msg[i + 2]) == 13 && int(msg[i + 3]) == 10 {
+            return 1
+        }
+        let c = int(msg[i])
+        if c == 0 || c == 127 || (c < 32 && c != 9 && c != 10 && c != 13) { return 0 }
+        i = i + 1
+    }
+    return 0
+}
+
+fn madis_method(msg: string) -> string {
+    let end = str_index(msg, " ")
+    if end <= 0 { return "" }
+    return msg[0:end]
+}
+
+fn madis_header_name_matches(msg: string, start: int, width: int, target: string) -> int {
+    if width == len(target) {
+        let mut i = 0
+        while i < width {
+            let mut a = int(msg[start + i])
+            let mut b = int(target[i])
+            if a >= 65 && a <= 90 { a = a + 32 }
+            if b >= 65 && b <= 90 { b = b + 32 }
+            if a != b { return 0 }
+            i = i + 1
+        }
+        return 1
+    }
+    if width != 1 { return 0 }
+    let c = int(msg[start])
+    if str_eq(target, "From") && (c == 70 || c == 102) { return 1 }
+    if str_eq(target, "To") && (c == 84 || c == 116) { return 1 }
+    if str_eq(target, "Call-ID") && (c == 73 || c == 105) { return 1 }
+    if str_eq(target, "Content-Length") && (c == 76 || c == 108) { return 1 }
+    return 0
+}
+
+fn madis_header_count(msg: string, target: string) -> int {
+    let mut header_end = str_index(msg, "\r\n\r\n")
+    if header_end >= 0 { header_end = header_end + 2 }
+    let first_crlf = str_index(msg, "\r\n")
+    if header_end <= first_crlf || first_crlf < 0 { return 0 }
+    let mut line_start = first_crlf + 2
+    let mut count = 0
+    while line_start < header_end {
+        let mut line_end = line_start
+        while line_end < header_end && not (int(msg[line_end]) == 13 && int(msg[line_end + 1]) == 10) {
+            line_end = line_end + 1
+        }
+        if line_end >= header_end { return count }
+        if int(msg[line_start]) != 32 && int(msg[line_start]) != 9 {
+            let mut colon = line_start
+            while colon < line_end && int(msg[colon]) != 58 { colon = colon + 1 }
+            if colon < line_end && madis_header_name_matches(msg, line_start, colon - line_start, target) == 1 {
+                count = count + 1
+            }
+        }
+        line_start = line_end + 2
+    }
+    return count
+}
+
+// Validate header-line framing and token syntax without building a line array.
+fn sip_header_block_valid(msg: string, header_end: int) -> int {
+    let first_crlf = str_index(msg, "\r\n")
+    if first_crlf < 0 || first_crlf >= header_end { return 0 }
+    let mut line_start = first_crlf + 2
+    let mut header_count = 1
+    let mut have_header = 0
+    while line_start < header_end {
+        let mut line_end = line_start
+        while line_end < header_end {
+            if int(msg[line_end]) == 13 && int(msg[line_end + 1]) == 10 { break }
+            line_end = line_end + 1
+        }
+        if line_end >= header_end || int(msg[line_end]) != 13 || int(msg[line_end + 1]) != 10 { return 0 }
+        let width = line_end - line_start
+        if width <= 0 || width > 8192 { return 0 }
+        let first = int(msg[line_start])
+        if first == 32 || first == 9 {
+            if have_header == 0 { return 0 }
+        } else {
+            let mut colon = -1
+            let mut i = line_start
+            while i < line_end {
+                if int(msg[i]) == 58 { colon = i; break }
+                i = i + 1
+            }
+            if colon <= line_start { return 0 }
+            let name_width = colon - line_start
+            i = line_start
+            while i < colon {
+                if sip_token_char(int(msg[i])) == 0 { return 0 }
+                i = i + 1
+            }
+            if name_width <= 0 { return 0 }
+            have_header = 1
+        }
+        header_count = header_count + 1
+        line_start = line_end + 2
+    }
+    if line_start != header_end || header_count < 2 || header_count > 129 { return 0 }
+    return 1
+}
+
 fn sip_validate_message(msg: string, n: int) -> int {
     if n < 12 || n > 65535 { return 0 }
+    if sip_ingress_header_safe(msg, n) == 0 { return 0 }
     if sip_ok(msg) == 0 { return 0 }
     let mut header_end = -1
     let mut i = 0
     while i + 3 < n {
         if int(msg[i]) == 13 && int(msg[i + 1]) == 10 && int(msg[i + 2]) == 13 && int(msg[i + 3]) == 10 {
-            header_end = i
+            // Include the terminating CRLF of the final header line. The
+            // validation helpers use this as an exclusive line boundary.
+            header_end = i + 2
             break
         }
         i = i + 1
@@ -519,67 +723,31 @@ fn sip_validate_message(msg: string, n: int) -> int {
     if header_end < 0 { return 0 }
 
     let response = sip_is_response(msg)
-    if not str_eq(sip_version(msg), "SIP/2.0") { return 0 }
+    let version = sip_version(msg)
+    if not str_eq(version, "SIP/2.0") { return 0 }
     if response == 1 {
         let code = sip_status_code(msg)
         if code < 100 || code > 699 { return 0 }
     } else {
         if sip_request_uri_valid(msg) == 0 { return 0 }
     }
-    if len(sip_header(msg, "Via")) == 0 { return 0 }
-    if len(sip_header(msg, "From")) == 0 { return 0 }
-    if len(sip_header(msg, "To")) == 0 { return 0 }
-    if len(sip_header(msg, "Call-ID")) == 0 { return 0 }
-    if sip_name_addr_valid(sip_header(msg, "From")) == 0 { return 0 }
-    if sip_name_addr_valid(sip_header(msg, "To")) == 0 { return 0 }
-    if sip_call_id_valid(sip_header(msg, "Call-ID")) == 0 { return 0 }
+    let via = sip_header(msg, "Via")
+    let from = sip_header(msg, "From")
+    let to = sip_header(msg, "To")
+    let call_id = sip_header(msg, "Call-ID")
+    if len(via) == 0 || len(from) == 0 || len(to) == 0 || len(call_id) == 0 { return 0 }
+    if sip_name_addr_valid(from) == 0 { return 0 }
+    if sip_name_addr_valid(to) == 0 { return 0 }
+    if sip_call_id_valid(call_id) == 0 { return 0 }
     if sip_cseq_valid(msg, response) == 0 { return 0 }
     if sip_via_valid(msg) == 0 { return 0 }
-
-    let header_block = msg[0:header_end]
-    let lines = str_split(header_block, "\r\n")
-    if len(lines) < 2 || len(lines) > 129 { return 0 }
-    i = 1
-    let mut from_count = 0
-    let mut to_count = 0
-    let mut call_id_count = 0
-    let mut cseq_count = 0
-    let mut max_forwards_count = 0
-    let mut have_header = 0
-    while i < len(lines) {
-        let header_line = lines[i]
-        if len(header_line) > 8192 { return 0 }
-        if len(header_line) > 0 {
-            let first_char = int(header_line[0])
-            if first_char == 32 || first_char == 9 {
-                if have_header == 0 { return 0 }
-            } else {
-                let colon = str_index(header_line, ":")
-                if colon <= 0 { return 0 }
-                let name = header_line[0:colon]
-                let mut ni = 0
-                while ni < len(name) {
-                    let nc = int(name[ni])
-                    if sip_token_char(nc) == 0 { return 0 }
-                    ni = ni + 1
-                }
-                let low_name = str_to_lower(name)
-                if str_eq(low_name, "from") || str_eq(low_name, "f") { from_count = from_count + 1 }
-                if str_eq(low_name, "to") || str_eq(low_name, "t") { to_count = to_count + 1 }
-                if str_eq(low_name, "call-id") || str_eq(low_name, "i") { call_id_count = call_id_count + 1 }
-                if str_eq(low_name, "cseq") { cseq_count = cseq_count + 1 }
-                if str_eq(low_name, "max-forwards") { max_forwards_count = max_forwards_count + 1 }
-                have_header = 1
-            }
-        }
-        i = i + 1
-    }
 
     // These are singleton headers in a SIP message.  Accepting duplicates
     // would make different stacks validate different identity/transaction
     // contexts because the platform accessor returns only one occurrence.
-    if from_count != 1 || to_count != 1 || call_id_count != 1 || cseq_count != 1 { return 0 }
-    if max_forwards_count > 1 { return 0 }
+    if sip_header_block_valid(msg, header_end) == 0 { return 0 }
+    if madis_header_count(msg, "From") != 1 || madis_header_count(msg, "To") != 1 || madis_header_count(msg, "Call-ID") != 1 || madis_header_count(msg, "CSeq") != 1 { return 0 }
+    if madis_header_count(msg, "Max-Forwards") > 1 { return 0 }
 
     // Reject NUL and other C0 characters in the start line/header area. HTAB
     // is valid horizontal whitespace; the body is left to SDP/RTP handling.
@@ -590,31 +758,23 @@ fn sip_validate_message(msg: string, n: int) -> int {
         i = i + 1
     }
     let body = sip_body(msg)
+    let content_length_count = madis_header_count(msg, "Content-Length")
+    if content_length_count == 0 { return 0 }
     let mut declared_length = -1
-    let mut content_length_count = 0
-    i = 1
-    while i < len(lines) {
-        let low_line = str_to_lower(lines[i])
-        let mut is_length = 0
-        if str_has_prefix(low_line, "content-length:") || str_has_prefix(low_line, "l:") { is_length = 1 }
-        if is_length == 1 {
-            let colon = str_index(lines[i], ":")
-            if colon < 0 { return 0 }
-            let raw_length = str_trim_space(lines[i][colon + 1:])
-            if len(raw_length) == 0 { return 0 }
-            let parsed_length = parse_int(raw_length)
-            match parsed_length {
-                Ok(v) => {
-                    if v < 0 || v > 1048576 { return 0 }
-                    if declared_length >= 0 && declared_length != v { return 0 }
-                    declared_length = v
-                    content_length_count = content_length_count + 1
-                }
-                Err(_) => { return 0 }
+    let mut content_i = 0
+    while content_i < content_length_count {
+        let raw_length = str_trim_space(sip_header_n(msg, "Content-Length", content_i))
+        if len(raw_length) == 0 { return 0 }
+        match parse_int(raw_length) {
+            Ok(v) => {
+                if v < 0 || v > 1048576 { return 0 }
+                if declared_length >= 0 && declared_length != v { return 0 }
+                declared_length = v
             }
+            Err(_) => { return 0 }
         }
-        i = i + 1
+        content_i = content_i + 1
     }
-    if content_length_count == 0 || declared_length != len(body) { return 0 }
+    if declared_length != len(body) { return 0 }
     return 1
 }

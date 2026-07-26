@@ -1,0 +1,20 @@
+-module(madis_carrier).
+-export([capabilities/2, pending_events/3, publish/3, ack/3]).
+
+request(Base, Token, Method, Path, Body) ->
+    application:ensure_all_started(inets),
+    Headers = [{"Authorization", "Bearer " ++ Token}, {"Accept", "application/json"}],
+    Content = case Body of none -> []; Json -> [{"content-type", "application/json"}, {"content-length", integer_to_list(byte_size(Json))}] end,
+    true = (Body =:= none orelse byte_size(Body) =< 65536),
+    Req = case Body of none -> {Base ++ Path, Headers}; Json -> {Base ++ Path, Headers ++ Content, "application/json", Json} end,
+    case httpc:request(Method, Req, [{timeout, 2000}], []) of
+        {ok, {{_, Code, _}, _, Response}} when Code >= 200, Code < 300 -> Response;
+        {ok, {{_, Code, _}, _, _}} -> exit({madis_http_error, Code});
+        Error -> exit({madis_transport_error, Error})
+    end.
+
+capabilities(Base, Token) -> request(Base, Token, get, "/api/v1/capabilities", none).
+pending_events(Base, Token, Limit) ->
+    N = min(max(Limit, 1), 100), request(Base, Token, get, "/api/v1/billing/events?limit=" ++ integer_to_list(N), none).
+publish(Base, Token, Json) -> request(Base, Token, post, "/api/v1/billing/events", Json).
+ack(Base, Token, EventId) -> request(Base, Token, post, "/api/v1/billing/events/ack?event_id=" ++ uri_string:percent_encode(EventId, uri_string:urlchar_reserved()), none).

@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package madis.carrier.v1;
+
+import "google/protobuf/struct.proto";
+
+message BillingEvent {
+  string schema = 1;
+  string event_id = 2;
+  string event_type = 3;
+  string tenant_id = 4;
+  string session_id = 5;
+  google.protobuf.Struct data = 6;
+  google.protobuf.Struct extensions = 7;
+}
+
+message PublishBillingEventRequest { BillingEvent event = 1; }
+message PublishBillingEventResponse { bool accepted = 1; string event_id = 2; }
+message PendingEventsRequest { uint32 limit = 1; }
+message PendingEventsResponse { repeated BillingEvent events = 1; }
+message AckEventRequest { string event_id = 1; }
+message AckEventResponse { bool acknowledged = 1; }
+
+message ChargingRequest {
+  string schema = 1;
+  string event_id = 2;
+  string tenant_id = 3;
+  string session_id = 4;
+  string cc_request_type = 5;
+  uint32 cc_request_number = 6;
+  google.protobuf.Struct requested_service_unit = 7;
+  google.protobuf.Struct extensions = 8;
+}
+
+message ChargingResponse {
+  string decision = 1;
+  string reservation_id = 2;
+  google.protobuf.Struct granted_service_unit = 3;
+  string valid_until = 4;
+  string final_unit_action = 5;
+  google.protobuf.Struct extensions = 6;
+}
+
+service CarrierEvents {
+  rpc PublishBillingEvent(PublishBillingEventRequest) returns (PublishBillingEventResponse);
+  rpc PendingEvents(PendingEventsRequest) returns (PendingEventsResponse);
+  rpc AcknowledgeEvent(AckEventRequest) returns (AckEventResponse);
+  rpc AuthorizeCharging(ChargingRequest) returns (ChargingResponse);
+}
