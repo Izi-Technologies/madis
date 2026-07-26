@@ -34,7 +34,7 @@ the database.
 ## Standalone WebUI
 
 The control-plane UI is built from `admin/main.mko` with Mako 0.4.16 and runs
-as `madis-admin.service`, independently of the SIP worker and without Leba.
+as `madis-admin.service`, independently of the SIP worker.
 Use loopback binding and put nginx or another TLS reverse proxy in front of
 it:
 
@@ -53,6 +53,15 @@ The dashboard sends a live snapshot over WebSocket, falls back to
 seconds across clients. The initial HTML response does not wait on SIP or
 metrics probes. Keep `admin-bin` behind the reverse proxy and do not expose
 the admin listener directly to the public internet.
+
+The same admin process serves the bearer-token machine API at
+`/admin/api/v1/`. `SIP_CARRIER_API_TOKEN` is limited to capabilities, billing
+events, acknowledgements, and CDR reads. `SIP_CONTROL_API_READ_TOKEN` provides
+read-only control status, validation, and policy/resource reads, while
+`SIP_CONTROL_API_TOKEN` also permits routing, dialplan, and allowlisted SIP
+resource writes. The resource API is not a generic SQL or application-database
+interface; security bans are currently list/create-upsert by `source_ip`, while
+the other mutable resource helpers use numeric IDs and revisions.
 
 The installer also provides the `madis` CLI:
 

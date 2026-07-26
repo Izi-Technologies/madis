@@ -1,10 +1,8 @@
 # Testing and release checks
 
-All native builds and CI checks must use Mako **0.4.16** and the matching
-runtime directory. The compiler version and runtime are a pair; do not use a
-0.4.15 binary with the 0.4.16 runtime.
+Madis builds and tests with Mako **0.4.16** and a matching runtime directory. Do not mix a different compiler/runtime pair with generated C.
 
-## Fast local check
+## Local CI
 
 ```sh
 MAKO_BIN=/path/to/mako \
@@ -12,84 +10,63 @@ MAKO_RUNTIME=/path/to/mako/runtime \
   ./scripts/ci.sh
 ```
 
-This runs Mako checks and lint, all ten Mako test files, native SIP and
-WebUI links, and JSON-schema validation. It is the command used by the GitHub
-Actions workflow after it builds the pinned Mako revision.
+The CI script runs:
 
-## Adversarial and wire checks
+- Mako syntax checks and lint for `main.mko` and `admin/main.mko`.
+- All repository Mako test files.
+- Native SIP worker and WebUI links, including the `madis_memory.c` bridge.
+- JSON-schema parsing, shell syntax validation, and Python SDK compilation.
+
+The checks are deterministic contract and regression tests. They do not establish interoperability with every SIP, WebRTC, Diameter, IMS, or SS7 implementation.
+
+## Focused tests
+
+| Test | Coverage |
+| --- | --- |
+| `tests/admin_http_test.mko` | HTTP framing, cookie boundaries, form decoding, and Origin checks. |
+| `tests/adversarial_test.mko` | Malformed headers, framing, injection, limits, status handling, and SIP URI validation. |
+| `tests/app_gateway_test.mko` | Signed application/module commands, header boundaries, SQL-shaped data, and module allowlists. |
+| `tests/auth_test.mko` | Digest parameters, qop, MD5/SHA-256, `-sess`, and bounded attacker caches. |
+| `tests/b2bua_test.mko` | Independent B2BUA legs, dialog translation, cleanup, and header safety. |
+| `tests/carrier_contract_test.mko` | Billing identity/escaping, control API routes, validation, and resource allowlists. |
+| `tests/diameter_codec_test.mko` | Diameter headers, AVPs, grouping, malformed input, Cx/Sh correlation, and credit-control fields. |
+| `tests/proxy_state_test.mko` | Registration, transactions, forks, ACK/CANCEL/BYE, routes, and state limits. |
+| `tests/rfc3261_abnf_test.mko` | Compact headers, quoted values, continuation, Via grammar, and Proxy-Require. |
+| `tests/rfc3263_test.mko` | NAPTR/SRV ordering, transport selection, IPv6 targets, and port validation. |
+
+## Protocol and load gates
+
+The optional gates exercise deployment-dependent behavior beyond the unit/contract tests:
 
 ```sh
 MAKO=/path/to/mako \
 MAKO_RUNTIME_PATH=/path/to/mako/runtime \
   ./bench/rfc_gate.sh
-```
 
-The RFC gate covers the local unit suites, UDP/TCP/TLS/WSS transport framing,
-outbound WSS signaling, trusted TLS and IPv6, deterministic loss/delay/
-duplicate/reorder cases, auth vectors, a generated-style ABNF corpus, and
-seeded SIP fuzzing. `RFC_FULL=1` adds the longer sanitizer/soak work when the
-host has the required external tools.
-
-For memory-safety checks alone:
-
-```sh
 MAKO=/path/to/mako \
 MAKO_RUNTIME_PATH=/path/to/mako/runtime \
   ./bench/sanitizer.sh
 ```
 
-This builds with AddressSanitizer and UndefinedBehaviorSanitizer, then runs
-the transport, WSS, TLS/IPv6, fault, and fuzz matrices. Keep the sanitizer
-gate enabled for changes to parser, transport, transaction, admin, or native
-bridge code.
+The RFC gate covers selected UDP/TCP/TLS/WSS, IPv6, loss/delay/duplicate/reorder, ABNF, and transport behavior. The sanitizer gate builds AddressSanitizer/UndefinedBehaviorSanitizer variants and runs transport, WSS, TLS/IPv6, fault, and fuzz matrices where the host supports them.
 
-## Focused tests
-
-| Test | Focus |
-| --- | --- |
-| `tests/adversarial_test.mko` | Framing, malformed headers, injection, limits, response status. |
-| `tests/auth_test.mko` | Digest parameters, qop, SHA-256, `-sess`, bounded attacker caches. |
-| `tests/carrier_contract_test.mko` | Billing identity/escaping and RFC 8506 request contracts. |
-| `tests/diameter_codec_test.mko` | Diameter headers, AVPs, grouping, malformed input, Cx/Sh correlation. |
-| `tests/proxy_state_test.mko` | Registration, transactions, forks, ACK/CANCEL/BYE, routes, limits. |
-| `tests/rfc3261_abnf_test.mko` | Compact headers, quoted names, continuation, Via, Proxy-Require. |
-| `tests/rfc3263_test.mko` | NAPTR/SRV ordering, transport selection, IPv6 targets and ports. |
-| `tests/admin_http_test.mko` | HTTP framing, cookie boundaries, form decoding, Origin checks. |
-| `tests/app_gateway_test.mko` | Signed application/module commands, header boundaries, SQL-shaped data, and module allowlists. |
-| `tests/b2bua_test.mko` | Independent B2BUA legs, dialog translation, cleanup, and header safety. |
-
-These tests are intentionally independent of a production database and mostly
-exercise deterministic behavior. Wire tests use separate local processes and
-temporary certificates. They do not certify every external SIP, WebRTC,
-Diameter, IMS, or SS7 implementation.
-
-## Benchmarking
-
-The SIPp harness reports completed dialog rate, failures, latency buckets, CPS,
-and concurrency. Use identical host, CPU affinity, SIPp scenario, transport,
-database mode, routing data, and worker settings when comparing Kamailio or
-another proxy. Run the generator on a separate machine when possible.
+For CPS measurements:
 
 ```sh
-RATE=100 CALLS=1000 CONCURRENCY=200 WORKERS=1 ./bench/benchmark.sh
+RATE=100 CALLS=1000 CONCURRENCY=200 WORKERS=1 \
+  ./bench/benchmark.sh
 ```
 
-Sweep rates and concurrency until failures or latency become unacceptable.
-Report p95/p99 setup latency, loss, retransmissions, CPU, RSS, file descriptors,
-and database load along with CPS. A high generator rate is not a successful
-result if calls fail or the generator drops packets. The repository contains
-historical host-specific numbers, not a capacity guarantee.
+Record host CPU, memory, file descriptors, database capacity, network conditions, and exact configuration with every benchmark result. A benchmark result is not a production capacity guarantee.
 
 ## Release checklist
 
-- [ ] `git diff --check` is clean.
-- [ ] Mako 0.4.16 native CI passes.
-- [ ] RFC gate passes with the exact runtime.
-- [ ] Sanitizer and fuzz gates pass for parser/transport/state changes.
-- [ ] Documentation and schemas match the deployed configuration.
-- [ ] TLS/CA, bearer tokens, database permissions, firewall, and backups are
-      reviewed for the target environment.
-- [ ] A real OPTIONS/REGISTER and one representative INVITE path work in a
-      staging environment.
-- [ ] External SIP, Diameter/IMS, media, and SS7 interop checks are recorded
-      separately from local test results.
+- [ ] `scripts/ci.sh` passes with Mako 0.4.16.
+- [ ] API schemas and documentation match the deployed configuration and token scopes.
+- [ ] TLS certificates, CA bundles, bearer-token rotation, database permissions, firewall rules, and backups are reviewed.
+- [ ] A real OPTIONS/REGISTER and representative INVITE path work in staging.
+- [ ] Billing event deduplication and acknowledgement recovery have been exercised.
+- [ ] Control API read/write separation and revision-conflict handling have been exercised.
+- [ ] Application/module timeout, signature, allowlist, and failure-mode behavior has been tested if enabled.
+- [ ] External SIP, Diameter/IMS, media, and SS7 interoperability checks are recorded separately.
+- [ ] Upgrade and database restore procedures have been rehearsed.

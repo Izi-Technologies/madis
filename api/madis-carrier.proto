@@ -137,6 +137,8 @@ message DeleteDialplanResponse { bool deleted = 1; }
 
 // Generic control resources are intentionally bounded to Madis-owned SIP
 // state. Application billing and tenant records stay in the caller's database.
+// security-bans is keyed by source_ip and supports list/create-upsert in the
+// current HTTP implementation; the numeric id helpers do not apply to it.
 message ControlResourceDocument {
   string resource = 1;
   int32 id = 2;
