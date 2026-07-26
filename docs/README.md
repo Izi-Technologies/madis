@@ -11,6 +11,7 @@ system.
 | Which environment variables matter? | [`configuration.md`](configuration.md) |
 | How do I install, operate, upgrade, or troubleshoot it? | [`operations.md`](operations.md) |
 | What do the test and benchmark commands prove? | [`testing.md`](testing.md) |
+| How do application teams integrate from Python, Go, or JavaScript? | [`integrations.md`](integrations.md) |
 | What is the carrier API and how is billing acknowledged? | [`../api/README.md`](../api/README.md) |
 | What Diameter/IMS interfaces are present? | [`../api/diameter.md`](../api/diameter.md), [`../api/ims-diameter.md`](../api/ims-diameter.md) |
 | What does the WebUI expose? | [`../admin/README.md`](../admin/README.md) |

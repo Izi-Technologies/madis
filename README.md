@@ -40,6 +40,8 @@ The longer guides are in [`docs/`](docs/):
 [`configuration.md`](docs/configuration.md) lists runtime settings,
 [`operations.md`](docs/operations.md) covers installation and upgrades, and
 [`testing.md`](docs/testing.md) describes the validation and benchmark gates.
+[`integrations.md`](docs/integrations.md) shows how Python, Go, and
+JavaScript/TypeScript services use the carrier API.
 [`PRODUCTION.md`](PRODUCTION.md) and [`RFC_COMPLIANCE.md`](RFC_COMPLIANCE.md)
 are the concise production and protocol-status references.
 

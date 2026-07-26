@@ -9,6 +9,12 @@ Madis exposes a small, versioned machine API beside the WebUI:
 | `POST /admin/api/v1/billing/events` | Publish a carrier-defined JSON event |
 | `POST /admin/api/v1/billing/events/ack?event_id=...` | Acknowledge after the consumer commits it |
 
+For application-team integration patterns, see
+[`../docs/integrations.md`](../docs/integrations.md). The reference clients
+under [`../sdk/`](../sdk/) are source examples, not published packages. They
+can be copied or vendored into Python, Go, and JavaScript services, or replaced
+with the HTTP client already used by a framework.
+
 Machine requests use `Authorization: Bearer $SIP_CARRIER_API_TOKEN`. The
 installer generates a separate token from the WebUI token. Put the API behind
 TLS/mTLS or a private network; the standalone Mako listener is normally bound
@@ -16,6 +22,10 @@ to loopback.
 
 The route is served by the standalone WebUI process, so the base URL is the
 WebUI's `ADMIN_BIND`/`ADMIN_PORT`, not the SIP worker's `/healthz` listener.
+The SDK examples use a base URL ending in `/admin`, for example
+`https://madis.example/admin`; their methods append `/api/v1/...` to that
+base. If you use raw HTTP, the equivalent full path is
+`https://madis.example/admin/api/v1/...`.
 Missing or invalid bearer credentials return `401`. A missing database returns
 `503`; malformed JSON, content type, or event identifiers return `400`.
 
