@@ -33,6 +33,7 @@ GET  /api/v1/capabilities
 GET  /api/v1/billing/events?limit=100
 POST /api/v1/billing/events
 POST /api/v1/billing/events/ack?event_id=...
+GET  /api/v1/billing/cdr?limit=100&call_id=...
 ```
 
 The full public path is therefore, for example,
@@ -62,6 +63,12 @@ GET  /api/v1/control/routing-rules?limit=100
 POST /api/v1/control/routing-rules
 POST /api/v1/control/routing-rules/{id}/enable
 POST /api/v1/control/routing-rules/{id}/disable
+GET  /api/v1/control/dialplans?limit=100
+POST /api/v1/control/dialplans
+PUT  /api/v1/control/dialplans/{id}
+DELETE /api/v1/control/dialplans/{id}
+POST /api/v1/control/dialplans/{id}/enable
+POST /api/v1/control/dialplans/{id}/disable
 ```
 
 For example, a carrier application can submit
@@ -72,6 +79,21 @@ worker has `SIP_B2BUA_MODE=enabled`. A control request changes database policy;
 it does not inject Mako, SQL, shell commands, or arbitrary language code into
 the SIP worker. The worker continues to own SIP transaction state and applies
 the rule on the next matching call.
+
+Dialplans use the same control token. A replacement contains
+`match_prefix`, `callee_action`, and `direction`, with optional
+`caller_action`, `priority`, and `description`. Actions are limited to
+`strip:N`, `prepend:PREFIX`, `replace:OLD:NEW`, `set:NUMBER`, `e164:CC`,
+`strip_plus`, and `add_plus`; semicolon-separated actions run in order. Use
+enable/disable for reversible changes and delete only when the rule is no
+longer needed. The worker reads the committed rule on the next call.
+
+CDRs are read with the carrier token through `/billing/cdr`. The endpoint is
+bounded to 100 records per request and supports an exact `call_id` lookup. It
+is a read surface for external rating, invoicing, reconciliation, and
+reporting; it does not mark a call billed or acknowledge an outbox event. The
+application owns those billing transactions and should use the event outbox
+for at-least-once delivery.
 
 The same HTTP contract is used by every supported language. In Python:
 
@@ -226,12 +248,12 @@ rating or invoice has completed.
 | Bearer-token storage and rotation | Yes | Token authentication |
 | Event schema and validation | Yes, using the supplied envelope/schema | Bounded JSON persistence |
 | Idempotency and retry policy | Yes | Idempotent event insertion by `event_id` |
-| Billing/rating/invoice transaction | Yes | Outbox and online-charging integration boundaries |
+| Billing/rating/invoice transaction | Yes | CDR read surface, outbox, and online-charging integration boundaries |
 | Tenant authorization | Yes | Tenant fields and authenticated API boundary |
 | Long-running jobs and reconciliation | Yes | Pending-event and acknowledgement flow |
 
 For OpenAPI-based code generation, use
 [`../api/openapi.yaml`](../api/openapi.yaml) as a starting contract and review
 generated clients before deployment. It describes the carrier API, not the
-full SIP/WebUI surface. The API covers the endpoints listed in
-their existing framework conventions, databases, queues, and observability.
+full SIP/WebUI surface. Applications still own their framework conventions,
+databases, queues, and observability.

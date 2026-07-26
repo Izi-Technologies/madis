@@ -33,6 +33,12 @@ class MadisCarrier:
     def ack(self, event_id):
         return self._request("POST", "/api/v1/billing/events/ack?" + urlencode({"event_id": event_id}))
 
+    def cdr(self, limit=100, call_id=None):
+        query = {"limit": min(max(limit, 1), 100)}
+        if call_id:
+            query["call_id"] = call_id
+        return self._request("GET", "/api/v1/billing/cdr?" + urlencode(query))
+
     def control_status(self):
         return self._request("GET", "/api/v1/control/status")
 
@@ -47,3 +53,19 @@ class MadisCarrier:
 
     def disable_routing_rule(self, rule_id):
         return self._request("POST", f"/api/v1/control/routing-rules/{int(rule_id)}/disable")
+
+    def dialplans(self, limit=100):
+        return self._request("GET", "/api/v1/control/dialplans?" + urlencode({"limit": min(max(limit, 1), 100)}))
+
+    def create_dialplan(self, rule):
+        return self._request("POST", "/api/v1/control/dialplans", rule)
+
+    def set_dialplan_enabled(self, rule_id, enabled):
+        state = "enable" if enabled else "disable"
+        return self._request("POST", f"/api/v1/control/dialplans/{int(rule_id)}/{state}")
+
+    def update_dialplan(self, rule_id, rule):
+        return self._request("PUT", f"/api/v1/control/dialplans/{int(rule_id)}", rule)
+
+    def delete_dialplan(self, rule_id):
+        return self._request("DELETE", f"/api/v1/control/dialplans/{int(rule_id)}")

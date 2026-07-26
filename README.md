@@ -90,6 +90,8 @@ are the concise production and protocol-status references.
   changing validated headers/body fields, and starting B2BUA policy.
 - A separate signed module dispatcher for `tts`, `stt`, `llm`, `media`,
   `recording`, `fraud`, and `billing` operations.
+- An authenticated carrier API for CDR reads and billing events, plus a
+  separate control API for routing-rule and dialplan management.
 - External module services can be written in Python, Go, JavaScript, Lua,
   Erlang, or another language with an HTTP client. They do not run inside the
   SIP worker and do not receive SQL connections, Mako handles, or raw worker
@@ -220,7 +222,7 @@ Madis reads its config from environment variables (or `/etc/madis/madis.env` whe
 - `SIP_SCHED_WORKERS` — optional bounded Mako scheduler pool for `crew`/`kick`; values
   below the listener count are raised automatically, while `0` keeps one pthread per kick
 - `SIP_CARRIER_API_TOKEN` — bearer token for the versioned machine API
-- `SIP_CONTROL_API_TOKEN` — separate bearer token for routing and B2BUA policy changes
+- `SIP_CONTROL_API_TOKEN` — separate bearer token for routing, dialplan, and B2BUA policy changes
 - `SIP_APP_URL` / `SIP_APP_TOKEN` — optional signed live SIP application hook;
   see [`docs/modules.md`](docs/modules.md)
 - `SIP_APP_CA` — optional CA bundle for the HTTPS application endpoint
@@ -358,6 +360,12 @@ The proxy writes CDR lifecycle events to `billing_events` with deterministic
 event IDs. Delivery is at-least-once: consume, commit, deduplicate by
 `event_id`, and then acknowledge. The page limit is 100 and the JSON request
 limit is 64 KiB. These bounds are part of the contract, not suggestions.
+
+External services can read bounded CDRs for rating and reconciliation with the
+carrier token. Services holding `SIP_CONTROL_API_TOKEN` can list, create,
+replace, delete, enable, and disable dialplans and routing rules. Dialplan
+actions are limited to the documented number-transformation operations; these
+APIs do not execute SQL, Mako, shell commands, or arbitrary application code.
 
 `SIP_BILLING_MODE=preauth` is the opt-in online charging path. With the default
 `SIP_CHARGING_PROTOCOL=http`, it sends a bounded HTTPS JSON request before

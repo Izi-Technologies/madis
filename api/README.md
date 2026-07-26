@@ -8,11 +8,18 @@ Madis exposes a versioned machine API beside the WebUI:
 | `GET /admin/api/v1/billing/events?limit=100` | Read pending events, at most 100 per request |
 | `POST /admin/api/v1/billing/events` | Publish a carrier-defined JSON event |
 | `POST /admin/api/v1/billing/events/ack?event_id=...` | Acknowledge after the consumer commits it |
+| `GET /admin/api/v1/billing/cdr?limit=100&call_id=...` | Read bounded CDRs for rating and reconciliation |
 | `GET /admin/api/v1/control/status` | Read the authenticated control surface |
 | `GET /admin/api/v1/control/routing-rules` | List routing rules |
 | `POST /admin/api/v1/control/routing-rules` | Create an allowlisted routing rule |
 | `POST /admin/api/v1/control/routing-rules/{id}/enable` | Enable a rule |
 | `POST /admin/api/v1/control/routing-rules/{id}/disable` | Disable a rule |
+| `GET /admin/api/v1/control/dialplans` | List dialplan rules |
+| `POST /admin/api/v1/control/dialplans` | Create a dialplan rule |
+| `PUT /admin/api/v1/control/dialplans/{id}` | Replace a dialplan rule |
+| `DELETE /admin/api/v1/control/dialplans/{id}` | Delete a dialplan rule |
+| `POST /admin/api/v1/control/dialplans/{id}/enable` | Enable a dialplan rule |
+| `POST /admin/api/v1/control/dialplans/{id}/disable` | Disable a dialplan rule |
 
 For application-team integration patterns, see
 [`../docs/integrations.md`](../docs/integrations.md). The reference clients
@@ -63,7 +70,10 @@ transaction commits can lose the handoff.
 
 `GET /billing/events` returns an object with `schema`, an `events` array, and a
 `truncated` flag. The request limit is clamped to 100 and the response is
-bounded. `POST /billing/events` returns `202` after an idempotent insert. The
+bounded. `GET /billing/cdr` accepts an optional exact `call_id` filter and
+returns call, SIP, gateway, URI, timestamp, and duration fields. Its response
+also contains `truncated`; use an exact call ID or another bounded page when it
+is `true`. `POST /billing/events` returns `202` after an idempotent insert. The
 server currently derives a SHA-256 event ID when a caller omits one; portable
 clients should still send an explicit ID and validate against
 `billing-event.schema.json`.
@@ -93,10 +103,42 @@ their billing/charging transaction, then acknowledge. Acknowledgement is not a
 delete, so operators can audit the original JSONB payload. Pages and request
 bodies are bounded to protect the Mako 0.4.16 worker from memory pressure.
 
+## Managing dialplans
+
+Dialplan calls use `SIP_CONTROL_API_TOKEN`, not the carrier billing token.
+Rules are applied by the SIP worker on the next call after the database
+transaction commits. A rule has a number prefix, a direction (`inbound` or
+`outbound`), and one or more bounded number actions. Supported actions are
+`strip:N`, `prepend:PREFIX`, `replace:OLD:NEW`, `set:NUMBER`, `e164:CC`,
+`strip_plus`, and `add_plus`; chain actions with `;`.
+
+```sh
+curl -fsS -X POST "$API/admin/api/v1/control/dialplans" \
+  -H "Authorization: Bearer $CONTROL_TOKEN" \
+  -H 'Content-Type: application/json' \
+  --data '{"match_prefix":"+1555","callee_action":"strip_plus;prepend:1","caller_action":"add_plus","direction":"outbound","priority":20,"description":"Normalize carrier numbers"}'
+
+curl -fsS -H "Authorization: Bearer $CONTROL_TOKEN" \
+  "$API/admin/api/v1/control/dialplans?limit=100"
+
+curl -fsS -X PUT "$API/admin/api/v1/control/dialplans/42" \
+  -H "Authorization: Bearer $CONTROL_TOKEN" \
+  -H 'Content-Type: application/json' \
+  --data '{"match_prefix":"+1555","callee_action":"e164:1","direction":"outbound","priority":10}'
+
+curl -fsS -X POST "$API/admin/api/v1/control/dialplans/42/disable" \
+  -H "Authorization: Bearer $CONTROL_TOKEN"
+```
+
+Update is a full replacement of the rule fields; enable/disable is a
+separate recoverable state change. Values are validated before parameterized
+SQL is used. The endpoint does not accept SQL, Mako, shell commands, or
+arbitrary code.
+
 ## Custom schemas
 
 The envelope fields are fixed for this API version; `data`, `extensions`, and
-application-defined fields are open. Set `schema` to your own URI or version, keep
+application-defined fields are open. Set `schema` to your own URI or version,
 reuse the same `event_id` across retries, and add a tenant-specific `event_type`.
 Madis stores the complete JSON document as JSONB and does not silently rewrite
 unknown fields. The built-in CDR event is only one profile, not a required

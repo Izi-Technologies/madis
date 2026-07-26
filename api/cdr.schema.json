@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://madis.example/schemas/billing-cdr.v1.json",
+  "title": "Madis billing CDR record",
+  "type": "object",
+  "required": ["call_id", "caller", "callee", "status"],
+  "properties": {
+    "call_id": {"type": "string", "maxLength": 512},
+    "caller": {"type": "string", "maxLength": 512},
+    "callee": {"type": "string", "maxLength": 512},
+    "status": {"type": "string", "maxLength": 64},
+    "gateway": {"type": "string", "maxLength": 512},
+    "source_ip": {"type": "string", "maxLength": 128},
+    "destination": {"type": "string", "maxLength": 512},
+    "transport": {"type": "string", "maxLength": 32},
+    "from_uri": {"type": "string", "maxLength": 2048},
+    "to_uri": {"type": "string", "maxLength": 2048},
+    "user_agent": {"type": "string", "maxLength": 512},
+    "sip_code": {"type": ["integer", "null"], "minimum": 100, "maximum": 699},
+    "started_at": {"type": ["string", "null"]},
+    "ended_at": {"type": ["string", "null"]},
+    "duration_sec": {"type": ["integer", "null"], "minimum": 0}
+  },
+  "additionalProperties": false
+}

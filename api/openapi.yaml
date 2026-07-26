@@ -57,6 +57,35 @@ paths:
         '400': {description: Invalid event_id}
         '401': {description: Missing or invalid carrier bearer token}
         '503': {description: Database unavailable}
+  /api/v1/billing/cdr:
+    get:
+      operationId: billingCdr
+      summary: Read bounded call detail records
+      description: >-
+        Read CDR fields for rating, reconciliation, reporting, or an external
+        billing system. Use call_id for an exact lookup. This endpoint does not
+        change billing state.
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100}}
+        - {name: call_id, in: query, schema: {type: string, maxLength: 512}}
+      responses:
+        '200':
+          description: CDR records
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [schema, records, truncated]
+                properties:
+                  schema: {type: string}
+                  records:
+                    type: array
+                    items: {$ref: '#/components/schemas/CdrRecord'}
+                  truncated: {type: boolean}
+        '400': {description: Invalid call_id filter}
+        '401': {description: Missing or invalid carrier bearer token}
+        '503': {description: Database unavailable}
   /api/v1/control/status:
     get:
       operationId: controlStatus
@@ -107,6 +136,87 @@ paths:
         '401': {description: Missing or invalid control bearer token}
         '404': {description: Rule not found}
         '503': {description: Database unavailable}
+  /api/v1/control/dialplans:
+    get:
+      operationId: dialplans
+      summary: List dialplan rules
+      security: [{controlBearerAuth: []}]
+      parameters:
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100}}
+      responses:
+        '200':
+          description: Dialplan rules
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [schema, dialplans, truncated]
+                properties:
+                  schema: {type: string}
+                  dialplans:
+                    type: array
+                    items: {$ref: '#/components/schemas/Dialplan'}
+                  truncated: {type: boolean}
+        '401': {description: Missing or invalid control bearer token}
+        '503': {description: Database unavailable}
+    post:
+      operationId: createDialplan
+      summary: Create a number transformation rule
+      security: [{controlBearerAuth: []}]
+      description: >-
+        The callee_action and caller_action values use the existing dialplan
+        operations: strip, prepend, replace, set, e164, strip_plus, and
+        add_plus. Multiple actions are separated by semicolons.
+      requestBody:
+        required: true
+        content:
+          application/json: {schema: {$ref: '#/components/schemas/DialplanInput'}}
+      responses:
+        '201': {description: Dialplan rule created}
+        '400': {description: Invalid dialplan or content type}
+        '401': {description: Missing or invalid control bearer token}
+        '503': {description: Database unavailable}
+  /api/v1/control/dialplans/{id}/{state}:
+    post:
+      operationId: setDialplanState
+      summary: Enable or disable a dialplan rule
+      security: [{controlBearerAuth: []}]
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: integer, minimum: 1}}
+        - {name: state, in: path, required: true, schema: {type: string, enum: [enable, disable]}}
+      responses:
+        '200': {description: Dialplan state changed}
+        '401': {description: Missing or invalid control bearer token}
+        '404': {description: Dialplan rule not found}
+        '503': {description: Database unavailable}
+  /api/v1/control/dialplans/{id}:
+    put:
+      operationId: updateDialplan
+      summary: Replace a dialplan rule
+      security: [{controlBearerAuth: []}]
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: integer, minimum: 1}}
+      requestBody:
+        required: true
+        content:
+          application/json: {schema: {$ref: '#/components/schemas/DialplanInput'}}
+      responses:
+        '200': {description: Dialplan rule updated}
+        '400': {description: Invalid dialplan or content type}
+        '401': {description: Missing or invalid control bearer token}
+        '404': {description: Dialplan rule not found}
+        '503': {description: Database unavailable}
+    delete:
+      operationId: deleteDialplan
+      summary: Delete a dialplan rule
+      security: [{controlBearerAuth: []}]
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: integer, minimum: 1}}
+      responses:
+        '200': {description: Dialplan rule deleted}
+        '401': {description: Missing or invalid control bearer token}
+        '404': {description: Dialplan rule not found}
+        '503': {description: Database unavailable}
 components:
   securitySchemes:
     bearerAuth: {type: http, scheme: bearer}
@@ -119,11 +229,31 @@ components:
       properties:
         schema: {type: string, minLength: 1, maxLength: 512}
         event_id: {type: string, minLength: 16, maxLength: 128}
-        event_type: {type: string, minLength: 1, maxLength: 128}
         tenant_id: {type: string}
         session_id: {type: string}
         data: {type: object, additionalProperties: true}
         extensions: {type: object, additionalProperties: true}
+    CdrRecord:
+      $ref: 'cdr.schema.json'
+    DialplanInput:
+      type: object
+      required: [match_prefix, callee_action, direction]
+      additionalProperties: false
+      properties:
+        match_prefix: {type: string, minLength: 1, maxLength: 256}
+        callee_action: {type: string, minLength: 1, maxLength: 512}
+        caller_action: {type: string, maxLength: 512}
+        direction: {type: string, enum: [inbound, outbound]}
+        priority: {type: integer, minimum: 0, maximum: 100000, default: 10}
+        description: {type: string, maxLength: 512}
+    Dialplan:
+      allOf:
+        - {$ref: '#/components/schemas/DialplanInput'}
+        - type: object
+          required: [id, enabled]
+          properties:
+            id: {type: integer, minimum: 1}
+            enabled: {type: boolean}
     RoutingRuleInput:
       type: object
       required: [action]

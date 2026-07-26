@@ -20,10 +20,12 @@ base URL should include `/admin` (for example,
 
 The clients also expose the bounded control surface: read `control_status()` /
 `ControlStatus()` / `controlStatus()`, list and create routing rules, and
-enable or disable a rule. Pass `SIP_CONTROL_API_TOKEN` to a client used for
-these calls. Keep it separate from `SIP_CARRIER_API_TOKEN` and never expose
-either token to browser code. Control calls select allowlisted routing actions;
-they do not execute source code or SQL in Madis.
+enable or disable a rule. They can list, create, replace, delete, enable, and
+disable dialplans. CDR reads are available through `cdr`/`CDR`/`cdr` and use
+the carrier token; dialplan and routing calls use `SIP_CONTROL_API_TOKEN`.
+Keep it separate from `SIP_CARRIER_API_TOKEN` and never expose either token to
+browser code. Control calls select allowlisted actions; they do not execute
+source code or SQL in Madis.
 
 For live SIP behavior, use the external application gateway described in
 [`../docs/modules.md`](../docs/modules.md). It is HTTP/JSON rather than a

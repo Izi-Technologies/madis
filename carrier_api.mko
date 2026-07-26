@@ -68,7 +68,7 @@ fn carrier_api_capabilities() -> string {
         + "\"version\":\"" + carrier_json_escape(carrier_cap(env_get_or("MADIS_VERSION", "dev"), 128)) + "\","
         + "\"mako_version\":\"0.4.16\","
         + "\"transports\":[\"udp\",\"tcp\",\"tls\",\"ws\",\"wss\"],"
-        + "\"contracts\":[\"billing-event-v1\",\"charging-request-v1\",\"diameter-rfc8506-v1\",\"diameter-rfc6733-peer-v1\",\"ims-cx-dx-v1\",\"ims-sh-v1\",\"ims-session-v1\",\"ss7-m3ua-envelope-v1\"],"
+        + "\"contracts\":[\"billing-event-v1\",\"billing-cdr-v1\",\"charging-request-v1\",\"diameter-rfc8506-v1\",\"diameter-rfc6733-peer-v1\",\"ims-cx-dx-v1\",\"ims-sh-v1\",\"ims-session-v1\",\"ss7-m3ua-envelope-v1\"],"
         + "\"charging\":{\"outbox\":true,\"preauth_http_adapter\":true,\"diameter_native\":true,\"diameter_transport\":\"tcp_tls_sctp\",\"diameter_persistent_peer\":true,\"diameter_sctp\":true,\"diameter_sctp_runtime\":\"platform_dependent\",\"diameter_peer_failover\":false},"
         + "\"ims\":{\"cx_dx_wire_contract\":true,\"cx_register_uar_sar\":true,\"sh_wire_contract\":true,\"hss_native\":false,\"scscf_service_logic\":false},"
         + "\"ss7\":{\"native_sctp_m3ua\":false,\"external_adapter\":true},"
@@ -140,7 +140,7 @@ fn carrier_api_control_status() -> string {
     let mode = str_to_lower(str_trim_space(env_get_or("SIP_B2BUA_MODE", "proxy")))
     let mut enabled = "false"
     if str_eq(mode, "1") || str_eq(mode, "enabled") || str_eq(mode, "b2bua") { enabled = "true" }
-    return "{\"schema\":\"madis.control.v1\",\"mako_version\":\"0.4.16\",\"b2bua\":{\"enabled\":" + enabled + ",\"mode\":\"" + carrier_json_escape(carrier_cap(mode, 32)) + "\"},\"operations\":[\"routing-rules.read\",\"routing-rules.create\",\"routing-rules.enable\",\"routing-rules.disable\"]}"
+    return "{\"schema\":\"madis.control.v1\",\"mako_version\":\"0.4.16\",\"b2bua\":{\"enabled\":" + enabled + ",\"mode\":\"" + carrier_json_escape(carrier_cap(mode, 32)) + "\"},\"operations\":[\"routing-rules.read\",\"routing-rules.create\",\"routing-rules.enable\",\"routing-rules.disable\",\"dialplans.read\",\"dialplans.create\",\"dialplans.enable\",\"dialplans.disable\"]}"
 }
 
 fn carrier_api_control_rules(db: SqlDB, ok: int, limit: int) -> string {
@@ -192,6 +192,168 @@ fn carrier_api_control_create_rule(db: SqlDB, ok: int, body: string) -> int {
     return rc
 }
 
+fn carrier_api_resource_state_id(path: string, prefix: string) -> string {
+    if not str_has_prefix(path, prefix) { return "" }
+    let rest = path[len(prefix):]
+    let slash = str_index(rest, "/")
+    if slash <= 0 { return "" }
+    let id = rest[0:slash]
+    let state = rest[slash + 1:]
+    if not str_eq(state, "enable") && not str_eq(state, "disable") { return "" }
+    match parse_int(id) {
+        Ok(v) => { if v > 0 && v <= 2147483647 { return id } }
+        Err(_) => {}
+    }
+    return ""
+}
+
+fn carrier_api_resource_id(path: string, prefix: string) -> string {
+    if not str_has_prefix(path, prefix) { return "" }
+    let id = path[len(prefix):]
+    if len(id) == 0 || str_index(id, "/") >= 0 { return "" }
+    match parse_int(id) {
+        Ok(v) => { if v > 0 && v <= 2147483647 { return id } }
+        Err(_) => {}
+    }
+    return ""
+}
+
+fn carrier_api_resource_state(path: string, prefix: string) -> string {
+    if not str_has_prefix(path, prefix) { return "" }
+    let rest = path[len(prefix):]
+    let slash = str_index(rest, "/")
+    if slash <= 0 { return "" }
+    return rest[slash + 1:]
+}
+
+fn carrier_api_dialplan_id(path: string) -> string {
+    return carrier_api_resource_state_id(path, "/admin/api/v1/control/dialplans/")
+}
+
+fn carrier_api_dialplan_state(path: string) -> string {
+    return carrier_api_resource_state(path, "/admin/api/v1/control/dialplans/")
+}
+
+fn carrier_api_dialplan_resource_id(path: string) -> string {
+    return carrier_api_resource_id(path, "/admin/api/v1/control/dialplans/")
+}
+
+fn carrier_api_dialplan_direction_ok(direction: string) -> int {
+    return if str_eq(direction, "inbound") || str_eq(direction, "outbound") { 1 } else { 0 }
+}
+
+fn carrier_api_dialplan_action_ok(action: string, required: int) -> int {
+    if len(action) == 0 { return if required == 1 { 0 } else { 1 } }
+    let parts = str_split(action, ";")
+    let mut i = 0
+    while i < len(parts) {
+        let item = str_trim_space(parts[i])
+        if len(item) == 0 { i = i + 1; continue }
+        if str_eq(item, "strip_plus") || str_eq(item, "add_plus") { i = i + 1; continue }
+        if str_has_prefix(item, "strip:") {
+            match parse_int(item[6:]) { Ok(v) => { if v < 0 || v > 256 { return 0 } } Err(_) => { return 0 } }
+            i = i + 1; continue
+        }
+        if str_has_prefix(item, "prepend:") || str_has_prefix(item, "set:") || str_has_prefix(item, "e164:") {
+            if len(item) <= str_index(item, ":") + 1 || carrier_api_rule_value_safe(item, 512) == 0 { return 0 }
+            i = i + 1; continue
+        }
+        if str_has_prefix(item, "replace:") {
+            let rest = item[8:]
+            let colon = str_index(rest, ":")
+            if colon <= 0 || carrier_api_rule_value_safe(item, 512) == 0 { return 0 }
+            i = i + 1; continue
+        }
+        return 0
+    }
+    return 1
+}
+
+fn carrier_api_dialplan_json_ok(body: string) -> int {
+    if len(body) == 0 || len(body) > 65536 { return 0 }
+    let prefix = json_get_string(body, "match_prefix")
+    let callee = json_get_string(body, "callee_action")
+    let caller = json_get_string(body, "caller_action")
+    let direction = str_to_lower(str_trim_space(json_get_string(body, "direction")))
+    let description = json_get_string(body, "description")
+    let priority_raw = json_get_string(body, "priority")
+    if len(prefix) == 0 || len(prefix) > 256 || len(callee) == 0 || len(callee) > 512 || len(caller) > 512 || len(description) > 512 { return 0 }
+    if carrier_api_rule_value_safe(prefix, 256) == 0 || carrier_api_rule_value_safe(description, 512) == 0 { return 0 }
+    if carrier_api_dialplan_action_ok(callee, 1) == 0 || carrier_api_dialplan_action_ok(caller, 0) == 0 || carrier_api_dialplan_direction_ok(direction) == 0 { return 0 }
+    let mut priority = 10
+    if len(priority_raw) > 0 {
+        match parse_int(priority_raw) { Ok(v) => { priority = v } Err(_) => { return 0 } }
+    } else {
+        if str_index(body, "\"priority\"") >= 0 { priority = json_get_int(body, "priority") }
+    }
+    return if priority >= 0 && priority <= 100000 { 1 } else { 0 }
+}
+
+fn carrier_api_dialplan_packed(body: string) -> string {
+    let prefix = json_get_string(body, "match_prefix")
+    let callee = json_get_string(body, "callee_action")
+    let caller = json_get_string(body, "caller_action")
+    let direction = str_to_lower(str_trim_space(json_get_string(body, "direction")))
+    let description = json_get_string(body, "description")
+    let priority_raw = json_get_string(body, "priority")
+    let mut priority = 10
+    if len(priority_raw) > 0 {
+        match parse_int(priority_raw) { Ok(v) => { priority = v } Err(_) => {} }
+    } else {
+        if str_index(body, "\"priority\"") >= 0 { priority = json_get_int(body, "priority") }
+    }
+    return "{\"match_prefix\":\"" + carrier_json_escape(prefix) + "\",\"callee_action\":\"" + carrier_json_escape(callee) + "\",\"caller_action\":\"" + carrier_json_escape(caller) + "\",\"direction\":\"" + carrier_json_escape(direction) + "\",\"priority\":" + string(priority) + ",\"description\":\"" + carrier_json_escape(description) + "\"}"
+}
+
+fn carrier_api_control_dialplans(db: SqlDB, ok: int, limit: int) -> string {
+    let rows = tbl_query(db, ok, "SELECT json_build_object('id', id, 'match_prefix', LEFT(COALESCE(match_prefix,''),256), 'callee_action', LEFT(COALESCE(callee_action,''),512), 'caller_action', LEFT(COALESCE(caller_action,''),512), 'direction', LEFT(COALESCE(direction,''),32), 'priority', priority, 'enabled', enabled, 'description', LEFT(COALESCE(description,''),512))::text FROM dialplan ORDER BY priority ASC, id ASC", limit)
+    let mut out = "{\"schema\":\"madis.control.dialplans.v1\",\"dialplans\":["
+    let mut truncated = 0
+    let mut i = 0
+    while i < len(rows) {
+        if len(out) + len(rows[i]) + 2 > 262144 { truncated = 1; break }
+        if i > 0 { out = out + "," }
+        out = out + rows[i]
+        i = i + 1
+    }
+    return out + "],\"truncated\":" + if truncated == 1 { "true" } else { "false" } + "}"
+}
+
+fn carrier_api_control_create_dialplan(db: SqlDB, ok: int, body: string) -> int {
+    if ok == 0 || carrier_api_dialplan_json_ok(body) == 0 { return -1 }
+    let packed = carrier_api_dialplan_packed(body)
+    let rc = sql_exec_str4(db, "INSERT INTO dialplan (match_prefix, callee_action, caller_action, direction, priority, enabled, description) SELECT $4::jsonb->>'match_prefix', $4::jsonb->>'callee_action', $4::jsonb->>'caller_action', $4::jsonb->>'direction', COALESCE(($4::jsonb->>'priority')::int, 10), true, COALESCE($4::jsonb->>'description','')", "", "", "", packed)
+    return if rc < 0 { -2 } else { rc }
+}
+
+fn carrier_api_control_update_dialplan(db: SqlDB, ok: int, id: string, body: string) -> int {
+    if ok == 0 || len(id) == 0 || carrier_api_dialplan_json_ok(body) == 0 { return -1 }
+    let packed = carrier_api_dialplan_packed(body)
+    let rc = sql_exec_str4(db, "UPDATE dialplan SET match_prefix = $2::jsonb->>'match_prefix', callee_action = $2::jsonb->>'callee_action', caller_action = $2::jsonb->>'caller_action', direction = $2::jsonb->>'direction', priority = COALESCE(($2::jsonb->>'priority')::int, 10), description = COALESCE($2::jsonb->>'description','') WHERE id = $1", id, packed, "", "")
+    return if rc < 0 { -2 } else { rc }
+}
+
+fn carrier_api_cdr(db: SqlDB, ok: int, limit: int, call_id: string) -> string {
+    let base = "SELECT json_build_object('call_id', LEFT(COALESCE(call_id,''),512), 'caller', LEFT(COALESCE(caller,''),512), 'callee', LEFT(COALESCE(callee,''),512), 'status', LEFT(COALESCE(status,''),64), 'gateway', LEFT(COALESCE(gateway,''),512), 'source_ip', LEFT(COALESCE(source_ip,''),128), 'destination', LEFT(COALESCE(destination,''),512), 'transport', LEFT(COALESCE(transport,''),32), 'from_uri', LEFT(COALESCE(from_uri,''),2048), 'to_uri', LEFT(COALESCE(to_uri,''),2048), 'user_agent', LEFT(COALESCE(user_agent,''),512), 'sip_code', sip_code, 'started_at', started_at, 'ended_at', ended_at, 'duration_sec', duration_sec)::text FROM cdr"
+    let mut rows = make([]string, 0, limit)
+    if len(call_id) > 0 {
+        if len(call_id) > 512 || carrier_api_rule_value_safe(call_id, 512) == 0 { return "{\"schema\":\"madis.billing.cdr.v1\",\"records\":[],\"invalid_filter\":true}" }
+        rows = tbl_query_param(db, ok, base + " WHERE call_id = $1 ORDER BY started_at DESC, call_id DESC", call_id, limit)
+    } else {
+        rows = tbl_query(db, ok, base + " ORDER BY started_at DESC, call_id DESC", limit)
+    }
+    let mut out = "{\"schema\":\"madis.billing.cdr.v1\",\"records\":["
+    let mut truncated = 0
+    let mut i = 0
+    while i < len(rows) {
+        if len(out) + len(rows[i]) + 2 > 262144 { truncated = 1; break }
+        if i > 0 { out = out + "," }
+        out = out + rows[i]
+        i = i + 1
+    }
+    return out + "],\"truncated\":" + if truncated == 1 { "true" } else { "false" } + "}"
+}
+
 fn carrier_api_events(db: SqlDB, ok: int, limit: int) -> string {
     let rows = tbl_query(db, ok, "SELECT json_build_object('event_id', event_id, 'call_id', call_id, 'event_type', event_type, 'payload', payload_json, 'occurred_at', occurred_at, 'attempts', attempts)::text FROM billing_events WHERE delivered_at IS NULL ORDER BY occurred_at ASC, event_id ASC", limit)
     let mut out = "{\"schema\":\"madis.billing.batch.v1\",\"events\":["
@@ -241,15 +403,21 @@ fn carrier_api_route(method: string, path: string) -> int {
     if str_eq(method, "GET") && str_eq(path, "/admin/api/v1/billing/events") { return 2 }
     if str_eq(method, "POST") && str_eq(path, "/admin/api/v1/billing/events") { return 3 }
     if str_eq(method, "POST") && str_eq(path, "/admin/api/v1/billing/events/ack") { return 4 }
+    if str_eq(method, "GET") && str_eq(path, "/admin/api/v1/billing/cdr") { return 9 }
     if str_eq(method, "GET") && str_eq(path, "/admin/api/v1/control/status") { return 5 }
     if str_eq(method, "GET") && str_eq(path, "/admin/api/v1/control/routing-rules") { return 6 }
     if str_eq(method, "POST") && str_eq(path, "/admin/api/v1/control/routing-rules") { return 7 }
     if str_eq(method, "POST") && len(carrier_api_rule_id(path)) > 0 { return 8 }
+    if str_eq(method, "GET") && str_eq(path, "/admin/api/v1/control/dialplans") { return 10 }
+    if str_eq(method, "POST") && str_eq(path, "/admin/api/v1/control/dialplans") { return 11 }
+    if str_eq(method, "POST") && len(carrier_api_dialplan_id(path)) > 0 { return 12 }
+    if str_eq(method, "PUT") && len(carrier_api_dialplan_resource_id(path)) > 0 { return 13 }
+    if str_eq(method, "DELETE") && len(carrier_api_dialplan_resource_id(path)) > 0 { return 14 }
     return 0
 }
 
 fn carrier_api_requires_control(kind: int) -> int {
-    if kind >= 5 { return 1 }
+    if kind >= 5 && kind != 9 { return 1 }
     return 0
 }
 
@@ -273,6 +441,13 @@ fn carrier_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: str
         if rc < 0 { return http_resp(400, "application/json", "{\"ok\":false,\"error\":\"invalid event_id\"}\n", "") }
         return http_resp(200, "application/json", "{\"ok\":true,\"acknowledged\":true}\n", "")
     }
+    if kind == 9 {
+        if ok == 0 { return http_resp(503, "application/json", "{\"ok\":false,\"error\":\"database unavailable\"}\n", "") }
+        let q = parse_query(raw, n)
+        let call_id = query_val(q, "call_id")
+        if len(call_id) > 512 || carrier_api_rule_value_safe(call_id, 512) == 0 { return http_resp(400, "application/json", "{\"ok\":false,\"error\":\"invalid call_id filter\"}\n", "") }
+        return http_resp(200, "application/json", carrier_api_cdr(db, ok, carrier_api_limit(q), call_id), "Cache-Control: no-store\r\n")
+    }
     if kind == 5 { return http_resp(200, "application/json", carrier_api_control_status(), "Cache-Control: no-store\r\n") }
     if kind == 6 {
         if ok == 0 { return http_resp(503, "application/json", "{\"ok\":false,\"error\":\"database unavailable\"}\n", "") }
@@ -295,6 +470,46 @@ fn carrier_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: str
         let rc = sql_exec_str4(db, "UPDATE routing_rules SET enabled = $2::boolean WHERE id = $1", id, value, "", "")
         if rc < 0 { return http_resp(500, "application/json", "{\"ok\":false,\"error\":\"routing rule could not be updated\"}\n", "") }
         return http_resp(200, "application/json", "{\"ok\":true,\"updated\":true}\n", "")
+    }
+    if kind == 10 {
+        if ok == 0 { return http_resp(503, "application/json", "{\"ok\":false,\"error\":\"database unavailable\"}\n", "") }
+        return http_resp(200, "application/json", carrier_api_control_dialplans(db, ok, carrier_api_limit(parse_query(raw, n))), "Cache-Control: no-store\r\n")
+    }
+    if kind == 11 {
+        if carrier_api_json_request_ok(raw, n) == 0 { return http_resp(400, "application/json", "{\"ok\":false,\"error\":\"application/json body required\"}\n", "") }
+        if ok == 0 { return http_resp(503, "application/json", "{\"ok\":false,\"error\":\"database unavailable\"}\n", "") }
+        let rc = carrier_api_control_create_dialplan(db, ok, parse_body(raw, n))
+        if rc == -1 { return http_resp(400, "application/json", "{\"ok\":false,\"error\":\"invalid dialplan\"}\n", "") }
+        if rc < 0 { return http_resp(500, "application/json", "{\"ok\":false,\"error\":\"dialplan could not be stored\"}\n", "") }
+        return http_resp(201, "application/json", "{\"ok\":true,\"created\":true}\n", "")
+    }
+    if kind == 12 {
+        if ok == 0 { return http_resp(503, "application/json", "{\"ok\":false,\"error\":\"database unavailable\"}\n", "") }
+        let id = carrier_api_dialplan_id(path)
+        if len(sql_query_str(db, "SELECT id::text FROM dialplan WHERE id = $1", id)) == 0 { return http_resp(404, "application/json", "{\"ok\":false,\"error\":\"dialplan not found\"}\n", "") }
+        let mut value = "false"
+        if str_eq(carrier_api_dialplan_state(path), "enable") { value = "true" }
+        let rc = sql_exec_str4(db, "UPDATE dialplan SET enabled = $2::boolean WHERE id = $1", id, value, "", "")
+        if rc < 0 { return http_resp(500, "application/json", "{\"ok\":false,\"error\":\"dialplan could not be updated\"}\n", "") }
+        return http_resp(200, "application/json", "{\"ok\":true,\"updated\":true}\n", "")
+    }
+    if kind == 13 {
+        if carrier_api_json_request_ok(raw, n) == 0 { return http_resp(400, "application/json", "{\"ok\":false,\"error\":\"application/json body required\"}\n", "") }
+        if ok == 0 { return http_resp(503, "application/json", "{\"ok\":false,\"error\":\"database unavailable\"}\n", "") }
+        let id = carrier_api_dialplan_resource_id(path)
+        if len(sql_query_str(db, "SELECT id::text FROM dialplan WHERE id = $1", id)) == 0 { return http_resp(404, "application/json", "{\"ok\":false,\"error\":\"dialplan not found\"}\n", "") }
+        let rc = carrier_api_control_update_dialplan(db, ok, id, parse_body(raw, n))
+        if rc == -1 { return http_resp(400, "application/json", "{\"ok\":false,\"error\":\"invalid dialplan\"}\n", "") }
+        if rc < 0 { return http_resp(500, "application/json", "{\"ok\":false,\"error\":\"dialplan could not be updated\"}\n", "") }
+        return http_resp(200, "application/json", "{\"ok\":true,\"updated\":true}\n", "")
+    }
+    if kind == 14 {
+        if ok == 0 { return http_resp(503, "application/json", "{\"ok\":false,\"error\":\"database unavailable\"}\n", "") }
+        let id = carrier_api_dialplan_resource_id(path)
+        if len(sql_query_str(db, "SELECT id::text FROM dialplan WHERE id = $1", id)) == 0 { return http_resp(404, "application/json", "{\"ok\":false,\"error\":\"dialplan not found\"}\n", "") }
+        let rc = sql_exec_str4(db, "DELETE FROM dialplan WHERE id = $1", id, "", "", "")
+        if rc < 0 { return http_resp(500, "application/json", "{\"ok\":false,\"error\":\"dialplan could not be deleted\"}\n", "") }
+        return http_resp(200, "application/json", "{\"ok\":true,\"deleted\":true}\n", "")
     }
     return http_resp(404, "application/json", "{\"ok\":false,\"error\":\"not found\"}\n", "")
 }

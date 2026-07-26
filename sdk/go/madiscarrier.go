@@ -72,6 +72,19 @@ func (c *Client) Publish(ctx context.Context, event any) (map[string]any, error)
 func (c *Client) Ack(ctx context.Context, eventID string) (map[string]any, error) {
 	return c.request(ctx, http.MethodPost, "/api/v1/billing/events/ack?"+url.Values{"event_id": {eventID}}.Encode(), nil)
 }
+func (c *Client) CDR(ctx context.Context, limit int, callID string) (map[string]any, error) {
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	values := url.Values{"limit": {strconv.Itoa(limit)}}
+	if callID != "" {
+		values.Set("call_id", callID)
+	}
+	return c.request(ctx, http.MethodGet, "/api/v1/billing/cdr?"+values.Encode(), nil)
+}
 func (c *Client) ControlStatus(ctx context.Context) (map[string]any, error) {
 	return c.request(ctx, http.MethodGet, "/api/v1/control/status", nil)
 }
@@ -93,4 +106,29 @@ func (c *Client) SetRoutingRuleEnabled(ctx context.Context, ruleID int, enabled 
 		state = "enable"
 	}
 	return c.request(ctx, http.MethodPost, fmt.Sprintf("/api/v1/control/routing-rules/%d/%s", ruleID, state), nil)
+}
+func (c *Client) Dialplans(ctx context.Context, limit int) (map[string]any, error) {
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	return c.request(ctx, http.MethodGet, "/api/v1/control/dialplans?"+url.Values{"limit": {strconv.Itoa(limit)}}.Encode(), nil)
+}
+func (c *Client) CreateDialplan(ctx context.Context, rule any) (map[string]any, error) {
+	return c.request(ctx, http.MethodPost, "/api/v1/control/dialplans", rule)
+}
+func (c *Client) SetDialplanEnabled(ctx context.Context, ruleID int, enabled bool) (map[string]any, error) {
+	state := "disable"
+	if enabled {
+		state = "enable"
+	}
+	return c.request(ctx, http.MethodPost, fmt.Sprintf("/api/v1/control/dialplans/%d/%s", ruleID, state), nil)
+}
+func (c *Client) UpdateDialplan(ctx context.Context, ruleID int, rule any) (map[string]any, error) {
+	return c.request(ctx, http.MethodPut, fmt.Sprintf("/api/v1/control/dialplans/%d", ruleID), rule)
+}
+func (c *Client) DeleteDialplan(ctx context.Context, ruleID int) (map[string]any, error) {
+	return c.request(ctx, http.MethodDelete, fmt.Sprintf("/api/v1/control/dialplans/%d", ruleID), nil)
 }
