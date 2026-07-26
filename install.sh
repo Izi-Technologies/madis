@@ -21,6 +21,7 @@ MADIS_SIP_ADMIN_PORT="${MADIS_SIP_ADMIN_PORT:-9090}"
 MADIS_ADMIN_TOKEN="${MADIS_ADMIN_TOKEN:-}"
 MADIS_CARRIER_API_TOKEN="${MADIS_CARRIER_API_TOKEN:-}"
 MADIS_CONTROL_API_TOKEN="${MADIS_CONTROL_API_TOKEN:-}"
+MADIS_CONTROL_API_READ_TOKEN="${MADIS_CONTROL_API_READ_TOKEN:-}"
 MADIS_APP_TOKEN="${MADIS_APP_TOKEN:-}"
 MADIS_MODULE_TOKEN="${MADIS_MODULE_TOKEN:-}"
 MADIS_ADMIN_PASSWORD="${MADIS_ADMIN_PASSWORD:-}"
@@ -98,6 +99,11 @@ fi
 if [ -z "$MADIS_CONTROL_API_TOKEN" ]; then
     MADIS_CONTROL_API_TOKEN=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 48 || true)
     info "Generated control API token."
+fi
+
+if [ -z "$MADIS_CONTROL_API_READ_TOKEN" ]; then
+    MADIS_CONTROL_API_READ_TOKEN=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 48 || true)
+    info "Generated read-only control API token."
 fi
 
 if [ -z "$MADIS_APP_TOKEN" ]; then
@@ -292,6 +298,21 @@ CREATE TABLE IF NOT EXISTS ip_auth (
 );
 
 -- Access control lists
+CREATE TABLE IF NOT EXISTS access_control (
+    id              SERIAL PRIMARY KEY,
+    source_ip       TEXT DEFAULT '*',
+    sip_user        TEXT DEFAULT '*',
+    action          TEXT DEFAULT 'allow',
+    skip_auth       BOOLEAN DEFAULT false,
+    tenant          TEXT DEFAULT 'default',
+    max_channels    INT DEFAULT 0,
+    priority        INT DEFAULT 10,
+    enabled         BOOLEAN DEFAULT true,
+    description     TEXT,
+    created_at      TIMESTAMP DEFAULT NOW()
+);
+
+-- Legacy ACL table retained only to migrate older installations.
 CREATE TABLE IF NOT EXISTS acl (
     id              SERIAL PRIMARY KEY,
     source_ip       TEXT DEFAULT '*',
@@ -301,6 +322,15 @@ CREATE TABLE IF NOT EXISTS acl (
     description     TEXT,
     created_at      TIMESTAMP DEFAULT NOW()
 );
+CREATE TABLE IF NOT EXISTS madis_schema_migrations (
+    key             TEXT PRIMARY KEY,
+    applied_at      TIMESTAMP DEFAULT NOW()
+);
+INSERT INTO access_control (source_ip, sip_user, action, priority, description)
+SELECT source_ip, sip_user, action, priority, description FROM acl
+WHERE NOT EXISTS (SELECT 1 FROM madis_schema_migrations WHERE key = 'acl-to-access-control')
+  AND NOT EXISTS (SELECT 1 FROM access_control);
+INSERT INTO madis_schema_migrations (key) VALUES ('acl-to-access-control') ON CONFLICT DO NOTHING;
 
 -- Registrations (legacy single-binding table)
 CREATE TABLE IF NOT EXISTS registrations (
@@ -339,6 +369,12 @@ CREATE TABLE IF NOT EXISTS gateways (
     auth_pass       TEXT,
     caller_id       TEXT,
     max_channels    INT DEFAULT 100,
+    number_format   TEXT DEFAULT 'e164',
+    tech_prefix     TEXT DEFAULT '',
+    caller_id_override TEXT DEFAULT '',
+    health_status   TEXT DEFAULT 'unknown',
+    last_health_code INT DEFAULT 0,
+    last_health_check TIMESTAMP,
     enabled         BOOLEAN DEFAULT true,
     created_at      TIMESTAMP DEFAULT NOW()
 );
@@ -394,6 +430,23 @@ CREATE TABLE IF NOT EXISTS routing_rules (
     priority        INT DEFAULT 10,
     enabled         BOOLEAN DEFAULT true,
     description     TEXT,
+    created_at      TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS ani_groups (
+    id              SERIAL PRIMARY KEY,
+    name            TEXT UNIQUE NOT NULL,
+    description     TEXT DEFAULT '',
+    enabled         BOOLEAN DEFAULT true,
+    created_at      TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS ani_ranges (
+    id              SERIAL PRIMARY KEY,
+    group_id        INT NOT NULL,
+    range_start     TEXT NOT NULL,
+    range_end       TEXT NOT NULL,
+    enabled         BOOLEAN DEFAULT true,
     created_at      TIMESTAMP DEFAULT NOW()
 );
 
@@ -526,7 +579,7 @@ CREATE TABLE IF NOT EXISTS security_events (
 CREATE INDEX IF NOT EXISTS idx_reg_bindings_aor_exp ON registration_bindings (aor, expires_at);
 CREATE INDEX IF NOT EXISTS idx_routes_pfx ON routes (prefix, enabled);
 CREATE INDEX IF NOT EXISTS idx_dids_num ON dids (number) WHERE enabled = true;
-CREATE INDEX IF NOT EXISTS idx_acl_ip ON acl (source_ip);
+CREATE INDEX IF NOT EXISTS idx_acl_ip ON access_control (source_ip);
 CREATE INDEX IF NOT EXISTS idx_cdr_time ON cdr (started_at);
 CREATE INDEX IF NOT EXISTS idx_users_name ON users (username) WHERE enabled = true;
 CREATE INDEX IF NOT EXISTS idx_ipauth_ip ON ip_auth (ip_address) WHERE enabled = true;
@@ -706,6 +759,7 @@ SIP_DIGEST_ALGORITHM=md5
 SIP_ADMIN_TOKEN=${MADIS_ADMIN_TOKEN}
 SIP_CARRIER_API_TOKEN=${MADIS_CARRIER_API_TOKEN}
 SIP_CONTROL_API_TOKEN=${MADIS_CONTROL_API_TOKEN}
+SIP_CONTROL_API_READ_TOKEN=${MADIS_CONTROL_API_READ_TOKEN}
 SIP_APP_TOKEN=${MADIS_APP_TOKEN}
 SIP_MODULE_TOKEN=${MADIS_MODULE_TOKEN}
 
@@ -900,6 +954,7 @@ echo ""
 echo "  Admin token: $MADIS_ADMIN_TOKEN"
 echo "  Carrier API token: $MADIS_CARRIER_API_TOKEN"
 echo "  Control API token: $MADIS_CONTROL_API_TOKEN"
+echo "  Control read token: $MADIS_CONTROL_API_READ_TOKEN"
 echo "  SIP application token: $MADIS_APP_TOKEN"
 echo "  Module bus token: $MADIS_MODULE_TOKEN"
 echo "  (used as: Authorization: Bearer <token>)"

@@ -26,17 +26,36 @@ fn carrier_api_token_ok(raw: string, n: int) -> int {
     if not str_has_prefix(str_to_lower(header), "bearer ") { return 0 }
     let actual = str_trim_space(header[7:])
     if len(actual) == 0 || len(actual) > 256 { return 0 }
-    return if str_eq(actual, expected) { 1 } else { 0 }
+    return if str_eq(sha256(actual), sha256(expected)) { 1 } else { 0 }
 }
 
 fn carrier_api_control_token_ok(raw: string, n: int) -> int {
-    let expected = env_get_or("SIP_CONTROL_API_TOKEN", "")
-    if len(expected) == 0 { return 0 }
     let header = parse_header(raw, n, "Authorization")
     if not str_has_prefix(str_to_lower(header), "bearer ") { return 0 }
     let actual = str_trim_space(header[7:])
     if len(actual) == 0 || len(actual) > 256 { return 0 }
-    return if str_eq(actual, expected) { 1 } else { 0 }
+    return if carrier_api_control_scope_value(actual) == 2 { 1 } else { 0 }
+}
+
+fn carrier_api_control_scope_value(actual: string) -> int {
+    let write_token = env_get_or("SIP_CONTROL_API_TOKEN", "")
+    if len(write_token) > 0 && str_eq(sha256(actual), sha256(write_token)) { return 2 }
+    let read_token = env_get_or("SIP_CONTROL_API_READ_TOKEN", "")
+    if len(read_token) > 0 && str_eq(sha256(actual), sha256(read_token)) { return 1 }
+    return 0
+}
+
+fn carrier_api_control_scope(raw: string, n: int) -> int {
+    let header = parse_header(raw, n, "Authorization")
+    if not str_has_prefix(str_to_lower(header), "bearer ") { return 0 }
+    let actual = str_trim_space(header[7:])
+    if len(actual) == 0 || len(actual) > 256 { return 0 }
+    return carrier_api_control_scope_value(actual)
+}
+
+fn carrier_api_control_write_required(kind: int) -> int {
+    if kind == 5 || kind == 6 || kind == 10 || kind == 15 || kind == 20 { return 0 }
+    return 1
 }
 
 fn carrier_api_json_request_ok(raw: string, n: int) -> int {
@@ -73,7 +92,7 @@ fn carrier_api_capabilities() -> string {
         + "\"ims\":{\"cx_dx_wire_contract\":true,\"cx_register_uar_sar\":true,\"sh_wire_contract\":true,\"hss_native\":false,\"scscf_service_logic\":false},"
         + "\"ss7\":{\"native_sctp_m3ua\":false,\"external_adapter\":true},"
         + "\"memory_safety\":{\"bounded_http_body\":true,\"bounded_outbox_page\":true,\"parameterized_sql\":true},"
-        + "\"control\":{\"schema\":\"madis.control.v1\",\"authenticated\":true,\"routing_rules\":true,\"b2bua_policy\":true,\"arbitrary_code_execution\":false},"
+        + "\"control\":{\"schema\":\"madis.control.v1\",\"authenticated\":true,\"read_only_scope\":true,\"resource_api\":true,\"application_database_external\":true,\"routing_rules\":true,\"b2bua_policy\":true,\"arbitrary_code_execution\":false},"
         + "\"sip_application\":{\"schema\":\"madis.sip.event.v1\",\"command_schema\":\"madis.sip.command.v1\",\"signed\":true,\"bounded\":true,\"enabled\":" + app_enabled + "},"
         + "\"module_bus\":{\"schema\":\"madis.module.request.v1\",\"modules\":[\"tts\",\"stt\",\"llm\",\"media\",\"recording\",\"fraud\",\"billing\"],\"signed\":true,\"bounded\":true,\"enabled\":" + module_enabled + "},"
         + "\"extensions\":{}"
@@ -112,6 +131,29 @@ fn carrier_api_rule_action_ok(action: string) -> int {
     return 0
 }
 
+fn carrier_api_control_rule_json_ok(body: string) -> int {
+    if len(body) == 0 || len(body) > 65536 { return 0 }
+    let action = json_get_string(body, "action")
+    let prefix = json_get_string(body, "match_prefix")
+    let caller = json_get_string(body, "match_caller")
+    let src_ip = json_get_string(body, "match_src_ip")
+    let time_start = json_get_string(body, "match_time_start")
+    let time_end = json_get_string(body, "match_time_end")
+    let day = json_get_string(body, "match_day")
+    let description = json_get_string(body, "description")
+    let priority_raw = json_get_string(body, "priority")
+    if len(action) == 0 || carrier_api_rule_action_ok(action) == 0 { return 0 }
+    if carrier_api_rule_value_safe(prefix, 256) == 0 || carrier_api_rule_value_safe(caller, 256) == 0 || carrier_api_rule_value_safe(src_ip, 128) == 0 || carrier_api_rule_value_safe(time_start, 16) == 0 || carrier_api_rule_value_safe(day, 32) == 0 || carrier_api_rule_value_safe(description, 512) == 0 || carrier_api_rule_value_safe(priority_raw, 16) == 0 { return 0 }
+    if carrier_api_rule_value_safe(time_end, 16) == 0 { return 0 }
+    let mut priority = 10
+    if len(priority_raw) > 0 {
+        match parse_int(priority_raw) { Ok(v) => { priority = v } Err(_) => { return 0 } }
+    } else {
+        if str_index(body, "\"priority\"") >= 0 { priority = json_get_int(body, "priority") }
+    }
+    return if priority >= 0 && priority <= 100000 { 1 } else { 0 }
+}
+
 fn carrier_api_rule_id(path: string) -> string {
     let prefix = "/admin/api/v1/control/routing-rules/"
     if not str_has_prefix(path, prefix) { return "" }
@@ -140,7 +182,7 @@ fn carrier_api_control_status() -> string {
     let mode = str_to_lower(str_trim_space(env_get_or("SIP_B2BUA_MODE", "proxy")))
     let mut enabled = "false"
     if str_eq(mode, "1") || str_eq(mode, "enabled") || str_eq(mode, "b2bua") { enabled = "true" }
-    return "{\"schema\":\"madis.control.v1\",\"mako_version\":\"0.4.16\",\"b2bua\":{\"enabled\":" + enabled + ",\"mode\":\"" + carrier_json_escape(carrier_cap(mode, 32)) + "\"},\"operations\":[\"routing-rules.read\",\"routing-rules.create\",\"routing-rules.enable\",\"routing-rules.disable\",\"dialplans.read\",\"dialplans.create\",\"dialplans.enable\",\"dialplans.disable\"]}"
+    return "{\"schema\":\"madis.control.v1\",\"mako_version\":\"0.4.16\",\"b2bua\":{\"enabled\":" + enabled + ",\"mode\":\"" + carrier_json_escape(carrier_cap(mode, 32)) + "\"},\"application_database\":\"external\",\"operations\":[\"routing-rules.read\",\"routing-rules.create\",\"routing-rules.enable\",\"routing-rules.disable\",\"dialplans.read\",\"dialplans.create\",\"dialplans.enable\",\"dialplans.disable\",\"resources.read\",\"resources.write\"]}"
 }
 
 fn carrier_api_control_rules(db: SqlDB, ok: int, limit: int) -> string {
@@ -413,6 +455,9 @@ fn carrier_api_route(method: string, path: string) -> int {
     if str_eq(method, "POST") && len(carrier_api_dialplan_id(path)) > 0 { return 12 }
     if str_eq(method, "PUT") && len(carrier_api_dialplan_resource_id(path)) > 0 { return 13 }
     if str_eq(method, "DELETE") && len(carrier_api_dialplan_resource_id(path)) > 0 { return 14 }
+    if str_eq(method, "POST") && (str_eq(path, "/admin/api/v1/control/validate/routing-rule") || str_eq(path, "/admin/api/v1/control/validate/dialplan")) { return 15 }
+    let resource_kind = control_resource_path_valid(method, path)
+    if resource_kind > 0 { return 19 + resource_kind }
     return 0
 }
 
@@ -510,6 +555,72 @@ fn carrier_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: str
         let rc = sql_exec_str4(db, "DELETE FROM dialplan WHERE id = $1", id, "", "", "")
         if rc < 0 { return http_resp(500, "application/json", "{\"ok\":false,\"error\":\"dialplan could not be deleted\"}\n", "") }
         return http_resp(200, "application/json", "{\"ok\":true,\"deleted\":true}\n", "")
+    }
+    if kind == 15 {
+        if carrier_api_json_request_ok(raw, n) == 0 { return http_resp(400, "application/json", "{\"ok\":false,\"error\":\"application/json body required\"}\n", "") }
+        let body = parse_body(raw, n)
+        let mut valid = 0
+        if str_eq(path, "/admin/api/v1/control/validate/dialplan") { valid = carrier_api_dialplan_json_ok(body) }
+        if str_eq(path, "/admin/api/v1/control/validate/routing-rule") { valid = carrier_api_control_rule_json_ok(body) }
+        let value = if valid == 1 { "true" } else { "false" }
+        return http_resp(200, "application/json", "{\"schema\":\"madis.control.validation.v1\",\"valid\":" + value + "}\n", "Cache-Control: no-store\r\n")
+    }
+    if kind == 20 {
+        if ok == 0 { return http_resp(503, "application/json", "{\"ok\":false,\"error\":\"database unavailable\"}\n", "") }
+        let resource = control_resource_path(path)
+        return http_resp(200, "application/json", control_resource_list(db, ok, resource, carrier_api_limit(parse_query(raw, n))), "Cache-Control: no-store\r\n")
+    }
+    if kind == 21 {
+        if carrier_api_json_request_ok(raw, n) == 0 { return http_resp(400, "application/json", "{\"ok\":false,\"error\":\"application/json body required\"}\n", "") }
+        if ok == 0 { return http_resp(503, "application/json", "{\"ok\":false,\"error\":\"database unavailable\"}\n", "") }
+        let resource = control_resource_path(path)
+        let rc = control_resource_create(db, ok, resource, parse_body(raw, n))
+        if rc == -1 { return http_resp(400, "application/json", "{\"ok\":false,\"error\":\"invalid control resource\"}\n", "") }
+        if rc < 0 { return http_resp(500, "application/json", "{\"ok\":false,\"error\":\"control resource could not be stored\"}\n", "") }
+        return http_resp(201, "application/json", "{\"ok\":true,\"created\":true}\n", "")
+    }
+    if kind == 22 {
+        if carrier_api_json_request_ok(raw, n) == 0 { return http_resp(400, "application/json", "{\"ok\":false,\"error\":\"application/json body required\"}\n", "") }
+        if ok == 0 { return http_resp(503, "application/json", "{\"ok\":false,\"error\":\"database unavailable\"}\n", "") }
+        let resource = control_resource_path(path)
+        let id = control_resource_id(path, resource)
+        let rev_sql = control_resource_revision_sql(resource)
+        let current = sql_query_str(db, rev_sql, id)
+        if len(current) == 0 { return http_resp(404, "application/json", "{\"ok\":false,\"error\":\"control resource not found\"}\n", "") }
+        let expected = json_get_string(parse_body(raw, n), "expected_revision")
+        if len(expected) > 0 && not str_eq(expected, current) { return http_resp(409, "application/json", "{\"ok\":false,\"error\":\"revision conflict\"}\n", "") }
+        let rc = control_resource_update(db, ok, resource, id, parse_body(raw, n))
+        if rc == -1 { return http_resp(400, "application/json", "{\"ok\":false,\"error\":\"invalid control resource\"}\n", "") }
+        if rc == -4 { return http_resp(409, "application/json", "{\"ok\":false,\"error\":\"revision conflict\"}\n", "") }
+        if rc < 0 { return http_resp(500, "application/json", "{\"ok\":false,\"error\":\"control resource could not be updated\"}\n", "") }
+        return http_resp(200, "application/json", "{\"ok\":true,\"updated\":true}\n", "")
+    }
+    if kind == 23 {
+        if ok == 0 { return http_resp(503, "application/json", "{\"ok\":false,\"error\":\"database unavailable\"}\n", "") }
+        let resource = control_resource_path(path)
+        let id = control_resource_id(path, resource)
+        let rev_sql = control_resource_revision_sql(resource)
+        let current = sql_query_str(db, rev_sql, id)
+        if len(current) == 0 { return http_resp(404, "application/json", "{\"ok\":false,\"error\":\"control resource not found\"}\n", "") }
+        let q = parse_query(raw, n)
+        let expected = query_val(q, "expected_revision")
+        if len(expected) > 0 && not str_eq(expected, current) { return http_resp(409, "application/json", "{\"ok\":false,\"error\":\"revision conflict\"}\n", "") }
+        let rc = control_resource_delete(db, ok, resource, id, expected)
+        if rc == -1 { return http_resp(400, "application/json", "{\"ok\":false,\"error\":\"invalid control resource\"}\n", "") }
+        if rc < 0 { return http_resp(500, "application/json", "{\"ok\":false,\"error\":\"control resource could not be deleted\"}\n", "") }
+        return http_resp(200, "application/json", "{\"ok\":true,\"deleted\":true}\n", "")
+    }
+    if kind == 24 {
+        if ok == 0 { return http_resp(503, "application/json", "{\"ok\":false,\"error\":\"database unavailable\"}\n", "") }
+        let resource = control_resource_path(path)
+        let id = control_resource_id(path, resource)
+        let rev_sql = control_resource_revision_sql(resource)
+        if len(sql_query_str(db, rev_sql, id)) == 0 { return http_resp(404, "application/json", "{\"ok\":false,\"error\":\"control resource not found\"}\n", "") }
+        let state = control_resource_state(path, resource)
+        let rc = control_resource_state_update(db, ok, resource, id, state)
+        if rc == -1 { return http_resp(400, "application/json", "{\"ok\":false,\"error\":\"invalid control resource state\"}\n", "") }
+        if rc < 0 { return http_resp(500, "application/json", "{\"ok\":false,\"error\":\"control resource state could not be updated\"}\n", "") }
+        return http_resp(200, "application/json", "{\"ok\":true,\"updated\":true}\n", "")
     }
     return http_resp(404, "application/json", "{\"ok\":false,\"error\":\"not found\"}\n", "")
 }

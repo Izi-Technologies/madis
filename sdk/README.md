@@ -21,11 +21,20 @@ base URL should include `/admin` (for example,
 The clients also expose the bounded control surface: read `control_status()` /
 `ControlStatus()` / `controlStatus()`, list and create routing rules, and
 enable or disable a rule. They can list, create, replace, delete, enable, and
-disable dialplans. CDR reads are available through `cdr`/`CDR`/`cdr` and use
-the carrier token; dialplan and routing calls use `SIP_CONTROL_API_TOKEN`.
+disable dialplans. Generic resource methods cover gateways, routes, dispatch
+sets and members, DIDs, header rules, access control, security bans, ANI
+groups/ranges, and read-only registrations, bindings, cluster nodes, and
+security events. CDR reads are available through `cdr`/`CDR`/`cdr` and use the
+carrier token; dialplan and routing calls use `SIP_CONTROL_API_TOKEN`.
 Keep it separate from `SIP_CARRIER_API_TOKEN` and never expose either token to
-browser code. Control calls select allowlisted actions; they do not execute
-source code or SQL in Madis.
+browser code. Read-only list/status calls may use
+`SIP_CONTROL_API_READ_TOKEN`. Control calls select allowlisted actions; they do
+not execute source code or SQL in Madis.
+
+The resource API owns only Madis's routing fields. Do not model application
+billing tables or tenant-specific records in Madis. Keep those in the
+application database and associate them with a Madis ID or event payload.
+Updates can send `expected_revision` to reject stale writes.
 
 For live SIP behavior, use the external application gateway described in
 [`../docs/modules.md`](../docs/modules.md). It is HTTP/JSON rather than a

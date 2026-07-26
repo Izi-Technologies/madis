@@ -1,0 +1,387 @@
+// Generic, allowlisted carrier control resources.
+//
+// This API exposes only the fields Madis needs to route SIP. Applications own
+// their billing, tenant, and product schemas; Madis never accepts SQL/table
+// names from callers and never interprets application data as Mako source.
+
+fn control_resource_name_ok(resource: string) -> int {
+    let names = ["gateways", "routes", "dispatch-sets", "dispatch-members", "dids", "header-rules", "access-control", "security-bans", "ani-groups", "ani-ranges", "registrations", "registration-bindings", "cluster-nodes", "security-events"]
+    let mut i = 0
+    while i < len(names) {
+        if str_eq(resource, names[i]) { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+fn control_resource_is_mutable(resource: string) -> int {
+    if str_eq(resource, "registrations") || str_eq(resource, "registration-bindings") || str_eq(resource, "cluster-nodes") || str_eq(resource, "security-events") || str_eq(resource, "routing-rules") || str_eq(resource, "dialplans") { return 0 }
+    return if control_resource_name_ok(resource) == 1 { 1 } else { 0 }
+}
+
+fn control_resource_text(body: string, key: string, max: int, required: int) -> string {
+    let value = json_get_string(body, key)
+    if required == 1 && len(value) == 0 { return "" }
+    if carrier_api_rule_value_safe(value, max) == 0 { return "" }
+    return value
+}
+
+fn control_resource_int_ok(body: string, key: string, min: int, max: int, required: int) -> int {
+    let present = str_index(body, "\"" + key + "\"") >= 0
+    if not present { return if required == 1 { 0 } else { 1 } }
+    let value = json_get_int(body, key)
+    return if value >= min && value <= max { 1 } else { 0 }
+}
+
+fn control_resource_bool_ok(body: string, key: string) -> int {
+    let present = str_index(body, "\"" + key + "\"") >= 0
+    if not present { return 1 }
+    let value = str_to_lower(str_trim_space(json_get_string(body, key)))
+    if len(value) == 0 {
+        let compact = str_replace(body, " ", "")
+        let marker = "\"" + key + "\":"
+        if str_index(compact, marker + "false") >= 0 || str_index(compact, marker + "0") >= 0 { return 1 }
+    }
+    return if str_eq(value, "true") || str_eq(value, "false") || str_eq(value, "1") || str_eq(value, "0") { 1 } else { 0 }
+}
+
+fn control_resource_decimal_ok(body: string, key: string, max: int, required: int) -> int {
+    let value = json_get_string(body, key)
+    if len(value) == 0 { return if required == 1 { 0 } else { 1 } }
+    if len(value) > max || carrier_api_rule_value_safe(value, max) == 0 { return 0 }
+    let mut dots = 0
+    let mut digits = 0
+    let mut i = 0
+    while i < len(value) {
+        let c = int(value[i])
+        if c == 46 { dots = dots + 1 } else {
+            if c == 45 && i == 0 { i = i + 1; continue }
+            if c < 48 || c > 57 { return 0 }
+            digits = digits + 1
+        }
+        i = i + 1
+    }
+    return if dots <= 1 && digits > 0 { 1 } else { 0 }
+}
+
+fn control_resource_time_ok(body: string, key: string) -> int {
+    let value = json_get_string(body, key)
+    if len(value) == 0 { return 1 }
+    if len(value) != 5 || int(value[2]) != 58 { return 0 }
+    let hour = parse_int(value[0:2])
+    let minute = parse_int(value[3:5])
+    match hour { Ok(h) => { if h < 0 || h > 23 { return 0 } } Err(_) => { return 0 } }
+    match minute { Ok(m) => { if m < 0 || m > 59 { return 0 } } Err(_) => { return 0 } }
+    return if carrier_api_rule_value_safe(value, 5) == 1 { 1 } else { 0 }
+}
+
+fn control_resource_algorithm_ok(value: string) -> int {
+    return if str_eq(value, "round-robin") || str_eq(value, "weight") || str_eq(value, "priority") || str_eq(value, "hash") || str_eq(value, "hash-user") || str_eq(value, "broadcast") { 1 } else { 0 }
+}
+
+fn control_resource_transport_ok(value: string) -> int {
+    let v = str_to_lower(str_trim_space(value))
+    return if str_eq(v, "udp") || str_eq(v, "tcp") || str_eq(v, "tls") || str_eq(v, "ws") || str_eq(v, "wss") { 1 } else { 0 }
+}
+
+fn control_resource_json_ok(resource: string, body: string) -> int {
+    if len(body) == 0 || len(body) > 65536 || control_resource_name_ok(resource) == 0 { return 0 }
+    if str_eq(resource, "gateways") {
+        if len(control_resource_text(body, "name", 128, 1)) == 0 || len(control_resource_text(body, "address", 512, 1)) == 0 { return 0 }
+        if control_resource_int_ok(body, "port", 1, 65535, 0) == 0 || control_resource_int_ok(body, "max_channels", 1, 1000000, 0) == 0 { return 0 }
+        if control_resource_transport_ok(control_resource_text(body, "transport", 8, 0)) == 0 && len(json_get_string(body, "transport")) > 0 { return 0 }
+        if len(control_resource_text(body, "auth_user", 256, 0)) == 0 && len(json_get_string(body, "auth_user")) > 0 { return 0 }
+        if len(control_resource_text(body, "auth_pass", 512, 0)) == 0 && len(json_get_string(body, "auth_pass")) > 0 { return 0 }
+        if len(control_resource_text(body, "caller_id", 512, 0)) == 0 && len(json_get_string(body, "caller_id")) > 0 { return 0 }
+        if len(control_resource_text(body, "number_format", 32, 0)) == 0 && len(json_get_string(body, "number_format")) > 0 { return 0 }
+        if len(control_resource_text(body, "tech_prefix", 64, 0)) == 0 && len(json_get_string(body, "tech_prefix")) > 0 { return 0 }
+        if len(control_resource_text(body, "caller_id_override", 512, 0)) == 0 && len(json_get_string(body, "caller_id_override")) > 0 { return 0 }
+        return 1
+    }
+    if str_eq(resource, "routes") {
+        if len(control_resource_text(body, "prefix", 256, 1)) == 0 { return 0 }
+        let has_gateway = str_index(body, "\"gateway_id\"") >= 0
+        let has_dispatch = str_index(body, "\"dispatch_set_id\"") >= 0
+        if (has_gateway && has_dispatch) || (not has_gateway && not has_dispatch) { return 0 }
+        if has_gateway && control_resource_int_ok(body, "gateway_id", 1, 2147483647, 1) == 0 { return 0 }
+        if has_dispatch && control_resource_int_ok(body, "dispatch_set_id", 1, 2147483647, 1) == 0 { return 0 }
+        if control_resource_int_ok(body, "priority", 0, 100000, 0) == 0 || control_resource_int_ok(body, "weight", 0, 1000000, 0) == 0 { return 0 }
+        if control_resource_decimal_ok(body, "cost_per_min", 32, 0) == 0 { return 0 }
+        if control_resource_time_ok(body, "time_start") == 0 || control_resource_time_ok(body, "time_end") == 0 { return 0 }
+        if len(control_resource_text(body, "time_start", 16, 0)) == 0 && len(json_get_string(body, "time_start")) > 0 { return 0 }
+        if len(control_resource_text(body, "time_end", 16, 0)) == 0 && len(json_get_string(body, "time_end")) > 0 { return 0 }
+        if len(control_resource_text(body, "description", 512, 0)) == 0 && len(json_get_string(body, "description")) > 0 { return 0 }
+        return 1
+    }
+    if str_eq(resource, "dispatch-sets") {
+        let algorithm = control_resource_text(body, "algorithm", 32, 0)
+        if len(control_resource_text(body, "name", 128, 1)) == 0 || (len(algorithm) > 0 && control_resource_algorithm_ok(algorithm) == 0) { return 0 }
+        return if len(control_resource_text(body, "description", 512, 0)) == 0 && len(json_get_string(body, "description")) > 0 { 0 } else { 1 }
+    }
+    if str_eq(resource, "dispatch-members") {
+        if control_resource_int_ok(body, "set_id", 1, 2147483647, 1) == 0 || control_resource_int_ok(body, "gateway_id", 1, 2147483647, 1) == 0 || control_resource_int_ok(body, "priority", 0, 100000, 0) == 0 || control_resource_int_ok(body, "weight", 0, 1000000, 0) == 0 { return 0 }
+        return 1
+    }
+    if str_eq(resource, "dids") {
+        if len(control_resource_text(body, "number", 256, 1)) == 0 || len(control_resource_text(body, "destination_user", 256, 1)) == 0 { return 0 }
+        return if len(control_resource_text(body, "description", 512, 0)) == 0 && len(json_get_string(body, "description")) > 0 { 0 } else { 1 }
+    }
+    if str_eq(resource, "header-rules") {
+        let action = str_to_lower(str_trim_space(control_resource_text(body, "action", 16, 1)))
+        let name = control_resource_text(body, "header_name", 128, 1)
+        if action != "add" && action != "remove" && action != "set" { return 0 }
+        if len(name) == 0 || str_contains(name, ":") || str_contains(name, " ") { return 0 }
+        if len(control_resource_text(body, "match_method", 32, 0)) == 0 && len(json_get_string(body, "match_method")) > 0 { return 0 }
+        if len(control_resource_text(body, "match_direction", 16, 0)) == 0 && len(json_get_string(body, "match_direction")) > 0 { return 0 }
+        if len(control_resource_text(body, "header_value", 4096, 0)) == 0 && len(json_get_string(body, "header_value")) > 0 { return 0 }
+        return 1
+    }
+    if str_eq(resource, "access-control") {
+        let action = str_to_lower(str_trim_space(control_resource_text(body, "action", 16, 1)))
+        if action != "allow" && action != "deny" { return 0 }
+        if len(control_resource_text(body, "source_ip", 128, 0)) == 0 && len(json_get_string(body, "source_ip")) > 0 { return 0 }
+        if len(control_resource_text(body, "sip_user", 256, 0)) == 0 && len(json_get_string(body, "sip_user")) > 0 { return 0 }
+        if len(control_resource_text(body, "tenant", 128, 0)) == 0 && len(json_get_string(body, "tenant")) > 0 { return 0 }
+        if control_resource_int_ok(body, "max_channels", 0, 1000000, 0) == 0 || control_resource_int_ok(body, "priority", 0, 100000, 0) == 0 || control_resource_bool_ok(body, "skip_auth") == 0 { return 0 }
+        return 1
+    }
+    if str_eq(resource, "security-bans") {
+        if len(control_resource_text(body, "source_ip", 128, 1)) == 0 || (len(control_resource_text(body, "reason", 512, 0)) == 0 && len(json_get_string(body, "reason")) > 0) || control_resource_bool_ok(body, "permanent") == 0 { return 0 }
+        return 1
+    }
+    if str_eq(resource, "ani-groups") {
+        if len(control_resource_text(body, "name", 128, 1)) == 0 { return 0 }
+        return if len(control_resource_text(body, "description", 512, 0)) == 0 && len(json_get_string(body, "description")) > 0 { 0 } else { 1 }
+    }
+    if str_eq(resource, "ani-ranges") {
+        if control_resource_int_ok(body, "group_id", 1, 2147483647, 1) == 0 || len(control_resource_text(body, "range_start", 64, 1)) == 0 || len(control_resource_text(body, "range_end", 64, 1)) == 0 { return 0 }
+        return 1
+    }
+    return if control_resource_is_mutable(resource) == 0 { 0 } else { 1 }
+}
+
+fn control_resource_list_sql(resource: string) -> string {
+    if str_eq(resource, "gateways") { return "SELECT json_build_object('id',id,'name',LEFT(COALESCE(name,''),128),'address',LEFT(COALESCE(address,''),512),'port',port,'transport',LEFT(COALESCE(transport,''),8),'caller_id',LEFT(COALESCE(caller_id,''),512),'max_channels',max_channels,'number_format',LEFT(COALESCE(number_format,''),32),'tech_prefix',LEFT(COALESCE(tech_prefix,''),64),'caller_id_override',LEFT(COALESCE(caller_id_override,''),512),'health_status',LEFT(COALESCE(health_status,''),32),'last_health_code',last_health_code,'last_health_check',last_health_check,'enabled',enabled,'revision',xmin::text)::text FROM gateways ORDER BY id" }
+    if str_eq(resource, "routes") { return "SELECT json_build_object('id',id,'prefix',LEFT(COALESCE(prefix,''),256),'gateway_id',gateway_id,'dispatch_set_id',dispatch_set_id,'priority',priority,'weight',weight,'cost_per_min',cost_per_min::text,'time_start',time_start::text,'time_end',time_end::text,'enabled',enabled,'description',LEFT(COALESCE(description,''),512),'revision',xmin::text)::text FROM routes ORDER BY priority,id" }
+    if str_eq(resource, "dispatch-sets") { return "SELECT json_build_object('id',id,'name',LEFT(COALESCE(name,''),128),'algorithm',LEFT(COALESCE(algorithm,''),32),'description',LEFT(COALESCE(description,''),512),'enabled',enabled,'revision',xmin::text)::text FROM dispatch_sets ORDER BY id" }
+    if str_eq(resource, "dispatch-members") { return "SELECT json_build_object('id',id,'set_id',set_id,'gateway_id',gateway_id,'priority',priority,'weight',weight,'enabled',enabled,'revision',xmin::text)::text FROM dispatch_members ORDER BY set_id,priority,id" }
+    if str_eq(resource, "dids") { return "SELECT json_build_object('id',id,'number',LEFT(COALESCE(number,''),256),'destination_user',LEFT(COALESCE(destination_user,''),256),'description',LEFT(COALESCE(description,''),512),'enabled',enabled,'revision',xmin::text)::text FROM dids ORDER BY id" }
+    if str_eq(resource, "header-rules") { return "SELECT json_build_object('id',id,'match_method',LEFT(COALESCE(match_method,''),32),'match_direction',LEFT(COALESCE(match_direction,''),16),'action',LEFT(COALESCE(action,''),16),'header_name',LEFT(COALESCE(header_name,''),128),'header_value',LEFT(COALESCE(header_value,''),4096),'priority',priority,'description',LEFT(COALESCE(description,''),512),'enabled',enabled,'revision',xmin::text)::text FROM header_rules ORDER BY priority,id" }
+    if str_eq(resource, "access-control") { return "SELECT json_build_object('id',id,'source_ip',LEFT(COALESCE(source_ip,''),128),'sip_user',LEFT(COALESCE(sip_user,''),256),'action',action,'skip_auth',skip_auth,'tenant',LEFT(COALESCE(tenant,''),128),'max_channels',max_channels,'priority',priority,'description',LEFT(COALESCE(description,''),512),'enabled',enabled,'revision',xmin::text)::text FROM access_control ORDER BY priority,id" }
+    if str_eq(resource, "security-bans") { return "SELECT json_build_object('source_ip',LEFT(COALESCE(source_ip,''),128),'reason',LEFT(COALESCE(reason,''),512),'ban_count',ban_count,'expires_at',expires_at,'permanent',permanent)::text FROM security_bans ORDER BY created_at DESC" }
+    if str_eq(resource, "ani-groups") { return "SELECT json_build_object('id',id,'name',LEFT(COALESCE(name,''),128),'description',LEFT(COALESCE(description,''),512),'enabled',enabled,'revision',xmin::text)::text FROM ani_groups ORDER BY id" }
+    if str_eq(resource, "ani-ranges") { return "SELECT json_build_object('id',id,'group_id',group_id,'range_start',LEFT(COALESCE(range_start,''),64),'range_end',LEFT(COALESCE(range_end,''),64),'enabled',enabled,'revision',xmin::text)::text FROM ani_ranges ORDER BY id" }
+    if str_eq(resource, "registrations") { return "SELECT json_build_object('aor',LEFT(COALESCE(aor,''),512),'contact',LEFT(COALESCE(contact,''),2048),'transport',LEFT(COALESCE(transport,''),8),'node_id',LEFT(COALESCE(node_id,''),128),'user_agent',LEFT(COALESCE(user_agent,''),512),'updated_at',updated_at)::text FROM registrations ORDER BY updated_at DESC" }
+    if str_eq(resource, "registration-bindings") { return "SELECT json_build_object('id',id,'aor',LEFT(COALESCE(aor,''),512),'contact',LEFT(COALESCE(contact,''),2048),'transport',LEFT(COALESCE(transport,''),8),'node_id',LEFT(COALESCE(node_id,''),128),'source_ip',LEFT(COALESCE(source_ip,''),128),'source_port',source_port,'expires_at',expires_at,'updated_at',updated_at,'revision',xmin::text)::text FROM registration_bindings ORDER BY updated_at DESC" }
+    if str_eq(resource, "cluster-nodes") { return "SELECT json_build_object('id',LEFT(COALESCE(id,''),128),'address',LEFT(COALESCE(address,''),512),'port',port,'region',LEFT(COALESCE(region,''),128),'weight',weight,'status',LEFT(COALESCE(status,''),32),'last_heartbeat',last_heartbeat)::text FROM cluster_nodes ORDER BY id" }
+    if str_eq(resource, "security-events") { return "SELECT json_build_object('id',id,'event_type',LEFT(COALESCE(event_type,''),128),'source_ip',LEFT(COALESCE(source_ip,''),128),'sip_user',LEFT(COALESCE(sip_user,''),256),'severity',LEFT(COALESCE(severity,''),16),'details',LEFT(COALESCE(details,''),2048),'ts',ts)::text FROM security_events ORDER BY ts DESC" }
+    return ""
+}
+
+fn control_resource_create_sql(resource: string) -> string {
+    if str_eq(resource, "gateways") { return "INSERT INTO gateways (name,address,port,transport,auth_user,auth_pass,caller_id,max_channels,number_format,tech_prefix,caller_id_override,enabled) SELECT $4::jsonb->>'name',$4::jsonb->>'address',COALESCE(NULLIF($4::jsonb->>'port','')::int,5060),UPPER(COALESCE(NULLIF($4::jsonb->>'transport',''),'UDP')),$4::jsonb->>'auth_user',$4::jsonb->>'auth_pass',$4::jsonb->>'caller_id',COALESCE(NULLIF($4::jsonb->>'max_channels','')::int,100),COALESCE(NULLIF($4::jsonb->>'number_format',''),'e164'),COALESCE(NULLIF($4::jsonb->>'tech_prefix',''),''),COALESCE(NULLIF($4::jsonb->>'caller_id_override',''),''),true" }
+    if str_eq(resource, "routes") { return "INSERT INTO routes (prefix,gateway_id,dispatch_set_id,priority,weight,cost_per_min,time_start,time_end,enabled,description) SELECT $4::jsonb->>'prefix',NULLIF($4::jsonb->>'gateway_id','')::int,NULLIF($4::jsonb->>'dispatch_set_id','')::int,COALESCE(NULLIF($4::jsonb->>'priority','')::int,10),COALESCE(NULLIF($4::jsonb->>'weight','')::int,100),COALESCE(NULLIF($4::jsonb->>'cost_per_min','')::numeric,0),COALESCE(NULLIF($4::jsonb->>'time_start',''),'00:00'),COALESCE(NULLIF($4::jsonb->>'time_end',''),'23:59'),true,$4::jsonb->>'description'" }
+    if str_eq(resource, "dispatch-sets") { return "INSERT INTO dispatch_sets (name,algorithm,description,enabled) SELECT $4::jsonb->>'name',COALESCE(NULLIF($4::jsonb->>'algorithm',''),'round-robin'),$4::jsonb->>'description',true" }
+    if str_eq(resource, "dispatch-members") { return "INSERT INTO dispatch_members (set_id,gateway_id,priority,weight,enabled) SELECT ($4::jsonb->>'set_id')::int,($4::jsonb->>'gateway_id')::int,COALESCE(NULLIF($4::jsonb->>'priority','')::int,10),COALESCE(NULLIF($4::jsonb->>'weight','')::int,100),true" }
+    if str_eq(resource, "dids") { return "INSERT INTO dids (number,destination_user,description,enabled) SELECT $4::jsonb->>'number',$4::jsonb->>'destination_user',$4::jsonb->>'description',true" }
+    if str_eq(resource, "header-rules") { return "INSERT INTO header_rules (match_method,match_direction,action,header_name,header_value,priority,enabled,description) SELECT COALESCE(NULLIF($4::jsonb->>'match_method',''),'*'),COALESCE(NULLIF($4::jsonb->>'match_direction',''),'outbound'),$4::jsonb->>'action',$4::jsonb->>'header_name',$4::jsonb->>'header_value',COALESCE(NULLIF($4::jsonb->>'priority','')::int,10),true,$4::jsonb->>'description'" }
+    if str_eq(resource, "access-control") { return "INSERT INTO access_control (source_ip,sip_user,action,skip_auth,tenant,max_channels,priority,enabled,description) SELECT COALESCE(NULLIF($4::jsonb->>'source_ip',''),'*'),COALESCE(NULLIF($4::jsonb->>'sip_user',''),'*'),COALESCE(NULLIF($4::jsonb->>'action',''),'allow'),COALESCE(NULLIF($4::jsonb->>'skip_auth','')::boolean,false),COALESCE(NULLIF($4::jsonb->>'tenant',''),'default'),COALESCE(NULLIF($4::jsonb->>'max_channels','')::int,0),COALESCE(NULLIF($4::jsonb->>'priority','')::int,10),true,$4::jsonb->>'description'" }
+    if str_eq(resource, "security-bans") { return "INSERT INTO security_bans (source_ip,reason,permanent) SELECT $4::jsonb->>'source_ip',$4::jsonb->>'reason',COALESCE(NULLIF($4::jsonb->>'permanent','')::boolean,false) ON CONFLICT (source_ip) DO UPDATE SET reason=EXCLUDED.reason,permanent=EXCLUDED.permanent" }
+    if str_eq(resource, "ani-groups") { return "INSERT INTO ani_groups (name,description,enabled) SELECT $4::jsonb->>'name',$4::jsonb->>'description',true" }
+    if str_eq(resource, "ani-ranges") { return "INSERT INTO ani_ranges (group_id,range_start,range_end,enabled) SELECT ($4::jsonb->>'group_id')::int,$4::jsonb->>'range_start',$4::jsonb->>'range_end',true" }
+    return ""
+}
+
+fn control_resource_update_sql(resource: string) -> string {
+    if str_eq(resource, "gateways") { return "UPDATE gateways SET name=$2::jsonb->>'name',address=$2::jsonb->>'address',port=COALESCE(NULLIF($2::jsonb->>'port','')::int,5060),transport=UPPER(COALESCE(NULLIF($2::jsonb->>'transport',''),'UDP')),auth_user=$2::jsonb->>'auth_user',auth_pass=COALESCE(NULLIF($2::jsonb->>'auth_pass',''),auth_pass),caller_id=$2::jsonb->>'caller_id',max_channels=COALESCE(NULLIF($2::jsonb->>'max_channels','')::int,100),number_format=COALESCE(NULLIF($2::jsonb->>'number_format',''),number_format),tech_prefix=COALESCE(NULLIF($2::jsonb->>'tech_prefix',''),tech_prefix),caller_id_override=COALESCE(NULLIF($2::jsonb->>'caller_id_override',''),caller_id_override) WHERE id=$1 AND ($3='' OR xmin::text=$3)" }
+    if str_eq(resource, "routes") { return "UPDATE routes SET prefix=$2::jsonb->>'prefix',gateway_id=NULLIF($2::jsonb->>'gateway_id','')::int,dispatch_set_id=NULLIF($2::jsonb->>'dispatch_set_id','')::int,priority=COALESCE(NULLIF($2::jsonb->>'priority','')::int,10),weight=COALESCE(NULLIF($2::jsonb->>'weight','')::int,100),cost_per_min=COALESCE(NULLIF($2::jsonb->>'cost_per_min','')::numeric,0),time_start=COALESCE(NULLIF($2::jsonb->>'time_start',''),'00:00'),time_end=COALESCE(NULLIF($2::jsonb->>'time_end',''),'23:59'),description=$2::jsonb->>'description' WHERE id=$1 AND ($3='' OR xmin::text=$3)" }
+    if str_eq(resource, "dispatch-sets") { return "UPDATE dispatch_sets SET name=$2::jsonb->>'name',algorithm=COALESCE(NULLIF($2::jsonb->>'algorithm',''),'round-robin'),description=$2::jsonb->>'description' WHERE id=$1 AND ($3='' OR xmin::text=$3)" }
+    if str_eq(resource, "dispatch-members") { return "UPDATE dispatch_members SET set_id=($2::jsonb->>'set_id')::int,gateway_id=($2::jsonb->>'gateway_id')::int,priority=COALESCE(NULLIF($2::jsonb->>'priority','')::int,10),weight=COALESCE(NULLIF($2::jsonb->>'weight','')::int,100) WHERE id=$1 AND ($3='' OR xmin::text=$3)" }
+    if str_eq(resource, "dids") { return "UPDATE dids SET number=$2::jsonb->>'number',destination_user=$2::jsonb->>'destination_user',description=$2::jsonb->>'description' WHERE id=$1 AND ($3='' OR xmin::text=$3)" }
+    if str_eq(resource, "header-rules") { return "UPDATE header_rules SET match_method=COALESCE(NULLIF($2::jsonb->>'match_method',''),'*'),match_direction=COALESCE(NULLIF($2::jsonb->>'match_direction',''),'outbound'),action=$2::jsonb->>'action',header_name=$2::jsonb->>'header_name',header_value=$2::jsonb->>'header_value',priority=COALESCE(NULLIF($2::jsonb->>'priority','')::int,10),description=$2::jsonb->>'description' WHERE id=$1 AND ($3='' OR xmin::text=$3)" }
+    if str_eq(resource, "access-control") { return "UPDATE access_control SET source_ip=COALESCE(NULLIF($2::jsonb->>'source_ip',''),'*'),sip_user=COALESCE(NULLIF($2::jsonb->>'sip_user',''),'*'),action=COALESCE(NULLIF($2::jsonb->>'action',''),'allow'),skip_auth=COALESCE(NULLIF($2::jsonb->>'skip_auth','')::boolean,false),tenant=COALESCE(NULLIF($2::jsonb->>'tenant',''),'default'),max_channels=COALESCE(NULLIF($2::jsonb->>'max_channels','')::int,0),priority=COALESCE(NULLIF($2::jsonb->>'priority','')::int,10),description=$2::jsonb->>'description' WHERE id=$1 AND ($3='' OR xmin::text=$3)" }
+    if str_eq(resource, "ani-groups") { return "UPDATE ani_groups SET name=$2::jsonb->>'name',description=$2::jsonb->>'description' WHERE id=$1 AND ($3='' OR xmin::text=$3)" }
+    if str_eq(resource, "ani-ranges") { return "UPDATE ani_ranges SET group_id=($2::jsonb->>'group_id')::int,range_start=$2::jsonb->>'range_start',range_end=$2::jsonb->>'range_end' WHERE id=$1 AND ($3='' OR xmin::text=$3)" }
+    return ""
+}
+
+fn control_resource_delete_sql(resource: string) -> string {
+    if str_eq(resource, "gateways") { return "DELETE FROM gateways WHERE id=$1 AND ($2='' OR xmin::text=$2)" }
+    if str_eq(resource, "routes") { return "DELETE FROM routes WHERE id=$1 AND ($2='' OR xmin::text=$2)" }
+    if str_eq(resource, "dispatch-sets") { return "WITH deleted_members AS (DELETE FROM dispatch_members WHERE set_id=$1 AND EXISTS (SELECT 1 FROM dispatch_sets WHERE id=$1 AND ($2='' OR xmin::text=$2)) RETURNING set_id) DELETE FROM dispatch_sets WHERE id=$1 AND ($2='' OR xmin::text=$2)" }
+    if str_eq(resource, "dispatch-members") { return "DELETE FROM dispatch_members WHERE id=$1 AND ($2='' OR xmin::text=$2)" }
+    if str_eq(resource, "dids") { return "DELETE FROM dids WHERE id=$1 AND ($2='' OR xmin::text=$2)" }
+    if str_eq(resource, "header-rules") { return "DELETE FROM header_rules WHERE id=$1 AND ($2='' OR xmin::text=$2)" }
+    if str_eq(resource, "access-control") { return "DELETE FROM access_control WHERE id=$1 AND ($2='' OR xmin::text=$2)" }
+    if str_eq(resource, "ani-groups") { return "WITH deleted_ranges AS (DELETE FROM ani_ranges WHERE group_id=$1 AND EXISTS (SELECT 1 FROM ani_groups WHERE id=$1 AND ($2='' OR xmin::text=$2)) RETURNING group_id) DELETE FROM ani_groups WHERE id=$1 AND ($2='' OR xmin::text=$2)" }
+    if str_eq(resource, "security-bans") { return "DELETE FROM security_bans WHERE source_ip=$1" }
+    if str_eq(resource, "ani-ranges") { return "DELETE FROM ani_ranges WHERE id=$1 AND ($2='' OR xmin::text=$2)" }
+    return ""
+}
+
+fn control_resource_state_sql(resource: string) -> string {
+    if str_eq(resource, "gateways") { return "UPDATE gateways SET enabled=$2::boolean WHERE id=$1" }
+    if str_eq(resource, "routes") { return "UPDATE routes SET enabled=$2::boolean WHERE id=$1" }
+    if str_eq(resource, "dispatch-sets") { return "UPDATE dispatch_sets SET enabled=$2::boolean WHERE id=$1" }
+    if str_eq(resource, "dispatch-members") { return "UPDATE dispatch_members SET enabled=$2::boolean WHERE id=$1" }
+    if str_eq(resource, "dids") { return "UPDATE dids SET enabled=$2::boolean WHERE id=$1" }
+    if str_eq(resource, "header-rules") { return "UPDATE header_rules SET enabled=$2::boolean WHERE id=$1" }
+    if str_eq(resource, "access-control") { return "UPDATE access_control SET enabled=$2::boolean WHERE id=$1" }
+    if str_eq(resource, "ani-groups") { return "UPDATE ani_groups SET enabled=$2::boolean WHERE id=$1" }
+    if str_eq(resource, "ani-ranges") { return "UPDATE ani_ranges SET enabled=$2::boolean WHERE id=$1" }
+    return ""
+}
+
+fn control_resource_path(path: string) -> string {
+    let prefix = "/admin/api/v1/control/resources/"
+    if not str_has_prefix(path, prefix) { return "" }
+    let rest = path[len(prefix):]
+    let slash = str_index(rest, "/")
+    if slash < 0 { return rest }
+    return rest[0:slash]
+}
+
+fn control_resource_id(path: string, resource: string) -> string {
+    let prefix = "/admin/api/v1/control/resources/" + resource + "/"
+    if not str_has_prefix(path, prefix) { return "" }
+    let rest = path[len(prefix):]
+    let slash = str_index(rest, "/")
+    if slash >= 0 { return rest[0:slash] }
+    return rest
+}
+
+fn control_resource_state(path: string, resource: string) -> string {
+    let prefix = "/admin/api/v1/control/resources/" + resource + "/"
+    if not str_has_prefix(path, prefix) { return "" }
+    let rest = path[len(prefix):]
+    let slash = str_index(rest, "/")
+    if slash < 0 { return "" }
+    return rest[slash + 1:]
+}
+
+fn control_resource_path_valid(method: string, path: string) -> int {
+    let resource = control_resource_path(path)
+    if control_resource_name_ok(resource) == 0 { return 0 }
+    let id = control_resource_id(path, resource)
+    if len(id) > 0 && not str_eq(resource, "security-bans") && control_resource_id_ok(id) == 0 { return 0 }
+    if str_eq(method, "GET") && len(id) == 0 { return 1 }
+    if str_eq(method, "POST") && len(id) == 0 && control_resource_is_mutable(resource) == 1 { return 2 }
+    if str_eq(method, "PUT") && len(id) > 0 && control_resource_is_mutable(resource) == 1 && not str_eq(resource, "security-bans") { return 3 }
+    if str_eq(method, "DELETE") && len(id) > 0 && (control_resource_is_mutable(resource) == 1 || str_eq(resource, "security-bans")) { return 4 }
+    let state = control_resource_state(path, resource)
+    if str_eq(method, "POST") && len(id) > 0 && (str_eq(state, "enable") || str_eq(state, "disable")) && len(control_resource_state_sql(resource)) > 0 { return 5 }
+    return 0
+}
+
+fn control_resource_audit(db: SqlDB, ok: int, operation: string, resource: string, id: string) -> int {
+    if ok == 0 { return 0 }
+    let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS admin_audit (id SERIAL PRIMARY KEY, ts TIMESTAMP DEFAULT NOW(), username TEXT, action TEXT, detail TEXT)")
+    return sql_exec_str4(db, "INSERT INTO admin_audit (username,action,detail) VALUES ($1,$2,$3)", "machine-api", operation, resource + ":" + carrier_cap(id, 128), "")
+}
+
+fn control_resource_list(db: SqlDB, ok: int, resource: string, limit: int) -> string {
+    let sql = control_resource_list_sql(resource)
+    if ok == 0 || len(sql) == 0 { return "{\"schema\":\"madis.control.resource.v1\",\"resource\":\"" + carrier_json_escape(resource) + "\",\"items\":[],\"truncated\":false}" }
+    let rows = tbl_query(db, ok, sql, limit)
+    let mut out = "{\"schema\":\"madis.control.resource.v1\",\"resource\":\"" + carrier_json_escape(resource) + "\",\"items\":["
+    let mut truncated = 0
+    let mut i = 0
+    while i < len(rows) {
+        if len(out) + len(rows[i]) + 2 > 262144 { truncated = 1; break }
+        if i > 0 { out = out + "," }
+        out = out + rows[i]
+        i = i + 1
+    }
+    return out + "],\"truncated\":" + if truncated == 1 { "true" } else { "false" } + "}"
+}
+
+fn control_resource_id_ok(id: string) -> int {
+    match parse_int(id) {
+        Ok(v) => { return if v > 0 && v <= 2147483647 { 1 } else { 0 } }
+        Err(_) => { return 0 }
+    }
+    return 0
+}
+
+fn control_resource_revision_sql(resource: string) -> string {
+    if str_eq(resource, "gateways") { return "SELECT xmin::text FROM gateways WHERE id=$1" }
+    if str_eq(resource, "routes") { return "SELECT xmin::text FROM routes WHERE id=$1" }
+    if str_eq(resource, "dispatch-sets") { return "SELECT xmin::text FROM dispatch_sets WHERE id=$1" }
+    if str_eq(resource, "dispatch-members") { return "SELECT xmin::text FROM dispatch_members WHERE id=$1" }
+    if str_eq(resource, "dids") { return "SELECT xmin::text FROM dids WHERE id=$1" }
+    if str_eq(resource, "header-rules") { return "SELECT xmin::text FROM header_rules WHERE id=$1" }
+    if str_eq(resource, "access-control") { return "SELECT xmin::text FROM access_control WHERE id=$1" }
+    if str_eq(resource, "ani-groups") { return "SELECT xmin::text FROM ani_groups WHERE id=$1" }
+    if str_eq(resource, "ani-ranges") { return "SELECT xmin::text FROM ani_ranges WHERE id=$1" }
+    if str_eq(resource, "security-bans") { return "SELECT source_ip FROM security_bans WHERE source_ip=$1" }
+    return ""
+}
+
+fn control_resource_references_ok(db: SqlDB, ok: int, resource: string, body: string) -> int {
+    if ok == 0 { return 0 }
+    if str_eq(resource, "routes") {
+        if str_index(body, "\"gateway_id\"") >= 0 {
+            return if len(sql_query_str(db, "SELECT id::text FROM gateways WHERE id=$1", string(json_get_int(body, "gateway_id")))) > 0 { 1 } else { 0 }
+        }
+        return if len(sql_query_str(db, "SELECT id::text FROM dispatch_sets WHERE id=$1", string(json_get_int(body, "dispatch_set_id")))) > 0 { 1 } else { 0 }
+    }
+    if str_eq(resource, "dispatch-members") {
+        let set_ok = len(sql_query_str(db, "SELECT id::text FROM dispatch_sets WHERE id=$1", string(json_get_int(body, "set_id")))) > 0
+        let gateway_ok = len(sql_query_str(db, "SELECT id::text FROM gateways WHERE id=$1", string(json_get_int(body, "gateway_id")))) > 0
+        return if set_ok && gateway_ok { 1 } else { 0 }
+    }
+    if str_eq(resource, "ani-ranges") {
+        return if len(sql_query_str(db, "SELECT id::text FROM ani_groups WHERE id=$1", string(json_get_int(body, "group_id")))) > 0 { 1 } else { 0 }
+    }
+    return 1
+}
+
+fn control_resource_document_ok(db: SqlDB, ok: int, body: string) -> int {
+    let document = str_trim_space(body)
+    if ok == 0 || len(document) < 2 || int(document[0]) != 123 || int(document[len(document) - 1]) != 125 { return 0 }
+    // PostgreSQL parses the one bound value; the caller never becomes part
+    // of SQL text. This rejects malformed JSON before resource SQL runs.
+    return if len(sql_query_str(db, "SELECT $1::jsonb", document)) > 0 { 1 } else { 0 }
+}
+
+fn control_resource_create(db: SqlDB, ok: int, resource: string, body: string) -> int {
+    let sql = control_resource_create_sql(resource)
+    if ok == 0 || len(sql) == 0 || control_resource_document_ok(db, ok, body) == 0 || control_resource_json_ok(resource, body) == 0 || control_resource_references_ok(db, ok, resource, body) == 0 { return -1 }
+    let rc = sql_exec_str4(db, sql, "", "", "", body)
+    if rc < 0 { return -2 }
+    let _ = control_resource_audit(db, ok, "control.create", resource, "")
+    return rc
+}
+
+fn control_resource_update(db: SqlDB, ok: int, resource: string, id: string, body: string) -> int {
+    let sql = control_resource_update_sql(resource)
+    if ok == 0 || len(sql) == 0 || len(id) == 0 || control_resource_id_ok(id) == 0 || control_resource_document_ok(db, ok, body) == 0 || control_resource_json_ok(resource, body) == 0 || control_resource_references_ok(db, ok, resource, body) == 0 { return -1 }
+    let revision = control_resource_text(body, "expected_revision", 64, 0)
+    let rc = sql_exec_str4(db, sql, id, body, revision, "")
+    if rc < 0 { return -2 }
+    if len(revision) > 0 {
+        let after = sql_query_str(db, control_resource_revision_sql(resource), id)
+        if str_eq(after, revision) { return -4 }
+    }
+    let _ = control_resource_audit(db, ok, "control.update", resource, id)
+    return rc
+}
+
+fn control_resource_delete(db: SqlDB, ok: int, resource: string, id: string, revision: string) -> int {
+    let sql = control_resource_delete_sql(resource)
+    if ok == 0 || len(sql) == 0 || len(id) == 0 || (not str_eq(resource, "security-bans") && control_resource_id_ok(id) == 0) || carrier_api_rule_value_safe(revision, 64) == 0 { return -1 }
+    let rc = sql_exec_str4(db, sql, id, revision, "", "")
+    if rc < 0 { return -2 }
+    let _ = control_resource_audit(db, ok, "control.delete", resource, id)
+    return rc
+}
+
+fn control_resource_state_update(db: SqlDB, ok: int, resource: string, id: string, state: string) -> int {
+    let sql = control_resource_state_sql(resource)
+    if ok == 0 || len(sql) == 0 || len(id) == 0 || control_resource_id_ok(id) == 0 { return -1 }
+    let value = if str_eq(state, "enable") { "true" } else { "false" }
+    let rc = sql_exec_str4(db, sql, id, value, "", "")
+    if rc < 0 { return -2 }
+    let _ = control_resource_audit(db, ok, "control." + state, resource, id)
+    return rc
+}

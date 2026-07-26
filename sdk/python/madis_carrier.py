@@ -5,6 +5,13 @@ from urllib.request import Request, urlopen
 
 
 class MadisCarrier:
+    CONTROL_RESOURCES = {
+        "gateways", "routes", "dispatch-sets", "dispatch-members", "dids",
+        "header-rules", "access-control", "security-bans", "ani-groups",
+        "ani-ranges", "registrations", "registration-bindings",
+        "cluster-nodes", "security-events",
+    }
+
     def __init__(self, base_url, token, timeout=2.0):
         self.base_url = base_url.rstrip("/")
         self.token = token
@@ -69,3 +76,34 @@ class MadisCarrier:
 
     def delete_dialplan(self, rule_id):
         return self._request("DELETE", f"/api/v1/control/dialplans/{int(rule_id)}")
+
+    def _resource_path(self, resource):
+        if resource not in self.CONTROL_RESOURCES:
+            raise ValueError("resource is not in the Madis control allowlist")
+        return "/api/v1/control/resources/" + resource
+
+    def control_resources(self, resource, limit=100):
+        path = self._resource_path(resource)
+        return self._request("GET", path + "?" + urlencode({"limit": min(max(limit, 1), 100)}))
+
+    def create_control_resource(self, resource, document):
+        return self._request("POST", self._resource_path(resource), document)
+
+    def update_control_resource(self, resource, resource_id, document):
+        return self._request("PUT", f"{self._resource_path(resource)}/{int(resource_id)}", document)
+
+    def delete_control_resource(self, resource, resource_id, expected_revision=None):
+        path = f"{self._resource_path(resource)}/{int(resource_id)}"
+        if expected_revision:
+            path += "?" + urlencode({"expected_revision": expected_revision})
+        return self._request("DELETE", path)
+
+    def set_control_resource_enabled(self, resource, resource_id, enabled):
+        state = "enable" if enabled else "disable"
+        return self._request("POST", f"{self._resource_path(resource)}/{int(resource_id)}/{state}")
+
+    def validate_routing_rule(self, rule):
+        return self._request("POST", "/api/v1/control/validate/routing-rule", rule)
+
+    def validate_dialplan(self, rule):
+        return self._request("POST", "/api/v1/control/validate/dialplan", rule)

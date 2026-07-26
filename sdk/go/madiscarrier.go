@@ -16,6 +16,20 @@ type Client struct {
 	HTTP           *http.Client
 }
 
+var controlResources = map[string]bool{
+	"gateways": true, "routes": true, "dispatch-sets": true, "dispatch-members": true,
+	"dids": true, "header-rules": true, "access-control": true, "security-bans": true,
+	"ani-groups": true, "ani-ranges": true, "registrations": true,
+	"registration-bindings": true, "cluster-nodes": true, "security-events": true,
+}
+
+func resourcePath(resource string) (string, error) {
+	if !controlResources[resource] {
+		return "", fmt.Errorf("resource is not in the Madis control allowlist")
+	}
+	return "/api/v1/control/resources/" + resource, nil
+}
+
 func (c *Client) request(ctx context.Context, method, path string, value any) (map[string]any, error) {
 	var body io.Reader
 	if value != nil {
@@ -131,4 +145,66 @@ func (c *Client) UpdateDialplan(ctx context.Context, ruleID int, rule any) (map[
 }
 func (c *Client) DeleteDialplan(ctx context.Context, ruleID int) (map[string]any, error) {
 	return c.request(ctx, http.MethodDelete, fmt.Sprintf("/api/v1/control/dialplans/%d", ruleID), nil)
+}
+
+func (c *Client) ControlResources(ctx context.Context, resource string, limit int) (map[string]any, error) {
+	path, err := resourcePath(resource)
+	if err != nil {
+		return nil, err
+	}
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	return c.request(ctx, http.MethodGet, path+"?"+url.Values{"limit": {strconv.Itoa(limit)}}.Encode(), nil)
+}
+
+func (c *Client) CreateControlResource(ctx context.Context, resource string, document any) (map[string]any, error) {
+	path, err := resourcePath(resource)
+	if err != nil {
+		return nil, err
+	}
+	return c.request(ctx, http.MethodPost, path, document)
+}
+
+func (c *Client) UpdateControlResource(ctx context.Context, resource string, resourceID int, document any) (map[string]any, error) {
+	path, err := resourcePath(resource)
+	if err != nil {
+		return nil, err
+	}
+	return c.request(ctx, http.MethodPut, fmt.Sprintf("%s/%d", path, resourceID), document)
+}
+
+func (c *Client) DeleteControlResource(ctx context.Context, resource string, resourceID int, expectedRevision string) (map[string]any, error) {
+	path, err := resourcePath(resource)
+	if err != nil {
+		return nil, err
+	}
+	path = fmt.Sprintf("%s/%d", path, resourceID)
+	if expectedRevision != "" {
+		path += "?" + url.Values{"expected_revision": {expectedRevision}}.Encode()
+	}
+	return c.request(ctx, http.MethodDelete, path, nil)
+}
+
+func (c *Client) SetControlResourceEnabled(ctx context.Context, resource string, resourceID int, enabled bool) (map[string]any, error) {
+	path, err := resourcePath(resource)
+	if err != nil {
+		return nil, err
+	}
+	state := "disable"
+	if enabled {
+		state = "enable"
+	}
+	return c.request(ctx, http.MethodPost, fmt.Sprintf("%s/%d/%s", path, resourceID, state), nil)
+}
+
+func (c *Client) ValidateRoutingRule(ctx context.Context, rule any) (map[string]any, error) {
+	return c.request(ctx, http.MethodPost, "/api/v1/control/validate/routing-rule", rule)
+}
+
+func (c *Client) ValidateDialplan(ctx context.Context, rule any) (map[string]any, error) {
+	return c.request(ctx, http.MethodPost, "/api/v1/control/validate/dialplan", rule)
 }

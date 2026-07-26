@@ -1962,11 +1962,22 @@ fn main() {
 
         let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS routes (id SERIAL PRIMARY KEY, prefix TEXT NOT NULL, gateway_id INT, dispatch_set_id INT, priority INT DEFAULT 10, weight INT DEFAULT 100, cost_per_min NUMERIC(8,4) DEFAULT 0, time_start TIME DEFAULT '00:00', time_end TIME DEFAULT '23:59', enabled BOOLEAN DEFAULT true, description TEXT, created_at TIMESTAMP DEFAULT NOW())")
 
-        let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS routing_rules (id SERIAL PRIMARY KEY, match_prefix TEXT DEFAULT '', match_caller TEXT DEFAULT '', match_src_ip TEXT DEFAULT '', match_time_start TEXT DEFAULT '', match_time_end TEXT DEFAULT '', match_day TEXT DEFAULT '', action TEXT NOT NULL, priority INT DEFAULT 10, enabled BOOLEAN DEFAULT true, description TEXT, created_at TIMESTAMP DEFAULT NOW())")
+        let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS routing_rules (id SERIAL PRIMARY KEY, match_prefix TEXT DEFAULT '', match_caller TEXT DEFAULT '', match_src_ip TEXT DEFAULT '', match_time_start TEXT DEFAULT '', match_time_end TEXT DEFAULT '', match_day TEXT DEFAULT '', match_ani_group TEXT DEFAULT '', action TEXT NOT NULL, priority INT DEFAULT 10, enabled BOOLEAN DEFAULT true, description TEXT, created_at TIMESTAMP DEFAULT NOW())")
+        let _ = sql_exec_plain(db, "ALTER TABLE routing_rules ADD COLUMN IF NOT EXISTS match_ani_group TEXT DEFAULT ''")
 
         let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS dids (id SERIAL PRIMARY KEY, number TEXT UNIQUE NOT NULL, destination_user TEXT NOT NULL, description TEXT, enabled BOOLEAN DEFAULT true, created_at TIMESTAMP DEFAULT NOW())")
 
+        let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS access_control (id SERIAL PRIMARY KEY, source_ip TEXT DEFAULT '*', sip_user TEXT DEFAULT '*', action TEXT DEFAULT 'allow', skip_auth BOOLEAN DEFAULT false, tenant TEXT DEFAULT 'default', max_channels INT DEFAULT 0, priority INT DEFAULT 10, enabled BOOLEAN DEFAULT true, description TEXT, created_at TIMESTAMP DEFAULT NOW())")
+        let _ = sql_exec_plain(db, "ALTER TABLE access_control ADD COLUMN IF NOT EXISTS skip_auth BOOLEAN DEFAULT false")
+        let _ = sql_exec_plain(db, "ALTER TABLE access_control ADD COLUMN IF NOT EXISTS tenant TEXT DEFAULT 'default'")
+        let _ = sql_exec_plain(db, "ALTER TABLE access_control ADD COLUMN IF NOT EXISTS max_channels INT DEFAULT 0")
+        let _ = sql_exec_plain(db, "ALTER TABLE access_control ADD COLUMN IF NOT EXISTS enabled BOOLEAN DEFAULT true")
+        // Keep one-way compatibility with installations created before the
+        // WebUI's access_control table replaced the old acl table.
         let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS acl (id SERIAL PRIMARY KEY, source_ip TEXT DEFAULT '*', sip_user TEXT DEFAULT '*', action TEXT DEFAULT 'allow', priority INT DEFAULT 10, description TEXT, created_at TIMESTAMP DEFAULT NOW())")
+        let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS madis_schema_migrations (key TEXT PRIMARY KEY, applied_at TIMESTAMP DEFAULT NOW())")
+        let _ = sql_exec_plain(db, "INSERT INTO access_control (source_ip, sip_user, action, priority, description) SELECT source_ip, sip_user, action, priority, description FROM acl WHERE NOT EXISTS (SELECT 1 FROM madis_schema_migrations WHERE key = 'acl-to-access-control') AND NOT EXISTS (SELECT 1 FROM access_control)")
+        let _ = sql_exec_plain(db, "INSERT INTO madis_schema_migrations (key) VALUES ('acl-to-access-control') ON CONFLICT DO NOTHING")
 
         let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS dialplan (id SERIAL PRIMARY KEY, match_prefix TEXT NOT NULL, callee_action TEXT NOT NULL DEFAULT '', caller_action TEXT DEFAULT '', direction TEXT DEFAULT 'outbound', priority INT DEFAULT 10, enabled BOOLEAN DEFAULT true, description TEXT, created_at TIMESTAMP DEFAULT NOW())")
 
@@ -1988,6 +1999,15 @@ fn main() {
         let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS cluster_nodes (id TEXT PRIMARY KEY, address TEXT NOT NULL, port INT DEFAULT 5060, region TEXT DEFAULT 'default', weight INT DEFAULT 100, status TEXT DEFAULT 'active', last_heartbeat TIMESTAMP DEFAULT NOW(), started_at TIMESTAMP DEFAULT NOW())")
 
         let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS header_rules (id SERIAL PRIMARY KEY, match_method TEXT DEFAULT '*', match_direction TEXT DEFAULT 'outbound', action TEXT NOT NULL, header_name TEXT NOT NULL, header_value TEXT DEFAULT '', priority INT DEFAULT 10, enabled BOOLEAN DEFAULT true, description TEXT, created_at TIMESTAMP DEFAULT NOW())")
+        let _ = sql_exec_plain(db, "ALTER TABLE gateways ADD COLUMN IF NOT EXISTS number_format TEXT DEFAULT 'e164'")
+        let _ = sql_exec_plain(db, "ALTER TABLE gateways ADD COLUMN IF NOT EXISTS tech_prefix TEXT DEFAULT ''")
+        let _ = sql_exec_plain(db, "ALTER TABLE gateways ADD COLUMN IF NOT EXISTS caller_id_override TEXT DEFAULT ''")
+        let _ = sql_exec_plain(db, "ALTER TABLE gateways ADD COLUMN IF NOT EXISTS health_status TEXT DEFAULT 'unknown'")
+        let _ = sql_exec_plain(db, "ALTER TABLE gateways ADD COLUMN IF NOT EXISTS last_health_code INT DEFAULT 0")
+        let _ = sql_exec_plain(db, "ALTER TABLE gateways ADD COLUMN IF NOT EXISTS last_health_check TIMESTAMP")
+        let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS ani_groups (id SERIAL PRIMARY KEY, name TEXT UNIQUE NOT NULL, description TEXT DEFAULT '', enabled BOOLEAN DEFAULT true, created_at TIMESTAMP DEFAULT NOW())")
+        let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS ani_ranges (id SERIAL PRIMARY KEY, group_id INT NOT NULL, range_start TEXT NOT NULL, range_end TEXT NOT NULL, enabled BOOLEAN DEFAULT true, created_at TIMESTAMP DEFAULT NOW())")
+        let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_ani_ranges_group ON ani_ranges (group_id, range_start)")
 
         let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL, description TEXT)")
         let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS security_bans (source_ip TEXT PRIMARY KEY, reason TEXT DEFAULT '', ban_count INT DEFAULT 1, expires_at TIMESTAMP, permanent BOOLEAN DEFAULT false, created_at TIMESTAMP DEFAULT NOW())")
@@ -1997,7 +2017,7 @@ fn main() {
         // Indexes
         let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_routes_pfx ON routes (prefix, enabled)")
         let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_dids_num ON dids (number) WHERE enabled = true")
-        let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_acl_ip ON acl (source_ip)")
+        let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_acl_ip ON access_control (source_ip)")
         let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_cdr_time ON cdr (started_at)")
         let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_users_name ON users (username) WHERE enabled = true")
         let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_ipauth_ip ON ip_auth (ip_address) WHERE enabled = true")

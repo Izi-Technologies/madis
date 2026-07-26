@@ -223,6 +223,7 @@ Madis reads its config from environment variables (or `/etc/madis/madis.env` whe
   below the listener count are raised automatically, while `0` keeps one pthread per kick
 - `SIP_CARRIER_API_TOKEN` — bearer token for the versioned machine API
 - `SIP_CONTROL_API_TOKEN` — separate bearer token for routing, dialplan, and B2BUA policy changes
+- `SIP_CONTROL_API_READ_TOKEN` — optional read-only token for control status and resource/list calls
 - `SIP_APP_URL` / `SIP_APP_TOKEN` — optional signed live SIP application hook;
   see [`docs/modules.md`](docs/modules.md)
 - `SIP_APP_CA` — optional CA bundle for the HTTPS application endpoint
@@ -363,9 +364,18 @@ limit is 64 KiB. These bounds are part of the contract, not suggestions.
 
 External services can read bounded CDRs for rating and reconciliation with the
 carrier token. Services holding `SIP_CONTROL_API_TOKEN` can list, create,
-replace, delete, enable, and disable dialplans and routing rules. Dialplan
-actions are limited to the documented number-transformation operations; these
-APIs do not execute SQL, Mako, shell commands, or arbitrary application code.
+replace, delete, enable, and disable dialplans, routing rules, gateways,
+routes, dispatch sets, DIDs, header rules, access-control entries, security
+bans, and ANI ranges. `SIP_CONTROL_API_READ_TOKEN` is limited to status and
+read operations. Dialplan actions and resource fields are bounded; these APIs
+do not execute SQL, Mako, shell commands, or arbitrary application code.
+
+The resource API is not an application database. Billing, tenant, rating,
+invoice, and product tables remain in the external application's database.
+Madis stores only the SIP state it needs and treats event `data` and
+`extensions` as the application's JSON contract. Mutable resource responses
+include a revision for optimistic concurrency; send `expected_revision` when
+multiple control writers can update the same row.
 
 `SIP_BILLING_MODE=preauth` is the opt-in online charging path. With the default
 `SIP_CHARGING_PROTOCOL=http`, it sends a bounded HTTPS JSON request before

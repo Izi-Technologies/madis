@@ -5,6 +5,12 @@ local ltn12 = require("ltn12")
 local url = require("socket.url")
 
 local M = {}
+local control_resources = {
+  gateways=true, routes=true, ["dispatch-sets"]=true, ["dispatch-members"]=true,
+  dids=true, ["header-rules"]=true, ["access-control"]=true, ["security-bans"]=true,
+  ["ani-groups"]=true, ["ani-ranges"]=true, registrations=true,
+  ["registration-bindings"]=true, ["cluster-nodes"]=true, ["security-events"]=true,
+}
 function M.new(base_url, token)
   local client = { base_url = base_url:gsub("/$", ""), token = token }
   function client:request(method, path, body)
@@ -42,6 +48,34 @@ function M.new(base_url, token)
   end
   function client:delete_dialplan(rule_id)
     return self:request("DELETE", "/api/v1/control/dialplans/" .. tostring(rule_id))
+  end
+  function client:resource_path(resource)
+    assert(control_resources[resource], "resource is not in the Madis control allowlist")
+    return "/api/v1/control/resources/" .. resource
+  end
+  function client:control_resources(resource, limit)
+    limit=math.min(math.max(limit or 100,1),100)
+    return self:request("GET", self:resource_path(resource) .. "?limit=" .. limit)
+  end
+  function client:create_control_resource(resource, json)
+    return self:request("POST", self:resource_path(resource), json)
+  end
+  function client:update_control_resource(resource, resource_id, json)
+    return self:request("PUT", self:resource_path(resource) .. "/" .. tostring(resource_id), json)
+  end
+  function client:delete_control_resource(resource, resource_id, expected_revision)
+    local suffix = ""
+    if expected_revision and #expected_revision > 0 then suffix = "?expected_revision=" .. url.escape(expected_revision) end
+    return self:request("DELETE", self:resource_path(resource) .. "/" .. tostring(resource_id) .. suffix)
+  end
+  function client:set_control_resource_enabled(resource, resource_id, enabled)
+    return self:request("POST", self:resource_path(resource) .. "/" .. tostring(resource_id) .. "/" .. (enabled and "enable" or "disable"))
+  end
+  function client:validate_routing_rule(json)
+    return self:request("POST", "/api/v1/control/validate/routing-rule", json)
+  end
+  function client:validate_dialplan(json)
+    return self:request("POST", "/api/v1/control/validate/dialplan", json)
   end
   return client
 end

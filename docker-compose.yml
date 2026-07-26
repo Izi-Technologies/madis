@@ -21,6 +21,7 @@ services:
       SIP_ADMIN_TOKEN: "${MADIS_ADMIN_TOKEN:-changeme}"
       SIP_CARRIER_API_TOKEN: "${MADIS_CARRIER_API_TOKEN:-changeme}"
       SIP_CONTROL_API_TOKEN: "${MADIS_CONTROL_API_TOKEN:-changeme}"
+      SIP_CONTROL_API_READ_TOKEN: "${MADIS_CONTROL_API_READ_TOKEN:-changeme-read-only}"
       SIP_APP_TOKEN: "${MADIS_APP_TOKEN:-changeme}"
       SIP_MODULE_TOKEN: "${MADIS_MODULE_TOKEN:-changeme}"
       SIP_APP_URL: "${MADIS_APP_URL:-}"
