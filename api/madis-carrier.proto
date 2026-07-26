@@ -135,6 +135,31 @@ message UpdateDialplanResponse { bool updated = 1; }
 message DeleteDialplanRequest { int32 id = 1; }
 message DeleteDialplanResponse { bool deleted = 1; }
 
+// Generic control resources are intentionally bounded to Madis-owned SIP
+// state. Application billing and tenant records stay in the caller's database.
+message ControlResourceDocument {
+  string resource = 1;
+  int32 id = 2;
+  string revision = 3;
+  google.protobuf.Struct fields = 4;
+}
+
+message ControlResourceListRequest { string resource = 1; uint32 limit = 2; }
+message ControlResourceListResponse {
+  string schema = 1;
+  string resource = 2;
+  repeated ControlResourceDocument items = 3;
+  bool truncated = 4;
+}
+message CreateControlResourceRequest { ControlResourceDocument resource = 1; }
+message CreateControlResourceResponse { bool created = 1; }
+message UpdateControlResourceRequest { ControlResourceDocument resource = 1; string expected_revision = 2; }
+message UpdateControlResourceResponse { bool updated = 1; }
+message DeleteControlResourceRequest { string resource = 1; int32 id = 2; string expected_revision = 3; }
+message DeleteControlResourceResponse { bool deleted = 1; }
+message SetControlResourceStateRequest { string resource = 1; int32 id = 2; bool enabled = 3; }
+message SetControlResourceStateResponse { bool updated = 1; }
+
 service CarrierEvents {
   rpc PublishBillingEvent(PublishBillingEventRequest) returns (PublishBillingEventResponse);
   rpc PendingEvents(PendingEventsRequest) returns (PendingEventsResponse);
@@ -153,4 +178,9 @@ service CarrierControl {
   rpc SetDialplanState(SetDialplanStateRequest) returns (SetDialplanStateResponse);
   rpc UpdateDialplan(UpdateDialplanRequest) returns (UpdateDialplanResponse);
   rpc DeleteDialplan(DeleteDialplanRequest) returns (DeleteDialplanResponse);
+  rpc ListControlResource(ControlResourceListRequest) returns (ControlResourceListResponse);
+  rpc CreateControlResource(CreateControlResourceRequest) returns (CreateControlResourceResponse);
+  rpc UpdateControlResource(UpdateControlResourceRequest) returns (UpdateControlResourceResponse);
+  rpc DeleteControlResource(DeleteControlResourceRequest) returns (DeleteControlResourceResponse);
+  rpc SetControlResourceState(SetControlResourceStateRequest) returns (SetControlResourceStateResponse);
 }

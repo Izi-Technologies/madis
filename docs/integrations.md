@@ -54,8 +54,9 @@ publish an explicit `event_id` and reuse it for retries.
 
 Applications can also change the supported call policy through the versioned
 control API. Use a separate `SIP_CONTROL_API_TOKEN`; do not give a billing
-worker permission to change routing. The first control surface manages bounded
-routing rules and explicit B2BUA policy:
+worker permission to change routing. A service that only reads state can use
+`SIP_CONTROL_API_READ_TOKEN`. The control surface manages bounded routing
+rules, explicit B2BUA policy, and allowlisted SIP resources:
 
 ```text
 GET  /api/v1/control/status
@@ -69,6 +70,11 @@ PUT  /api/v1/control/dialplans/{id}
 DELETE /api/v1/control/dialplans/{id}
 POST /api/v1/control/dialplans/{id}/enable
 POST /api/v1/control/dialplans/{id}/disable
+GET  /api/v1/control/resources/{resource}
+POST /api/v1/control/resources/{resource}
+PUT  /api/v1/control/resources/{resource}/{id}
+DELETE /api/v1/control/resources/{resource}/{id}
+POST /api/v1/control/resources/{resource}/{id}/enable|disable
 ```
 
 For example, a carrier application can submit
@@ -87,6 +93,21 @@ Dialplans use the same control token. A replacement contains
 `strip_plus`, and `add_plus`; semicolon-separated actions run in order. Use
 enable/disable for reversible changes and delete only when the rule is no
 longer needed. The worker reads the committed rule on the next call.
+
+The generic resource names are `gateways`, `routes`, `dispatch-sets`,
+`dispatch-members`, `dids`, `header-rules`, `access-control`,
+`security-bans`, `ani-groups`, `ani-ranges`, `registrations`,
+`registration-bindings`, `cluster-nodes`, and `security-events`. The last
+four are read-only. Each mutable row includes a revision. Send
+`expected_revision` on a replacement or delete when more than one service may
+write the same row; a stale value is rejected with `409`.
+
+This is not a general-purpose database API. Madis does not accept table names,
+SQL, migrations, or arbitrary columns from an external service. Keep custom
+billing, tenant, rating, provisioning, and invoice tables in the application's
+own database. Use an application-owned identifier in the event payload or a
+separate association table. Unknown fields in a Madis resource document are
+not persisted.
 
 CDRs are read with the carrier token through `/billing/cdr`. The endpoint is
 bounded to 100 records per request and supports an exact `call_id` lookup. It

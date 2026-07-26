@@ -1,4 +1,11 @@
 export class MadisCarrier {
+  static controlResources = new Set([
+    "gateways", "routes", "dispatch-sets", "dispatch-members", "dids",
+    "header-rules", "access-control", "security-bans", "ani-groups",
+    "ani-ranges", "registrations", "registration-bindings", "cluster-nodes",
+    "security-events",
+  ]);
+
   constructor(baseUrl, token, timeoutMs = 2000) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
     this.token = token;
@@ -44,4 +51,26 @@ export class MadisCarrier {
   }
   updateDialplan(ruleId, rule) { return this.request("PUT", `/api/v1/control/dialplans/${Number(ruleId)}`, rule); }
   deleteDialplan(ruleId) { return this.request("DELETE", `/api/v1/control/dialplans/${Number(ruleId)}`); }
+
+  resourcePath(resource) {
+    if (!MadisCarrier.controlResources.has(resource)) throw new Error("resource is not in the Madis control allowlist");
+    return `/api/v1/control/resources/${resource}`;
+  }
+  controlResources(resource, limit = 100) {
+    const n = Math.min(Math.max(limit, 1), 100);
+    return this.request("GET", `${this.resourcePath(resource)}?limit=${n}`);
+  }
+  createControlResource(resource, document) { return this.request("POST", this.resourcePath(resource), document); }
+  updateControlResource(resource, resourceId, document) {
+    return this.request("PUT", `${this.resourcePath(resource)}/${Number(resourceId)}`, document);
+  }
+  deleteControlResource(resource, resourceId, expectedRevision = "") {
+    const query = expectedRevision ? `?expected_revision=${encodeURIComponent(expectedRevision)}` : "";
+    return this.request("DELETE", `${this.resourcePath(resource)}/${Number(resourceId)}${query}`);
+  }
+  setControlResourceEnabled(resource, resourceId, enabled) {
+    return this.request("POST", `${this.resourcePath(resource)}/${Number(resourceId)}/${enabled ? "enable" : "disable"}`);
+  }
+  validateRoutingRule(rule) { return this.request("POST", "/api/v1/control/validate/routing-rule", rule); }
+  validateDialplan(rule) { return this.request("POST", "/api/v1/control/validate/dialplan", rule); }
 }

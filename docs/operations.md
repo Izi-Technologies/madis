@@ -32,6 +32,7 @@ MADIS_DB_PASS='long-random-password' \
 MADIS_ADMIN_TOKEN='long-random-admin-token' \
 MADIS_CARRIER_API_TOKEN='long-random-carrier-token' \
 MADIS_CONTROL_API_TOKEN='long-random-control-token' \
+MADIS_CONTROL_API_READ_TOKEN='long-random-read-token' \
 MADIS_APP_TOKEN='long-random-application-token' \
 MADIS_MODULE_TOKEN='long-random-module-token' \
 MADIS_APP_URL='https://app.example.net/madis/sip' \

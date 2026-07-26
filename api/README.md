@@ -20,6 +20,14 @@ Madis exposes a versioned machine API beside the WebUI:
 | `DELETE /admin/api/v1/control/dialplans/{id}` | Delete a dialplan rule |
 | `POST /admin/api/v1/control/dialplans/{id}/enable` | Enable a dialplan rule |
 | `POST /admin/api/v1/control/dialplans/{id}/disable` | Disable a dialplan rule |
+| `POST /admin/api/v1/control/validate/routing-rule` | Validate a routing-rule document without storing it |
+| `POST /admin/api/v1/control/validate/dialplan` | Validate a dialplan document without storing it |
+| `GET /admin/api/v1/control/resources/{resource}` | List an allowlisted SIP resource |
+| `POST /admin/api/v1/control/resources/{resource}` | Create an allowlisted SIP resource |
+| `PUT /admin/api/v1/control/resources/{resource}/{id}` | Replace an allowlisted SIP resource |
+| `DELETE /admin/api/v1/control/resources/{resource}/{id}` | Delete an allowlisted SIP resource |
+| `POST /admin/api/v1/control/resources/{resource}/{id}/enable` | Enable a resource |
+| `POST /admin/api/v1/control/resources/{resource}/{id}/disable` | Disable a resource |
 
 For application-team integration patterns, see
 [`../docs/integrations.md`](../docs/integrations.md). The reference clients
@@ -32,10 +40,11 @@ installer generates a separate token from the WebUI token. Put the API behind
 TLS/mTLS or a private network; the standalone Mako listener is normally bound
 to loopback.
 
-Control writes use a separate `SIP_CONTROL_API_TOKEN`. Keep it in the service
-that may change call behavior; a billing consumer should receive only the
-carrier token. The control API accepts routing policy, not Mako source, SQL,
-shell commands, or arbitrary plugin code.
+Control writes use a separate `SIP_CONTROL_API_TOKEN`. Read-only control calls
+may use `SIP_CONTROL_API_READ_TOKEN`; it cannot create, replace, delete, or
+toggle resources. Keep the write token in the service that may change call
+behavior. The control API accepts routing policy, not Mako source, SQL, shell
+commands, or arbitrary plugin code.
 
 For per-request SIP decisions and external TTS/STT/LLM/media workers, use the
 signed HTTP/JSON application and module contracts in
@@ -96,7 +105,9 @@ Accepted actions are `route:`, `b2bua:`, `dispatch:`, `reject:`, `redirect:`,
 `failover:`, `lcr`, and `continue`. Values are length-bounded and checked for
 CR/LF/NUL/field separators before parameterized SQL is used. Read the rule
 list for IDs, then use enable/disable for a recoverable state change. There is
-no endpoint for arbitrary SQL or runtime code execution.
+no endpoint for arbitrary SQL or runtime code execution. The validation
+endpoints can check a document before an application presents or submits it;
+they do not query or modify the database.
 
 The API is at-least-once. Consumers must deduplicate by `event_id`, commit
 their billing/charging transaction, then acknowledge. Acknowledgement is not a
@@ -135,14 +146,44 @@ separate recoverable state change. Values are validated before parameterized
 SQL is used. The endpoint does not accept SQL, Mako, shell commands, or
 arbitrary code.
 
-## Custom schemas
+## Application-owned schemas
 
 The envelope fields are fixed for this API version; `data`, `extensions`, and
 application-defined fields are open. Set `schema` to your own URI or version,
 reuse the same `event_id` across retries, and add a tenant-specific `event_type`.
-Madis stores the complete JSON document as JSONB and does not silently rewrite
+Madis stores the complete event envelope as JSONB and does not silently rewrite
 unknown fields. The built-in CDR event is only one profile, not a required
 carrier schema.
+
+Madis does not create or manage application billing tables. An external
+application can use its own database engine, tables, migrations, tenant model,
+rating representation, and invoice format. Use the billing event outbox and
+CDR endpoint as the handoff, and keep the application-owned identifier in the
+event payload. The control resource API is limited to Madis routing and SIP
+state; it is not a generic SQL or custom-table API.
+
+The generic control resources are `gateways`, `routes`, `dispatch-sets`,
+`dispatch-members`, `dids`, `header-rules`, `access-control`,
+`security-bans`, `ani-groups`, `ani-ranges`, `registrations` (read only),
+`registration-bindings` (read only), `cluster-nodes` (read only), and
+`security-events` (read only).
+
+The main writable fields are: `gateways` (`name`, `address`, `port`,
+`transport`, credentials, caller ID, channel limit, number format, and tech
+prefix); `routes` (prefix, exactly one gateway or dispatch-set ID, priority,
+weight, cost, time window, description); `dispatch-sets` (name, algorithm,
+description); `dispatch-members` (set, gateway, priority, weight); `dids`
+(number, destination user, description); `header-rules` (method, direction,
+action, header name/value, priority); `access-control` (source IP, SIP user,
+action, authentication flag, tenant label, channel limit, priority);
+`security-bans` (source IP, reason, permanence); `ani-groups` (name,
+description); and `ani-ranges` (group ID and start/end values).
+
+Every mutable row returns a `revision`. Send it as `expected_revision` on
+update or as the `expected_revision` delete query parameter when concurrent
+writers need optimistic concurrency. Unknown JSON fields are not persisted as
+database columns. Store application extensions in the caller's database and
+use a stable external reference in the event or application record.
 
 ```json
 {

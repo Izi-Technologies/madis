@@ -5,6 +5,7 @@ import "./pages.mko"
 import "./http.mko"
 import "./handlers.mko"
 pull . "../carrier_api.mko"
+pull . "../control_resources.mko"
 
 fn main() {
     let db_url = env_get_or("SIP_DB_URL", "")
@@ -17,6 +18,15 @@ fn main() {
         let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS admin_sessions (token TEXT PRIMARY KEY, username TEXT NOT NULL, role TEXT NOT NULL, created_at TIMESTAMP DEFAULT NOW())")
         let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS billing_events (event_id TEXT PRIMARY KEY, call_id TEXT NOT NULL DEFAULT '', event_type TEXT NOT NULL, payload_json JSONB NOT NULL, occurred_at TIMESTAMP DEFAULT NOW(), available_at TIMESTAMP DEFAULT NOW(), delivered_at TIMESTAMP, attempts INT NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '', CONSTRAINT billing_event_id_size CHECK (char_length(event_id) BETWEEN 16 AND 128), CONSTRAINT billing_event_payload_size CHECK (octet_length(payload_json::text) <= 65536))")
         let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_billing_events_pending ON billing_events (occurred_at, event_id) WHERE delivered_at IS NULL")
+        let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS access_control (id SERIAL PRIMARY KEY, source_ip TEXT DEFAULT '*', sip_user TEXT DEFAULT '*', action TEXT DEFAULT 'allow', skip_auth BOOLEAN DEFAULT false, tenant TEXT DEFAULT 'default', max_channels INT DEFAULT 0, priority INT DEFAULT 10, enabled BOOLEAN DEFAULT true, description TEXT, created_at TIMESTAMP DEFAULT NOW())")
+        let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS ani_groups (id SERIAL PRIMARY KEY, name TEXT UNIQUE NOT NULL, description TEXT DEFAULT '', enabled BOOLEAN DEFAULT true, created_at TIMESTAMP DEFAULT NOW())")
+        let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS ani_ranges (id SERIAL PRIMARY KEY, group_id INT NOT NULL, range_start TEXT NOT NULL, range_end TEXT NOT NULL, enabled BOOLEAN DEFAULT true, created_at TIMESTAMP DEFAULT NOW())")
+        let _ = sql_exec_plain(db, "ALTER TABLE gateways ADD COLUMN IF NOT EXISTS number_format TEXT DEFAULT 'e164'")
+        let _ = sql_exec_plain(db, "ALTER TABLE gateways ADD COLUMN IF NOT EXISTS tech_prefix TEXT DEFAULT ''")
+        let _ = sql_exec_plain(db, "ALTER TABLE gateways ADD COLUMN IF NOT EXISTS caller_id_override TEXT DEFAULT ''")
+        let _ = sql_exec_plain(db, "ALTER TABLE gateways ADD COLUMN IF NOT EXISTS health_status TEXT DEFAULT 'unknown'")
+        let _ = sql_exec_plain(db, "ALTER TABLE gateways ADD COLUMN IF NOT EXISTS last_health_code INT DEFAULT 0")
+        let _ = sql_exec_plain(db, "ALTER TABLE gateways ADD COLUMN IF NOT EXISTS last_health_check TIMESTAMP")
         let ac = sql_query_str(db, "SELECT COUNT(*) FROM admin_users", "")
         if str_eq(ac, "0") {
             // Bootstrap only when SIP_ADMIN_PASSWORD is set — never hardcode admin/admin.
@@ -200,14 +210,20 @@ fn main() {
                         let machine_kind = carrier_api_route(method, path)
                         if len(resp) == 0 && machine_kind > 0 {
                             let mut machine_auth = carrier_api_token_ok(raw, rl)
+                            let mut control_scope = 0
                             if carrier_api_requires_control(machine_kind) == 1 {
-                                machine_auth = carrier_api_control_token_ok(raw, rl)
+                                control_scope = carrier_api_control_scope(raw, rl)
+                                machine_auth = if control_scope > 0 { 1 } else { 0 }
+                                if carrier_api_control_write_required(machine_kind) == 1 && control_scope < 2 { machine_auth = 0 }
                             }
                             if machine_auth == 1 {
                                 resp = carrier_api_handle(db, db_ok, method, path, raw, rl)
                             } else {
                                 let mut message = "carrier bearer token required"
-                                if carrier_api_requires_control(machine_kind) == 1 { message = "control bearer token required" }
+                                if carrier_api_requires_control(machine_kind) == 1 {
+                                    message = "control bearer token required"
+                                    if control_scope == 1 && carrier_api_control_write_required(machine_kind) == 1 { message = "control write scope required" }
+                                }
                                 resp = http_resp(401, "application/json", "{\"ok\":false,\"error\":\"" + message + "\"}\n", "WWW-Authenticate: Bearer\r\n")
                             }
                         }

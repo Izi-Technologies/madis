@@ -5,6 +5,7 @@ pull . "../admin/http.mko"
 pull . "../admin/ui.mko"
 pull . "../admin/pages.mko"
 pull . "../carrier_api.mko"
+pull . "../control_resources.mko"
 
 fn TestBillingEventIdentityAndEscaping() {
     let a = billing_event_id("call-1|TRYING", "cdr.lifecycle")
@@ -34,12 +35,42 @@ fn TestControlApiIsExplicitAndAllowlisted() {
     assert_eq(carrier_api_route("POST", "/admin/api/v1/control/routing-rules/0/enable"), 0)
     assert_eq(carrier_api_requires_control(7), 1)
     assert_eq(carrier_api_requires_control(3), 0)
+    assert_eq(carrier_api_control_write_required(5), 0)
+    assert_eq(carrier_api_control_write_required(6), 0)
+    assert_eq(carrier_api_control_write_required(20), 0)
+    assert_eq(carrier_api_route("POST", "/admin/api/v1/control/validate/routing-rule"), 15)
+    assert_eq(carrier_api_route("POST", "/admin/api/v1/control/validate/dialplan"), 15)
+    assert_eq(carrier_api_control_write_required(15), 0)
+    assert_eq(carrier_api_control_write_required(21), 1)
     assert_eq(carrier_api_rule_action_ok("b2bua:carrier-gateway"), 1)
     assert_eq(carrier_api_rule_action_ok("route:carrier-gateway"), 1)
     assert_eq(carrier_api_rule_action_ok("DROP TABLE routing_rules"), 0)
     assert_eq(carrier_api_rule_action_ok("b2bua:one,two"), 0)
     assert_eq_str(carrier_api_rule_field("{\"action\":\"b2bua:gw\"}", "action", 512), "b2bua:gw")
     assert_eq_str(carrier_api_rule_field("{\"action\":\"b2bua|gw\"}", "action", 512), "")
+    assert_eq(carrier_api_route("GET", "/admin/api/v1/control/resources/gateways"), 20)
+    assert_eq(carrier_api_route("POST", "/admin/api/v1/control/resources/gateways"), 21)
+    assert_eq(carrier_api_route("PUT", "/admin/api/v1/control/resources/gateways/12"), 22)
+    assert_eq(carrier_api_route("DELETE", "/admin/api/v1/control/resources/gateways/12"), 23)
+    assert_eq(carrier_api_route("POST", "/admin/api/v1/control/resources/gateways/12/enable"), 24)
+    assert_eq(carrier_api_route("PUT", "/admin/api/v1/control/resources/unknown/12"), 0)
+    assert_eq(carrier_api_route("PUT", "/admin/api/v1/control/resources/gateways/0"), 0)
+    assert_eq(control_resource_name_ok("routing-rules"), 0)
+    assert_eq(control_resource_name_ok("users"), 0)
+    assert_eq(control_resource_json_ok("routes", "{\"prefix\":\"+1\",\"gateway_id\":1}"), 1)
+    assert_eq(control_resource_json_ok("routes", "{\"prefix\":\"+1\",\"gateway_id\":1,\"dispatch_set_id\":2}"), 0)
+    assert_eq(control_resource_json_ok("routes", "{\"prefix\":\"+1\",\"gateway_id\":1,\"description\":\"x'; DROP TABLE routes;--\"}"), 1)
+    assert_eq(control_resource_time_ok("{\"time_start\":\"09:30\"}", "time_start"), 1)
+    assert_eq(control_resource_time_ok("{\"time_start\":\"99:99\"}", "time_start"), 0)
+    assert_eq(control_resource_json_ok("header-rules", "{\"action\":\"set\",\"header_name\":\"X-Test\",\"header_value\":\"ok\"}"), 1)
+    assert_eq(control_resource_json_ok("header-rules", "{\"action\":\"set\",\"header_name\":\"X-Test: Drop\"}"), 0)
+    assert_eq(control_resource_json_ok("security-bans", "{\"source_ip\":\"127.0.0.1\",\"reason\":\"scanner\"}"), 1)
+    assert_eq(control_resource_bool_ok("{\"permanent\":false}", "permanent"), 1)
+    assert_eq(control_resource_bool_ok("{\"permanent\":\"DROP TABLE\"}", "permanent"), 0)
+    assert_eq(carrier_api_control_rule_json_ok("{\"action\":\"route:gw\",\"priority\":10}"), 1)
+    assert_eq(carrier_api_control_rule_json_ok("{\"action\":\"DROP TABLE routes\"}"), 0)
+    assert_eq(str_index(control_resource_delete_sql("dispatch-sets"), ";"), -1)
+    assert_eq(str_index(control_resource_delete_sql("ani-groups"), ";"), -1)
 }
 
 fn TestDialplanApiIsBoundedAndComplete() {

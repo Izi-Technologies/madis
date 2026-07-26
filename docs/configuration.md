@@ -114,6 +114,7 @@ not use the insecure override for carrier traffic.
 | `SIP_ADMIN_TOKEN` | empty | Bearer token for the SIP worker admin endpoints; empty means no token on that local endpoint. |
 | `SIP_CARRIER_API_TOKEN` | empty | Bearer token for billing event and integration endpoints. |
 | `SIP_CONTROL_API_TOKEN` | empty | Separate bearer token for routing-rule and B2BUA policy changes; keep it server-side. |
+| `SIP_CONTROL_API_READ_TOKEN` | empty | Optional read-only bearer token for control status and resource/list calls. It cannot mutate state. |
 | `SIP_APP_URL` | empty | Optional HTTPS endpoint for live signed SIP application decisions. Disabled when empty. |
 | `SIP_APP_TOKEN` | empty | Shared secret for the live SIP application endpoint; never put it in browser code. |
 | `SIP_APP_CA` | empty | Optional CA bundle for the application endpoint. Empty uses the platform trust paths. |
@@ -171,10 +172,19 @@ peer behavior before enabling it for carrier traffic.
 ## Runtime call control
 
 `SIP_CONTROL_API_TOKEN` authorizes the versioned WebUI control endpoints. They
-can list, create, enable, and disable bounded routing rules. They cannot change
-environment variables, execute Mako or SQL, or mutate arbitrary tables. A
-`b2bua:` rule is inert until `SIP_B2BUA_MODE=enabled`; changing that environment
-setting requires a service restart.
+can list, create, replace, delete, enable, and disable the allowlisted Madis
+SIP resources. `SIP_CONTROL_API_READ_TOKEN` can read status and lists but
+cannot mutate state. Neither token can change environment variables, execute
+Mako or SQL, or mutate arbitrary tables. A `b2bua:` rule is inert until
+`SIP_B2BUA_MODE=enabled`; changing that environment setting requires a service
+restart.
+
+The control resource API is deliberately not a general application database
+interface. External applications keep their own billing, tenant, rating,
+invoice, and custom tables. Madis stores only routing and SIP state. Resource
+documents contain Madis-owned fields; unknown fields are not persisted as
+columns. Mutable rows expose a `revision`; clients may send
+`expected_revision` to reject stale updates and deletes.
 
 For live application control and external media/AI workers, see
 [`modules.md`](modules.md). Those endpoints receive signed bounded JSON; they
