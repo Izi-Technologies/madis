@@ -1,280 +1,128 @@
 # Application integration
 
-Carrier, billing, provisioning, and operations applications can call Madis over
-HTTP/JSON. They can be written in Python, Go, JavaScript, or another language
-without linking to Mako or embedding SIP process state.
+Madis integrates with carrier applications over bounded HTTP/JSON contracts. The application owns business state and uses Madis for SIP state, routing policy, CDR delivery, and selected charging/integration boundaries.
 
-The supported integration boundary is server-side HTTP/JSON:
+## Choose the right interface
 
-```text
-application service  ── HTTPS + bearer token ──>  Madis WebUI/API
-       │                                             │
-       └─ owns billing, workflow, retries, schema ───┘
-```
+| Requirement | Madis interface |
+| --- | --- |
+| Read enabled transports and integration contracts | `GET /admin/api/v1/capabilities` |
+| Consume CDR or application billing events | Carrier API with `SIP_CARRIER_API_TOKEN` |
+| Change routes, dialplans, gateways, or other SIP policy | Control API with `SIP_CONTROL_API_TOKEN` |
+| Observe policy without mutation | Control API with `SIP_CONTROL_API_READ_TOKEN` |
+| Make a per-request SIP decision | Signed live application contract; see [`modules.md`](modules.md) |
+| Dispatch TTS/STT/LLM/media/recording/fraud/billing work | Signed module contract; see [`modules.md`](modules.md) |
+| Online authorization before an INVITE | HTTP or Diameter charging configuration; see [`../api/diameter.md`](../api/diameter.md) |
 
-Madis does not execute application code inside the SIP worker. Keep framework
-code, business rules, credentials, and durable application state in the
-calling service. The API is served by the standalone WebUI process; use the
-SIP worker's `/healthz` and `/readyz` endpoints separately for infrastructure
-health checks.
-
-## Start with the contract
-
-Use a base URL that includes `/admin`:
+The HTTP/JSON base URL includes `/admin`, for example:
 
 ```text
-https://proxy.example.net/admin
+https://proxy.example.net/admin/api/v1/
 ```
 
-The carrier API then uses:
+The SIP worker’s local `/healthz` and `/readyz` endpoints are infrastructure probes, not an application API. Readiness should be checked separately from billing or control API health.
+
+## Authentication and network placement
+
+Use `Authorization: Bearer ...` on every machine API request. Keep the following credentials separate:
+
+- `SIP_CARRIER_API_TOKEN` for billing consumers and CDR/rating integrations.
+- `SIP_CONTROL_API_TOKEN` for the service that may change call behavior.
+- `SIP_CONTROL_API_READ_TOKEN` for observers and reconciliation jobs that must not mutate state.
+
+Keep tokens in server-side configuration. Do not put them in browser bundles, SIP headers, routing-rule descriptions, logs, or application URLs. Put the admin service behind HTTPS and a private network or reverse proxy. The repository does not ship a public TLS termination or identity provider.
+
+## Capabilities discovery
+
+Start an integration by querying capabilities:
+
+```sh
+curl -fsS \
+  -H "Authorization: Bearer $SIP_CARRIER_API_TOKEN" \
+  https://proxy.example.net/admin/api/v1/capabilities
+```
+
+The response identifies the Madis schema/version, signaling transports, available billing/charging/IMS/SS7 contracts, control surface, and whether the optional signed application or module endpoints are enabled. Treat it as runtime discovery, not a replacement for deployment configuration review.
+
+## Billing event consumer
+
+The billing outbox is at-least-once. A robust consumer does the following:
 
 ```text
-GET  /api/v1/capabilities
-GET  /api/v1/billing/events?limit=100
-POST /api/v1/billing/events
-POST /api/v1/billing/events/ack?event_id=...
-GET  /api/v1/billing/cdr?limit=100&call_id=...
+poll events → validate schema and tenant policy
+→ deduplicate by event_id → commit rating/ledger/workflow transaction
+→ acknowledge event_id
 ```
 
-The full public path is therefore, for example,
-`https://proxy.example.net/admin/api/v1/capabilities`. Send
-`Authorization: Bearer <SIP_CARRIER_API_TOKEN>` and JSON for event writes.
-Keep this token on the server. Browser applications should call their own
-backend, which then calls Madis; do not expose a carrier token in JavaScript
-bundles or browser storage.
+Do not acknowledge first. If a consumer crashes after committing but before acknowledging, it must safely process the same `event_id` again. Retry connection failures and transient `503` responses with bounded exponential backoff and jitter; fix `400` and `401` responses instead of retrying them blindly.
 
-The API accepts an event envelope. `schema`, `event_type`, and `data` are
-required; `tenant_id`, `session_id`, `occurred_at_ms`, and
-`extensions` are available when useful. `data` and `extensions` are owned by
-the application. Validate events against
-[`../api/billing-event.schema.json`](../api/billing-event.schema.json) and
-publish an explicit `event_id` and reuse it for retries.
+Madis provides event identity, bounded JSON persistence, CDR reads, and acknowledgement. The application provides the rating formula, ledger, invoices, settlement, tax, tenant authorization, and durable job orchestration.
 
-## Control plane
+## Control API usage
 
-Applications can also change the supported call policy through the versioned
-control API. Use a separate `SIP_CONTROL_API_TOKEN`; do not give a billing
-worker permission to change routing. A service that only reads state can use
-`SIP_CONTROL_API_READ_TOKEN`. The control surface manages bounded routing
-rules, explicit B2BUA policy, and allowlisted SIP resources:
+Use the validation endpoints before writing policy assembled by an operator or another service:
 
-```text
-GET  /api/v1/control/status
-GET  /api/v1/control/routing-rules?limit=100
-POST /api/v1/control/routing-rules
-POST /api/v1/control/routing-rules/{id}/enable
-POST /api/v1/control/routing-rules/{id}/disable
-GET  /api/v1/control/dialplans?limit=100
-POST /api/v1/control/dialplans
-PUT  /api/v1/control/dialplans/{id}
-DELETE /api/v1/control/dialplans/{id}
-POST /api/v1/control/dialplans/{id}/enable
-POST /api/v1/control/dialplans/{id}/disable
-GET  /api/v1/control/resources/{resource}
-POST /api/v1/control/resources/{resource}
-PUT  /api/v1/control/resources/{resource}/{id}
-DELETE /api/v1/control/resources/{resource}/{id}
-POST /api/v1/control/resources/{resource}/{id}/enable|disable
+```sh
+API=https://proxy.example.net/admin/api/v1
+
+curl -fsS -X POST "$API/control/validate/dialplan" \
+  -H "Authorization: Bearer $SIP_CONTROL_API_READ_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"match_prefix":"+1","callee_action":"e164,prepend:1","priority":20}'
 ```
 
-For example, a carrier application can submit
-`{"match_prefix":"+1555","action":"b2bua:carrier-gateway"}`. The
-allowed actions are `route:`, `b2bua:`, `dispatch:`, `reject:`, `redirect:`,
-`failover:`, `lcr`, and `continue`. `b2bua:` is effective only when the SIP
-worker has `SIP_B2BUA_MODE=enabled`. A control request changes database policy;
-it does not inject Mako, SQL, shell commands, or arbitrary language code into
-the SIP worker. The worker continues to own SIP transaction state and applies
-the rule on the next matching call.
+Use the generic resource API for Madis-owned SIP state such as gateways, routes, dispatch sets, DIDs, access control, security bans, ANI ranges, and header rules. Security bans are currently listed and created/upserted by `source_ip`; they do not use the generic numeric-ID update/delete/state operations. The API is not a generic CRUD interface for application tables. See [`../api/README.md`](../api/README.md) for the complete resource catalog and field bounds.
 
-Dialplans use the same control token. A replacement contains
-`match_prefix`, `callee_action`, and `direction`, with optional
-`caller_action`, `priority`, and `description`. Actions are limited to
-`strip:N`, `prepend:PREFIX`, `replace:OLD:NEW`, `set:NUMBER`, `e164:CC`,
-`strip_plus`, and `add_plus`; semicolon-separated actions run in order. Use
-enable/disable for reversible changes and delete only when the rule is no
-longer needed. The worker reads the committed rule on the next call.
-
-The generic resource names are `gateways`, `routes`, `dispatch-sets`,
-`dispatch-members`, `dids`, `header-rules`, `access-control`,
-`security-bans`, `ani-groups`, `ani-ranges`, `registrations`,
-`registration-bindings`, `cluster-nodes`, and `security-events`. The last
-four are read-only. Each mutable row includes a revision. Send
-`expected_revision` on a replacement or delete when more than one service may
-write the same row; a stale value is rejected with `409`.
-
-This is not a general-purpose database API. Madis does not accept table names,
-SQL, migrations, or arbitrary columns from an external service. Keep custom
-billing, tenant, rating, provisioning, and invoice tables in the application's
-own database. Use an application-owned identifier in the event payload or a
-separate association table. Unknown fields in a Madis resource document are
-not persisted.
-
-CDRs are read with the carrier token through `/billing/cdr`. The endpoint is
-bounded to 100 records per request and supports an exact `call_id` lookup. It
-is a read surface for external rating, invoicing, reconciliation, and
-reporting; it does not mark a call billed or acknowledge an outbox event. The
-application owns those billing transactions and should use the event outbox
-for at-least-once delivery.
-
-The same HTTP contract is used by every supported language. In Python:
-
-```python
-control = MadisCarrier(
-    os.environ["MADIS_API_URL"],
-    os.environ["SIP_CONTROL_API_TOKEN"],
-)
-control.create_routing_rule({
-    "match_prefix": "+1555",
-    "action": "b2bua:carrier-gateway",
-    "priority": 10,
-})
-```
-
-Go, JavaScript/TypeScript, Lua, and Erlang clients expose the same operations
-as `CreateRoutingRule`/`SetRoutingRuleEnabled`, `createRoutingRule`,
-`create_routing_rule`/`set_routing_rule_enabled`, and
-`create_routing_rule`/`set_routing_rule_enabled`. The examples under
-[`../sdk/`](../sdk/) are intentionally thin so teams can wrap them in FastAPI,
-Gin, Express, LuaSocket, OTP, or another application framework.
+Mutable resource responses include a `revision`. When multiple writers are possible, read the row, retain its revision, and send `expected_revision` on the update or delete operation. Treat a conflict as a signal to re-read and reconcile rather than blindly retrying the old document.
 
 ## Python
 
-The dependency-free reference client is
-[`sdk/python/madis_carrier.py`](../sdk/python/madis_carrier.py). It works in a
-normal worker, Flask view, Django management command, or a synchronous FastAPI
-route:
+[`../sdk/python/madis_carrier.py`](../sdk/python/madis_carrier.py) uses only the Python standard library. It provides capabilities, event publication/acknowledgement, CDR reads, control methods, resource methods, and document validation.
 
 ```python
 import os
+from madis_carrier import MadisCarrier
 
-from sdk.python.madis_carrier import MadisCarrier
-
-madis = MadisCarrier(
-    os.environ["MADIS_API_URL"],       # https://proxy.example.net/admin
+client = MadisCarrier(
+    os.environ["MADIS_API_URL"],  # e.g. https://proxy.example.net/admin
     os.environ["SIP_CARRIER_API_TOKEN"],
     timeout=2.0,
 )
 
-def publish_usage(call_id: str, seconds: int) -> dict:
-    return madis.publish({
-        "schema": "https://carrier.example/schemas/voice-usage.v1",
-        "event_id": f"{call_id}:final",
-        "event_type": "voice.usage.final",
-        "session_id": call_id,
-        "data": {"seconds": seconds},
-    })
+event = {
+    "schema": "https://carrier.example/schemas/voice-usage.v1",
+    "event_id": "call-123:final",
+    "event_type": "voice.usage.final",
+    "session_id": "call-123",
+    "data": {"seconds": 42},
+}
+client.publish(event)
 ```
 
-For async FastAPI or an async worker, use an async HTTP client such as
-`httpx` or `aiohttp`, or run the synchronous reference client in a worker
-thread. Do not perform blocking `urllib` calls directly in an async event
-loop. Flask and Django views may use the reference client directly, but set a
-short timeout and move long polling or billing reconciliation to a background
-worker such as Celery, RQ, Dramatiq, or the platform's job system.
+For a control client, construct it with the control token and use `control_resources`, `create_control_resource`, `update_control_resource`, `delete_control_resource`, `set_control_resource_enabled`, `validate_routing_rule`, or `validate_dialplan` as appropriate.
 
 ## Go
 
-[`sdk/go/madiscarrier.go`](../sdk/go/madiscarrier.go) is a small source-level
-package example using `net/http`, `context`, and `encoding/json`. It is not a
-published Go module; copy or vendor it into the application's own module and
-review its error and retry policy.
+[`../sdk/go/madiscarrier.go`](../sdk/go/madiscarrier.go) is a source-level example using `net/http`, `context`, and `encoding/json`. It is not a published Go module. Copy or vendor it into the application and review its retry, timeout, and error handling.
 
-The same client fits `net/http` handlers and routers such as Gin, chi, Echo,
-or Fiber. Pass request-scoped contexts and keep the HTTP client shared:
-
-```go
-client := &madiscarrier.Client{
-    BaseURL: os.Getenv("MADIS_API_URL"), // .../admin
-    Token:   os.Getenv("SIP_CARRIER_API_TOKEN"),
-    HTTP:    &http.Client{Timeout: 2 * time.Second},
-}
-
-event := map[string]any{
-    "schema":     "https://carrier.example/schemas/voice-usage.v1",
-    "event_id":   callID + ":final",
-    "event_type": "voice.usage.final",
-    "session_id": callID,
-    "data":       map[string]any{"seconds": seconds},
-}
-
-result, err := client.Publish(ctx, event)
-```
-
-In Gin/chi/Echo, call this from a server-side handler or enqueue the event in
-the application's durable job system first. Do not create a new `http.Client`
-for every request. Use `context.WithTimeout` for per-operation deadlines and
-log the Madis status without logging the bearer token or full sensitive event
-payload.
+Use a shared `http.Client`, a request-scoped context deadline, and a durable queue for event publication. Do not create a new client for every event or block the SIP request path on a long-running rating job.
 
 ## JavaScript and TypeScript
 
-[`sdk/javascript/madis-carrier.mjs`](../sdk/javascript/madis-carrier.mjs) uses
-the platform `fetch` API and works in current Node.js releases. It can be
-wrapped by Express, Fastify, NestJS, or a Next.js route handler:
+[`../sdk/javascript/madis-carrier.mjs`](../sdk/javascript/madis-carrier.mjs) uses the platform `fetch` API and works in current server-side Node.js environments. It can be wrapped by Express, Fastify, NestJS, or a Next.js server route.
 
-```js
-import { MadisCarrier } from "./sdk/javascript/madis-carrier.mjs";
+Never import it into a browser bundle when the instance contains a Madis bearer token. Browser code should call an application-owned backend endpoint, and that backend should enforce the application’s user and tenant authorization before calling Madis.
 
-const madis = new MadisCarrier(
-  process.env.MADIS_API_URL,              // .../admin
-  process.env.SIP_CARRIER_API_TOKEN,
-  2000,
-);
+## Lua and Erlang
 
-export async function publishUsage(callId, seconds) {
-  return madis.publish({
-    schema: "https://carrier.example/schemas/voice-usage.v1",
-    event_id: `${callId}:final`,
-    event_type: "voice.usage.final",
-    session_id: callId,
-    data: { seconds },
-  });
-}
-```
+[`../sdk/lua/madis_carrier.lua`](../sdk/lua/madis_carrier.lua) uses LuaSocket, and [`../sdk/erlang/madis_carrier.erl`](../sdk/erlang/madis_carrier.erl) uses OTP `inets`. Both are small reference clients; JSON encoding, durable storage, retries, and application-specific validation remain with the caller.
 
-For Express or Fastify, call this from a server route or queue the work before
-returning to the caller. In NestJS, put the client behind an injectable
-service. In Next.js, use a server route or server action; never import the
-client into a browser bundle when it contains the carrier token. Browser
-frontends should call an application-owned backend endpoint instead.
+## Protobuf and OpenAPI
 
-## Consuming events
+[`../api/openapi.yaml`](../api/openapi.yaml) is the HTTP/JSON starting contract. [`../api/madis-carrier.proto`](../api/madis-carrier.proto) defines language-neutral message shapes for applications that want a Protobuf representation. The repository exposes the HTTP/JSON service; it does not provide a separate built-in gRPC listener. Review generated clients against the deployed API and preserve the bearer-token and at-least-once semantics.
 
-A consumer is at-least-once, not exactly-once:
+## Live SIP applications and modules
 
-```text
-read pending events
-  → validate schema and authorize tenant
-  → deduplicate by event_id
-  → commit billing/workflow transaction
-  → POST ack only after commit succeeds
-```
+Use the signed live application contract when an external application must participate in a SIP decision within a bounded timeout. Use the module contract for external speech, media, model, fraud, recording, or billing workers. These services must return quickly or use an asynchronous correlation pattern; Madis does not hold SIP transactions open for an unbounded external job.
 
-The pending-event response is bounded and may be truncated. Poll again until
-the service returns no work, then use a bounded interval. A failed request or
-process restart should leave the event available for another attempt. Do not
-ack before the downstream transaction is durable.
-
-Publishing is idempotent when the same event ID is retried. Retry only
-transient failures such as connection failures or `503`, with exponential
-backoff and jitter. Do not blindly retry `400` or `401`; fix the payload or
-credentials. A `202` means Madis accepted the event, not that a downstream
-rating or invoice has completed.
-
-## Framework responsibilities
-
-| Responsibility | Application owns it | Madis provides |
-| --- | --- | --- |
-| HTTP client and framework route | Yes | Versioned JSON endpoints |
-| Bearer-token storage and rotation | Yes | Token authentication |
-| Event schema and validation | Yes, using the supplied envelope/schema | Bounded JSON persistence |
-| Idempotency and retry policy | Yes | Idempotent event insertion by `event_id` |
-| Billing/rating/invoice transaction | Yes | CDR read surface, outbox, and online-charging integration boundaries |
-| Tenant authorization | Yes | Tenant fields and authenticated API boundary |
-| Long-running jobs and reconciliation | Yes | Pending-event and acknowledgement flow |
-
-For OpenAPI-based code generation, use
-[`../api/openapi.yaml`](../api/openapi.yaml) as a starting contract and review
-generated clients before deployment. It describes the carrier API, not the
-full SIP/WebUI surface. Applications still own their framework conventions,
-databases, queues, and observability.
+See [`modules.md`](modules.md) for event and command schemas, signing, allowlists, timeout behavior, and failure modes.

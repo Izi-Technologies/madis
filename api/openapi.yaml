@@ -270,6 +270,10 @@ paths:
     post:
       operationId: createControlResource
       summary: Create an allowlisted Madis resource
+      description: >-
+        Creates a mutable resource. The security-bans resource is the exception
+        to the numeric-ID model: POST upserts by source_ip and is the supported
+        write operation for that resource.
       security: [{controlBearerAuth: []}]
       parameters:
         - {$ref: '#/components/parameters/ControlResource'}
@@ -289,7 +293,7 @@ paths:
       security: [{controlBearerAuth: []}]
       parameters:
         - {$ref: '#/components/parameters/ControlResource'}
-        - {name: id, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128, description: Numeric row ID; source_ip for security-bans}}
+        - {name: id, in: path, required: true, schema: {type: integer, minimum: 1, description: Numeric row ID for resources that support replacement; security-bans does not support this operation}}
       requestBody:
         required: true
         content:
@@ -307,7 +311,7 @@ paths:
       security: [{controlBearerAuth: []}]
       parameters:
         - {$ref: '#/components/parameters/ControlResource'}
-        - {name: id, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128, description: Numeric row ID; source_ip for security-bans}}
+        - {name: id, in: path, required: true, schema: {type: integer, minimum: 1, description: Numeric row ID for resources that support deletion; security-bans does not support this operation}}
         - {name: expected_revision, in: query, schema: {type: string, maxLength: 64}}
       responses:
         '200': {description: Resource deleted}
@@ -320,10 +324,13 @@ paths:
     post:
       operationId: setControlResourceState
       summary: Enable or disable an allowlisted Madis resource
+      description: >-
+        Applies to mutable numeric-ID resources with an enabled column.
+        security-bans is keyed by source_ip and does not support this operation.
       security: [{controlBearerAuth: []}]
       parameters:
         - {$ref: '#/components/parameters/ControlResource'}
-        - {name: id, in: path, required: true, schema: {type: integer, minimum: 1}}
+        - {name: id, in: path, required: true, schema: {type: integer, minimum: 1, description: Numeric row ID; security-bans does not support state changes}}
         - {name: state, in: path, required: true, schema: {type: string, enum: [enable, disable]}}
       responses:
         '200': {description: Resource state changed}
@@ -344,6 +351,9 @@ components:
       schema:
         type: string
         enum: [gateways, routes, dispatch-sets, dispatch-members, dids, header-rules, access-control, security-bans, ani-groups, ani-ranges, registrations, registration-bindings, cluster-nodes, security-events]
+        description: >-
+          Allowlisted Madis resources. security-bans is read/list plus POST
+          source_ip upsert; it is not a numeric-ID update/delete/state resource.
   schemas:
     BillingEvent:
       type: object

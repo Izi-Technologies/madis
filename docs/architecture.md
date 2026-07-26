@@ -1,116 +1,81 @@
 # Architecture
 
-## Process layout
-
-Madis normally runs as two processes:
+Madis normally runs as two processes that share PostgreSQL but do not share in-memory state.
 
 ```text
-SIP endpoints / trunks
-        │ UDP, TCP, TLS, WSS
+SIP endpoints and trunks
+        │ UDP / TCP / TLS / WS / WSS
         ▼
-  madis.service  ───── PostgreSQL
-        │                  │
-        │ HTTP health/     │ registrations, routing,
-        │ metrics           │ users, CDR, billing outbox
-        ▼                  │
-  madis-admin.service ◄────┘
+  madis.service ───────────── PostgreSQL
+        │                         │
+        │ local health,           │ registrations, routing,
+        │ metrics, and state      │ policy, CDR, outbox
+        ▼                         │
+  madis-admin.service ◄───────────┘
         │
-        └─ browser WebUI and bearer-token carrier API
+        └── WebUI, live dashboard, and /admin/api/v1/
 ```
 
-The SIP worker owns SIP listeners, transaction state, registration state,
-routing, forwarding, timers, and the local health/metrics endpoint. The admin
-worker owns the browser session, WebUI, live dashboard, and machine API. The
-installer keeps the listeners separate by using the worker's internal
-`SIP_ADMIN_PORT=9090` for metrics and the standalone WebUI's `ADMIN_PORT=8080`.
-The WebUI targets the worker through `SIP_METRICS_HOST/PORT` and forwards the
-worker token when one is configured.
+The installer uses `SIP_ADMIN_PORT=9090` for the worker’s local HTTP surface and `ADMIN_PORT=8080` for the standalone WebUI. The WebUI reaches the worker through `SIP_METRICS_HOST`/`SIP_METRICS_PORT`. A Docker deployment may expose the worker HTTP port directly, but the browser WebUI still requires a separately built admin process.
 
-The two processes may share PostgreSQL, but they do not share in-memory maps.
-The database is the durable source for registrations and configuration that
-the deployment has chosen to persist. A local multi-worker configuration is
-not the same thing as a multi-node cluster.
+## SIP worker
 
-## SIP request path
+The worker owns:
 
-For each ingress message, the worker roughly does the following:
+- UDP, TCP, TLS, WS, and WSS listeners and outbound transport selection.
+- SIP parsing, authentication, registration contacts, transactions, retransmissions, dialogs, forks, and response routing.
+- Database-backed routes, dispatch groups, dialplans, gateways, access control, security bans, header rules, ANI ranges, and optional B2BUA policy.
+- Bounded CDR/outbox writes, optional preauthorization, metrics, and worker-local health/state endpoints.
 
-1. Bounds and parses the message, including framing, headers, URI targets,
-   `Content-Length`, CSeq, Via, and Max-Forwards.
-2. Applies security policy, authentication, rate limits, scanner/fraud checks,
-   and database-backed access policy.
-3. Creates or checks transaction state and handles retransmissions.
-4. Processes REGISTER, responses, dialog requests, routing, dispatch groups,
-   dialplan actions, and optional online charging.
-5. Selects UDP, TCP, TLS, WS, or WSS for the next hop and forwards the message.
-6. Records bounded state, CDR events, metrics, and the response path.
+The main modular entry point is [`../main.mko`](../main.mko). It pulls parser, header, authentication, registration, routing, transport, billing, charging, application, module, and operations components. [`../sipproxy_full.mko`](../sipproxy_full.mko) is a legacy monolithic reference and is not the deployment target.
 
-The exact behavior is implemented in `parser.mko`, `rfc.mko`, `routing.mko`,
-`registration.mko`, `transport.mko`, `stream.mko`, and `main.mko`. The RFC
-status and known omissions are recorded in [`../RFC_COMPLIANCE.md`](../RFC_COMPLIANCE.md).
+## Request path
 
-## Concurrency model
+For an inbound SIP message, the worker broadly:
 
-UDP and stream listeners use Mako event and worker primitives. `crew`/`kick`
-can use a bounded Mako scheduler pool through `SIP_SCHED_WORKERS`; `0` keeps
-the default one-pthread-per-kick behavior. The setting changes scheduling, not
-the protocol or the capacity of a host.
+1. Bounds and parses framing, headers, URI targets, `Content-Length`, CSeq, Via, and Max-Forwards.
+2. Applies database-backed security, access, authentication, rate, scanner, and ban policy.
+3. Creates or finds transaction state and handles retransmissions and duplicate messages.
+4. Processes REGISTER, dialog requests, responses, routing, dispatch, dialplan, and optional charging policy.
+5. Resolves the next hop using explicit transport policy and RFC 3263-style DNS selection where configured.
+6. Sends the message, updates bounded state and metrics, and emits lifecycle/billing records where enabled.
 
-State that can grow from attacker-controlled input is kept behind explicit
-limits: registration contacts, dialogs, forks, authentication state, DNS and
-routing caches, transaction rings, and outbound associations. These limits
-protect memory; they are not a promise that a particular machine can sustain a
-given CPS or concurrent-call number.
+The exact behavior is implemented in [`../parser.mko`](../parser.mko), [`../rfc.mko`](../rfc.mko), [`../routing.mko`](../routing.mko), [`../registration.mko`](../registration.mko), [`../transport.mko`](../transport.mko), [`../stream.mko`](../stream.mko), and [`../main.mko`](../main.mko). The known protocol gaps are in [`../RFC_COMPLIANCE.md`](../RFC_COMPLIANCE.md).
 
-## WebUI and API path
+## WebUI and machine API
 
-The WebUI accepts browser requests on `ADMIN_BIND`/`ADMIN_PORT`. It uses a
-database-backed admin user, a bounded session cache, secure cookies by default,
-Origin/Host checks for browser POSTs, and an allowlist for dynamic SQL table
-and column names. The live dashboard uses WebSocket updates with HTTP polling
-fallback and a short shared snapshot cache.
+The admin process owns browser sessions, role-gated pages, HTMX updates, WebSocket live updates with polling fallback, CDR export, dashboards, and configuration views. It also owns the versioned machine API at `/admin/api/v1/`.
 
-Machine integrations use `/admin/api/v1/` and a separate bearer token. Billing
-events are at-least-once: consumers must commit their own transaction,
-deduplicate by `event_id`, and then acknowledge the event. The API stores
-caller-defined JSON data; it does not replace a carrier's rating, invoice, or
-charging system.
+The API has separate bearer scopes:
 
-The control API uses a second bearer token and exposes only bounded routing
-policy operations. A client can create or disable a routing rule, including an
-explicit `b2bua:` action, but cannot execute Mako, SQL, shell commands, or
-arbitrary application code in the SIP worker. B2BUA state remains in the
-worker's bounded in-memory map; PostgreSQL stores the policy that selects it.
+- `SIP_CARRIER_API_TOKEN` for capabilities, billing events, acknowledgements, and CDR reads.
+- `SIP_CONTROL_API_READ_TOKEN` for read-only status, validation, and control/resource reads.
+- `SIP_CONTROL_API_TOKEN` for control writes as well as reads.
 
-The optional SIP application gateway extends this boundary to live decisions.
-It sends signed, bounded SIP events to an out-of-process service and accepts
-only validated commands for routing, replies, B2BUA, validated headers/body, or
-module invocation. The module bus uses the same boundary for TTS, STT, LLM,
-recording, media, fraud, and billing workers. External services own their
-frameworks and durable state; Madis retains transaction, dialog, and transport
-ownership. See [`modules.md`](modules.md) for the wire contract.
+The machine API is intentionally allowlisted and bounded. It accepts routing and SIP resource documents, not SQL, Mako, shell commands, or arbitrary code. Resource responses include revisions for optimistic concurrency. See [`../api/README.md`](../api/README.md).
 
-## Integration boundaries
+## External application and module boundaries
 
-- **Media:** RTPEngine integration is a control-plane hook. Madis does not
-  terminate RTP, ICE, or DTLS-SRTP itself.
-- **Diameter:** the repository contains bounded RFC 6733 peer framing, RFC 8506
-  credit-control messages, and selected 3GPP Cx/Dx and Sh builders. HSS/UDM,
-  policy, peer routing, failover, and autonomous quota enforcement remain
-  external or incomplete.
-- **IMS:** the session schema and Cx/Sh contracts are integration boundaries;
-  they are not P-/I-/S-CSCF, HSS, TAS, PCRF/PCF, or a complete IMS core.
-- **SS7/SIGTRAN:** the M3UA envelope is a contract for an external gateway.
-  Madis does not terminate M3UA/SCCP/ISUP/TCAP on its own.
-- **Billing:** the outbox and optional preauthorization adapters provide
-  delivery and protocol plumbing, not rating or financial settlement.
+The optional application gateway sends signed, bounded SIP event documents to an external HTTP(S) service and accepts only validated commands such as continue, route, reply, redirect, reject, B2BUA policy, and constrained header/body changes. The module dispatcher uses a separate signed contract for TTS, STT, LLM, media, recording, fraud, and billing operations.
 
-## Memory and SQL boundaries
+These are network contracts, not in-process plugin ABIs. The external service owns its framework, credentials, queues, model/media workers, durable state, and business authorization. The SIP worker retains transaction and dialog ownership and applies command allowlists, size bounds, timeouts, and failure modes. See [`modules.md`](modules.md).
 
-Mako 0.4.16 emits native C and the build links `madis_memory.c` for bounded
-transaction-map helpers. Application code does not use raw pointers. SQL
-values are passed as parameters; identifiers accepted by generic admin actions
-are allowlisted before query construction. Inputs, request bodies, JSON, and
-stored event payloads have size limits. These controls reduce common failure
-modes but do not remove the need for OS isolation, database permissions,
-secrets management, and external security review.
+## Persistence and ownership
+
+PostgreSQL stores the SIP state needed by the worker and admin process: registrations, routing policy, gateways, dispatch data, dialplans, security state, CDRs, and the billing event outbox. It is not an application-owned billing database.
+
+The application remains responsible for:
+
+- Tenant, product, tariff, rating, ledger, invoice, tax, and settlement data.
+- Durable handling and deduplication of billing events.
+- HSS/UDM, complete IMS service logic, and carrier-specific Diameter policy.
+- Media relay, RTP, ICE, DTLS-SRTP, codecs, and recording.
+- Native SS7/SIGTRAN gateway operation.
+
+## Concurrency and failure behavior
+
+Listener workers and scheduler settings are bounded through the `SIP_*_WORKERS` and `SIP_SCHED_WORKERS` configuration. Attacker-controlled caches, transaction state, dialog state, routing state, and integration payloads have implementation limits.
+
+Billing delivery is at least once: an application must commit its own transaction before acknowledging an event. Optional live applications and modules have bounded synchronous timeouts. Application failures can be configured open or closed; module failures are closed by default. Online preauthorization is fail-closed unless the operator explicitly enables `SIP_CHARGING_FAIL_OPEN=1`.
+
+These controls reduce common failure modes but do not replace operating-system isolation, database permissions, secret management, network policy, backup/restore testing, or external security review.

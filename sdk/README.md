@@ -1,54 +1,45 @@
 # Madis carrier SDK examples
 
-These are example clients for the HTTP/JSON API. Application state and schema
-remain in the caller. The API can be called from Python, JavaScript, Go, Lua,
-Erlang, or any language with an HTTP client. The Protobuf contract is in
-`api/madis-carrier.proto` for callers using gRPC. FastAPI, Flask, Django, Gin,
-chi, Echo, Express, Fastify, NestJS, and Next.js can call the same server-side
-HTTP endpoints.
+These are small source-level clients for the Madis HTTP/JSON machine API. They are reference implementations, not published packages or complete application frameworks. Each caller remains responsible for durable storage, retries, schema validation, tenant authorization, observability, and secret management.
 
-- `python/madis_carrier.py` uses only the Python standard library.
-- `javascript/madis-carrier.mjs` uses the platform `fetch` API.
-- `go/madiscarrier.go` uses only `net/http` and `encoding/json`.
-- `lua/madis_carrier.lua` uses LuaSocket; JSON is supplied by the caller.
-- `erlang/madis_carrier.erl` uses OTP `inets`; JSON is supplied by the caller.
+The base URL should include `/admin`, for example `https://madis.example/admin`; the clients append `/api/v1/...`.
 
-All clients preserve the server's at-least-once semantics: process and commit
-an event, then call `ack`. Treat `event_id` as an idempotency key. The client
-base URL should include `/admin` (for example,
-`https://madis.example/admin`); the methods append `/api/v1/...`.
+| Client | Runtime | File |
+| --- | --- | --- |
+| Python | Standard library | [`python/madis_carrier.py`](python/madis_carrier.py) |
+| JavaScript | Server-side `fetch` | [`javascript/madis-carrier.mjs`](javascript/madis-carrier.mjs) |
+| Go | `net/http`, `context`, `encoding/json` | [`go/madiscarrier.go`](go/madiscarrier.go) |
+| Lua | LuaSocket; caller supplies JSON | [`lua/madis_carrier.lua`](lua/madis_carrier.lua) |
+| Erlang | OTP `inets`; caller supplies JSON | [`erlang/madis_carrier.erl`](erlang/madis_carrier.erl) |
 
-The clients also expose the bounded control surface: read `control_status()` /
-`ControlStatus()` / `controlStatus()`, list and create routing rules, and
-enable or disable a rule. They can list, create, replace, delete, enable, and
-disable dialplans. Generic resource methods cover gateways, routes, dispatch
-sets and members, DIDs, header rules, access control, security bans, ANI
-groups/ranges, and read-only registrations, bindings, cluster nodes, and
-security events. CDR reads are available through `cdr`/`CDR`/`cdr` and use the
-carrier token; dialplan and routing calls use `SIP_CONTROL_API_TOKEN`.
-Keep it separate from `SIP_CARRIER_API_TOKEN` and never expose either token to
-browser code. Read-only list/status calls may use
-`SIP_CONTROL_API_READ_TOKEN`. Control calls select allowlisted actions; they do
-not execute source code or SQL in Madis.
+## API methods covered
 
-The resource API owns only Madis's routing fields. Do not model application
-billing tables or tenant-specific records in Madis. Keep those in the
-application database and associate them with a Madis ID or event payload.
-Updates can send `expected_revision` to reject stale writes.
+The clients expose the carrier operations for capabilities, pending billing events, publication, acknowledgement, and CDR reads. They also expose control operations for status, routing rules, dialplans, validation, and the generic allowlisted SIP resources.
 
-For live SIP behavior, use the external application gateway described in
-[`../docs/modules.md`](../docs/modules.md). It is HTTP/JSON rather than a
-language-specific plugin ABI: a FastAPI, Go, Node, LuaSocket, or OTP service
-can verify `madis.sip.event.v1` and return `madis.sip.command.v1`. The module
-bus uses the same command shape for TTS, STT, LLM, media, recording, fraud,
-and billing workers. Keep the live SIP endpoint server-side.
+Generic resource helpers cover:
 
-The examples are not full SDKs. Each one accepts a
-base URL and bearer token, publishes ordinary JSON, and leaves retries,
-durable storage, and application-specific validation to the caller. Start
-with the Python example if you want a dependency-free reference client, then
-copy the same request/acknowledge flow into your service language. Keep the
-token in server-side configuration; do not ship it to browser code.
+`gateways`, `routes`, `dispatch-sets`, `dispatch-members`, `dids`, `header-rules`, `access-control`, `security-bans`, `ani-groups`, `ani-ranges`, `registrations`, `registration-bindings`, `cluster-nodes`, and `security-events`. `security-bans` is currently a source-IP create/upsert and list surface; the generic numeric-ID update/delete/state helpers do not apply to it.
 
-See [`../docs/integrations.md`](../docs/integrations.md) for framework wiring,
-consumer patterns, error handling, and schema/versioning guidance.
+The server still enforces the read/write scope. A client constructed with `SIP_CONTROL_API_READ_TOKEN` can list and validate but cannot mutate. Use `SIP_CONTROL_API_TOKEN` only in the service that is allowed to change SIP behavior.
+
+## Event delivery semantics
+
+The billing outbox is at least once. Applications should:
+
+1. Read pending events.
+2. Validate the envelope and authorize the tenant.
+3. Deduplicate on `event_id`.
+4. Commit the rating/ledger/workflow transaction.
+5. Call the acknowledgement endpoint.
+
+Do not acknowledge before the application transaction is durable. Retry connection failures and transient `503` responses with bounded backoff; fix invalid payloads and credentials instead of retrying `400`/`401` responses indefinitely.
+
+## Resource writes
+
+Mutable resource responses include a `revision`. When concurrent control writers are possible, send `expected_revision` on update/delete calls and reconcile a conflict by re-reading the resource. Unknown JSON fields are not persisted. Resource helpers do not expose SQL or arbitrary table names.
+
+## Server-side use only
+
+All clients accept bearer tokens and must remain server-side. Never ship a carrier or control token in browser JavaScript. Browser frontends should call an application-owned backend, which then applies user and tenant authorization before calling Madis.
+
+The HTTP/JSON contract is documented in [`../api/README.md`](../api/README.md), [`../api/openapi.yaml`](../api/openapi.yaml), and [`../docs/integrations.md`](../docs/integrations.md). [`../api/madis-carrier.proto`](../api/madis-carrier.proto) provides Protobuf message shapes; the repository’s service surface is HTTP/JSON rather than a separate built-in gRPC listener.

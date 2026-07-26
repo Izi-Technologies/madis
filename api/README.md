@@ -1,231 +1,147 @@
 # Madis carrier integration API
 
-Madis exposes a versioned machine API beside the WebUI:
+Madis exposes a versioned HTTP/JSON machine API from the standalone WebUI. If the WebUI base URL is `https://madis.example/admin`, the API base URL is:
 
-| Endpoint | Purpose |
+```text
+https://madis.example/admin/api/v1
+```
+
+The API is for carrier and application services. It is separate from the browser session API and from the SIP worker’s local `/healthz`, `/readyz`, `/metrics`, `/state`, and `/reload` endpoints.
+
+The machine contracts are also represented by [`openapi.yaml`](openapi.yaml), [`madis-carrier.proto`](madis-carrier.proto), and the JSON schemas in this directory. The source-level reference clients are in [`../sdk/README.md`](../sdk/README.md).
+
+## Authentication
+
+Send a bearer token on every machine request:
+
+```http
+Authorization: Bearer <token>
+```
+
+| Token | Allowed operations |
 | --- | --- |
-| `GET /admin/api/v1/capabilities` | Runtime and integration capability discovery |
-| `GET /admin/api/v1/billing/events?limit=100` | Read pending events, at most 100 per request |
-| `POST /admin/api/v1/billing/events` | Publish a carrier-defined JSON event |
-| `POST /admin/api/v1/billing/events/ack?event_id=...` | Acknowledge after the consumer commits it |
-| `GET /admin/api/v1/billing/cdr?limit=100&call_id=...` | Read bounded CDRs for rating and reconciliation |
-| `GET /admin/api/v1/control/status` | Read the authenticated control surface |
-| `GET /admin/api/v1/control/routing-rules` | List routing rules |
-| `POST /admin/api/v1/control/routing-rules` | Create an allowlisted routing rule |
-| `POST /admin/api/v1/control/routing-rules/{id}/enable` | Enable a rule |
-| `POST /admin/api/v1/control/routing-rules/{id}/disable` | Disable a rule |
-| `GET /admin/api/v1/control/dialplans` | List dialplan rules |
-| `POST /admin/api/v1/control/dialplans` | Create a dialplan rule |
-| `PUT /admin/api/v1/control/dialplans/{id}` | Replace a dialplan rule |
-| `DELETE /admin/api/v1/control/dialplans/{id}` | Delete a dialplan rule |
-| `POST /admin/api/v1/control/dialplans/{id}/enable` | Enable a dialplan rule |
-| `POST /admin/api/v1/control/dialplans/{id}/disable` | Disable a dialplan rule |
-| `POST /admin/api/v1/control/validate/routing-rule` | Validate a routing-rule document without storing it |
-| `POST /admin/api/v1/control/validate/dialplan` | Validate a dialplan document without storing it |
-| `GET /admin/api/v1/control/resources/{resource}` | List an allowlisted SIP resource |
-| `POST /admin/api/v1/control/resources/{resource}` | Create an allowlisted SIP resource |
-| `PUT /admin/api/v1/control/resources/{resource}/{id}` | Replace an allowlisted SIP resource |
-| `DELETE /admin/api/v1/control/resources/{resource}/{id}` | Delete an allowlisted SIP resource |
-| `POST /admin/api/v1/control/resources/{resource}/{id}/enable` | Enable a resource |
-| `POST /admin/api/v1/control/resources/{resource}/{id}/disable` | Disable a resource |
+| `SIP_CARRIER_API_TOKEN` | Capabilities, billing events, event acknowledgement, and CDR reads. |
+| `SIP_CONTROL_API_READ_TOKEN` | Control status, reads, validation, and resource lists. |
+| `SIP_CONTROL_API_TOKEN` | All read-only control operations plus control writes. |
 
-For application-team integration patterns, see
-[`../docs/integrations.md`](../docs/integrations.md). The reference clients
-under [`../sdk/`](../sdk/) are source examples, not published packages. They
-can be copied or vendored into Python, Go, and JavaScript services, or replaced
-with the HTTP client already used by a framework.
+The write token also has the read scope. The read token cannot create, replace, delete, enable, or disable a routing rule, dialplan, or mutable resource. Browser cookies are not accepted by these routes.
 
-Machine requests use `Authorization: Bearer $SIP_CARRIER_API_TOKEN`. The
-installer generates a separate token from the WebUI token. Put the API behind
-TLS/mTLS or a private network; the standalone Mako listener is normally bound
-to loopback.
+## Endpoints
 
-Control writes use a separate `SIP_CONTROL_API_TOKEN`. Read-only control calls
-may use `SIP_CONTROL_API_READ_TOKEN`; it cannot create, replace, delete, or
-toggle resources. Keep the write token in the service that may change call
-behavior. The control API accepts routing policy, not Mako source, SQL, shell
-commands, or arbitrary plugin code.
+All list endpoints accept `limit`; values are clamped to 1–100. JSON request bodies are capped at 64 KiB. Responses are bounded and may include a truncation indicator when the response-size limit is reached.
 
-For per-request SIP decisions and external TTS/STT/LLM/media workers, use the
-signed HTTP/JSON application and module contracts in
-[`../docs/modules.md`](../docs/modules.md). Those services are configured as
-out-of-process endpoints; Madis validates their commands and retains
-transaction ownership.
+| Method and path | Scope | Description |
+| --- | --- | --- |
+| `GET /capabilities` | Carrier | Discover transports and enabled integration contracts. |
+| `GET /billing/events?limit=100` | Carrier | Read undelivered billing events. |
+| `POST /billing/events` | Carrier | Publish an idempotent application event. |
+| `POST /billing/events/ack?event_id=...` | Carrier | Acknowledge an event after the consumer commits its work. |
+| `GET /billing/cdr?limit=100&call_id=...` | Carrier | Read bounded CDR records for rating or reconciliation. |
+| `GET /control/status` | Control read | Read the control-plane capability/status document. |
+| `GET /control/routing-rules` | Control read | List routing rules. |
+| `POST /control/routing-rules` | Control write | Create an allowlisted routing rule. |
+| `POST /control/routing-rules/{id}/enable` | Control write | Enable a routing rule. |
+| `POST /control/routing-rules/{id}/disable` | Control write | Disable a routing rule. |
+| `GET /control/dialplans` | Control read | List dialplan rules. |
+| `POST /control/dialplans` | Control write | Create a dialplan rule. |
+| `PUT /control/dialplans/{id}` | Control write | Replace a dialplan rule. |
+| `DELETE /control/dialplans/{id}` | Control write | Delete a dialplan rule. |
+| `POST /control/dialplans/{id}/enable` | Control write | Enable a dialplan rule. |
+| `POST /control/dialplans/{id}/disable` | Control write | Disable a dialplan rule. |
+| `POST /control/validate/routing-rule` | Control read | Validate a routing-rule document without storing it. |
+| `POST /control/validate/dialplan` | Control read | Validate a dialplan document without storing it. |
+| `GET /control/resources/{resource}` | Control read | List an allowlisted SIP resource. |
+| `POST /control/resources/{resource}` | Control write | Create a mutable SIP resource; `security-bans` is upserted by `source_ip`. |
+| `PUT /control/resources/{resource}/{id}` | Control write | Replace a numeric-ID mutable SIP resource. |
+| `DELETE /control/resources/{resource}/{id}` | Control write | Delete a numeric-ID mutable SIP resource. |
+| `POST /control/resources/{resource}/{id}/enable` | Control write | Enable a numeric-ID mutable resource. |
+| `POST /control/resources/{resource}/{id}/disable` | Control write | Disable a numeric-ID mutable resource. |
 
-The route is served by the standalone WebUI process, so the base URL is the
-WebUI's `ADMIN_BIND`/`ADMIN_PORT`, not the SIP worker's `/healthz` listener.
-The SDK examples use a base URL ending in `/admin`, for example
-`https://madis.example/admin`; their methods append `/api/v1/...` to that
-base. If you use raw HTTP, the equivalent full path is
-`https://madis.example/admin/api/v1/...`.
-Missing or invalid bearer credentials return `401`. A missing database returns
-`503`; malformed JSON, content type, or event identifiers return `400`.
+The API has no endpoint for arbitrary SQL, database migrations, Mako source, shell commands, or plugin code.
 
-A minimal client flow looks like this:
+## Billing and CDR flow
+
+Billing events are stored in Madis’s durable outbox. Publishing is idempotent by `event_id`; if the caller omits it, the server derives one from the request body, but portable integrations should always supply a stable ID.
+
+Consumers should follow this sequence:
+
+```text
+read pending events → validate and deduplicate by event_id
+→ commit the application transaction → acknowledge the event
+```
+
+An acknowledgement makes the event unavailable to the pending-event reader. Do not acknowledge before the application’s rating, ledger, or workflow transaction is durable. Delivery is at least once, not exactly once. The application owns retries, schema validation, tenant authorization, and downstream billing state.
+
+The built-in CDR profile is described by [`cdr.schema.json`](cdr.schema.json). `data` and `extensions` in application events remain application-owned JSON; Madis does not turn them into arbitrary database columns.
+
+Example event publication:
 
 ```sh
-export API=http://127.0.0.1:8080
-export TOKEN='the-value-from-/etc/madis/madis.env'
+API=https://madis.example/admin
+TOKEN="$SIP_CARRIER_API_TOKEN"
 
-curl -fsS -H "Authorization: Bearer $TOKEN" "$API/admin/api/v1/capabilities"
-curl -fsS -X POST "$API/admin/api/v1/billing/events" \
-  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  --data '{"schema":"https://carrier.example/usage.v1","event_id":"call-42-final","event_type":"voice.usage.final","data":{"seconds":91}}'
+curl -fsS -X POST "$API/api/v1/billing/events" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "schema": "https://carrier.example/schemas/voice-usage.v1",
+    "event_id": "call-123:final",
+    "event_type": "voice.usage.final",
+    "session_id": "call-123",
+    "data": {"seconds": 42},
+    "extensions": {"application_call_id": "app-456"}
+  }'
 ```
 
-Read pending events, commit them in the billing system, and acknowledge each
-caller-supplied `event_id`. A retry is expected; an acknowledgement before the billing
-transaction commits can lose the handoff.
+## Routing and dialplan control
 
-`GET /billing/events` returns an object with `schema`, an `events` array, and a
-`truncated` flag. The request limit is clamped to 100 and the response is
-bounded. `GET /billing/cdr` accepts an optional exact `call_id` filter and
-returns call, SIP, gateway, URI, timestamp, and duration fields. Its response
-also contains `truncated`; use an exact call ID or another bounded page when it
-is `true`. `POST /billing/events` returns `202` after an idempotent insert. The
-server currently derives a SHA-256 event ID when a caller omits one; portable
-clients should still send an explicit ID and validate against
-`billing-event.schema.json`.
+Routing actions are values, not executable code. The accepted action families are `route:`, `b2bua:`, `dispatch:`, `reject:`, `redirect:`, `failover:`, `lcr`, and `continue`, subject to the endpoint’s length and character validation. A `b2bua:` action still requires `SIP_B2BUA_MODE=enabled` in the worker environment.
 
-## Controlling routing behavior
+Dialplan actions are limited to number transformations such as `strip`, `prepend`, `set`, `replace`, `e164`, `add_plus`, and `strip_plus`. Use the validation endpoint before presenting or storing a document when the application has multiple control writers.
 
-Use `SIP_CONTROL_API_TOKEN` for policy changes. A rule is created enabled and
-applies when the SIP worker evaluates the next call. Environment changes such
-as `SIP_B2BUA_MODE=enabled` still require the normal service restart.
+Example:
 
 ```sh
-export CONTROL_TOKEN='the-value-from-/etc/madis/madis.env'
-curl -fsS -X POST "$API/admin/api/v1/control/routing-rules" \
-  -H "Authorization: Bearer $CONTROL_TOKEN" \
+curl -fsS -X POST "$API/api/v1/control/validate/routing-rule" \
+  -H "Authorization: Bearer $SIP_CONTROL_API_READ_TOKEN" \
   -H 'Content-Type: application/json' \
-  --data '{"match_prefix":"+1555","action":"b2bua:carrier-gateway","priority":10,"description":"Carrier B2BUA policy"}'
+  -d '{"match_prefix":"+1","action":"route:primary","priority":10}'
+
+curl -fsS -X POST "$API/api/v1/control/routing-rules" \
+  -H "Authorization: Bearer $SIP_CONTROL_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"match_prefix":"+1","action":"route:primary","priority":10,"description":"North America"}'
 ```
 
-Accepted actions are `route:`, `b2bua:`, `dispatch:`, `reject:`, `redirect:`,
-`failover:`, `lcr`, and `continue`. Values are length-bounded and checked for
-CR/LF/NUL/field separators before parameterized SQL is used. Read the rule
-list for IDs, then use enable/disable for a recoverable state change. There is
-no endpoint for arbitrary SQL or runtime code execution. The validation
-endpoints can check a document before an application presents or submits it;
-they do not query or modify the database.
+## Generic SIP resources
 
-The API is at-least-once. Consumers must deduplicate by `event_id`, commit
-their billing/charging transaction, then acknowledge. Acknowledgement is not a
-delete, so operators can audit the original JSONB payload. Pages and request
-bodies are bounded to protect the Mako 0.4.16 worker from memory pressure.
+The resource name is allowlisted; it is never interpreted as a table name. The current resource set is:
 
-## Managing dialplans
+| Resource | Mutability | Main fields |
+| --- | --- | --- |
+| `gateways` | Read/write | `name`, `address`, `port`, `transport`, credentials, `caller_id`, `max_channels`, `number_format`, `tech_prefix`, `caller_id_override` |
+| `routes` | Read/write | `prefix`, exactly one of `gateway_id` or `dispatch_set_id`, `priority`, `weight`, `cost_per_min`, `time_start`, `time_end`, `description` |
+| `dispatch-sets` | Read/write | `name`, `algorithm`, `description`; algorithms include `round-robin`, `weight`, `priority`, `hash`, `hash-user`, and `broadcast` |
+| `dispatch-members` | Read/write | `set_id`, `gateway_id`, `priority`, `weight` |
+| `dids` | Read/write | `number`, `destination_user`, `description` |
+| `header-rules` | Read/write | `match_method`, `match_direction`, `action`, `header_name`, `header_value`, `priority`, `description` |
+| `access-control` | Read/write | `source_ip`, `sip_user`, `action`, `skip_auth`, `tenant`, `max_channels`, `priority`, `description` |
+| `security-bans` | Read/create-upsert | `source_ip`, `reason`, `permanent`; the current row key is `source_ip`, not a numeric resource ID |
+| `ani-groups` | Read/write | `name`, `description` |
+| `ani-ranges` | Read/write | `group_id`, `range_start`, `range_end` |
+| `registrations` | Read-only | AOR, contact, transport, node, user agent, and update time |
+| `registration-bindings` | Read-only | Binding ID, AOR, contact, source, port, expiry, and update time |
+| `cluster-nodes` | Read-only | Node ID, address, port, region, weight, status, and heartbeat |
+| `security-events` | Read-only | Event type, source, user, severity, details, and timestamp |
 
-Dialplan calls use `SIP_CONTROL_API_TOKEN`, not the carrier billing token.
-Rules are applied by the SIP worker on the next call after the database
-transaction commits. A rule has a number prefix, a direction (`inbound` or
-`outbound`), and one or more bounded number actions. Supported actions are
-`strip:N`, `prepend:PREFIX`, `replace:OLD:NEW`, `set:NUMBER`, `e164:CC`,
-`strip_plus`, and `add_plus`; chain actions with `;`.
+Mutable numeric-ID resource responses expose a `revision` based on the current database row version. Use `expected_revision` with update/delete operations when concurrent writers must not overwrite one another. `security-bans` is the exception: its POST is a source-IP upsert and its list response has no numeric-ID revision. Resource writes create or change only the fields listed by the resource contract; unknown JSON fields are not persisted.
 
-```sh
-curl -fsS -X POST "$API/admin/api/v1/control/dialplans" \
-  -H "Authorization: Bearer $CONTROL_TOKEN" \
-  -H 'Content-Type: application/json' \
-  --data '{"match_prefix":"+1555","callee_action":"strip_plus;prepend:1","caller_action":"add_plus","direction":"outbound","priority":20,"description":"Normalize carrier numbers"}'
+## Error handling and deployment
 
-curl -fsS -H "Authorization: Bearer $CONTROL_TOKEN" \
-  "$API/admin/api/v1/control/dialplans?limit=100"
+Typical responses are `200` for reads/state changes, `201` for creates, `202` for accepted events, `400` for invalid input, `401` for missing/invalid credentials, `404` for unknown rows, `409` for revision conflicts where applicable, and `503` when the database or required runtime dependency is unavailable.
 
-curl -fsS -X PUT "$API/admin/api/v1/control/dialplans/42" \
-  -H "Authorization: Bearer $CONTROL_TOKEN" \
-  -H 'Content-Type: application/json' \
-  --data '{"match_prefix":"+1555","callee_action":"e164:1","direction":"outbound","priority":10}'
+Put the standalone WebUI behind an HTTPS reverse proxy, preserve `Host` and `Origin` for browser requests, and never expose bearer tokens in browser code. See [`../docs/operations.md`](../docs/operations.md) for service layout and [`../docs/integrations.md`](../docs/integrations.md) for application patterns.
 
-curl -fsS -X POST "$API/admin/api/v1/control/dialplans/42/disable" \
-  -H "Authorization: Bearer $CONTROL_TOKEN"
-```
+## What remains external
 
-Update is a full replacement of the rule fields; enable/disable is a
-separate recoverable state change. Values are validated before parameterized
-SQL is used. The endpoint does not accept SQL, Mako, shell commands, or
-arbitrary code.
-
-## Application-owned schemas
-
-The envelope fields are fixed for this API version; `data`, `extensions`, and
-application-defined fields are open. Set `schema` to your own URI or version,
-reuse the same `event_id` across retries, and add a tenant-specific `event_type`.
-Madis stores the complete event envelope as JSONB and does not silently rewrite
-unknown fields. The built-in CDR event is only one profile, not a required
-carrier schema.
-
-Madis does not create or manage application billing tables. An external
-application can use its own database engine, tables, migrations, tenant model,
-rating representation, and invoice format. Use the billing event outbox and
-CDR endpoint as the handoff, and keep the application-owned identifier in the
-event payload. The control resource API is limited to Madis routing and SIP
-state; it is not a generic SQL or custom-table API.
-
-The generic control resources are `gateways`, `routes`, `dispatch-sets`,
-`dispatch-members`, `dids`, `header-rules`, `access-control`,
-`security-bans`, `ani-groups`, `ani-ranges`, `registrations` (read only),
-`registration-bindings` (read only), `cluster-nodes` (read only), and
-`security-events` (read only).
-
-The main writable fields are: `gateways` (`name`, `address`, `port`,
-`transport`, credentials, caller ID, channel limit, number format, and tech
-prefix); `routes` (prefix, exactly one gateway or dispatch-set ID, priority,
-weight, cost, time window, description); `dispatch-sets` (name, algorithm,
-description); `dispatch-members` (set, gateway, priority, weight); `dids`
-(number, destination user, description); `header-rules` (method, direction,
-action, header name/value, priority); `access-control` (source IP, SIP user,
-action, authentication flag, tenant label, channel limit, priority);
-`security-bans` (source IP, reason, permanence); `ani-groups` (name,
-description); and `ani-ranges` (group ID and start/end values).
-
-Every mutable row returns a `revision`. Send it as `expected_revision` on
-update or as the `expected_revision` delete query parameter when concurrent
-writers need optimistic concurrency. Unknown JSON fields are not persisted as
-database columns. Store application extensions in the caller's database and
-use a stable external reference in the event or application record.
-
-```json
-{
-  "schema": "https://carrier.example/schemas/usage.voice.v3",
-  "event_id": "acct-42-call-abc-final",
-  "event_type": "voice.usage.final",
-  "session_id": "call-abc",
-  "tenant_id": "carrier-a",
-  "data": {
-    "account_id": "42",
-    "units": {"seconds": 91, "messages": 0},
-    "rating_context": {"plan": "gold", "zone": "us-east"}
-  },
-  "extensions": {"x-carrier": {"invoice_group": "voice"}}
-}
-```
-
-## Online charging
-
-`SIP_BILLING_MODE=preauth` uses the configured online charging protocol before
-an INVITE is routed. `http` sends the bounded JSON contract to
-`SIP_CHARGING_URL`; `diameter` uses the native RFC 8506 client described in
-[`diameter.md`](diameter.md). Cx/Dx and Sh builders and parsers are described in
-[`ims-diameter.md`](ims-diameter.md). Both charging paths are fail-closed by
-default. Post-call termination messages never block SIP completion. The default `outbox` mode
-keeps the SIP path local and is the correct choice for offline CDR/accounting.
-
-The HTTP request uses RFC 8506 concepts (`INITIAL_REQUEST`, request number,
-requested service units, service context, and subscription identity). RFC
-8506 obsoletes RFC 4006; a legacy-only Diameter peer requires a compatibility
-adapter.
-
-## IMS and SS7 boundaries
-
-The JSON and Protobuf contracts in this directory are integration boundaries
-for P-/I-/S-CSCF, HSS/UDM, PCRF/PCF, TAS/MMTel, charging, and an SS7 gateway.
-Cx registration authorization is available behind `SIP_IMS_CX=1`; the HSS,
-S-CSCF service logic, and user-data store remain external. Madis does not claim
-to be a complete 3GPP IMS core. Likewise, the SS7 envelope carries M3UA/SCCP/ISUP metadata for an
-external SIGTRAN gateway; native M3UA remains outside Madis even though the
-Mako 0.4.16 runtime provides SCTP primitives.
-
-See `billing-event.schema.json`, `charging-request.schema.json`,
-`ims-session.schema.json`, `ss7-m3ua-envelope.schema.json`, and
-`madis-carrier.proto`.
+Madis stores the SIP state needed to route calls and deliver events. The external application remains the source of truth for tenants, products, tariffs, invoices, ledgers, tax, settlement, long-running jobs, and business-specific JSON schemas.
