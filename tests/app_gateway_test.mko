@@ -1,0 +1,66 @@
+// External application/module contract tests. These do not open sockets or
+// touch PostgreSQL; they target the validation boundary used by the SIP core.
+pull . "../main.mko"
+
+fn app_test_request() -> string {
+    return "INVITE sip:+15551212@example.net SIP/2.0\r\n"
+        + "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-app-test\r\n"
+        + "From: <sip:+15550001@example.net>;tag=from1\r\n"
+        + "To: <sip:+15551212@example.net>\r\n"
+        + "Call-ID: app-test@example.net\r\n"
+        + "CSeq: 1 INVITE\r\n"
+        + "Max-Forwards: 70\r\n"
+        + "Content-Length: 0\r\n\r\n"
+}
+
+fn app_test_command(action: string, target: string, token: string, request_id: string) -> string {
+    let base = "{\"schema\":\"madis.sip.command.v1\",\"request_id\":\"" + request_id + "\",\"action\":\"" + action + "\",\"target\":\"" + target + "\",\"status\":486,\"reason\":\"Busy Here\",\"set_headers\":\"X-Policy: carrier\",\"add_headers\":\"\",\"remove_headers\":\"\",\"body\":\"\""
+    return base + ",\"signature\":\"" + app_gateway_command_signature(base + "}", token, request_id) + "\"}"
+}
+
+fn TestApplicationGatewayBoundary() {
+    assert_eq(app_url_valid("https://app.example.net/sip"), 1)
+    assert_eq(app_url_valid("http://127.0.0.1:9081/decision"), 1)
+    assert_eq(app_url_valid("ftp://app.example.net/sip"), 0)
+    assert_eq(app_url_valid("https://user:pass@app.example.net/sip"), 0)
+    assert_eq(app_url_valid("https://app.example.net/sip\r\nX-Evil: yes"), 0)
+    assert_eq(app_gateway_target_safe("sip:gateway.example.net:5060;transport=udp", 0), 1)
+    assert_eq(app_gateway_target_safe("sip:one.example.net:5060,sip:two.example.net:5060", 1), 1)
+    assert_eq(app_gateway_target_safe("sip:gateway.example.net:0", 0), 0)
+    assert_eq(app_gateway_target_safe("sip:gateway.example.net:5060|DROP TABLE users", 0), 0)
+    assert_eq(app_gateway_header_lines_safe("X-Policy: carrier\nP-App-Id: voice", 0), 1)
+    assert_eq(app_gateway_header_lines_safe("Via: attacker", 0), 0)
+    assert_eq(app_gateway_header_lines_safe("X-Policy: ok\r\nInjected: yes", 0), 0)
+    assert_eq(app_gateway_remove_headers_safe("Privacy\nP-Preferred-Identity"), 1)
+    assert_eq(app_gateway_remove_headers_safe("Call-ID"), 0)
+}
+
+fn TestApplicationCommandSignatureAndSqlLikeData() {
+    let msg = app_test_request()
+    let id = app_gateway_request_id_for(msg, "request")
+    let token = "01234567890123456789012345678901"
+    let command = app_test_command("proxy", "sip:gateway.example.net:5060", token, id)
+    assert_eq(app_gateway_command_valid_token(command, id, 0, token), 1)
+    let changed = app_gateway_apply_headers(msg, command)
+    assert(str_contains(changed, "X-Policy: carrier"))
+    let sql_text = "X-Policy: tenant'; DROP TABLE billing_events; --"
+    let sql_command = str_replace(command, "X-Policy: carrier", sql_text)
+    let sql_base = sql_command[0:str_index(sql_command, ",\"signature\":")]
+    let sql_signed = sql_base + ",\"signature\":\"" + app_gateway_command_signature(sql_base + "}", token, id) + "\"}"
+    assert_eq(app_gateway_command_valid_token(sql_signed, id, 0, token), 1)
+    assert(str_contains(app_gateway_apply_headers(msg, sql_signed), "DROP TABLE billing_events"))
+    // A signature binds every command field; changing a target without the
+    // shared secret must invalidate the command before any SIP mutation.
+    let tampered = str_replace(command, "gateway.example.net", "evil.example.net")
+    assert_eq(app_gateway_command_valid_token(tampered, id, 0, token), 0)
+    let bad_reason = str_replace(command, "Busy Here", "Busy\nInjected: yes")
+    assert_eq(app_gateway_command_valid_token(bad_reason, id, 0, token), 0)
+}
+
+fn TestModuleAllowlist() {
+    assert_eq(module_gateway_request_allowed("tts", "speak"), 1)
+    assert_eq(module_gateway_request_allowed("stt", "transcribe"), 1)
+    assert_eq(module_gateway_request_allowed("llm", "complete"), 1)
+    assert_eq(module_gateway_request_allowed("tts", "DROP TABLE users"), 0)
+    assert_eq(module_gateway_request_allowed("../../etc", "read"), 0)
+}

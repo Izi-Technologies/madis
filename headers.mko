@@ -3,10 +3,31 @@
 // Actions: add, remove, modify, set, rename, copy, move
 // Supports standard headers AND X-headers (X-Account-ID, X-Billing-Code, etc.)
 
+fn hdr_text_safe(value: string) -> int {
+    let mut i = 0
+    while i < len(value) {
+        let c = int(value[i])
+        if c == 0 || c == 10 || c == 13 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn hdr_name_safe(value: string) -> int {
+    if len(value) == 0 { return 0 }
+    let mut i = 0
+    while i < len(value) {
+        let c = int(value[i])
+        let token = (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 33 || c == 35 || c == 36 || c == 37 || c == 38 || c == 39 || c == 42 || c == 43 || c == 45 || c == 46 || c == 94 || c == 95 || c == 96 || c == 124 || c == 126
+        if not token { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
 // Add a header to the message (before Content-Length)
 fn hdr_add(msg: string, name: string, value: string) -> string {
-    if str_contains(name, "\r") || str_contains(name, "\n") || str_contains(name, "\0") { return msg }
-    if str_contains(value, "\r") || str_contains(value, "\n") || str_contains(value, "\0") { return msg }
+    if hdr_name_safe(name) == 0 || hdr_text_safe(value) == 0 { return msg }
     let n = len(msg)
     let cl_idx = str_index(str_to_lower(msg), "content-length:")
     if cl_idx >= 0 {
@@ -80,6 +101,7 @@ fn hdr_remove(msg: string, name: string) -> string {
 
 // Set header value (remove existing + add new)
 fn hdr_set(msg: string, name: string, value: string) -> string {
+    if hdr_name_safe(name) == 0 || hdr_text_safe(value) == 0 { return msg }
     let cleaned = hdr_remove(msg, name)
     return hdr_add(cleaned, name, value)
 }

@@ -1,0 +1,126 @@
+// B2BUA leg tests. These validate identity separation and bounded translation
+// without opening sockets or requiring PostgreSQL.
+pull . "../parser.mko"
+pull . "../headers.mko"
+pull . "../b2bua.mko"
+
+fn b2bua_test_invite() -> string {
+    return "INVITE sip:bob@example.net SIP/2.0\r\n"
+        + "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-b2bua-test;rport\r\n"
+        + "From: \"Alice\" <sip:alice@example.com>;tag=caller1\r\n"
+        + "To: <sip:bob@example.net>\r\n"
+        + "Call-ID: caller-call-1234@example.com\r\n"
+        + "CSeq: 42 INVITE\r\n"
+        + "Contact: <sip:alice@192.0.2.10:5060>\r\n"
+        + "Max-Forwards: 69\r\n"
+        + "Content-Length: 0\r\n\r\n"
+}
+
+fn b2bua_test_response(cid: string, to_tag: string, code: int) -> string {
+    return "SIP/2.0 " + string(code) + " Test\r\n"
+        + "Via: SIP/2.0/UDP 198.51.100.20:5060;branch=z9hG4bK-downstream\r\n"
+        + "From: <sip:alice@example.com>;tag=b2bua-out\r\n"
+        + "To: <sip:bob@example.net>;tag=" + to_tag + "\r\n"
+        + "Call-ID: " + cid + "\r\n"
+        + "CSeq: 42 INVITE\r\n"
+        + "Contact: <sip:bob@198.51.100.20:5060>\r\n"
+        + "Content-Length: 0\r\n\r\n"
+}
+
+fn TestB2buaCreatesIndependentLeg() {
+    let _ = env_set("SIP_B2BUA_MODE", "enabled")
+    let cache = cmap_new()
+    let invite = b2bua_test_invite()
+    let out = b2bua_prepare_invite(invite, "198.51.100.20:5060", "udp", "192.0.2.10:5060", "udp", cache)
+    assert(len(out) > 0)
+    assert_eq(sip_validate_message(out, len(out)), 1)
+    assert(not str_eq(sip_header(out, "Call-ID"), sip_header(invite, "Call-ID")))
+    assert(str_has_prefix(sip_header(out, "Call-ID"), "b2bua-"))
+    assert(not str_eq(sip_addr_tag(sip_header(out, "From")), sip_addr_tag(sip_header(invite, "From"))))
+    assert(not str_contains(out, "branch=z9hG4bK-b2bua-test"))
+    assert(str_contains(sip_header(out, "Contact"), "b2bua"))
+    assert(len(b2bua_lookup_in(invite, cache)) > 0)
+}
+
+fn TestB2buaResponseMapsBackToCallerLeg() {
+    let _ = env_set("SIP_B2BUA_MODE", "enabled")
+    let cache = cmap_new()
+    let invite = b2bua_test_invite()
+    let out = b2bua_prepare_invite(invite, "198.51.100.20:5060", "udp", "192.0.2.10:5060", "udp", cache)
+    let key = b2bua_lookup_in(invite, cache)
+    let response = b2bua_test_response(sip_header(out, "Call-ID"), "remote1", 200)
+    let translated = b2bua_translate_response(response, key, cache)
+    let in_tag = cmap_get(cache, "b2bua_in_tag|" + key)
+    assert_eq(sip_validate_message(translated, len(translated)), 1)
+    assert_eq_str(sip_header(translated, "Call-ID"), sip_header(invite, "Call-ID"))
+    assert_eq_str(sip_addr_tag(sip_header(translated, "To")), in_tag)
+    assert_eq_str(sip_addr_tag(sip_header(translated, "From")), "caller1")
+    assert(str_contains(sip_header(translated, "Via"), "192.0.2.10:5060"))
+    assert(str_contains(sip_header(translated, "Contact"), "b2bua"))
+}
+
+fn TestB2buaInDialogCseqAndByeTranslation() {
+    let _ = env_set("SIP_B2BUA_MODE", "enabled")
+    let cache = cmap_new()
+    let invite = b2bua_test_invite()
+    let out = b2bua_prepare_invite(invite, "198.51.100.20:5060", "udp", "192.0.2.10:5060", "udp", cache)
+    let key = b2bua_lookup_in(invite, cache)
+    let response = b2bua_test_response(sip_header(out, "Call-ID"), "remote2", 200)
+    let _ = b2bua_translate_response(response, key, cache)
+    let in_tag = cmap_get(cache, "b2bua_in_tag|" + key)
+
+    let mut bye = str_replace(invite, "INVITE sip:bob@example.net", "BYE sip:bob@example.net")
+    bye = str_replace(bye, "CSeq: 42 INVITE", "CSeq: 7 BYE")
+    let rewritten = b2bua_prepare_in_dialog(bye, key, cache)
+    assert_eq(sip_validate_message(rewritten, len(rewritten)), 1)
+    assert_eq_str(sip_header(rewritten, "Call-ID"), sip_header(out, "Call-ID"))
+    assert_eq_str(sip_header(rewritten, "CSeq"), "43 BYE")
+    assert_eq_str(sip_addr_tag(sip_header(rewritten, "From")), sip_addr_tag(sip_header(out, "From")))
+    assert_eq_str(sip_addr_tag(sip_header(rewritten, "To")), "remote2")
+
+    let downstream_bye = str_replace(rewritten, "BYE sip:bob@example.net", "BYE sip:alice@example.com")
+    let back = b2bua_request_to_peer(downstream_bye, key, cache)
+    assert_eq(sip_validate_message(back, len(back)), 1)
+    assert_eq_str(sip_header(back, "Call-ID"), sip_header(invite, "Call-ID"))
+    assert_eq_str(sip_addr_tag(sip_header(back, "From")), in_tag)
+    assert_eq_str(sip_addr_tag(sip_header(back, "To")), "caller1")
+}
+
+fn TestB2buaNon2xxAckUsesDownstreamDialog() {
+    let _ = env_set("SIP_B2BUA_MODE", "enabled")
+    let cache = cmap_new()
+    let invite = b2bua_test_invite()
+    let out = b2bua_prepare_invite(invite, "198.51.100.20:5060", "udp", "192.0.2.10:5060", "udp", cache)
+    let key = b2bua_lookup_in(invite, cache)
+    let response = b2bua_test_response(sip_header(out, "Call-ID"), "remote3", 486)
+    let ack = b2bua_non2xx_ack(response, key, cache)
+    assert_eq(sip_validate_message(ack, len(ack)), 1)
+    assert_eq_str(sip_header(ack, "Call-ID"), sip_header(out, "Call-ID"))
+    assert_eq_str(sip_header(ack, "CSeq"), "42 ACK")
+    assert_eq_str(sip_addr_tag(sip_header(ack, "To")), "remote3")
+}
+
+fn TestHeaderSanitizerPreservesSafeZeroAndRejectsInjection() {
+    let invite = b2bua_test_invite()
+    let safe = hdr_set(invite, "Call-ID", "leg0@example.net")
+    assert_eq_str(sip_header(safe, "Call-ID"), "leg0@example.net")
+    let injected = hdr_set(invite, "Call-ID", "bad\r\nX-Injected: yes")
+    assert_eq_str(sip_header(injected, "Call-ID"), sip_header(invite, "Call-ID"))
+    assert(not str_contains(injected, "X-Injected: yes"))
+    let bad_name = hdr_add(invite, "X-Bad: yes", "value")
+    assert_eq_str(bad_name, invite)
+}
+
+fn TestB2buaCleanupRemovesBothLegIndexes() {
+    let _ = env_set("SIP_B2BUA_MODE", "enabled")
+    let cache = cmap_new()
+    let invite = b2bua_test_invite()
+    let out = b2bua_prepare_invite(invite, "198.51.100.20:5060", "udp", "192.0.2.10:5060", "udp", cache)
+    let in_key = b2bua_lookup_in(invite, cache)
+    let out_key = b2bua_lookup_out(out, cache)
+    assert(len(out_key) > 0)
+    assert_eq_str(in_key, out_key)
+    assert_eq(b2bua_cleanup(in_key, cache), 1)
+    assert_eq_str(b2bua_lookup_in(invite, cache), "")
+    assert_eq_str(b2bua_lookup_out(out, cache), "")
+}

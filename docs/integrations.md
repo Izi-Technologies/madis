@@ -1,8 +1,8 @@
 # Application integration
 
-Madis is designed to sit behind carrier, billing, provisioning, and operations
-applications. Those applications can be written in Python, Go, JavaScript, or
-another language without linking to Mako or embedding SIP process state.
+Carrier, billing, provisioning, and operations applications can call Madis over
+HTTP/JSON. They can be written in Python, Go, JavaScript, or another language
+without linking to Mako or embedding SIP process state.
 
 The supported integration boundary is server-side HTTP/JSON:
 
@@ -33,6 +33,7 @@ GET  /api/v1/capabilities
 GET  /api/v1/billing/events?limit=100
 POST /api/v1/billing/events
 POST /api/v1/billing/events/ack?event_id=...
+GET  /api/v1/billing/cdr?limit=100&call_id=...
 ```
 
 The full public path is therefore, for example,
@@ -42,12 +43,78 @@ Keep this token on the server. Browser applications should call their own
 backend, which then calls Madis; do not expose a carrier token in JavaScript
 bundles or browser storage.
 
-The API accepts a flexible event envelope. `schema`, `event_type`, and `data`
-are the stable minimum; `tenant_id`, `session_id`, `occurred_at_ms`, and
+The API accepts an event envelope. `schema`, `event_type`, and `data` are
+required; `tenant_id`, `session_id`, `occurred_at_ms`, and
 `extensions` are available when useful. `data` and `extensions` are owned by
 the application. Validate events against
 [`../api/billing-event.schema.json`](../api/billing-event.schema.json) and
-publish an explicit, stable `event_id` for retries.
+publish an explicit `event_id` and reuse it for retries.
+
+## Control plane
+
+Applications can also change the supported call policy through the versioned
+control API. Use a separate `SIP_CONTROL_API_TOKEN`; do not give a billing
+worker permission to change routing. The first control surface manages bounded
+routing rules and explicit B2BUA policy:
+
+```text
+GET  /api/v1/control/status
+GET  /api/v1/control/routing-rules?limit=100
+POST /api/v1/control/routing-rules
+POST /api/v1/control/routing-rules/{id}/enable
+POST /api/v1/control/routing-rules/{id}/disable
+GET  /api/v1/control/dialplans?limit=100
+POST /api/v1/control/dialplans
+PUT  /api/v1/control/dialplans/{id}
+DELETE /api/v1/control/dialplans/{id}
+POST /api/v1/control/dialplans/{id}/enable
+POST /api/v1/control/dialplans/{id}/disable
+```
+
+For example, a carrier application can submit
+`{"match_prefix":"+1555","action":"b2bua:carrier-gateway"}`. The
+allowed actions are `route:`, `b2bua:`, `dispatch:`, `reject:`, `redirect:`,
+`failover:`, `lcr`, and `continue`. `b2bua:` is effective only when the SIP
+worker has `SIP_B2BUA_MODE=enabled`. A control request changes database policy;
+it does not inject Mako, SQL, shell commands, or arbitrary language code into
+the SIP worker. The worker continues to own SIP transaction state and applies
+the rule on the next matching call.
+
+Dialplans use the same control token. A replacement contains
+`match_prefix`, `callee_action`, and `direction`, with optional
+`caller_action`, `priority`, and `description`. Actions are limited to
+`strip:N`, `prepend:PREFIX`, `replace:OLD:NEW`, `set:NUMBER`, `e164:CC`,
+`strip_plus`, and `add_plus`; semicolon-separated actions run in order. Use
+enable/disable for reversible changes and delete only when the rule is no
+longer needed. The worker reads the committed rule on the next call.
+
+CDRs are read with the carrier token through `/billing/cdr`. The endpoint is
+bounded to 100 records per request and supports an exact `call_id` lookup. It
+is a read surface for external rating, invoicing, reconciliation, and
+reporting; it does not mark a call billed or acknowledge an outbox event. The
+application owns those billing transactions and should use the event outbox
+for at-least-once delivery.
+
+The same HTTP contract is used by every supported language. In Python:
+
+```python
+control = MadisCarrier(
+    os.environ["MADIS_API_URL"],
+    os.environ["SIP_CONTROL_API_TOKEN"],
+)
+control.create_routing_rule({
+    "match_prefix": "+1555",
+    "action": "b2bua:carrier-gateway",
+    "priority": 10,
+})
+```
+
+Go, JavaScript/TypeScript, Lua, and Erlang clients expose the same operations
+as `CreateRoutingRule`/`SetRoutingRuleEnabled`, `createRoutingRule`,
+`create_routing_rule`/`set_routing_rule_enabled`, and
+`create_routing_rule`/`set_routing_rule_enabled`. The examples under
+[`../sdk/`](../sdk/) are intentionally thin so teams can wrap them in FastAPI,
+Gin, Express, LuaSocket, OTP, or another application framework.
 
 ## Python
 
@@ -150,7 +217,7 @@ service. In Next.js, use a server route or server action; never import the
 client into a browser bundle when it contains the carrier token. Browser
 frontends should call an application-owned backend endpoint instead.
 
-## Consuming events safely
+## Consuming events
 
 A consumer is at-least-once, not exactly-once:
 
@@ -177,16 +244,16 @@ rating or invoice has completed.
 
 | Responsibility | Application owns it | Madis provides |
 | --- | --- | --- |
-| HTTP client and framework route | Yes | Stable JSON endpoints |
+| HTTP client and framework route | Yes | Versioned JSON endpoints |
 | Bearer-token storage and rotation | Yes | Token authentication |
 | Event schema and validation | Yes, using the supplied envelope/schema | Bounded JSON persistence |
 | Idempotency and retry policy | Yes | Idempotent event insertion by `event_id` |
-| Billing/rating/invoice transaction | Yes | Outbox and online-charging integration boundaries |
+| Billing/rating/invoice transaction | Yes | CDR read surface, outbox, and online-charging integration boundaries |
 | Tenant authorization | Yes | Tenant fields and authenticated API boundary |
 | Long-running jobs and reconciliation | Yes | Pending-event and acknowledgement flow |
 
 For OpenAPI-based code generation, use
 [`../api/openapi.yaml`](../api/openapi.yaml) as a starting contract and review
-generated clients before production. It describes the carrier API, not the
-full SIP/WebUI surface. The API remains intentionally small so teams can use
-their existing framework conventions, databases, queues, and observability.
+generated clients before deployment. It describes the carrier API, not the
+full SIP/WebUI surface. Applications still own their framework conventions,
+databases, queues, and observability.

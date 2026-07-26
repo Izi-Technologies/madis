@@ -32,7 +32,7 @@ done
 ```
 
 Then repeat the same matrix with `WORKERS=2`, `4`, and `8`. The useful score is
-the highest rate with zero failed calls and stable p99 setup latency—not the
+the highest rate with zero failed calls and p99 setup latency within the target—not the
 highest rate at which the generator starts dropping packets.
 
 For a fair Kamailio comparison, keep the SIPp scenario, host, CPU affinity,
@@ -40,15 +40,11 @@ message size, worker count, and database/routing mode identical. Kamailio is
 not installed in this checkout; install or point `SIPP`/the proxy command at a
 separate candidate before comparing results.
 
-Historical local baselines on 2026-07-24 with the then-current Mako 0.4.15
-build were: the default
-`RATE=100`, 1,000 calls, 200-call limit, and one worker completed 1,000/1,000
-calls with zero failures and a 102-call peak; the stress profile at
-`RATE=500`, 2,000 calls, 500-call limit, and four workers completed 2,000/2,000
-calls with zero failures and a 500-call peak, achieving 395.804 CPS. These
-are host-specific Madis baselines, not Kamailio comparisons or capacity
-guarantees. They are retained for context only; rerun the benchmark with
-Mako 0.4.16 before using any number for a release comparison.
+Do not reuse historical CPS or concurrency numbers as release results. Record
+the Mako version, source revision, host, scenario, database mode, route data,
+worker settings, achieved CPS, failed calls, p95/p99 setup latency, CPU, RSS,
+and file-descriptor usage for each run. The repository does not contain a
+current Kamailio comparison.
 
 Additional validation commands:
 

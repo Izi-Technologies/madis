@@ -1,0 +1,156 @@
+// Language-neutral external module bus.
+//
+// TTS, STT, LLM, recording, fraud, and carrier-specific media workers can
+// run as separate services in Python, Go, JavaScript, Lua, Erlang, or any
+// other language. Madis remains responsible for SIP transactions and accepts
+// only the same signed, bounded SIP commands used by the application hook.
+
+fn module_gateway_name_safe(name: string) -> int {
+    if len(name) < 2 || len(name) > 64 { return 0 }
+    let mut i = 0
+    while i < len(name) {
+        let c = int(name[i])
+        let ok = (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 45 || c == 95 || c == 46
+        if not ok { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn module_gateway_operation_safe(operation: string) -> int {
+    if len(operation) < 2 || len(operation) > 64 { return 0 }
+    let mut i = 0
+    while i < len(operation) {
+        let c = int(operation[i])
+        let ok = (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 45 || c == 95 || c == 46
+        if not ok { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn module_gateway_builtin(name: string) -> int {
+    let n = str_to_lower(str_trim_space(name))
+    if str_eq(n, "tts") || str_eq(n, "stt") || str_eq(n, "llm") { return 1 }
+    if str_eq(n, "media") || str_eq(n, "recording") || str_eq(n, "fraud") || str_eq(n, "billing") { return 1 }
+    return 0
+}
+
+fn module_gateway_operation_builtin(name: string, operation: string) -> int {
+    let n = str_to_lower(str_trim_space(name))
+    let op = str_to_lower(str_trim_space(operation))
+    if str_eq(n, "tts") { return if str_eq(op, "speak") || str_eq(op, "synthesize") || str_eq(op, "attach") { 1 } else { 0 } }
+    if str_eq(n, "stt") { return if str_eq(op, "listen") || str_eq(op, "transcribe") || str_eq(op, "attach") { 1 } else { 0 } }
+    if str_eq(n, "llm") { return if str_eq(op, "complete") || str_eq(op, "chat") || str_eq(op, "classify") { 1 } else { 0 } }
+    if str_eq(n, "media") { return if str_eq(op, "attach") || str_eq(op, "play") || str_eq(op, "stop") || str_eq(op, "record") { 1 } else { 0 } }
+    if str_eq(n, "recording") { return if str_eq(op, "start") || str_eq(op, "stop") || str_eq(op, "pause") || str_eq(op, "resume") { 1 } else { 0 } }
+    if str_eq(n, "fraud") { return if str_eq(op, "score") || str_eq(op, "allow") || str_eq(op, "deny") { 1 } else { 0 } }
+    if str_eq(n, "billing") { return if str_eq(op, "authorize") || str_eq(op, "update") || str_eq(op, "terminate") { 1 } else { 0 } }
+    return 0
+}
+
+fn module_gateway_request_allowed(name: string, operation: string) -> int {
+    if module_gateway_name_safe(name) == 0 || module_gateway_operation_safe(operation) == 0 { return 0 }
+    let configured = str_trim_space(env_get_or("SIP_MODULES", ""))
+    if len(configured) > 0 {
+        let names = str_split(configured, ",")
+        let mut found = 0
+        let mut i = 0
+        while i < len(names) {
+            if str_eq(str_to_lower(str_trim_space(names[i])), str_to_lower(name)) { found = 1 }
+            i = i + 1
+        }
+        if found == 0 { return 0 }
+    } else {
+        if module_gateway_builtin(name) == 0 {
+            let custom = str_to_lower(str_trim_space(env_get_or("SIP_MODULE_ALLOW_CUSTOM", "0")))
+            if not str_eq(custom, "1") && not str_eq(custom, "true") && not str_eq(custom, "yes") { return 0 }
+        }
+    }
+    if module_gateway_operation_builtin(name, operation) == 1 { return 1 }
+    let custom_ops = str_to_lower(str_trim_space(env_get_or("SIP_MODULE_ALLOW_CUSTOM", "0")))
+    return if str_eq(custom_ops, "1") || str_eq(custom_ops, "true") || str_eq(custom_ops, "yes") { 1 } else { 0 }
+}
+
+fn module_gateway_timeout_ms() -> int {
+    let mut value = 250
+    match parse_int(env_get_or("SIP_MODULE_TIMEOUT_MS", "250")) {
+        Ok(v) => { value = v }
+        Err(_) => {}
+    }
+    if value < 10 { value = 10 }
+    if value > 2000 { value = 2000 }
+    return value
+}
+
+fn module_gateway_fail_closed() -> int {
+    let value = str_to_lower(str_trim_space(env_get_or("SIP_MODULE_FAIL_MODE", "closed")))
+    if str_eq(value, "open") || str_eq(value, "fail-open") || str_eq(value, "0") { return 0 }
+    return 1
+}
+
+fn module_gateway_request_id(msg: string, event: string, module: string, operation: string, payload: string) -> string {
+    return sha256("madis.module|" + event + "|" + module + "|" + operation + "|" + sip_header(msg, "Call-ID") + "|" + sip_header(msg, "CSeq") + "|" + sha256(msg) + "|" + sha256(payload))[0:32]
+}
+
+fn module_gateway_mac_input(msg: string, ip: string, port: int, tr: string, event: string, module: string, operation: string, payload: string, request_id: string) -> string {
+    return request_id + "|" + event + "|" + module + "|" + operation + "|" + tr + "|" + ip + "|" + string(port)
+        + "|" + sip_header(msg, "Call-ID") + "|" + app_cap(msg, 65535) + "|" + payload
+}
+
+fn module_gateway_call(msg: string, ip: string, port: int, tr: string, event: string, module: string, operation: string, payload: string) -> string {
+    if module_gateway_request_allowed(module, operation) == 0 { return "__MODULE_FAIL__" }
+    let url = str_trim_space(env_get_or("SIP_MODULE_URL", ""))
+    let token = env_get_or("SIP_MODULE_TOKEN", "")
+    if app_url_valid(url) == 0 || len(token) < 16 || len(token) > 512 { return "__MODULE_FAIL__" }
+    let mut token_i = 0
+    while token_i < len(token) {
+        let token_c = int(token[token_i])
+        if token_c == 0 || token_c == 10 || token_c == 13 { return "__MODULE_FAIL__" }
+        token_i = token_i + 1
+    }
+    if app_url_is_http(url) == 1 {
+        let allow = str_to_lower(str_trim_space(env_get_or("SIP_MODULE_ALLOW_HTTP", "0")))
+        if not str_eq(allow, "1") && not str_eq(allow, "true") && not str_eq(allow, "yes") { return "__MODULE_FAIL__" }
+    }
+    if len(payload) > 32768 || app_gateway_text_safe(payload, 32768) == 0 { return "__MODULE_FAIL__" }
+    let request_id = module_gateway_request_id(msg, event, module, operation, payload)
+    let body = "{"
+        + "\"schema\":\"madis.module.request.v1\","
+        + "\"event\":\"" + app_json_escape(event) + "\","
+        + "\"request_id\":\"" + request_id + "\","
+        + "\"module\":\"" + app_json_escape(module) + "\","
+        + "\"operation\":\"" + app_json_escape(operation) + "\","
+        + "\"transport\":\"" + app_json_escape(tr) + "\","
+        + "\"source_ip\":\"" + app_json_escape(ip) + "\","
+        + "\"source_port\":" + string(port) + ","
+        + "\"call_id\":\"" + app_json_escape(sip_header(msg, "Call-ID")) + "\","
+        + "\"message\":\"" + app_json_escape(app_cap(msg, 65535)) + "\","
+        + "\"payload\":\"" + app_json_escape(payload) + "\""
+        + "}"
+    let signed = body[0:len(body) - 1] + ",\"signature\":\"" + sha256(token + "|" + module_gateway_mac_input(msg, ip, port, tr, event, module, operation, payload, request_id)) + "\"}"
+    let response = app_gateway_http_post_ca(url, token, signed, module_gateway_timeout_ms(), env_get_or("SIP_MODULE_CA", ""))
+    if len(response) == 0 {
+        if module_gateway_fail_closed() == 1 { return "__MODULE_FAIL__" }
+        return ""
+    }
+    return response
+}
+
+fn module_gateway_command_valid(raw: string, msg: string, event: string, module: string, operation: string, payload: string, for_response: int) -> int {
+    let token = env_get_or("SIP_MODULE_TOKEN", "")
+    let request_id = module_gateway_request_id(msg, event, module, operation, payload)
+    if app_gateway_command_valid_token(raw, request_id, for_response, token) == 0 { return 0 }
+    let action = str_to_lower(str_trim_space(json_get_string(raw, "action")))
+    if str_eq(action, "module") { return 0 }
+    return 1
+}
+
+fn module_gateway_action(raw: string, msg: string, event: string, module: string, operation: string, payload: string) -> string {
+    if str_eq(raw, "__MODULE_FAIL__") { return "fail" }
+    if len(raw) == 0 { return "continue" }
+    if module_gateway_command_valid(raw, msg, event, module, operation, payload, 0) == 0 {
+        return if module_gateway_fail_closed() == 1 { "fail" } else { "continue" }
+    }
+    return str_to_lower(str_trim_space(json_get_string(raw, "action")))
+}

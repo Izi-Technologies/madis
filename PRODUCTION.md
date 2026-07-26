@@ -4,7 +4,9 @@ This is the short operational reference. The detailed guides are
 [`docs/architecture.md`](docs/architecture.md),
 [`docs/configuration.md`](docs/configuration.md),
 [`docs/operations.md`](docs/operations.md), and
-[`docs/testing.md`](docs/testing.md).
+[`docs/testing.md`](docs/testing.md). Integration contracts are documented in
+[`docs/integrations.md`](docs/integrations.md),
+[`docs/modules.md`](docs/modules.md), and [`api/README.md`](api/README.md).
 
 The supported build entrypoint is `main.mko`. It pulls the modular SIP, state,
 transport, routing, media, security, and operations modules. `sipproxy_full.mko`
@@ -46,7 +48,7 @@ MAKO_RUNTIME=/path/to/mako/runtime \
   mako build --release --strip --no-incremental admin/main.mko -o admin-bin
 ```
 
-The dashboard sends a lightweight live snapshot over WebSocket, falls back to
+The dashboard sends a live snapshot over WebSocket, falls back to
 `/admin/api/live` polling, and shares the database/metrics snapshot for three
 seconds across clients. The initial HTML response does not wait on SIP or
 metrics probes. Keep `admin-bin` behind the reverse proxy and do not expose
@@ -99,19 +101,18 @@ when browsers send an `Origin` header. Login-failure, session, and admin-side
 cache state are bounded; use a reverse proxy for TLS, authentication policy,
 rate limiting, and public exposure.
 
-## Current Mako runtime prerequisites
+## Mako runtime prerequisites
 
 The supported compiler/runtime version is **Mako 0.4.16**. Use the same
 0.4.16 compiler and runtime directory for C emission, native linking, the
 WebUI, and the benchmark harness. Local filesystem paths are intentionally not
 part of the deployment contract.
 
-Mako 0.4.16 provides the metrics, tracing, graceful-shutdown, hot-reload,
-stream-transport, TLS-client, WebSocket-client, UDP `SO_REUSEPORT`, and native
-ECDSA P-256/ES256 APIs used here. Build this proxy with
-`MAKO_RUNTIME=/path/to/mako/runtime` so the generated C links against those
-interfaces. HS256 remains available for lab/interoperability use; ES256 with a
-protected P-256 private key is the production signing path.
+Build this proxy with `MAKO_RUNTIME=/path/to/mako/runtime` so the generated C
+links against the Mako 0.4.16 runtime. Do not mix a different compiler and
+runtime version. STIR/SHAKEN signing mode and key handling must be reviewed
+against the deployed configuration; the repository does not provide carrier
+certificate provisioning or rotation.
 
 ## Verification
 

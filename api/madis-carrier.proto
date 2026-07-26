@@ -3,6 +3,7 @@ syntax = "proto3";
 package madis.carrier.v1;
 
 import "google/protobuf/struct.proto";
+import "google/protobuf/empty.proto";
 
 message BillingEvent {
   string schema = 1;
@@ -20,6 +21,27 @@ message PendingEventsRequest { uint32 limit = 1; }
 message PendingEventsResponse { repeated BillingEvent events = 1; }
 message AckEventRequest { string event_id = 1; }
 message AckEventResponse { bool acknowledged = 1; }
+
+message CdrRecord {
+  string call_id = 1;
+  string caller = 2;
+  string callee = 3;
+  string status = 4;
+  string gateway = 5;
+  string source_ip = 6;
+  string destination = 7;
+  string transport = 8;
+  string from_uri = 9;
+  string to_uri = 10;
+  string user_agent = 11;
+  int32 sip_code = 12;
+  string started_at = 13;
+  string ended_at = 14;
+  int32 duration_sec = 15;
+}
+
+message CdrRequest { uint32 limit = 1; string call_id = 2; }
+message CdrResponse { repeated CdrRecord records = 1; }
 
 message ChargingRequest {
   string schema = 1;
@@ -41,9 +63,94 @@ message ChargingResponse {
   google.protobuf.Struct extensions = 6;
 }
 
+message ControlStatus {
+  string schema = 1;
+  string mako_version = 2;
+  bool b2bua_enabled = 3;
+  string b2bua_mode = 4;
+  repeated string operations = 5;
+}
+
+message RoutingRule {
+  int32 id = 1;
+  string match_prefix = 2;
+  string match_caller = 3;
+  string match_src_ip = 4;
+  string match_time_start = 5;
+  string match_time_end = 6;
+  string match_day = 7;
+  string action = 8;
+  int32 priority = 9;
+  bool enabled = 10;
+  string description = 11;
+}
+
+message RoutingRuleInput {
+  string match_prefix = 1;
+  string match_caller = 2;
+  string match_src_ip = 3;
+  string match_time_start = 4;
+  string match_time_end = 5;
+  string match_day = 6;
+  string action = 7;
+  int32 priority = 8;
+  string description = 9;
+}
+
+message RoutingRulesRequest { uint32 limit = 1; }
+message RoutingRulesResponse { repeated RoutingRule rules = 1; }
+message CreateRoutingRuleRequest { RoutingRuleInput rule = 1; }
+message CreateRoutingRuleResponse { bool created = 1; }
+message SetRoutingRuleStateRequest { int32 id = 1; bool enabled = 2; }
+message SetRoutingRuleStateResponse { bool updated = 1; }
+
+message Dialplan {
+  int32 id = 1;
+  string match_prefix = 2;
+  string callee_action = 3;
+  string caller_action = 4;
+  string direction = 5;
+  int32 priority = 6;
+  bool enabled = 7;
+  string description = 8;
+}
+
+message DialplanInput {
+  string match_prefix = 1;
+  string callee_action = 2;
+  string caller_action = 3;
+  string direction = 4;
+  int32 priority = 5;
+  string description = 6;
+}
+
+message DialplansRequest { uint32 limit = 1; }
+message DialplansResponse { repeated Dialplan dialplans = 1; }
+message CreateDialplanRequest { DialplanInput dialplan = 1; }
+message CreateDialplanResponse { bool created = 1; }
+message SetDialplanStateRequest { int32 id = 1; bool enabled = 2; }
+message SetDialplanStateResponse { bool updated = 1; }
+message UpdateDialplanRequest { int32 id = 1; DialplanInput dialplan = 2; }
+message UpdateDialplanResponse { bool updated = 1; }
+message DeleteDialplanRequest { int32 id = 1; }
+message DeleteDialplanResponse { bool deleted = 1; }
+
 service CarrierEvents {
   rpc PublishBillingEvent(PublishBillingEventRequest) returns (PublishBillingEventResponse);
   rpc PendingEvents(PendingEventsRequest) returns (PendingEventsResponse);
   rpc AcknowledgeEvent(AckEventRequest) returns (AckEventResponse);
+  rpc Cdr(CdrRequest) returns (CdrResponse);
   rpc AuthorizeCharging(ChargingRequest) returns (ChargingResponse);
+}
+
+service CarrierControl {
+  rpc GetControlStatus(google.protobuf.Empty) returns (ControlStatus);
+  rpc RoutingRules(RoutingRulesRequest) returns (RoutingRulesResponse);
+  rpc CreateRoutingRule(CreateRoutingRuleRequest) returns (CreateRoutingRuleResponse);
+  rpc SetRoutingRuleState(SetRoutingRuleStateRequest) returns (SetRoutingRuleStateResponse);
+  rpc Dialplans(DialplansRequest) returns (DialplansResponse);
+  rpc CreateDialplan(CreateDialplanRequest) returns (CreateDialplanResponse);
+  rpc SetDialplanState(SetDialplanStateRequest) returns (SetDialplanStateResponse);
+  rpc UpdateDialplan(UpdateDialplanRequest) returns (UpdateDialplanResponse);
+  rpc DeleteDialplan(DeleteDialplanRequest) returns (DeleteDialplanResponse);
 }

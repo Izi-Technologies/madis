@@ -1,0 +1,324 @@
+// B2BUA leg management.
+//
+// This module is deliberately opt-in. A b2bua:<target> routing action makes
+// Madis terminate the caller-facing dialog and create a separate downstream
+// UAC dialog. The bounded state maps and explicit method checks keep the
+// feature from silently turning ordinary proxy routes into B2BUA routes.
+
+fn b2bua_enabled() -> int {
+    let mode = str_to_lower(env_get_or("SIP_B2BUA_MODE", "proxy"))
+    if str_eq(mode, "1") || str_eq(mode, "enabled") || str_eq(mode, "b2bua") { return 1 }
+    return 0
+}
+
+fn b2bua_state_capacity() -> int {
+    return 4096
+}
+
+fn b2bua_state_ttl_ms() -> int {
+    let mut value = 1800000
+    match parse_int(env_get_or("SIP_B2BUA_STATE_MS", "1800000")) { Ok(v) => { value = v } Err(_) => {} }
+    if value < 64000 { value = 64000 }
+    if value > 86400000 { value = 86400000 }
+    return value
+}
+
+fn b2bua_key(cid: string, from_tag: string) -> string {
+    if len(cid) == 0 || len(from_tag) == 0 { return "" }
+    return sha256("madis.b2bua.key|" + cid + "|" + from_tag)[0:32]
+}
+
+fn b2bua_tag(seed: string) -> string {
+    return "b2bua-" + sha256("madis.b2bua.tag|" + seed + "|" + base64_encode(random_bytes(12)))[0:24]
+}
+
+fn b2bua_call_id(seed: string) -> string {
+    let host = env_get_or("SIP_B2BUA_CALLID_HOST", "madis.local")
+    return "b2bua-" + sha256("madis.b2bua.cid|" + seed + "|" + base64_encode(random_bytes(16)))[0:32] + "@" + host
+}
+
+// Remove only a tag parameter. Other From/To parameters remain intact.
+fn b2bua_without_tag(value: string) -> string {
+    let low = str_to_lower(value)
+    let tag_idx = str_index(low, ";tag=")
+    if tag_idx < 0 { return value }
+    let rest_start = tag_idx + 1
+    let next = str_index(value[rest_start:], ";")
+    if next < 0 { return value[0:tag_idx] }
+    return value[0:tag_idx] + value[rest_start + next:]
+}
+
+fn b2bua_with_tag(value: string, tag: string) -> string {
+    let base = b2bua_without_tag(value)
+    if len(tag) == 0 { return base }
+    return base + ";tag=" + tag
+}
+
+fn b2bua_signal_host() -> string {
+    let mut host = env_get_or("SIP_B2BUA_BIND_IP", "")
+    if len(host) == 0 { host = env_get_or("SIP_PUBLIC_IP", "") }
+    if len(host) == 0 { host = env_get_or("SIP_BIND_IP", "") }
+    if len(host) == 0 || str_eq(host, "0.0.0.0") || str_eq(host, "::") { host = "127.0.0.1" }
+    return host
+}
+
+fn b2bua_signal_port() -> int {
+    let mut port = 5060
+    match parse_int(env_get_or("SIP_B2BUA_SIGNAL_PORT", env_get_or("SIP_UDP_PORT", "5060"))) { Ok(v) => { port = v } Err(_) => {} }
+    if port <= 0 || port > 65535 { port = 5060 }
+    return port
+}
+
+fn b2bua_contact_uri(transport: string) -> string {
+    let mut host = env_get_or("SIP_B2BUA_CONTACT_HOST", "")
+    if len(host) == 0 { host = b2bua_signal_host() }
+    let mut authority = host
+    if str_index(host, ":") >= 0 && not str_has_prefix(host, "[") { authority = "[" + host + "]" }
+    let mut port = b2bua_signal_port()
+    match parse_int(env_get_or("SIP_B2BUA_CONTACT_PORT", string(port))) { Ok(v) => { port = v } Err(_) => {} }
+    if port <= 0 || port > 65535 { port = b2bua_signal_port() }
+    let user = env_get_or("SIP_B2BUA_CONTACT_USER", "b2bua")
+    let mut scheme = "sip"
+    if str_eq(transport, "tls") || str_eq(transport, "sips") { scheme = "sips" }
+    return scheme + ":" + user + "@" + authority + ":" + string(port) + ";transport=" + transport
+}
+
+fn b2bua_cleanup(key: string, cache: CMap) -> int {
+    if len(key) == 0 { return 0 }
+    let out_cid = cmap_get(cache, "b2bua_out_cid|" + key)
+    if len(out_cid) > 0 { let _ = cmap_del(cache, "b2bua_out_key|" + out_cid) }
+    let _ = cmap_del(cache, "b2bua_state|" + key)
+    let _ = cmap_del(cache, "b2bua_created|" + key)
+    let _ = cmap_del(cache, "b2bua_in_cid|" + key)
+    let _ = cmap_del(cache, "b2bua_out_cid|" + key)
+    let _ = cmap_del(cache, "b2bua_in_from|" + key)
+    let _ = cmap_del(cache, "b2bua_in_to|" + key)
+    let _ = cmap_del(cache, "b2bua_in_via|" + key)
+    let _ = cmap_del(cache, "b2bua_in_tag|" + key)
+    let _ = cmap_del(cache, "b2bua_out_tag|" + key)
+    let _ = cmap_del(cache, "b2bua_out_remote_to|" + key)
+    let _ = cmap_del(cache, "b2bua_out_invite|" + key)
+    let _ = cmap_del(cache, "b2bua_pending_invite|" + key)
+    let _ = cmap_del(cache, "b2bua_target|" + key)
+    let _ = cmap_del(cache, "b2bua_transport|" + key)
+    let _ = cmap_del(cache, "b2bua_peer|" + key)
+    let _ = cmap_del(cache, "b2bua_peer_transport|" + key)
+    let _ = cmap_del(cache, "b2bua_invite_cseq|" + key)
+    let _ = cmap_del(cache, "b2bua_out_cseq|" + key)
+    let _ = cmap_del(cache, "b2bua_peer_cseq|" + key)
+    let _ = cmap_del(cache, "b2bua_pending_method|" + key)
+    let _ = cmap_del(cache, "b2bua_pending_in_cseq|" + key)
+    let _ = cmap_del(cache, "b2bua_pending_out_cseq|" + key)
+    return 1
+}
+
+fn b2bua_active(key: string, cache: CMap) -> int {
+    if len(key) == 0 || cmap_has(cache, "b2bua_state|" + key) == 0 { return 0 }
+    let mut created = 0
+    match parse_int(cmap_get(cache, "b2bua_created|" + key)) { Ok(v) => { created = v } Err(_) => {} }
+    if created <= 0 || mono_ms() - created > b2bua_state_ttl_ms() {
+        let _ = b2bua_cleanup(key, cache)
+        return 0
+    }
+    cmap_set(cache, "b2bua_created|" + key, string(mono_ms()))
+    return 1
+}
+
+fn b2bua_store(key: string, in_cid: string, out_cid: string, from: string, to: string, via: string, in_tag: string, out_tag: string, invite: string, target: string, transport: string, peer: string, peer_transport: string, invite_cseq: string, cache: CMap) -> int {
+    if len(key) == 0 || len(in_cid) == 0 || len(out_cid) == 0 || len(invite) > 32768 { return 0 }
+    let seq = cmap_incr(cache, "b2bua_seq", 1)
+    if seq < 0 { return 0 }
+    let cap = b2bua_state_capacity()
+    let slot = seq - (seq / cap) * cap
+    let ring_key = "b2bua_ring|" + string(slot)
+    if cmap_has(cache, ring_key) == 1 {
+        let old = cmap_get(cache, ring_key)
+        if len(old) > 0 && not str_eq(old, key) { let _ = b2bua_cleanup(old, cache) }
+    }
+    cmap_set(cache, ring_key, key)
+    cmap_set(cache, "b2bua_state|" + key, "early")
+    cmap_set(cache, "b2bua_created|" + key, string(mono_ms()))
+    cmap_set(cache, "b2bua_in_cid|" + key, in_cid)
+    cmap_set(cache, "b2bua_out_cid|" + key, out_cid)
+    cmap_set(cache, "b2bua_out_key|" + out_cid, key)
+    cmap_set(cache, "b2bua_in_from|" + key, from)
+    cmap_set(cache, "b2bua_in_to|" + key, to)
+    cmap_set(cache, "b2bua_in_via|" + key, via)
+    cmap_set(cache, "b2bua_in_tag|" + key, in_tag)
+    cmap_set(cache, "b2bua_out_tag|" + key, out_tag)
+    cmap_set(cache, "b2bua_out_remote_to|" + key, to)
+    cmap_set(cache, "b2bua_out_invite|" + key, invite)
+    cmap_set(cache, "b2bua_pending_invite|" + key, invite)
+    cmap_set(cache, "b2bua_target|" + key, target)
+    cmap_set(cache, "b2bua_transport|" + key, transport)
+    cmap_set(cache, "b2bua_peer|" + key, peer)
+    cmap_set(cache, "b2bua_peer_transport|" + key, peer_transport)
+    cmap_set(cache, "b2bua_invite_cseq|" + key, invite_cseq)
+    cmap_set(cache, "b2bua_out_cseq|" + key, invite_cseq)
+    cmap_set(cache, "b2bua_peer_cseq|" + key, "1")
+    cmap_set(cache, "b2bua_pending_method|" + key, "INVITE")
+    cmap_set(cache, "b2bua_pending_in_cseq|" + key, invite_cseq)
+    cmap_set(cache, "b2bua_pending_out_cseq|" + key, invite_cseq)
+    return 1
+}
+
+fn b2bua_lookup_in(msg: string, cache: CMap) -> string {
+    let key = b2bua_key(sip_header(msg, "Call-ID"), sip_addr_tag(sip_header(msg, "From")))
+    if b2bua_active(key, cache) == 1 { return key }
+    return ""
+}
+
+fn b2bua_lookup_out(msg: string, cache: CMap) -> string {
+    let cid = sip_header(msg, "Call-ID")
+    if len(cid) == 0 || cmap_has(cache, "b2bua_out_key|" + cid) == 0 { return "" }
+    let key = cmap_get(cache, "b2bua_out_key|" + cid)
+    if b2bua_active(key, cache) == 1 { return key }
+    return ""
+}
+
+fn b2bua_in_cid(key: string, cache: CMap) -> string { return cmap_get(cache, "b2bua_in_cid|" + key) }
+fn b2bua_in_from(key: string, cache: CMap) -> string { return cmap_get(cache, "b2bua_in_from|" + key) }
+fn b2bua_in_to(key: string, cache: CMap) -> string { return cmap_get(cache, "b2bua_in_to|" + key) }
+fn b2bua_out_cid(key: string, cache: CMap) -> string { return cmap_get(cache, "b2bua_out_cid|" + key) }
+fn b2bua_target(key: string, cache: CMap) -> string { return cmap_get(cache, "b2bua_target|" + key) }
+fn b2bua_transport(key: string, cache: CMap) -> string { return cmap_get(cache, "b2bua_transport|" + key) }
+fn b2bua_peer(key: string, cache: CMap) -> string { return cmap_get(cache, "b2bua_peer|" + key) }
+fn b2bua_peer_transport(key: string, cache: CMap) -> string { return cmap_get(cache, "b2bua_peer_transport|" + key) }
+
+fn b2bua_rewrite_request(msg: string, call_id: string, from: string, to: string, cseq: string, transport: string, cache: CMap) -> string {
+    if len(call_id) == 0 || len(from) == 0 || len(to) == 0 { return "" }
+    let mut out = hdr_remove(msg, "Via")
+    out = hdr_remove(out, "Route")
+    out = hdr_remove(out, "Record-Route")
+    out = hdr_set(out, "Call-ID", call_id)
+    out = hdr_set(out, "From", from)
+    out = hdr_set(out, "To", to)
+    if len(cseq) > 0 {
+        let parts = str_split(str_trim_space(sip_header(out, "CSeq")), " ")
+        let mut method = madis_method(msg)
+        if len(parts) >= 2 { method = str_trim_space(parts[1]) }
+        out = hdr_set(out, "CSeq", cseq + " " + method)
+    }
+    out = hdr_remove(out, "Contact")
+    out = hdr_add(out, "Contact", "<" + b2bua_contact_uri(transport) + ">")
+    let via = sip_via_value_rport(transport, b2bua_signal_host(), b2bua_signal_port(), sip_branch())
+    out = sip_insert_via(out, via)
+    if sip_validate_message(out, len(out)) == 0 { return "" }
+    return out
+}
+
+fn b2bua_prepare_invite(msg: string, target: string, transport: string, peer: string, peer_transport: string, cache: CMap) -> string {
+    if b2bua_enabled() == 0 || len(target) == 0 || str_contains(target, ",") { return "" }
+    let in_cid = sip_header(msg, "Call-ID")
+    let in_from = sip_header(msg, "From")
+    let in_to = sip_header(msg, "To")
+    let in_via = sip_header(msg, "Via")
+    let caller_tag = sip_addr_tag(in_from)
+    let invite_cseq = sip_cseq_number(msg)
+    let key = b2bua_key(in_cid, caller_tag)
+    if len(key) == 0 || len(invite_cseq) == 0 || b2bua_active(key, cache) == 1 { return "" }
+    let out_cid = b2bua_call_id(key)
+    let in_tag = b2bua_tag(key + "|in")
+    let out_tag = b2bua_tag(key + "|out")
+    let out_from = b2bua_with_tag(in_from, out_tag)
+    let out_to = b2bua_without_tag(in_to)
+    let stripped = hdr_remove(hdr_remove(hdr_remove(msg, "Via"), "Route"), "Record-Route")
+    let with_cid = hdr_set(stripped, "Call-ID", out_cid)
+    let with_from = hdr_set(with_cid, "From", out_from)
+    let with_to = hdr_set(with_from, "To", out_to)
+    let without_contact = hdr_remove(with_to, "Contact")
+    let with_contact = hdr_add(without_contact, "Contact", "<" + b2bua_contact_uri(transport) + ">")
+    let out = sip_insert_via(with_contact, sip_via_value_rport(transport, b2bua_signal_host(), b2bua_signal_port(), sip_branch()))
+    if sip_validate_message(out, len(out)) == 0 { return "" }
+    if b2bua_store(key, in_cid, out_cid, in_from, in_to, in_via, in_tag, out_tag, out, target, transport, peer, peer_transport, invite_cseq, cache) == 0 { return "" }
+    return out
+}
+
+fn b2bua_prepare_in_dialog(msg: string, key: string, cache: CMap) -> string {
+    if b2bua_active(key, cache) == 0 { return "" }
+    let method = madis_method(msg)
+    if not str_eq(method, "ACK") && not str_eq(method, "BYE") && not str_eq(method, "INVITE") { return "" }
+    let out_tag = cmap_get(cache, "b2bua_out_tag|" + key)
+    let remote_to = cmap_get(cache, "b2bua_out_remote_to|" + key)
+    let out_from = b2bua_with_tag(b2bua_in_from(key, cache), out_tag)
+    let mut out_cseq = sip_cseq_number(msg)
+    let in_cseq = out_cseq
+    let invite_cseq = cmap_get(cache, "b2bua_invite_cseq|" + key)
+    if str_eq(method, "ACK") {
+        out_cseq = invite_cseq
+    } else {
+        let current = cmap_get(cache, "b2bua_out_cseq|" + key)
+        match parse_int(current) {
+            Ok(v) => { if v < 2147483647 { out_cseq = string(v + 1) } }
+            Err(_) => {}
+        }
+        cmap_set(cache, "b2bua_out_cseq|" + key, out_cseq)
+        cmap_set(cache, "b2bua_pending_method|" + key, method)
+        cmap_set(cache, "b2bua_pending_in_cseq|" + key, in_cseq)
+        cmap_set(cache, "b2bua_pending_out_cseq|" + key, out_cseq)
+    }
+    let rewritten = b2bua_rewrite_request(msg, b2bua_out_cid(key, cache), out_from, remote_to, out_cseq, b2bua_transport(key, cache), cache)
+    if str_eq(method, "INVITE") && len(rewritten) > 0 { cmap_set(cache, "b2bua_pending_invite|" + key, rewritten) }
+    return rewritten
+}
+
+fn b2bua_build_cancel(key: string, cache: CMap) -> string {
+    if b2bua_active(key, cache) == 0 { return "" }
+    return sip_build_cancel(cmap_get(cache, "b2bua_out_invite|" + key))
+}
+
+fn b2bua_non2xx_ack(response: string, key: string, cache: CMap) -> string {
+    if b2bua_active(key, cache) == 0 { return "" }
+    let mut invite = cmap_get(cache, "b2bua_out_invite|" + key)
+    if cmap_has(cache, "b2bua_pending_invite|" + key) == 1 { invite = cmap_get(cache, "b2bua_pending_invite|" + key) }
+    let ack = sip_build_ack_non2xx(invite)
+    let remote_to = sip_header(response, "To")
+    if len(ack) == 0 || len(remote_to) == 0 { return ack }
+    return hdr_set(ack, "To", remote_to)
+}
+
+fn b2bua_translate_response(response: string, key: string, cache: CMap) -> string {
+    if b2bua_active(key, cache) == 0 { return "" }
+    let cseq_parts = str_split(str_trim_space(sip_header(response, "CSeq")), " ")
+    if len(cseq_parts) < 2 || not str_eq(str_to_upper(str_trim_space(cseq_parts[1])), "INVITE") { return "" }
+    let remote_to = sip_header(response, "To")
+    let remote_tag = sip_addr_tag(remote_to)
+    if len(remote_tag) > 0 {
+        cmap_set(cache, "b2bua_out_remote_to|" + key, b2bua_with_tag(b2bua_in_to(key, cache), remote_tag))
+    }
+    let mut out = hdr_remove(response, "Via")
+    out = hdr_remove(out, "Record-Route")
+    out = hdr_remove(out, "Route")
+    out = hdr_remove(out, "Contact")
+    out = hdr_set(out, "Call-ID", b2bua_in_cid(key, cache))
+    out = hdr_set(out, "From", b2bua_in_from(key, cache))
+    out = hdr_set(out, "To", b2bua_with_tag(b2bua_in_to(key, cache), cmap_get(cache, "b2bua_in_tag|" + key)))
+    let pending_in = cmap_get(cache, "b2bua_pending_in_cseq|" + key)
+    if len(pending_in) > 0 { out = hdr_set(out, "CSeq", pending_in + " INVITE") }
+    let via = cmap_get(cache, "b2bua_in_via|" + key)
+    if len(via) == 0 { return "" }
+    out = hdr_add(out, "Via", via)
+    let code = sip_status_code(response)
+    if code >= 200 && code < 300 {
+        out = hdr_add(out, "Contact", "<" + b2bua_contact_uri(cmap_get(cache, "b2bua_peer_transport|" + key)) + ">")
+        cmap_set(cache, "b2bua_state|" + key, "confirmed")
+    }
+    return out
+}
+
+fn b2bua_next_peer_cseq(key: string, cache: CMap) -> string {
+    let current = cmap_get(cache, "b2bua_peer_cseq|" + key)
+    let mut value = 1
+    match parse_int(current) { Ok(v) => { value = v } Err(_) => {} }
+    if value < 1 { value = 1 }
+    if value < 2147483647 { cmap_set(cache, "b2bua_peer_cseq|" + key, string(value + 1)) }
+    return string(value)
+}
+
+fn b2bua_request_to_peer(msg: string, key: string, cache: CMap) -> string {
+    if b2bua_active(key, cache) == 0 { return "" }
+    if not str_eq(madis_method(msg), "BYE") { return "" }
+    let from = b2bua_with_tag(b2bua_in_to(key, cache), cmap_get(cache, "b2bua_in_tag|" + key))
+    let to = b2bua_in_from(key, cache)
+    return b2bua_rewrite_request(msg, b2bua_in_cid(key, cache), from, to, b2bua_next_peer_cseq(key, cache), b2bua_peer_transport(key, cache), cache)
+}

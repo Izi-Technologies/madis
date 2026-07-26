@@ -12,9 +12,12 @@ system.
 | How do I install, operate, upgrade, or troubleshoot it? | [`operations.md`](operations.md) |
 | What do the test and benchmark commands prove? | [`testing.md`](testing.md) |
 | How do application teams integrate from Python, Go, or JavaScript? | [`integrations.md`](integrations.md) |
+| How do external SIP applications and TTS/STT/LLM modules participate? | [`modules.md`](modules.md) |
 | What is the carrier API and how is billing acknowledged? | [`../api/README.md`](../api/README.md) |
 | What Diameter/IMS interfaces are present? | [`../api/diameter.md`](../api/diameter.md), [`../api/ims-diameter.md`](../api/ims-diameter.md) |
 | What does the WebUI expose? | [`../admin/README.md`](../admin/README.md) |
+| What are the production and protocol status summaries? | [`../PRODUCTION.md`](../PRODUCTION.md), [`../RFC_COMPLIANCE.md`](../RFC_COMPLIANCE.md) |
+| How are CPS and concurrency measured? | [`../bench/README.md`](../bench/README.md) |
 
 ## Version and scope
 

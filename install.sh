@@ -20,6 +20,9 @@ MADIS_ADMIN_PORT="${MADIS_ADMIN_PORT:-8080}"
 MADIS_SIP_ADMIN_PORT="${MADIS_SIP_ADMIN_PORT:-9090}"
 MADIS_ADMIN_TOKEN="${MADIS_ADMIN_TOKEN:-}"
 MADIS_CARRIER_API_TOKEN="${MADIS_CARRIER_API_TOKEN:-}"
+MADIS_CONTROL_API_TOKEN="${MADIS_CONTROL_API_TOKEN:-}"
+MADIS_APP_TOKEN="${MADIS_APP_TOKEN:-}"
+MADIS_MODULE_TOKEN="${MADIS_MODULE_TOKEN:-}"
 MADIS_ADMIN_PASSWORD="${MADIS_ADMIN_PASSWORD:-}"
 MADIS_VERSION="${MADIS_VERSION:-}"
 MADIS_MAKO_VERSION="0.4.16"
@@ -90,6 +93,21 @@ fi
 if [ -z "$MADIS_CARRIER_API_TOKEN" ]; then
     MADIS_CARRIER_API_TOKEN=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 48 || true)
     info "Generated carrier integration API token."
+fi
+
+if [ -z "$MADIS_CONTROL_API_TOKEN" ]; then
+    MADIS_CONTROL_API_TOKEN=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 48 || true)
+    info "Generated control API token."
+fi
+
+if [ -z "$MADIS_APP_TOKEN" ]; then
+    MADIS_APP_TOKEN=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 48 || true)
+    info "Generated SIP application gateway token."
+fi
+
+if [ -z "$MADIS_MODULE_TOKEN" ]; then
+    MADIS_MODULE_TOKEN=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 48 || true)
+    info "Generated external module bus token."
 fi
 
 if [ -z "$MADIS_ADMIN_PASSWORD" ]; then
@@ -678,10 +696,18 @@ SIP_TCP_WORKERS=1
 # Optional fixed Mako crew/kick pool; 0 keeps one pthread per kicked listener.
 SIP_SCHED_WORKERS=0
 
+# B2BUA is opt-in. Ordinary routing remains proxy behavior.
+SIP_B2BUA_MODE=proxy
+# SIP_B2BUA_STATE_MS=1800000
+# SIP_B2BUA_CALLID_HOST=madis.local
+
 # Auth
 SIP_DIGEST_ALGORITHM=md5
 SIP_ADMIN_TOKEN=${MADIS_ADMIN_TOKEN}
 SIP_CARRIER_API_TOKEN=${MADIS_CARRIER_API_TOKEN}
+SIP_CONTROL_API_TOKEN=${MADIS_CONTROL_API_TOKEN}
+SIP_APP_TOKEN=${MADIS_APP_TOKEN}
+SIP_MODULE_TOKEN=${MADIS_MODULE_TOKEN}
 
 # Billing / online charging. Outbox is local and non-blocking for SIP.
 SIP_BILLING_MODE=outbox
@@ -873,6 +899,9 @@ echo "  DB URL:      postgres://${MADIS_DB_USER}:****@127.0.0.1:5432/${MADIS_DB_
 echo ""
 echo "  Admin token: $MADIS_ADMIN_TOKEN"
 echo "  Carrier API token: $MADIS_CARRIER_API_TOKEN"
+echo "  Control API token: $MADIS_CONTROL_API_TOKEN"
+echo "  SIP application token: $MADIS_APP_TOKEN"
+echo "  Module bus token: $MADIS_MODULE_TOKEN"
 echo "  (used as: Authorization: Bearer <token>)"
 echo "  WebUI user:  admin"
 echo "  WebUI pass:  $MADIS_ADMIN_PASSWORD"
