@@ -14,6 +14,11 @@ installer generates a separate token from the WebUI token. Put the API behind
 TLS/mTLS or a private network; the standalone Mako listener is normally bound
 to loopback.
 
+The route is served by the standalone WebUI process, so the base URL is the
+WebUI's `ADMIN_BIND`/`ADMIN_PORT`, not the SIP worker's `/healthz` listener.
+Missing or invalid bearer credentials return `401`. A missing database returns
+`503`; malformed JSON, content type, or event identifiers return `400`.
+
 A minimal client flow looks like this:
 
 ```sh
@@ -29,6 +34,13 @@ curl -fsS -X POST "$API/admin/api/v1/billing/events" \
 Read pending events, commit them in the billing system, and acknowledge each
 stable `event_id`. A retry is expected; an acknowledgement before the billing
 transaction commits can lose the handoff.
+
+`GET /billing/events` returns an object with `schema`, an `events` array, and a
+`truncated` flag. The request limit is clamped to 100 and the response is
+bounded. `POST /billing/events` returns `202` after an idempotent insert. The
+server currently derives a SHA-256 event ID when a caller omits one; portable
+clients should still send an explicit ID and validate against
+`billing-event.schema.json`.
 
 The API is at-least-once. Consumers must deduplicate by `event_id`, commit
 their billing/charging transaction, then acknowledge. Acknowledgement is not a

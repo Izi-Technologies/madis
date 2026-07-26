@@ -46,7 +46,10 @@ fn fetch_metrics_path(path: string) -> string {
     let c = tcp_connect(host, port)
     if c < 0 { return "" }
     let _ = tcp_set_timeout(c, 800)
-    let _ = tcp_write(c, "GET " + path + " HTTP/1.0\r\nHost: " + host + "\r\nConnection: close\r\n\r\n")
+    let token = env_get_or("SIP_ADMIN_TOKEN", "")
+    let mut auth = ""
+    if len(token) > 0 { auth = "Authorization: Bearer " + token + "\r\n" }
+    let _ = tcp_write(c, "GET " + path + " HTTP/1.0\r\nHost: " + host + "\r\n" + auth + "Connection: close\r\n\r\n")
     let raw = tcp_read(c)
     let _ = tcp_close(c)
     let sep = str_index(raw, "\r\n\r\n")

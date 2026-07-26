@@ -17,6 +17,7 @@ MADIS_SIP_PORT="${MADIS_SIP_PORT:-5060}"
 MADIS_TLS_PORT="${MADIS_TLS_PORT:-5061}"
 MADIS_WSS_PORT="${MADIS_WSS_PORT:-8443}"
 MADIS_ADMIN_PORT="${MADIS_ADMIN_PORT:-8080}"
+MADIS_SIP_ADMIN_PORT="${MADIS_SIP_ADMIN_PORT:-9090}"
 MADIS_ADMIN_TOKEN="${MADIS_ADMIN_TOKEN:-}"
 MADIS_CARRIER_API_TOKEN="${MADIS_CARRIER_API_TOKEN:-}"
 MADIS_ADMIN_PASSWORD="${MADIS_ADMIN_PASSWORD:-}"
@@ -94,6 +95,10 @@ fi
 if [ -z "$MADIS_ADMIN_PASSWORD" ]; then
     MADIS_ADMIN_PASSWORD=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 24 || true)
     info "Generated WebUI admin password."
+fi
+
+if [ "$MADIS_SIP_ADMIN_PORT" = "$MADIS_ADMIN_PORT" ]; then
+    fail "MADIS_SIP_ADMIN_PORT and MADIS_ADMIN_PORT must be different"
 fi
 
 # ── detect public IP (GCP, AWS, Azure, or bare metal) ────────────────────────
@@ -652,8 +657,10 @@ SIP_DB_URL=postgres://${MADIS_DB_USER}:${MADIS_DB_PASS}@127.0.0.1:5432/${MADIS_D
 SIP_UDP_PORT=${MADIS_SIP_PORT}
 SIP_TLS_PORT=${MADIS_TLS_PORT}
 SIP_WSS_PORT=${MADIS_WSS_PORT}
-# The WebUI runs as madis-admin.service; keep the SIP worker off its port.
-SIP_ADMIN_PORT=0
+# The WebUI uses the SIP worker's internal control plane for live metrics.
+SIP_ADMIN_PORT=${MADIS_SIP_ADMIN_PORT}
+SIP_METRICS_HOST=127.0.0.1
+SIP_METRICS_PORT=${MADIS_SIP_ADMIN_PORT}
 SIP_ADMIN_PASSWORD=${MADIS_ADMIN_PASSWORD}
 SIP_BIND_IP=${MADIS_PRIVATE_IP:-0.0.0.0}
 SIP_PUBLIC_IP=${MADIS_PUBLIC_IP:-}
@@ -854,6 +861,7 @@ echo "  SIP UDP/TCP: $MADIS_SIP_PORT"
 echo "  SIP TLS:     $MADIS_TLS_PORT"
 echo "  WebSocket:   $MADIS_WSS_PORT"
 echo "  Admin HTTP:  $MADIS_ADMIN_PORT"
+echo "  SIP metrics: 127.0.0.1:$MADIS_SIP_ADMIN_PORT (internal)"
 echo "  WebUI:       http://127.0.0.1:${MADIS_ADMIN_PORT}/admin/login"
 echo "  CLI:         $MADIS_CLI_DIR/madis"
 echo ""

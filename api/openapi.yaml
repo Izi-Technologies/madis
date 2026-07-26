@@ -2,7 +2,10 @@ openapi: 3.0.3
 info:
   title: Madis Carrier Integration API
   version: 1.0.0
-  description: Versioned JSON outbox plus RFC 8506 charging and 3GPP Cx/Sh integration boundaries for Madis.
+  description: >-
+    Versioned JSON outbox plus RFC 8506 charging and selected 3GPP Cx/Sh
+    integration boundaries. Madis is not a rating engine, HSS, complete IMS
+    core, or SS7 stack.
 servers:
   - url: /admin
 security:
@@ -11,30 +14,49 @@ paths:
   /api/v1/capabilities:
     get:
       operationId: capabilities
+      summary: Discover enabled integration contracts
       responses:
         '200': {description: Runtime capabilities}
+        '401': {description: Missing or invalid carrier bearer token}
   /api/v1/billing/events:
     get:
       operationId: pendingEvents
+      summary: Read undelivered billing events
+      description: Process and commit each event, deduplicate by event_id, then acknowledge it.
       parameters:
         - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100}}
       responses:
         '200': {description: Pending events}
+        '401': {description: Missing or invalid carrier bearer token}
+        '503': {description: Database unavailable}
     post:
       operationId: publishEvent
+      summary: Publish an idempotent billing event
+      description: >-
+        event_id should be supplied by the caller and remain stable across
+        retries. The current server derives a SHA-256 event_id when it is
+        omitted, but portable clients should follow billing-event.schema.json
+        and send one explicitly.
       requestBody:
         required: true
         content:
           application/json: {schema: {$ref: '#/components/schemas/BillingEvent'}}
       responses:
         '202': {description: Accepted idempotently}
+        '400': {description: Invalid JSON event or content type}
+        '401': {description: Missing or invalid carrier bearer token}
+        '503': {description: Database unavailable}
   /api/v1/billing/events/ack:
     post:
       operationId: acknowledgeEvent
+      summary: Mark a billing event delivered
       parameters:
         - {name: event_id, in: query, required: true, schema: {type: string}}
       responses:
         '200': {description: Acknowledged}
+        '400': {description: Invalid event_id}
+        '401': {description: Missing or invalid carrier bearer token}
+        '503': {description: Database unavailable}
 components:
   securitySchemes:
     bearerAuth: {type: http, scheme: bearer}
@@ -44,9 +66,9 @@ components:
       required: [schema, event_type, data]
       additionalProperties: true
       properties:
-        schema: {type: string}
-        event_id: {type: string}
-        event_type: {type: string}
+        schema: {type: string, minLength: 1, maxLength: 512}
+        event_id: {type: string, minLength: 16, maxLength: 128}
+        event_type: {type: string, minLength: 1, maxLength: 128}
         tenant_id: {type: string}
         session_id: {type: string}
         data: {type: object, additionalProperties: true}

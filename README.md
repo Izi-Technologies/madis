@@ -35,6 +35,14 @@ If you are deciding where to start:
 | Compare CPS and concurrency | [`bench/README.md`](bench/README.md) |
 | Review Diameter/IMS and SS7 boundaries | [`api/diameter.md`](api/diameter.md), [`api/ims-diameter.md`](api/ims-diameter.md) |
 
+The longer guides are in [`docs/`](docs/):
+[`architecture.md`](docs/architecture.md) explains the process and data flow,
+[`configuration.md`](docs/configuration.md) lists runtime settings,
+[`operations.md`](docs/operations.md) covers installation and upgrades, and
+[`testing.md`](docs/testing.md) describes the validation and benchmark gates.
+[`PRODUCTION.md`](PRODUCTION.md) and [`RFC_COMPLIANCE.md`](RFC_COMPLIANCE.md)
+are the concise production and protocol-status references.
+
 ## What it does
 
 - Proxies and registers SIP endpoints (RFC 3261)
@@ -91,13 +99,14 @@ This starts Madis and a PostgreSQL instance together. See `docker-compose.yml` f
 Check the container before sending traffic:
 
 ```sh
-curl -fsS http://127.0.0.1:9090/readyz
-curl -fsS http://127.0.0.1:8080/admin/login >/dev/null
+curl -fsS http://127.0.0.1:8080/readyz
+curl -fsS http://127.0.0.1:8080/healthz
 ```
 
-The first endpoint belongs to the SIP worker. The second belongs to the
-standalone WebUI; it normally redirects unauthenticated users to its login
-page.
+Both endpoints belong to the SIP worker's internal HTTP control plane in this
+single-process image. The Docker image does not start the standalone WebUI;
+use the Linux installer, or run the separately built `admin-bin`, when browser
+administration is required.
 
 ## Building from source
 
@@ -124,8 +133,11 @@ MAKO_BIN=mako MAKO_RUNTIME=/path/to/mako/runtime ./scripts/ci.sh
 Madis reads its config from environment variables (or `/etc/madis/madis.env` when installed via the script). The main ones:
 
 - `SIP_DB_URL` — PostgreSQL connection string
-- `SIP_ADMIN_PORT` — turns on the SIP worker's local health/metrics interface;
-  set it to `0` when using the standalone WebUI service
+- `SIP_ADMIN_PORT` — port for the SIP worker's local health/metrics interface;
+  the installer uses `9090` so the standalone WebUI can read live metrics
+- `SIP_METRICS_HOST` / `SIP_METRICS_PORT` — WebUI target for that internal
+  worker endpoint; keep it aligned with `SIP_ADMIN_PORT` and separate from
+  `ADMIN_PORT`; use `SIP_ADMIN_PORT=0` only to disable the endpoint
 - `ADMIN_BIND` / `ADMIN_PORT` — bind address and port for the standalone Mako
   SIP WebUI (defaults to `127.0.0.1:8080`)
 - `SIP_ADMIN_TOKEN` — if set, admin endpoints require a bearer token
@@ -184,7 +196,7 @@ engine.
 
 ## WebUI / control plane
 
-The Mako SIP WebUI is included under [`admin/`](admin/). Build it as a
+The Mako SIP WebUI is included under [`admin/`](admin/). Build and run it as a
 separate service with Mako 0.4.16:
 
 ```sh
@@ -198,8 +210,9 @@ authenticated `/admin` control plane, HTMX views, and a WebSocket live
 dashboard with polling fallback. Live dashboard snapshots use a short shared
 cache and a single aggregate count query so multiple operators do not multiply
 database load; the first paint is not blocked by SIP or metrics probes. If the
-standalone admin service owns port
-8080, set `SIP_ADMIN_PORT=0` for the SIP worker.
+standalone admin service owns port 8080, keep the SIP worker's internal metrics
+endpoint on a different port (the installer uses `127.0.0.1:9090`) and set
+`SIP_METRICS_HOST/PORT` to it.
 
 The control plane parses each form body once per request and uses bound SQL
 parameters for request and database-derived values. The generic toggle/delete

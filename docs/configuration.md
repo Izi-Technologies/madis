@@ -1,0 +1,190 @@
+# Configuration
+
+Madis reads process settings from environment variables. The installer writes
+`/etc/madis/madis.env`; a container normally receives the same values from
+`docker-compose.yml`. Runtime routing, user, gateway, and policy records live
+in PostgreSQL when the relevant feature is enabled.
+
+The values below describe the supported knobs. Defaults shown are source
+defaults; the installer may choose a different operational value.
+
+## Smallest useful configuration
+
+```sh
+SIP_DB_URL=postgres://madis:password@127.0.0.1:5432/madis
+SIP_UDP_PORT=5060
+SIP_TLS_PORT=5061
+SIP_WSS_PORT=8443
+SIP_REALM=example.net
+SIP_NODE_ID=edge-1
+SIP_ADMIN_PORT=9090
+SIP_METRICS_HOST=127.0.0.1
+SIP_METRICS_PORT=9090
+SIP_ADMIN_TOKEN=replace-me
+```
+
+For the installed two-process layout, keep the worker's internal HTTP endpoint
+and the WebUI listener on different ports:
+
+```sh
+SIP_ADMIN_PORT=9090
+SIP_METRICS_HOST=127.0.0.1
+SIP_METRICS_PORT=9090
+ADMIN_BIND=127.0.0.1
+ADMIN_PORT=8080
+SIP_ADMIN_PASSWORD=choose-a-bootstrap-password
+SIP_CARRIER_API_TOKEN=separate-machine-token
+```
+
+The standalone WebUI uses `SIP_METRICS_HOST/PORT` to read the worker's health,
+metrics, and state data. Set `SIP_ADMIN_PORT=0` only when that local endpoint
+is intentionally disabled and live SIP metrics are not needed.
+
+Do not put real secrets in a committed compose file, shell history, or a
+publicly readable environment file.
+
+## Network and identity
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `SIP_BIND_IP` | `0.0.0.0` | SIP listener bind address. |
+| `SIP_PUBLIC_IP` | source address | Address used for advertised SIP/SDP-facing values when configured. |
+| `SIP_PUBLIC_HOST` | empty | WebUI/health display fallback. |
+| `SIP_UDP_PORT` | `5060` | UDP and TCP SIP port. |
+| `SIP_TLS_PORT` | `5061` | SIP over TLS listener. |
+| `SIP_WSS_PORT` | `8443` | SIP over WebSocket listener; public TLS termination is deployment-specific. |
+| `SIP_IPV6` | `1` | Enable the IPv6 UDP listener where the host supports it. |
+| `SIP_REALM` | `mako.local` | Digest and SIP realm. |
+| `SIP_DOMAIN` / `SIP_FQDN` | empty | Domain fallbacks used by WebUI gateway checks. |
+| `SIP_NODE_ID` | `node1` | Node identity stored with registrations and cluster records. |
+| `SIP_NODE_ADDR` | `127.0.0.1` | Node address for cluster metadata. |
+| `SIP_REGION` | `default` | Optional cluster region label. |
+| `SIP_DIAMETER_HOST_IP` | `127.0.0.1` | IPv4 address encoded in Diameter Host-IP-Address AVPs. |
+| `MADIS_VERSION` | `dev` (source) | Version shown by health and CLI; the installer reads `VERSION` when present. |
+
+The installed WebUI also uses `SIP_METRICS_HOST` (default `127.0.0.1`) and
+`SIP_METRICS_PORT` (default `9090`) as its target for worker health, metrics,
+and state requests. If `SIP_ADMIN_TOKEN` is set, the WebUI forwards it to that
+internal endpoint.
+
+Ports below 1 or above 65535 are rejected. Keep the standalone admin listener
+on loopback unless a reverse proxy and network policy protect it.
+
+## Workers and timers
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `SIP_UDP_WORKERS` | `1` | UDP worker count. |
+| `SIP_TCP_WORKERS` | `1` | Stream worker count. |
+| `SIP_SCHED_WORKERS` | `0` | Mako `crew`/`kick` pool; `0` uses the default per-kick threads. |
+| `SIP_T1_MS` | `500` | RFC-style transaction base timer, bounded by the implementation. |
+| `SIP_T2_MS` | `4000` | Non-INVITE retransmission ceiling. |
+| `SIP_TIMER_C_MS` | `180000` | Proxy INVITE timer C. |
+| `SIP_TIMER_L_MS` | `32000` | Server 2xx retention lifetime. |
+| `SIP_WSS_IDLE_MS` | `600000` | Outbound WSS idle lifetime, bounded to one minute through 24 hours. |
+
+Changing timers changes interop behavior. Use the RFC gate and an independent
+SIP stack before changing them in production.
+
+## TLS, WSS, and WebRTC signaling
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `SIP_TLS_CERT` / `SIP_TLS_KEY` | auto-generated lab cert | Use an operator-managed certificate in production. |
+| `SIP_TLS_AUTO_CERT` / `SIP_TLS_AUTO_KEY` | temporary paths | Paths for the generated lab certificate. |
+| `SIP_TLS_CN` | `localhost` | Name for the generated lab certificate. |
+| `SIP_TLS_SNI` | empty | Optional local SNI selection. |
+| `SIP_UPSTREAM_CA` | empty | CA bundle for outbound TLS/WSS verification. |
+| `SIP_UPSTREAM_TLS_INSECURE` | `0` | `1` disables outbound verification; lab use only. |
+
+Outbound WSS is SIP signaling, not a media implementation. ICE, DTLS-SRTP, and
+RTP remain the responsibility of the endpoint and configured media system.
+Certificate verification is enabled by default when a CA is configured; do
+not use the insecure override for carrier traffic.
+
+## Authentication and security
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `SIP_DIGEST_ALGORITHM` | `md5` | Supports the implemented digest profiles; select a stronger profile when all peers support it. |
+| `SIP_USER_RATE_LIMIT` | `100` | Per-user rate limit used by dialplan/security policy. |
+| `SIP_ADMIN_TOKEN` | empty | Bearer token for the SIP worker admin endpoints; empty means no token on that local endpoint. |
+| `ADMIN_METRICS_TOKEN` | empty | Optional token for standalone WebUI metrics proxy routes. |
+| `SIP_CONFIG_FILE` | empty | File mtime is a reload signal; it does not contain routing credentials. |
+| `SIP_CRASH_REPORT` | empty | Optional path for the native crash report facility. |
+
+The WebUI has separate settings: `ADMIN_BIND`, `ADMIN_PORT`,
+`ADMIN_SECURE_COOKIE`, `ADMIN_SESSION_TTL_SECS`, `ADMIN_LOGIN_MAX_FAILS`, and
+`ADMIN_LOGIN_LOCK_SECS`. `SIP_ADMIN_PASSWORD` bootstraps the first `admin`
+user only when no users exist and a database is available. Change that password
+through the WebUI and keep the bootstrap value out of long-lived logs.
+
+## Registration policy
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `SIP_MAX_REG_EXPIRES` | `3600` | Maximum requested registration lifetime, clamped to 60 seconds–24 hours. |
+| `SIP_MIN_EXPIRES` | `60` | Requests below this produce 423; clamped to 0–24 hours. |
+
+Registration state is bounded in memory and may be hydrated from PostgreSQL.
+Expiry and wildcard removal behavior is covered by the proxy-state tests.
+
+## Billing and HTTP charging
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `SIP_BILLING_MODE` | `outbox` | `outbox`, `preauth`, or `off`. |
+| `SIP_BILLING_TENANT` | `default` | Tenant field in event envelopes. |
+| `SIP_CHARGING_PROTOCOL` | `http` | HTTP adapter or native `diameter`. |
+| `SIP_CHARGING_URL` | empty | HTTPS/HTTP charging adapter URL when preauthorization is enabled. |
+| `SIP_CHARGING_CA` | empty | CA bundle for the HTTPS charging adapter. |
+| `SIP_CHARGING_TIMEOUT_MS` | `150` | Bounded online charging timeout. |
+| `SIP_CHARGING_FAIL_OPEN` | `0` | Explicitly allow routing when preauthorization is unavailable; review this as a revenue policy. |
+
+The default outbox path does not make an external charging call on the SIP
+critical path. Preauthorization is fail-closed unless `FAIL_OPEN` is explicitly
+enabled. See [`../api/README.md`](../api/README.md) for event acknowledgment
+and custom schemas.
+
+## Diameter and IMS
+
+The native Diameter settings are only used when the corresponding charging or
+IMS path is enabled:
+
+`SIP_DIAMETER_HOST`, `SIP_DIAMETER_PORT`, `SIP_DIAMETER_TLS`,
+`SIP_DIAMETER_CA`, `SIP_DIAMETER_CLIENT_CERT`, `SIP_DIAMETER_CLIENT_KEY`,
+`SIP_DIAMETER_TRANSPORT`, `SIP_DIAMETER_ALLOW_PLAINTEXT`,
+`SIP_DIAMETER_PERSISTENT`, `SIP_DIAMETER_TIMEOUT_MS`,
+`SIP_DIAMETER_ORIGIN_HOST`, `SIP_DIAMETER_ORIGIN_REALM`,
+`SIP_DIAMETER_DEST_REALM`, `SIP_DIAMETER_SERVICE_CONTEXT`,
+`SIP_DIAMETER_SERVICE_ID`, `SIP_DIAMETER_SUBSCRIPTION_TYPE`,
+`SIP_DIAMETER_REQUESTED_ACTION`, and `SIP_DIAMETER_REQUESTED_SECONDS`.
+
+`SIP_DIAMETER_TLS=1` is the safe default. Plaintext requires an explicit
+override and a separate network protection decision. `sctp` depends on host
+and Mako runtime support. `SIP_IMS_CX=1` enables the fail-closed REGISTER Cx
+UAR/SAR path; `SIP_IMS_VISITED_NETWORK`, `SIP_IMS_SERVER_NAME`, and
+`SIP_IMS_DEST_HOST` provide its identities. Read the protocol-specific limits
+in [`../api/diameter.md`](../api/diameter.md) and
+[`../api/ims-diameter.md`](../api/ims-diameter.md).
+
+## STIR/SHAKEN
+
+The optional settings are `STIR_SHAKEN_ENABLED`, `STIR_SHAKEN_MODE`,
+`STIR_SHAKEN_SECRET`, `STIR_SHAKEN_CERT_URL`, `STIR_SHAKEN_ATTESTATION`,
+`STIR_SHAKEN_PRIVATE_KEY`, `STIR_SHAKEN_PUBLIC_KEY`, `STIR_SHAKEN_JWKS`, and
+`STIR_SHAKEN_JWKS_URL`. Keep private keys outside the repository and use a
+carrier-approved certificate/JWKS rotation process. The current implementation
+has explicit lab/interoperability paths; review the deployed mode before
+claiming production attestation compliance.
+
+## Database and reload behavior
+
+`SIP_DB_URL` selects PostgreSQL. The installer creates the initial schema and
+the application creates a small set of idempotent tables when needed. Treat
+schema changes as migrations: back up the database, review SQL, and test the
+upgrade before applying it to a carrier database.
+
+Touching `SIP_CONFIG_FILE` invalidates selected in-memory configuration caches.
+It does not reload the environment, rotate secrets, or change database rows.
+Restart the relevant systemd service for environment changes.

@@ -26,10 +26,6 @@ bench/sipp_stat.csv
 CLAUDE.md
 CLAUDE.local.md
 
-# Dev docs (internal only)
-PRODUCTION.md
-RFC_COMPLIANCE.md
-
 # Environment / secrets
 .env
 .env.*

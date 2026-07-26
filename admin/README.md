@@ -41,8 +41,11 @@ MAKO_RUNTIME=/path/to/mako/runtime \
 
 The admin service listens on `ADMIN_BIND`/`ADMIN_PORT` (loopback and `8080`
 by default). Put TLS and WebSocket proxying in nginx or another reverse proxy.
-When this service is enabled, set `SIP_ADMIN_PORT=0` for the SIP worker so it
-does not attempt to claim the same port.
+The installer keeps the admin listener and the SIP worker's internal
+health/metrics endpoint separate: `ADMIN_PORT=8080`, `SIP_ADMIN_PORT=9090`,
+and `SIP_METRICS_HOST/PORT=127.0.0.1:9090` by default. Keep those ports
+different. Set `SIP_ADMIN_PORT=0` only when the worker's local HTTP endpoint is
+intentionally disabled and the WebUI does not need live SIP metrics.
 
 ## Environment
 
@@ -56,6 +59,8 @@ does not attempt to claim the same port.
 | `ADMIN_LOGIN_LOCK_SECS` | `900` | Lockout window |
 | `ADMIN_BIND` | `127.0.0.1` | Listen address (`0.0.0.0` only if intentionally public) |
 | `ADMIN_PORT` | `8080` | Listen port |
+| `SIP_METRICS_HOST` | `127.0.0.1` | SIP worker host used by the live dashboard |
+| `SIP_METRICS_PORT` | `9090` | SIP worker port used by the live dashboard |
 
 The live deployment uses `/admin/login`, authenticated session cookies, HTMX
 page updates, and a WebSocket live dashboard with HTTP polling fallback. The
@@ -66,10 +71,31 @@ probes, and the UI defers its optional browser asset so a slow third-party CDN
 cannot block the control plane.
 
 The cache is intentionally short-lived so dashboard counts remain responsive
-without multiplying PostgreSQL work across operators. A deployment must use
-`SIP_ADMIN_PORT=0` for the SIP worker when `madis-admin.service` owns the
-WebUI port. Public HTTPS/WSS termination belongs in nginx or another reverse
-proxy; the admin process itself should remain loopback-bound.
+without multiplying PostgreSQL work across operators. In the installed layout,
+`madis-admin.service` reads live SIP metrics from the worker's internal
+`SIP_METRICS_HOST/PORT`; the worker's `SIP_ADMIN_PORT` must match that port.
+Public HTTPS/WSS termination belongs in nginx or another reverse proxy; the
+admin process itself should remain loopback-bound.
+
+## What is in the UI
+
+The navigation covers dashboard, search, active dialogs, metrics, SIP traces,
+CDR export, users, registrations, access control, gateways, dispatch groups,
+routing rules, route simulation, ANI groups, DIDs, dialplan translation,
+header rules, security events/bans, cluster state, logs, audit history,
+configuration, admin users, and the current account. Actions are role-gated;
+use a viewer for read-only access and reserve admin/super-admin accounts for
+configuration changes.
+
+The browser live view uses `/admin/ws/live` when the reverse proxy supports
+WebSocket upgrade and falls back to `/admin/api/live`. Prometheus-compatible
+proxy routes are `/admin/api/prom` and `/admin/api/stats`; configure
+`ADMIN_METRICS_TOKEN` for token-only machine access. CDR export is
+`/admin/api/cdr.csv` and requires a browser session.
+
+The carrier machine API is separate from browser sessions and lives under
+`/admin/api/v1/`. It requires `SIP_CARRIER_API_TOKEN`; a WebUI cookie is not a
+substitute. See [`../api/README.md`](../api/README.md).
 
 ## Safety and performance notes
 

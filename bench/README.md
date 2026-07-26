@@ -1,5 +1,9 @@
 # SIP CPS/concurrency benchmark
 
+This is a load harness, not a capacity promise. Read
+[`../docs/testing.md`](../docs/testing.md) before comparing Madis with
+Kamailio or another proxy.
+
 This harness measures completed INVITE dialogs through the proxy, using SIPp
 as both the caller and a registered terminating UAS. It reports successful and
 failed calls, response-time buckets, achieved CPS, and the proxy's process
@@ -10,6 +14,10 @@ Run a baseline:
 ```sh
 RATE=100 CALLS=1000 CONCURRENCY=200 WORKERS=1 ./bench/benchmark.sh
 ```
+
+The harness expects `sipp` unless `SIPP=/path/to/sipp` is set. Build the
+proxy with Mako 0.4.16 first, and keep the UAS, database, route data, CPU
+affinity, and message mix identical across candidates.
 
 The scenario holds each dialog for one second. Change that pause in
 `bench/invite.xml` when testing a different traffic mix.
@@ -32,14 +40,15 @@ message size, worker count, and database/routing mode identical. Kamailio is
 not installed in this checkout; install or point `SIPP`/the proxy command at a
 separate candidate before comparing results.
 
-Historical local baselines on 2026-07-24 with Mako 0.4.15 were: the default
+Historical local baselines on 2026-07-24 with the then-current Mako 0.4.15
+build were: the default
 `RATE=100`, 1,000 calls, 200-call limit, and one worker completed 1,000/1,000
 calls with zero failures and a 102-call peak; the stress profile at
 `RATE=500`, 2,000 calls, 500-call limit, and four workers completed 2,000/2,000
 calls with zero failures and a 500-call peak, achieving 395.804 CPS. These
 are host-specific Madis baselines, not Kamailio comparisons or capacity
-guarantees. Rerun the benchmark with Mako 0.4.16 before using these numbers
-for a release comparison.
+guarantees. They are retained for context only; rerun the benchmark with
+Mako 0.4.16 before using any number for a release comparison.
 
 Additional validation commands:
 
