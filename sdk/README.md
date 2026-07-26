@@ -1,12 +1,11 @@
 # Madis carrier SDK examples
 
-These are intentionally small clients over the stable HTTP/JSON API. They
-keep application state and schema ownership in the caller, so the same
-contract works from Python, JavaScript, Go, Lua, Erlang, or any language with
-an HTTP client. The Protobuf contract is in `api/madis-carrier.proto` for
-teams that standardize on gRPC. Framework-specific adapters are not required:
-FastAPI, Flask, Django, Gin, chi, Echo, Express, Fastify, NestJS, and Next.js
-can all call the same server-side HTTP endpoints.
+These are example clients for the HTTP/JSON API. Application state and schema
+remain in the caller. The API can be called from Python, JavaScript, Go, Lua,
+Erlang, or any language with an HTTP client. The Protobuf contract is in
+`api/madis-carrier.proto` for callers using gRPC. FastAPI, Flask, Django, Gin,
+chi, Echo, Express, Fastify, NestJS, and Next.js can call the same server-side
+HTTP endpoints.
 
 - `python/madis_carrier.py` uses only the Python standard library.
 - `javascript/madis-carrier.mjs` uses the platform `fetch` API.
@@ -19,7 +18,21 @@ an event, then call `ack`. Treat `event_id` as an idempotency key. The client
 base URL should include `/admin` (for example,
 `https://madis.example/admin`); the methods append `/api/v1/...`.
 
-The examples are deliberately small rather than full SDKs. Each one accepts a
+The clients also expose the bounded control surface: read `control_status()` /
+`ControlStatus()` / `controlStatus()`, list and create routing rules, and
+enable or disable a rule. Pass `SIP_CONTROL_API_TOKEN` to a client used for
+these calls. Keep it separate from `SIP_CARRIER_API_TOKEN` and never expose
+either token to browser code. Control calls select allowlisted routing actions;
+they do not execute source code or SQL in Madis.
+
+For live SIP behavior, use the external application gateway described in
+[`../docs/modules.md`](../docs/modules.md). It is HTTP/JSON rather than a
+language-specific plugin ABI: a FastAPI, Go, Node, LuaSocket, or OTP service
+can verify `madis.sip.event.v1` and return `madis.sip.command.v1`. The module
+bus uses the same command shape for TTS, STT, LLM, media, recording, fraud,
+and billing workers. Keep the live SIP endpoint server-side.
+
+The examples are not full SDKs. Each one accepts a
 base URL and bearer token, publishes ordinary JSON, and leaves retries,
 durable storage, and application-specific validation to the caller. Start
 with the Python example if you want a dependency-free reference client, then

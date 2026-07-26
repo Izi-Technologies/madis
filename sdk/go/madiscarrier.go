@@ -72,3 +72,25 @@ func (c *Client) Publish(ctx context.Context, event any) (map[string]any, error)
 func (c *Client) Ack(ctx context.Context, eventID string) (map[string]any, error) {
 	return c.request(ctx, http.MethodPost, "/api/v1/billing/events/ack?"+url.Values{"event_id": {eventID}}.Encode(), nil)
 }
+func (c *Client) ControlStatus(ctx context.Context) (map[string]any, error) {
+	return c.request(ctx, http.MethodGet, "/api/v1/control/status", nil)
+}
+func (c *Client) RoutingRules(ctx context.Context, limit int) (map[string]any, error) {
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	return c.request(ctx, http.MethodGet, "/api/v1/control/routing-rules?"+url.Values{"limit": {strconv.Itoa(limit)}}.Encode(), nil)
+}
+func (c *Client) CreateRoutingRule(ctx context.Context, rule any) (map[string]any, error) {
+	return c.request(ctx, http.MethodPost, "/api/v1/control/routing-rules", rule)
+}
+func (c *Client) SetRoutingRuleEnabled(ctx context.Context, ruleID int, enabled bool) (map[string]any, error) {
+	state := "disable"
+	if enabled {
+		state = "enable"
+	}
+	return c.request(ctx, http.MethodPost, fmt.Sprintf("/api/v1/control/routing-rules/%d/%s", ruleID, state), nil)
+}

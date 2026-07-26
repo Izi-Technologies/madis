@@ -1,5 +1,5 @@
 -module(madis_carrier).
--export([capabilities/2, pending_events/3, publish/3, ack/3]).
+-export([capabilities/2, pending_events/3, publish/3, ack/3, control_status/2, routing_rules/3, create_routing_rule/3, set_routing_rule_enabled/4]).
 
 request(Base, Token, Method, Path, Body) ->
     application:ensure_all_started(inets),
@@ -18,3 +18,10 @@ pending_events(Base, Token, Limit) ->
     N = min(max(Limit, 1), 100), request(Base, Token, get, "/api/v1/billing/events?limit=" ++ integer_to_list(N), none).
 publish(Base, Token, Json) -> request(Base, Token, post, "/api/v1/billing/events", Json).
 ack(Base, Token, EventId) -> request(Base, Token, post, "/api/v1/billing/events/ack?event_id=" ++ uri_string:percent_encode(EventId, uri_string:urlchar_reserved()), none).
+control_status(Base, Token) -> request(Base, Token, get, "/api/v1/control/status", none).
+routing_rules(Base, Token, Limit) ->
+    N = min(max(Limit, 1), 100), request(Base, Token, get, "/api/v1/control/routing-rules?limit=" ++ integer_to_list(N), none).
+create_routing_rule(Base, Token, Json) -> request(Base, Token, post, "/api/v1/control/routing-rules", Json).
+set_routing_rule_enabled(Base, Token, RuleId, Enabled) ->
+    State = case Enabled of true -> "enable"; _ -> "disable" end,
+    request(Base, Token, post, "/api/v1/control/routing-rules/" ++ integer_to_list(RuleId) ++ "/" ++ State, none).

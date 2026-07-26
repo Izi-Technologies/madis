@@ -33,7 +33,7 @@ paths:
       operationId: publishEvent
       summary: Publish an idempotent billing event
       description: >-
-        event_id should be supplied by the caller and remain stable across
+        event_id should be supplied by the caller and be reused across
         retries. The current server derives a SHA-256 event_id when it is
         omitted, but portable clients should follow billing-event.schema.json
         and send one explicitly.
@@ -57,9 +57,60 @@ paths:
         '400': {description: Invalid event_id}
         '401': {description: Missing or invalid carrier bearer token}
         '503': {description: Database unavailable}
+  /api/v1/control/status:
+    get:
+      operationId: controlStatus
+      summary: Read the bounded runtime control surface
+      description: Requires the separate SIP_CONTROL_API_TOKEN.
+      security: [{controlBearerAuth: []}]
+      responses:
+        '200': {description: Control capabilities and B2BUA mode}
+        '401': {description: Missing or invalid control bearer token}
+  /api/v1/control/routing-rules:
+    get:
+      operationId: routingRules
+      summary: List routing rules
+      security: [{controlBearerAuth: []}]
+      parameters:
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100}}
+      responses:
+        '200': {description: Routing rules}
+        '401': {description: Missing or invalid control bearer token}
+        '503': {description: Database unavailable}
+    post:
+      operationId: createRoutingRule
+      summary: Create an allowlisted routing rule
+      security: [{controlBearerAuth: []}]
+      description: >-
+        The action is limited to Madis routing actions such as route, b2bua,
+        dispatch, reject, redirect, failover, lcr, and continue. This endpoint
+        does not execute code or accept SQL.
+      requestBody:
+        required: true
+        content:
+          application/json: {schema: {$ref: '#/components/schemas/RoutingRuleInput'}}
+      responses:
+        '201': {description: Rule created}
+        '400': {description: Invalid rule or content type}
+        '401': {description: Missing or invalid control bearer token}
+        '503': {description: Database unavailable}
+  /api/v1/control/routing-rules/{id}/{state}:
+    post:
+      operationId: setRoutingRuleState
+      summary: Enable or disable a routing rule
+      security: [{controlBearerAuth: []}]
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: integer, minimum: 1}}
+        - {name: state, in: path, required: true, schema: {type: string, enum: [enable, disable]}}
+      responses:
+        '200': {description: Rule state changed}
+        '401': {description: Missing or invalid control bearer token}
+        '404': {description: Rule not found}
+        '503': {description: Database unavailable}
 components:
   securitySchemes:
     bearerAuth: {type: http, scheme: bearer}
+    controlBearerAuth: {type: http, scheme: bearer, description: SIP_CONTROL_API_TOKEN}
   schemas:
     BillingEvent:
       type: object
@@ -73,3 +124,17 @@ components:
         session_id: {type: string}
         data: {type: object, additionalProperties: true}
         extensions: {type: object, additionalProperties: true}
+    RoutingRuleInput:
+      type: object
+      required: [action]
+      additionalProperties: false
+      properties:
+        match_prefix: {type: string, maxLength: 256}
+        match_caller: {type: string, maxLength: 256}
+        match_src_ip: {type: string, maxLength: 128}
+        match_time_start: {type: string, maxLength: 16}
+        match_time_end: {type: string, maxLength: 16}
+        match_day: {type: string, maxLength: 32}
+        action: {type: string, maxLength: 512, example: 'b2bua:carrier-gateway'}
+        priority: {type: integer, minimum: 0, maximum: 100000, default: 10}
+        description: {type: string, maxLength: 512}

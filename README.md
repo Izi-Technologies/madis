@@ -4,9 +4,12 @@ A SIP proxy and registrar written in [Mako](https://github.com/mako-lang).
 
 ## What is this?
 
-Madis started as an internal tool we needed for handling SIP routing, registration, and authentication. It does the usual proxy things — forwards requests, manages registrations, handles NAT, talks to RTPEngine for media relay — and tries to stay reasonably close to the relevant RFCs while doing it.
+Madis handles SIP routing, registration, authentication, NAT-related signaling,
+and the RTPEngine control interface. The implemented protocol scope and known
+gaps are listed in [`RFC_COMPLIANCE.md`](RFC_COMPLIANCE.md).
 
-It's still a work in progress. Some parts are more polished than others.
+Some protocol extensions and deployment integrations remain incomplete; see
+the support boundaries and [`RFC_COMPLIANCE.md`](RFC_COMPLIANCE.md).
 
 ## Quick start
 
@@ -41,45 +44,110 @@ The longer guides are in [`docs/`](docs/):
 [`operations.md`](docs/operations.md) covers installation and upgrades, and
 [`testing.md`](docs/testing.md) describes the validation and benchmark gates.
 [`integrations.md`](docs/integrations.md) shows how Python, Go, and
-JavaScript/TypeScript services use the carrier API.
+JavaScript/TypeScript services use the carrier API. [`modules.md`](docs/modules.md)
+defines the language-neutral live SIP application and TTS/STT/LLM module
+contract.
 [`PRODUCTION.md`](PRODUCTION.md) and [`RFC_COMPLIANCE.md`](RFC_COMPLIANCE.md)
 are the concise production and protocol-status references.
 
-## What it does
+## Supported behavior
 
-- Proxies and registers SIP endpoints (RFC 3261)
-- Digest auth (MD5, SHA-256) with nonce expiry
-- STIR/SHAKEN scaffolding (the current HMAC placeholder is not production ES256)
-- NAT handling via `rport`/`received` (RFC 3581)
-- RTPEngine integration for media relay
-- UDP, TCP, TLS, and WebSocket transports
-- Outbound WebRTC SIP signaling over persistent WSS
-- Separate Mako SIP WebUI/admin service under `admin/`
-- IPv6 support
-- DNS resolution with NAPTR/SRV lookups (RFC 3263)
-- Dialplan with pattern matching and rewriting
-- Transaction state machines, forking, retransmission
-- A small HTTP admin interface for health checks, metrics, and config reload
-- Versioned carrier integration API with an idempotent billing outbox
-- Extensible CDR, online-charging, IMS, and SS7/SIGTRAN adapter contracts
+### SIP and transport
 
-## Modules
+- SIP proxy and registrar behavior for the implemented RFC 3261 paths.
+- REGISTER with multiple contacts, expiry, wildcard removal, and database
+  hydration.
+- Digest authentication with MD5 and SHA-256 profiles, qop handling, and
+  nonce expiry.
+- UDP, TCP, TLS, WS, and WSS signaling, including IPv6 listeners and outbound
+  WSS connection reuse.
+- NAPTR/SRV transport selection and A/AAAA fallback for the implemented RFC
+  3263 path.
+- Via, Route, Record-Route, Max-Forwards, Content-Length, CSeq, transaction,
+  retransmission, fork, CANCEL, ACK, and response handling covered by the
+  local tests.
+- NAT-related SIP signaling using `rport` and `received`.
+- Dialplan matching and number rewriting.
+- RTPEngine control and SDP rewrite hooks. RTP, ICE, and DTLS-SRTP are not
+  terminated by Madis.
 
-The proxy is split across a handful of `.mko` files. `main.mko` is the entry point and pulls everything else in:
+### Call handling
 
-`parser` `headers` `auth` `registration` `routing` `dialplan` `nat` `transport` `stream` `rtpengine` `shaken` `security` `rfc` `billing` `charging` `db` `log` `ops`
+- Proxy routing, dispatch groups, failover paths, and database-backed routing
+  rules.
+- Opt-in single-target B2BUA routing with separate leg identities and bounded
+  dialog state. Set `SIP_B2BUA_MODE=enabled` before using a `b2bua:` action.
+- CDR lifecycle records and an at-least-once billing outbox.
+- Optional online charging before INVITE routing through HTTP or Diameter.
+- STIR/SHAKEN verification/signing interfaces. The configured signing mode and
+  certificate handling must be reviewed; the HMAC lab path is not a claim of
+  production ES256 attestation.
+
+### External applications and modules
+
+- A signed HTTP(S) application hook for live SIP request and response decisions.
+- Structured commands for continuing, routing, replying, redirecting, dropping,
+  changing validated headers/body fields, and starting B2BUA policy.
+- A separate signed module dispatcher for `tts`, `stt`, `llm`, `media`,
+  `recording`, `fraud`, and `billing` operations.
+- External module services can be written in Python, Go, JavaScript, Lua,
+  Erlang, or another language with an HTTP client. They do not run inside the
+  SIP worker and do not receive SQL connections, Mako handles, or raw worker
+  state.
+- Module payloads, response bodies, header changes, targets, operations, and
+  timeouts are bounded. The module and application hooks are disabled until
+  their URL and token are configured.
+
+See [`docs/modules.md`](docs/modules.md) for the request schemas, signatures,
+allowlists, failure modes, and command restrictions.
+
+## Integration boundaries
+
+Madis provides interfaces to external systems; it does not implement all of
+the systems below as native services:
+
+| Area | Included | Not included in Madis |
+| --- | --- | --- |
+| Web administration | Separate Mako WebUI, sessions, roles, routing/configuration views, health, metrics, and live dashboard | Public TLS termination and deployment identity policy |
+| Carrier applications | Versioned HTTP/JSON API, Protobuf contract, Python/Go/JavaScript/Lua/Erlang client examples | Rating, invoicing, settlement, and tenant business logic |
+| Billing | CDR events, durable outbox, idempotent acknowledgement, optional preauthorization | Rating engine and financial ledger |
+| Diameter | RFC 6733 framing/peer paths, RFC 8506 CCR/CCA, selected Cx/Sh builders | General Diameter relay, peer scheduler, all applications, and quota enforcement |
+| IMS | Cx/Sh wire contracts and an optional Cx REGISTER check | P-/I-/S-CSCF, HSS/UDM, TAS/MMTel, PCRF/PCF, and a complete IMS core |
+| SS7/SIGTRAN | Versioned M3UA/SCCP/ISUP/TCAP envelope for an external gateway | Native M3UA, SCCP, ISUP, and TCAP termination |
+| Media | RTPEngine control interface and SDP processing hooks | RTP, ICE, DTLS-SRTP, codecs, and media recording inside the SIP worker |
+
+RFC behavior is summarized in [`RFC_COMPLIANCE.md`](RFC_COMPLIANCE.md). The
+local tests and wire gates do not establish universal RFC compliance or
+interoperability with every SIP, WebRTC, Diameter, IMS, or SS7 implementation.
+
+## Source layout and external control
+
+The supported build entry point is `main.mko`. It pulls the SIP, transport,
+state, routing, billing, charging, WebUI-integration, and operations modules:
+
+`parser` `headers` `auth` `registration` `routing` `b2bua` `app_gateway` `module_gateway` `dialplan` `nat` `transport` `stream` `rtpengine` `shaken` `security` `rfc` `billing` `charging` `db` `log` `ops`
+
+External applications can control the supported live SIP decisions through the
+[`SIP application and module contract`](docs/modules.md). They use HTTP(S) and
+JSON from any language; they do not run Mako. Madis retains transaction and
+dialog ownership and validates each command before applying it. `sipproxy_full.mko`
+is a legacy monolithic reference and is not the deployment target.
 
 ## Installation
 
 ### Linux (Debian/Ubuntu, RHEL/CentOS/Fedora/Rocky/Alma)
 
-The install script handles everything — system packages, PostgreSQL, database schema, credentials, systemd service, firewall rules, and log rotation.
+The install script installs the system packages, PostgreSQL schema, credentials,
+systemd units, firewall rules, and log rotation configuration.
 
 ```sh
 sudo ./install.sh
 ```
 
-It generates the database password and admin API token for you and prints them at the end. Everything goes into `/etc/madis/madis.env`.
+It generates the database password, admin token, carrier token, separate
+control token, application token, and module token for you and prints them at
+the end. Everything goes into
+`/etc/madis/madis.env`.
 The installer also installs the Mako SIP WebUI source/binary and the `madis`
 CLI (`madisctl` is an alias) for service status, health checks, logs, and
 version reporting.
@@ -122,8 +190,8 @@ MAKO_BIN=mako MAKO_RUNTIME=/path/to/mako/runtime \
   ./scripts/build-native.sh main.mko madis
 ```
 
-`scripts/build-native.sh` emits C with Mako 0.4.16 and links the small native
-CMap ownership bridge used by the transaction timers. To run the checks,
+`scripts/build-native.sh` emits C with Mako 0.4.16 and links the native CMap
+ownership bridge used by the transaction timers. To run the checks,
 tests, native links, and schema validation together:
 
 ```sh
@@ -152,6 +220,21 @@ Madis reads its config from environment variables (or `/etc/madis/madis.env` whe
 - `SIP_SCHED_WORKERS` — optional bounded Mako scheduler pool for `crew`/`kick`; values
   below the listener count are raised automatically, while `0` keeps one pthread per kick
 - `SIP_CARRIER_API_TOKEN` — bearer token for the versioned machine API
+- `SIP_CONTROL_API_TOKEN` — separate bearer token for routing and B2BUA policy changes
+- `SIP_APP_URL` / `SIP_APP_TOKEN` — optional signed live SIP application hook;
+  see [`docs/modules.md`](docs/modules.md)
+- `SIP_APP_CA` — optional CA bundle for the HTTPS application endpoint
+- `SIP_APP_TIMEOUT_MS` — application decision timeout, clamped to 10–1000 ms
+- `SIP_APP_FAIL_MODE` — `open` by default; `closed` returns 503 when the application endpoint fails
+- `SIP_APP_ALLOW_HTTP` — explicit opt-in for plain HTTP in a protected lab network
+- `SIP_MODULE_URL` / `SIP_MODULE_TOKEN` — optional signed module dispatcher
+- `SIP_MODULE_CA` — optional CA bundle for the HTTPS module endpoint
+- `SIP_MODULES` — comma-separated module allowlist, such as `tts,stt,llm,media`
+- `SIP_MODULE_ALLOW_CUSTOM` — permit custom module names/operations when set to `1`
+- `SIP_MODULE_TIMEOUT_MS` — module decision timeout, clamped to 10–2000 ms
+- `SIP_MODULE_FAIL_MODE` — `closed` by default; `open` is available for optional work
+- `SIP_MODULE_ALLOW_HTTP` — explicit opt-in for plain HTTP in a protected lab network
+- `SIP_B2BUA_MODE` — set to `enabled` to permit explicit B2BUA routes
 - `SIP_BILLING_MODE` — `outbox` (default), `preauth`, or `off`
 - `SIP_BILLING_TENANT` — tenant value placed in the billing envelope
 - `SIP_CHARGING_PROTOCOL` — `http` (default) or native `diameter`
@@ -230,7 +313,7 @@ loopback-bound and put HTTPS/WSS termination in a reverse proxy. Browser POSTs
 also require a matching `Origin`/`Host` pair; non-browser clients without an
 Origin remain supported.
 
-## Hardening and compliance scope
+## Security and compliance scope
 
 The supported entry point is the modular `main.mko`; `sipproxy_full.mko` is a
 legacy reference archive and is not the deployment target. The proxy bounds
@@ -265,9 +348,9 @@ Mako 0.4.16 when that compiler is available, or accepts a prebuilt
 
 ## Carrier applications, billing, and charging
 
-The machine API and schemas are in [`api/`](api/); small clients for Python,
+The machine API and schemas are in [`api/`](api/); client examples for Python,
 JavaScript, Go, Lua, and Erlang are in [`sdk/`](sdk/). The API uses JSON/HTTP
-for universal reach and includes a Protobuf contract for teams using gRPC.
+and also provides a Protobuf contract for callers using gRPC.
 Applications own their business schema: the envelope is versioned, while
 `data`, `extensions`, and additional fields are open and stored as JSONB.
 
@@ -296,7 +379,7 @@ IMS component.
 
 ## IMS and SS7/SIGTRAN integration boundaries
 
-Madis is a hardened SIP edge/proxy and registrar, not a complete 3GPP IMS
+Madis is a SIP edge proxy and registrar, not a complete 3GPP IMS
 core. [`api/ims-session.schema.json`](api/ims-session.schema.json) defines the
 boundary for P-/I-/S-CSCF, HSS/UDM, PCRF/PCF, TAS/MMTel, media, and charging
 services. Deploy those functions as carrier services and connect them through

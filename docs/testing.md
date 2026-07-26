@@ -12,7 +12,7 @@ MAKO_RUNTIME=/path/to/mako/runtime \
   ./scripts/ci.sh
 ```
 
-This runs Mako checks and lint, all eight Mako test files, native SIP and
+This runs Mako checks and lint, all ten Mako test files, native SIP and
 WebUI links, and JSON-schema validation. It is the command used by the GitHub
 Actions workflow after it builds the pinned Mako revision.
 
@@ -55,6 +55,8 @@ bridge code.
 | `tests/rfc3261_abnf_test.mko` | Compact headers, quoted names, continuation, Via, Proxy-Require. |
 | `tests/rfc3263_test.mko` | NAPTR/SRV ordering, transport selection, IPv6 targets and ports. |
 | `tests/admin_http_test.mko` | HTTP framing, cookie boundaries, form decoding, Origin checks. |
+| `tests/app_gateway_test.mko` | Signed application/module commands, header boundaries, SQL-shaped data, and module allowlists. |
+| `tests/b2bua_test.mko` | Independent B2BUA legs, dialog translation, cleanup, and header safety. |
 
 These tests are intentionally independent of a production database and mostly
 exercise deterministic behavior. Wire tests use separate local processes and

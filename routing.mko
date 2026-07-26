@@ -26,6 +26,8 @@
 //   forward:ip:port                — forward to IP directly
 //   lcr                            — least-cost routing (pick cheapest gateway for prefix)
 //   failover:gw1,gw2,gw3           — try gateways in order
+//   b2bua:gateway_name             — terminate both SIP dialogs locally
+//   b2bua:host:port                — terminate both SIP dialogs locally
 //   continue                       — skip this rule, try next
 
 // Get current hour:minute as "HHMM" int for time comparison
@@ -372,6 +374,15 @@ fn db_route_call(db: SqlDB, db_ok: int, callee: string, caller: string, src_ip: 
                 fi = fi + 1
             }
             if len(targets) > 0 { return "route|" + targets }
+        }
+
+        // b2bua:<gateway-name> or b2bua:<host>:<port>. This is intentionally
+        // separate from route/dispatch so ordinary rules remain proxy legs.
+        if str_has_prefix(r_action, "b2bua:") {
+            let spec = r_action[6:]
+            let mut target = resolve_gateway(db, spec)
+            if len(target) == 0 { target = spec }
+            if len(target) > 0 { return "b2bua|" + target }
         }
 
         // lcr — least-cost routing: find cheapest gateway for this prefix

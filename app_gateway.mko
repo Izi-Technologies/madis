@@ -1,0 +1,449 @@
+// External SIP application gateway.
+//
+// An operator can point SIP_APP_URL at an HTTP(S) service written in any
+// language. Madis sends a bounded, signed SIP event and accepts only the
+// structured commands implemented below. The service never receives a Mako
+// handle, SQL connection, file descriptor, or mutable worker state.
+
+fn app_cap(s: string, max: int) -> string {
+    if max < 1 { return "" }
+    if len(s) <= max { return s }
+    return s[0:max]
+}
+
+fn app_json_escape(s: string) -> string {
+    let b = str_builder()
+    let mut i = 0
+    while i < len(s) {
+        let c = int(s[i])
+        if c == 34 { builder_write(b, "\\\"") }
+        else {
+            if c == 92 { builder_write(b, "\\\\") }
+            else {
+                if c == 10 { builder_write(b, "\\n") }
+                else {
+                    if c == 13 { builder_write(b, "\\r") }
+                    else {
+                        if c == 9 { builder_write(b, "\\t") }
+                        else {
+                            if c < 32 || c == 127 { builder_write_byte(b, byte(32)) }
+                            else { builder_write_byte(b, byte(c)) }
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return builder_string(b)
+}
+
+fn app_url_is_https(url: string) -> int {
+    return if str_has_prefix(str_to_lower(url), "https://") { 1 } else { 0 }
+}
+
+fn app_url_is_http(url: string) -> int {
+    return if str_has_prefix(str_to_lower(url), "http://") { 1 } else { 0 }
+}
+
+fn app_url_authority(url: string) -> string {
+    let low = str_to_lower(url)
+    let mut start = 0
+    if str_has_prefix(low, "https://") { start = 8 }
+    else { if str_has_prefix(low, "http://") { start = 7 } else { return "" } }
+    let tail = url[start:]
+    let slash = str_index(tail, "/")
+    let mut authority = tail
+    if slash >= 0 { authority = tail[0:slash] }
+    return authority
+}
+
+fn app_url_host(url: string) -> string {
+    let authority = app_url_authority(url)
+    if len(authority) == 0 || str_index(authority, "@") >= 0 { return "" }
+    if int(authority[0]) == 91 {
+        let close = str_index(authority, "]")
+        if close <= 1 { return "" }
+        return authority[1:close]
+    }
+    let colon = str_index(authority, ":")
+    if colon >= 0 { return authority[0:colon] }
+    return authority
+}
+
+fn app_url_port(url: string) -> int {
+    let authority = app_url_authority(url)
+    let mut port = 80
+    if app_url_is_https(url) == 1 { port = 443 }
+    if len(authority) == 0 { return -1 }
+    let mut colon = str_index(authority, ":")
+    if int(authority[0]) == 91 {
+        let close = str_index(authority, "]")
+        if close < 0 { return -1 }
+        if close + 1 == len(authority) { return port }
+        if close + 1 >= len(authority) || int(authority[close + 1]) != 58 { return -1 }
+        colon = close + 1
+    }
+    if colon >= 0 {
+        match parse_int(authority[colon + 1:]) { Ok(v) => { port = v } Err(_) => { return -1 } }
+    }
+    if port < 1 || port > 65535 { return -1 }
+    return port
+}
+
+fn app_url_path(url: string) -> string {
+    let authority = app_url_authority(url)
+    if len(authority) == 0 { return "" }
+    let low = str_to_lower(url)
+    let mut start = 0
+    if str_has_prefix(low, "https://") { start = 8 }
+    else { if str_has_prefix(low, "http://") { start = 7 } else { return "" } }
+    let tail = url[start:]
+    let slash = str_index(tail, "/")
+    if slash < 0 { return "/" }
+    let path = tail[slash:]
+    if len(path) == 0 { return "/" }
+    return path
+}
+
+fn app_url_valid(url: string) -> int {
+    if len(url) < 12 || len(url) > 2048 { return 0 }
+    if app_url_is_http(url) == 0 && app_url_is_https(url) == 0 { return 0 }
+    if str_index(url, "\r") >= 0 || str_index(url, "\n") >= 0 || str_index(url, "#") >= 0 { return 0 }
+    let host = app_url_host(url)
+    let path = app_url_path(url)
+    let port = app_url_port(url)
+    if len(host) == 0 || len(host) > 512 || len(path) == 0 || len(path) > 2048 { return 0 }
+    if port < 1 || port > 65535 { return 0 }
+    return 1
+}
+
+fn app_gateway_enabled() -> int {
+    let url = str_trim_space(env_get_or("SIP_APP_URL", ""))
+    let token = env_get_or("SIP_APP_TOKEN", "")
+    if app_url_valid(url) == 0 || len(token) < 16 || len(token) > 512 { return 0 }
+    let mut token_i = 0
+    while token_i < len(token) {
+        let token_c = int(token[token_i])
+        if token_c == 0 || token_c == 10 || token_c == 13 { return 0 }
+        token_i = token_i + 1
+    }
+    // Plain HTTP is only accepted when explicitly enabled. HTTPS uses the
+    // platform trust store or SIP_APP_CA and is the required production mode.
+    if app_url_is_https(url) == 0 {
+        let allow = str_to_lower(str_trim_space(env_get_or("SIP_APP_ALLOW_HTTP", "0")))
+        if not str_eq(allow, "1") && not str_eq(allow, "true") && not str_eq(allow, "yes") { return 0 }
+    }
+    return 1
+}
+
+fn app_gateway_timeout_ms() -> int {
+    let mut value = 100
+    match parse_int(env_get_or("SIP_APP_TIMEOUT_MS", "100")) {
+        Ok(v) => { value = v }
+        Err(_) => {}
+    }
+    if value < 10 { value = 10 }
+    if value > 1000 { value = 1000 }
+    return value
+}
+
+fn app_gateway_fail_closed() -> int {
+    let value = str_to_lower(str_trim_space(env_get_or("SIP_APP_FAIL_MODE", "open")))
+    if str_eq(value, "closed") || str_eq(value, "fail-closed") || str_eq(value, "1") { return 1 }
+    return 0
+}
+
+fn app_gateway_request_id(msg: string, event: string) -> string {
+    // Bind the command to the exact SIP message. A retry of the same
+    // transaction gets the same id, while a command cannot be moved to a
+    // different Call-ID/CSeq/message.
+    return sha256("madis.sip.app|" + event + "|" + sip_header(msg, "Call-ID") + "|" + sip_header(msg, "CSeq") + "|" + sha256(msg))[0:32]
+}
+
+fn app_gateway_event(msg: string, ip: string, port: int, tr: string, event: string, request_id: string) -> string {
+    let mut method = madis_method(msg)
+    let mut status = 0
+    if sip_is_response(msg) == 1 {
+        method = ""
+        status = sip_status_code(msg)
+    }
+    let raw = app_cap(msg, 65535)
+    let body = app_cap(sip_body(msg), 32768)
+    let truncated = if len(body) < len(sip_body(msg)) || len(raw) < len(msg) { "true" } else { "false" }
+    return "{"
+        + "\"schema\":\"madis.sip.event.v1\","
+        + "\"event\":\"" + app_json_escape(event) + "\","
+        + "\"request_id\":\"" + app_json_escape(request_id) + "\","
+        + "\"method\":\"" + app_json_escape(method) + "\","
+        + "\"status\":" + string(status) + ","
+        + "\"transport\":\"" + app_json_escape(tr) + "\","
+        + "\"source_ip\":\"" + app_json_escape(ip) + "\","
+        + "\"source_port\":" + string(port) + ","
+        + "\"request_uri\":\"" + app_json_escape(sip_request_uri(msg)) + "\","
+        + "\"call_id\":\"" + app_json_escape(sip_header(msg, "Call-ID")) + "\","
+        + "\"from\":\"" + app_json_escape(sip_header(msg, "From")) + "\","
+        + "\"to\":\"" + app_json_escape(sip_header(msg, "To")) + "\","
+        + "\"cseq\":\"" + app_json_escape(sip_header(msg, "CSeq")) + "\","
+        + "\"user_agent\":\"" + app_json_escape(sip_header(msg, "User-Agent")) + "\","
+        + "\"body\":\"" + app_json_escape(body) + "\","
+        + "\"body_truncated\":" + truncated + ","
+        + "\"message\":\"" + app_json_escape(raw) + "\""
+        + "}"
+}
+
+fn app_gateway_event_mac_input(msg: string, ip: string, port: int, tr: string, event: string, request_id: string) -> string {
+    let mut method = madis_method(msg)
+    let mut status = 0
+    if sip_is_response(msg) == 1 { method = ""; status = sip_status_code(msg) }
+    let raw = app_cap(msg, 65535)
+    let full_body = sip_body(msg)
+    let body = app_cap(full_body, 32768)
+    let truncated = if len(body) < len(full_body) { "true" } else { "false" }
+    return request_id + "|" + event + "|" + method + "|" + string(status) + "|" + tr + "|" + ip + "|" + string(port)
+        + "|" + sip_request_uri(msg) + "|" + sip_header(msg, "Call-ID") + "|" + sip_header(msg, "From") + "|" + sip_header(msg, "To")
+        + "|" + sip_header(msg, "CSeq") + "|" + sip_header(msg, "User-Agent") + "|" + body + "|" + truncated + "|" + raw
+}
+
+fn app_gateway_http_post_ca(url: string, token: string, body: string, timeout_ms: int, ca: string) -> string {
+    if app_url_valid(url) == 0 || len(body) == 0 || len(body) > 524288 { return "" }
+    let host = app_url_host(url)
+    let port = app_url_port(url)
+    let path = app_url_path(url)
+    if app_url_is_http(url) == 1 {
+        let headers = "Authorization: Bearer " + token + "\r\nAccept: application/json\r\nContent-Type: application/json\r\n"
+        let response = http_forward_full(host, port, "POST", path, headers, body, timeout_ms)
+        if http_forward_ok(response) == 0 || http_forward_status(response) < 200 || http_forward_status(response) >= 300 { return "" }
+        if http_forward_body_len(response) <= 0 || http_forward_body_len(response) > 65536 { return "" }
+        return http_forward_body(response)
+    }
+    let response = tls_post(host, port, path, ca, body)
+    if len(response) == 0 || http_last_status() < 200 || http_last_status() >= 300 || len(response) > 65536 { return "" }
+    return response
+}
+
+fn app_gateway_http_post(url: string, token: string, body: string, timeout_ms: int) -> string {
+    return app_gateway_http_post_ca(url, token, body, timeout_ms, env_get_or("SIP_APP_CA", ""))
+}
+
+fn app_gateway_call(msg: string, ip: string, port: int, tr: string, event: string) -> string {
+    if app_gateway_enabled() == 0 { return "" }
+    let url = str_trim_space(env_get_or("SIP_APP_URL", ""))
+    let token = env_get_or("SIP_APP_TOKEN", "")
+    let request_id = app_gateway_request_id(msg, event)
+    let payload = app_gateway_event(msg, ip, port, tr, event, request_id)
+    let signature = sha256(token + "|" + app_gateway_event_mac_input(msg, ip, port, tr, event, request_id))
+    let request = payload[0:len(payload) - 1] + ",\"signature\":\"" + signature + "\"}"
+    let response = app_gateway_http_post(url, token, request, app_gateway_timeout_ms())
+    if len(response) == 0 {
+        if app_gateway_fail_closed() == 1 { return "__APP_FAIL_CLOSED__" }
+        return ""
+    }
+    return response
+}
+
+fn app_gateway_command_signature(raw: string, token: string, request_id: string) -> string {
+    let action = str_to_lower(str_trim_space(json_get_string(raw, "action")))
+    let target = json_get_string(raw, "target")
+    let status = json_get_int(raw, "status")
+    let reason = json_get_string(raw, "reason")
+    let set_headers = json_get_string(raw, "set_headers")
+    let add_headers = json_get_string(raw, "add_headers")
+    let remove_headers = json_get_string(raw, "remove_headers")
+    let body = json_get_string(raw, "body")
+    let module = json_get_string(raw, "module")
+    let operation = json_get_string(raw, "operation")
+    let payload = json_get_string(raw, "payload")
+    return sha256(token + "|" + request_id + "|" + action + "|" + target + "|" + string(status) + "|" + reason + "|" + set_headers + "|" + add_headers + "|" + remove_headers + "|" + body + "|" + module + "|" + operation + "|" + payload)
+}
+
+fn app_gateway_text_safe(value: string, max: int) -> int {
+    if len(value) > max { return 0 }
+    let mut i = 0
+    while i < len(value) {
+        let c = int(value[i])
+        if c == 0 || c == 13 { return 0 }
+        if c < 32 && c != 9 && c != 10 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn app_gateway_line_safe(value: string, max: int) -> int {
+    if len(value) > max { return 0 }
+    let mut i = 0
+    while i < len(value) {
+        let c = int(value[i])
+        if c == 0 || c == 10 || c == 13 || c < 32 || c == 127 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn app_gateway_target_safe(target: string, list_ok: int) -> int {
+    if len(target) == 0 || len(target) > 4096 || str_index(target, "\r") >= 0 || str_index(target, "\n") >= 0 || str_index(target, "|") >= 0 { return 0 }
+    let items = str_split(target, ",")
+    if list_ok == 0 && len(items) != 1 { return 0 }
+    if len(items) > 32 { return 0 }
+    let mut i = 0
+    while i < len(items) {
+        let item = str_trim_space(items[i])
+        if len(item) == 0 || len(item) > 1024 || sip_target_port_state(item) < 0 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn app_gateway_protected_header(name: string) -> int {
+    let low = str_to_lower(str_trim_space(name))
+    if str_eq(low, "via") || str_eq(low, "from") || str_eq(low, "to") || str_eq(low, "call-id") { return 1 }
+    if str_eq(low, "cseq") || str_eq(low, "content-length") || str_eq(low, "max-forwards") { return 1 }
+    if str_eq(low, "route") || str_eq(low, "record-route") { return 1 }
+    return 0
+}
+
+fn app_gateway_header_lines_safe(lines: string, allow_protected: int) -> int {
+    if len(lines) > 8192 { return 0 }
+    if len(lines) == 0 { return 1 }
+    let mut raw_i = 0
+    while raw_i < len(lines) {
+        let raw_c = int(lines[raw_i])
+        if raw_c == 0 || raw_c == 13 { return 0 }
+        raw_i = raw_i + 1
+    }
+    let items = str_split(lines, "\n")
+    if len(items) > 16 { return 0 }
+    let mut i = 0
+    while i < len(items) {
+        let item = str_trim_space(items[i])
+        let colon = str_index(item, ":")
+        if colon <= 0 || colon > 128 { return 0 }
+        let name = str_trim_space(item[0:colon])
+        let value = str_trim_space(item[colon + 1:])
+        if hdr_name_safe(name) == 0 || app_gateway_text_safe(value, 2048) == 0 { return 0 }
+        if allow_protected == 0 && app_gateway_protected_header(name) == 1 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn app_gateway_remove_headers_safe(lines: string) -> int {
+    if len(lines) > 2048 { return 0 }
+    if len(lines) == 0 { return 1 }
+    let mut raw_i = 0
+    while raw_i < len(lines) {
+        let raw_c = int(lines[raw_i])
+        if raw_c == 0 || raw_c == 13 { return 0 }
+        raw_i = raw_i + 1
+    }
+    let items = str_split(lines, "\n")
+    if len(items) > 16 { return 0 }
+    let mut i = 0
+    while i < len(items) {
+        let name = str_trim_space(items[i])
+        if hdr_name_safe(name) == 0 || app_gateway_protected_header(name) == 1 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn app_gateway_command_valid_token(raw: string, request_id: string, for_response: int, token: string) -> int {
+    if len(raw) < 2 || len(raw) > 65536 || app_gateway_text_safe(raw, 65536) == 0 { return 0 }
+    if not str_eq(json_get_string(raw, "schema"), "madis.sip.command.v1") { return 0 }
+    if not str_eq(json_get_string(raw, "request_id"), request_id) { return 0 }
+    let signature = json_get_string(raw, "signature")
+    if len(signature) != 64 || not str_eq(signature, app_gateway_command_signature(raw, token, request_id)) { return 0 }
+    let action = str_to_lower(str_trim_space(json_get_string(raw, "action")))
+    if str_eq(action, "continue") || str_eq(action, "drop") { }
+    else {
+        if str_eq(action, "proxy") || str_eq(action, "route") || str_eq(action, "dispatch") {
+            if for_response == 1 || app_gateway_target_safe(json_get_string(raw, "target"), 1) == 0 { return 0 }
+        } else {
+            if str_eq(action, "b2bua") {
+                if for_response == 1 || app_gateway_target_safe(json_get_string(raw, "target"), 0) == 0 { return 0 }
+            } else {
+                if str_eq(action, "reply") || str_eq(action, "replace") || str_eq(action, "redirect") {
+                    if for_response == 0 && str_eq(action, "replace") { return 0 }
+                    let status = json_get_int(raw, "status")
+                    if status < 100 || status > 699 { return 0 }
+                    if app_gateway_line_safe(json_get_string(raw, "reason"), 128) == 0 { return 0 }
+                    if str_eq(action, "redirect") && app_gateway_target_safe(json_get_string(raw, "target"), 0) == 0 { return 0 }
+                } else {
+                    if str_eq(action, "module") {
+                        if for_response == 1 || module_gateway_request_allowed(json_get_string(raw, "module"), json_get_string(raw, "operation")) == 0 { return 0 }
+                        if app_gateway_text_safe(json_get_string(raw, "payload"), 32768) == 0 { return 0 }
+                    } else { return 0 }
+                }
+            }
+        }
+    }
+    if app_gateway_header_lines_safe(json_get_string(raw, "set_headers"), 0) == 0 { return 0 }
+    if app_gateway_header_lines_safe(json_get_string(raw, "add_headers"), 0) == 0 { return 0 }
+    if app_gateway_remove_headers_safe(json_get_string(raw, "remove_headers")) == 0 { return 0 }
+    if app_gateway_text_safe(json_get_string(raw, "body"), 65535) == 0 { return 0 }
+    return 1
+}
+
+fn app_gateway_command_valid(raw: string, request_id: string, for_response: int) -> int {
+    return app_gateway_command_valid_token(raw, request_id, for_response, env_get_or("SIP_APP_TOKEN", ""))
+}
+
+fn app_gateway_action(raw: string, request_id: string, for_response: int) -> string {
+    if len(raw) == 0 { return "continue" }
+    if str_eq(raw, "__APP_FAIL_CLOSED__") { return "fail" }
+    if app_gateway_command_valid(raw, request_id, for_response) == 0 { return if app_gateway_fail_closed() == 1 { "fail" } else { "continue" } }
+    return str_to_lower(str_trim_space(json_get_string(raw, "action")))
+}
+
+fn app_gateway_apply_headers(msg: string, raw: string) -> string {
+    let mut result = msg
+    let removes = str_split(json_get_string(raw, "remove_headers"), "\n")
+    let mut i = 0
+    while i < len(removes) {
+        let name = str_trim_space(removes[i])
+        if len(name) > 0 { result = hdr_remove(result, name) }
+        i = i + 1
+    }
+    let sets = str_split(json_get_string(raw, "set_headers"), "\n")
+    i = 0
+    while i < len(sets) {
+        let item = str_trim_space(sets[i])
+        let colon = str_index(item, ":")
+        if colon > 0 { result = hdr_set(result, str_trim_space(item[0:colon]), str_trim_space(item[colon + 1:])) }
+        i = i + 1
+    }
+    let adds = str_split(json_get_string(raw, "add_headers"), "\n")
+    i = 0
+    while i < len(adds) {
+        let item = str_trim_space(adds[i])
+        let colon = str_index(item, ":")
+        if colon > 0 { result = hdr_add(result, str_trim_space(item[0:colon]), str_trim_space(item[colon + 1:])) }
+        i = i + 1
+    }
+    let body = json_get_string(raw, "body")
+    if str_index(raw, "\"body\"") >= 0 { result = msg_set_body(result, body) }
+    return result
+}
+
+fn app_gateway_reply_headers(raw: string) -> string {
+    let mut result = ""
+    let sets = str_split(json_get_string(raw, "set_headers"), "\n")
+    let adds = str_split(json_get_string(raw, "add_headers"), "\n")
+    let mut i = 0
+    while i < len(sets) {
+        let item = str_trim_space(sets[i])
+        if len(item) > 0 { result = result + item + "\r\n" }
+        i = i + 1
+    }
+    i = 0
+    while i < len(adds) {
+        let item = str_trim_space(adds[i])
+        if len(item) > 0 { result = result + item + "\r\n" }
+        i = i + 1
+    }
+    return result
+}
+
+fn app_gateway_request_id_for(msg: string, event: string) -> string {
+    return app_gateway_request_id(msg, event)
+}

@@ -1,6 +1,10 @@
 // Contract tests stay local: no database, sockets, or charging service.
 pull . "../billing.mko"
 pull . "../charging.mko"
+pull . "../admin/http.mko"
+pull . "../admin/ui.mko"
+pull . "../admin/pages.mko"
+pull . "../carrier_api.mko"
 
 fn TestBillingEventIdentityAndEscaping() {
     let a = billing_event_id("call-1|TRYING", "cdr.lifecycle")
@@ -20,4 +24,20 @@ fn TestChargingContractUsesRFC8506RequestTypes() {
     assert_eq_str(json_get_string(request, "schema"), "madis.charging.request.v1")
     assert_eq_str(json_get_string(request, "cc_request_type"), "INITIAL_REQUEST")
     assert_eq(json_get_int(request, "cc_request_number"), 0)
+}
+
+fn TestControlApiIsExplicitAndAllowlisted() {
+    assert_eq(carrier_api_route("GET", "/admin/api/v1/control/status"), 5)
+    assert_eq(carrier_api_route("POST", "/admin/api/v1/control/routing-rules"), 7)
+    assert_eq(carrier_api_route("POST", "/admin/api/v1/control/routing-rules/12/enable"), 8)
+    assert_eq(carrier_api_route("POST", "/admin/api/v1/control/routing-rules/12/disable"), 8)
+    assert_eq(carrier_api_route("POST", "/admin/api/v1/control/routing-rules/0/enable"), 0)
+    assert_eq(carrier_api_requires_control(7), 1)
+    assert_eq(carrier_api_requires_control(3), 0)
+    assert_eq(carrier_api_rule_action_ok("b2bua:carrier-gateway"), 1)
+    assert_eq(carrier_api_rule_action_ok("route:carrier-gateway"), 1)
+    assert_eq(carrier_api_rule_action_ok("DROP TABLE routing_rules"), 0)
+    assert_eq(carrier_api_rule_action_ok("b2bua:one,two"), 0)
+    assert_eq_str(carrier_api_rule_field("{\"action\":\"b2bua:gw\"}", "action", 512), "b2bua:gw")
+    assert_eq_str(carrier_api_rule_field("{\"action\":\"b2bua|gw\"}", "action", 512), "")
 }

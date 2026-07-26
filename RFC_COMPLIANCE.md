@@ -1,7 +1,7 @@
 # SIP RFC compliance status
 
 This is an implementation audit, not an interoperability certification. The
-current code is hardened around the RFC 3261 proxy/registrar paths listed
+current code implements the RFC 3261 proxy/registrar paths listed
 below, but it must not be described as “100% RFC compliant” until the open
 items are implemented and exercised against independent SIP stacks.
 
@@ -67,8 +67,9 @@ items are implemented and exercised against independent SIP stacks.
 - Generated-style process corpus covering 24 valid compact/long, quoted,
   IPv4/IPv6, URI-escaped, and Via-parameter combinations plus 13 invalid
   one-rule mutations.
-- Repeatable five-run SIPp soak coverage at 1,000 calls/run and 500 concurrent
-  dialogs with zero failures, retransmissions, or timeouts.
+- A repeatable SIPp soak harness is available at [`bench/soak.sh`](bench/soak.sh).
+  Run it for the target source revision and record failures, retransmissions,
+  timeouts, CPS, concurrency, CPU, and memory with the result.
 
 The focused regression suite is in
 [`tests/proxy_state_test.mko`](tests/proxy_state_test.mko).

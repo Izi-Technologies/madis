@@ -8,7 +8,7 @@ in PostgreSQL when the relevant feature is enabled.
 The values below describe the supported knobs. Defaults shown are source
 defaults; the installer may choose a different operational value.
 
-## Smallest useful configuration
+## Minimum configuration
 
 ```sh
 SIP_DB_URL=postgres://madis:password@127.0.0.1:5432/madis
@@ -34,6 +34,9 @@ ADMIN_BIND=127.0.0.1
 ADMIN_PORT=8080
 SIP_ADMIN_PASSWORD=choose-a-bootstrap-password
 SIP_CARRIER_API_TOKEN=separate-machine-token
+SIP_CONTROL_API_TOKEN=separate-routing-control-token
+SIP_APP_TOKEN=separate-live-sip-application-token
+SIP_MODULE_TOKEN=separate-module-bus-token
 ```
 
 The standalone WebUI uses `SIP_METRICS_HOST/PORT` to read the worker's health,
@@ -109,6 +112,22 @@ not use the insecure override for carrier traffic.
 | `SIP_DIGEST_ALGORITHM` | `md5` | Supports the implemented digest profiles; select a stronger profile when all peers support it. |
 | `SIP_USER_RATE_LIMIT` | `100` | Per-user rate limit used by dialplan/security policy. |
 | `SIP_ADMIN_TOKEN` | empty | Bearer token for the SIP worker admin endpoints; empty means no token on that local endpoint. |
+| `SIP_CARRIER_API_TOKEN` | empty | Bearer token for billing event and integration endpoints. |
+| `SIP_CONTROL_API_TOKEN` | empty | Separate bearer token for routing-rule and B2BUA policy changes; keep it server-side. |
+| `SIP_APP_URL` | empty | Optional HTTPS endpoint for live signed SIP application decisions. Disabled when empty. |
+| `SIP_APP_TOKEN` | empty | Shared secret for the live SIP application endpoint; never put it in browser code. |
+| `SIP_APP_CA` | empty | Optional CA bundle for the application endpoint. Empty uses the platform trust paths. |
+| `SIP_APP_TIMEOUT_MS` | `100` | Application decision timeout, clamped to 10–1000 ms. |
+| `SIP_APP_FAIL_MODE` | `open` | `open` preserves local SIP when the optional app fails; `closed` returns 503. |
+| `SIP_APP_ALLOW_HTTP` | `0` | Explicitly allow plain HTTP for a protected lab/local network only. |
+| `SIP_MODULE_URL` | empty | Optional module dispatcher for TTS, STT, LLM, media, recording, fraud, or billing operations. |
+| `SIP_MODULE_TOKEN` | empty | Separate shared secret for module requests and signed module commands. |
+| `SIP_MODULE_CA` | empty | Optional CA bundle for the module dispatcher. |
+| `SIP_MODULES` | empty | Optional allowlist, e.g. `tts,stt,llm,media,recording`; built-in names are allowed when empty. |
+| `SIP_MODULE_ALLOW_CUSTOM` | `0` | Permit custom module names/operations only when explicitly enabled. |
+| `SIP_MODULE_TIMEOUT_MS` | `250` | Module timeout, clamped to 10–2000 ms. |
+| `SIP_MODULE_FAIL_MODE` | `closed` | Module failure behavior; `open` is appropriate only for optional enrichment. |
+| `SIP_MODULE_ALLOW_HTTP` | `0` | Explicitly allow plain HTTP for a protected lab/local network only. |
 | `ADMIN_METRICS_TOKEN` | empty | Optional token for standalone WebUI metrics proxy routes. |
 | `SIP_CONFIG_FILE` | empty | File mtime is a reload signal; it does not contain routing credentials. |
 | `SIP_CRASH_REPORT` | empty | Optional path for the native crash report facility. |
@@ -128,6 +147,38 @@ through the WebUI and keep the bootstrap value out of long-lived logs.
 
 Registration state is bounded in memory and may be hydrated from PostgreSQL.
 Expiry and wildcard removal behavior is covered by the proxy-state tests.
+
+## B2BUA mode
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `SIP_B2BUA_MODE` | `proxy` | Set to `enabled` to permit explicit `b2bua:` routing actions. Ordinary routes remain proxy routes. |
+| `SIP_B2BUA_STATE_MS` | `1800000` | In-memory early/confirmed leg lifetime, clamped to 64 seconds–24 hours. |
+| `SIP_B2BUA_CALLID_HOST` | `madis.local` | Host part used for generated downstream Call-IDs. |
+| `SIP_B2BUA_BIND_IP` | `SIP_PUBLIC_IP` or `SIP_BIND_IP` | Signaling address advertised on the generated leg. |
+| `SIP_B2BUA_SIGNAL_PORT` | `SIP_UDP_PORT` | Signaling port used in generated Via and Contact values. |
+| `SIP_B2BUA_CONTACT_HOST` | signal address | Optional Contact host override. |
+| `SIP_B2BUA_CONTACT_PORT` | signal port | Optional Contact port override. |
+| `SIP_B2BUA_CONTACT_USER` | `b2bua` | Generated Contact user part. |
+
+The current implementation is an explicit single-target B2BUA path with
+independent Call-ID/tags and bounded state. It handles the initial INVITE,
+responses, caller ACK/BYE/CANCEL/re-INVITE, downstream BYE, and non-2xx ACK
+generation. Forked B2BUA legs, REFER/INFO/UPDATE/PRACK/100rel, and a complete
+third-party-call-control implementation remain outside this switch; test the
+peer behavior before enabling it for carrier traffic.
+
+## Runtime call control
+
+`SIP_CONTROL_API_TOKEN` authorizes the versioned WebUI control endpoints. They
+can list, create, enable, and disable bounded routing rules. They cannot change
+environment variables, execute Mako or SQL, or mutate arbitrary tables. A
+`b2bua:` rule is inert until `SIP_B2BUA_MODE=enabled`; changing that environment
+setting requires a service restart.
+
+For live application control and external media/AI workers, see
+[`modules.md`](modules.md). Those endpoints receive signed bounded JSON; they
+do not receive SQL access or executable Mako code.
 
 ## Billing and HTTP charging
 
@@ -160,7 +211,7 @@ IMS path is enabled:
 `SIP_DIAMETER_SERVICE_ID`, `SIP_DIAMETER_SUBSCRIPTION_TYPE`,
 `SIP_DIAMETER_REQUESTED_ACTION`, and `SIP_DIAMETER_REQUESTED_SECONDS`.
 
-`SIP_DIAMETER_TLS=1` is the safe default. Plaintext requires an explicit
+`SIP_DIAMETER_TLS=1` is the default. Plaintext requires an explicit
 override and a separate network protection decision. `sctp` depends on host
 and Mako runtime support. `SIP_IMS_CX=1` enables the fail-closed REGISTER Cx
 UAR/SAR path; `SIP_IMS_VISITED_NETWORK`, `SIP_IMS_SERVER_NAME`, and

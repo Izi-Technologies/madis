@@ -19,6 +19,9 @@ pull . "./rtpengine.mko"
 pull . "./stream.mko"
 pull . "./registration.mko"
 pull . "./transport.mko"
+pull . "./b2bua.mko"
+pull . "./app_gateway.mko"
+pull . "./module_gateway.mko"
 pull . "./ops.mko"
 
 fn sip_target_authority(target: string) -> string {
@@ -308,6 +311,27 @@ fn sip_client_txn_tick(cache: CMap, out_fd: int) -> int {
     return acted
 }
 
+fn app_command_reply(msg: string, raw: string) -> string {
+    let action = str_to_lower(str_trim_space(json_get_string(raw, "action")))
+    let mut status = json_get_int(raw, "status")
+    let mut reason = json_get_string(raw, "reason")
+    let mut extra = app_gateway_reply_headers(raw)
+    if str_eq(action, "redirect") {
+        status = 302
+        reason = "Moved Temporarily"
+        extra = extra + "Contact: <" + json_get_string(raw, "target") + ">\r\n"
+    }
+    if len(reason) == 0 { reason = "SIP Application Response" }
+    let body = json_get_string(raw, "body")
+    return sip_reply(msg, status, reason, extra, body)
+}
+
+fn app_command_apply(msg: string, raw: string) -> string {
+    let updated = app_gateway_apply_headers(msg, raw)
+    if sip_validate_message(updated, len(updated)) == 0 { return "__APP_INVALID_MESSAGE__" }
+    return updated
+}
+
 fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, port: int, tr: string, forward_fd: int, db: SqlDB, db_ok: int, cache: CMap, realm: string, node_id: string, diameter_lock: Mutex) -> string {
     // Get public IP for NAT (from config or env)
     let public_ip = env_get_or("SIP_PUBLIC_IP", ip)
@@ -325,12 +349,67 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
             if cmap_has(cache, "client_target|" + response_txn) == 1 { downstream_target = cmap_get(cache, "client_target|" + response_txn) }
             if cmap_has(cache, "client_transport|" + response_txn) == 1 { downstream_transport = cmap_get(cache, "client_transport|" + response_txn) }
         }
+        let b2_key = b2bua_lookup_out(data, cache)
+        if len(b2_key) > 0 {
+            let cseq_parts = str_split(str_trim_space(sip_header(data, "CSeq")), " ")
+            if len(cseq_parts) >= 2 && str_eq(str_to_upper(str_trim_space(cseq_parts[1])), "INVITE") {
+                let original_cid = b2bua_in_cid(b2_key, cache)
+                let original_from_tag = sip_addr_tag(b2bua_in_from(b2_key, cache))
+                let remote_tag = sip_addr_tag(sip_header(data, "To"))
+                let media_response = rtp_process_answer(data, len(data), original_cid, original_from_tag, remote_tag, db, db_ok, cache)
+                let mut translated = b2bua_translate_response(media_response, b2_key, cache)
+                let mut app_drop = 0
+                if len(translated) > 0 {
+                    let app_raw = app_gateway_call(translated, ip, port, tr, "response")
+                    let app_id = app_gateway_request_id_for(translated, "response")
+                    let app_action = app_gateway_action(app_raw, app_id, 1)
+                    if str_eq(app_action, "fail") || str_eq(app_action, "drop") { app_drop = 1 }
+                    if str_eq(app_action, "replace") || str_eq(app_action, "reply") {
+                        if app_gateway_command_valid(app_raw, app_id, 1) == 1 { translated = app_command_reply(translated, app_raw) }
+                    }
+                    if len(app_raw) > 0 && str_eq(app_action, "continue") && app_gateway_command_valid(app_raw, app_id, 1) == 1 {
+                        let changed = app_command_apply(translated, app_raw)
+                        if not str_eq(changed, "__APP_INVALID_MESSAGE__") { translated = changed }
+                        else { if app_gateway_fail_closed() == 1 { app_drop = 1 } }
+                    }
+                }
+                let code = sip_status_code(data)
+                if code >= 300 && code < 700 {
+                    let ack = b2bua_non2xx_ack(data, b2_key, cache)
+                    if len(ack) > 0 { let _ = sip_forward_target(b2bua_target(b2_key, cache), ack, b2bua_transport(b2_key, cache), cache, forward_fd) }
+                    let _ = b2bua_cleanup(b2_key, cache)
+                }
+                let _ = sip_client_txn_finish(data, cache)
+                if app_drop == 1 { return "" }
+                if len(translated) > 0 { return translated }
+            } else {
+                let _ = sip_client_txn_finish(data, cache)
+                if len(cseq_parts) >= 2 && str_eq(str_to_upper(str_trim_space(cseq_parts[1])), "BYE") { let _ = b2bua_cleanup(b2_key, cache) }
+                return ""
+            }
+        }
         let _ = sip_client_txn_finish(data, cache)
-        if sip_status_code(data) == 100 { return "" }
+        let app_raw = app_gateway_call(data, ip, port, tr, "response")
+        let app_id = app_gateway_request_id_for(data, "response")
+        let app_action = app_gateway_action(app_raw, app_id, 1)
+        if str_eq(app_action, "fail") || str_eq(app_action, "drop") { return "" }
+        let mut response_input = data
+        if str_eq(app_action, "replace") || str_eq(app_action, "reply") {
+            if app_gateway_command_valid(app_raw, app_id, 1) == 1 { response_input = app_command_reply(data, app_raw) }
+            else { if app_gateway_fail_closed() == 1 { return "" } }
+        } else {
+            if len(app_raw) > 0 && str_eq(app_action, "continue") && app_gateway_command_valid(app_raw, app_id, 1) == 1 {
+                let changed = app_command_apply(data, app_raw)
+                if str_eq(changed, "__APP_INVALID_MESSAGE__") {
+                    if app_gateway_fail_closed() == 1 { return "" }
+                } else { response_input = changed }
+            }
+        }
+        if sip_status_code(response_input) == 100 { return "" }
         if len(downstream_request) > 0 && str_eq(madis_method(downstream_request), "CANCEL") { return "" }
-        let response_branch = sip_via_branch(sip_header(data, "Via"))
-        let mut response_data = data
-        if sip_status_code(data) >= 200 && sip_status_code(data) < 300 {
+        let response_branch = sip_via_branch(sip_header(response_input, "Via"))
+        let mut response_data = response_input
+        if sip_status_code(response_input) >= 200 && sip_status_code(response_input) < 300 {
             if cmap_has(cache, "fork_branch|" + response_branch) == 1 {
                 let fork_cid = cmap_get(cache, "fork_branch|" + response_branch)
                 let fork_target = cmap_get(cache, "fork_target|" + fork_cid + "|" + response_branch)
@@ -341,13 +420,13 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
                 }
             }
         }
-        if sip_status_code(data) >= 300 {
+        if sip_status_code(response_input) >= 300 {
             if cmap_has(cache, "fork_branch|" + response_branch) == 1 {
-                if sip_status_code(data) >= 600 {
+                if sip_status_code(response_input) >= 600 {
                     let fork_cid = cmap_get(cache, "fork_branch|" + response_branch)
                     let _ = sip_send_fork_cancels(fork_cid, response_branch, cache, forward_fd)
                 }
-                let selected = sip_fork_collect_response(data, cache)
+                let selected = sip_fork_collect_response(response_input, cache)
                 if len(selected) == 0 { return "" }
                 response_data = selected
             }
@@ -355,7 +434,7 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
         // A non-2xx INVITE final response completes the downstream INVITE
         // transaction only after its matching ACK. Generate that ACK locally
         // before the client transaction record is discarded.
-        if sip_status_code(data) >= 300 && sip_status_code(data) < 700 && len(downstream_request) > 0 {
+        if sip_status_code(response_input) >= 300 && sip_status_code(response_input) < 700 && len(downstream_request) > 0 {
             if str_eq(madis_method(downstream_request), "INVITE") {
                 let ack = sip_build_ack_non2xx(downstream_request)
                 if len(ack) > 0 && len(downstream_target) > 0 {
@@ -370,8 +449,8 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
         let resp_from_tag = sip_addr_tag(sip_header(resp, "From"))
         let resp_to_tag = sip_addr_tag(sip_header(resp, "To"))
         resp = rtp_process_answer(resp, len(resp), resp_cid, resp_from_tag, resp_to_tag, db, db_ok, cache)
-        let resp_code = string(sip_status_code(data))
-        let resp_code_int = sip_status_code(data)
+        let resp_code = string(sip_status_code(response_input))
+        let resp_code_int = sip_status_code(response_input)
         if resp_code_int >= 300 && resp_code_int < 700 {
             let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_non2xx|" + resp_cid, "1", 65536)
         }
@@ -582,6 +661,58 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
         return sip_resp(429, "Too Many Requests", data, dl, "rl")
     }
 
+    // A B2BUA has two independent dialogs. Handle requests arriving on either
+    // leg before ordinary proxy routing so Call-ID, tags, CSeq, and Via values
+    // are not accidentally forwarded as if this were a proxy transaction.
+    let b2_in_key = b2bua_lookup_in(data, cache)
+    let b2_out_key = b2bua_lookup_out(data, cache)
+    if len(b2_in_key) > 0 {
+        if is_cancel == 1 {
+            let cancel = b2bua_build_cancel(b2_in_key, cache)
+            let mut sent = 0
+            if len(cancel) > 0 { sent = sip_forward_target(b2bua_target(b2_in_key, cache), cancel, b2bua_transport(b2_in_key, cache), cache, forward_fd) }
+            if sent == 1 { return sip_reply(data, 200, "OK", "", "") }
+            return sip_resp(481, "Call/Transaction Does Not Exist", data, dl, "b2bua-cancel")
+        }
+        if is_ack == 1 {
+            let ack = b2bua_prepare_in_dialog(data, b2_in_key, cache)
+            if len(ack) > 0 { let _ = sip_forward_target(b2bua_target(b2_in_key, cache), ack, b2bua_transport(b2_in_key, cache), cache, forward_fd) }
+            return ""
+        }
+        if is_bye == 1 || is_invite == 1 {
+            let mut invite = data
+            if is_invite == 1 { invite = rtp_process_offer(data, dl, cid, from_tag, db, db_ok, cache) }
+            let forwarded = b2bua_prepare_in_dialog(invite, b2_in_key, cache)
+            let mut sent = 0
+            if len(forwarded) > 0 { sent = sip_forward_target(b2bua_target(b2_in_key, cache), forwarded, b2bua_transport(b2_in_key, cache), cache, forward_fd) }
+            if is_bye == 1 {
+                if sent == 1 {
+                    let _ = rtp_process_delete(cid, db, db_ok, cache)
+                    let _ = b2bua_cleanup(b2_in_key, cache)
+                    return sip_reply(data, 200, "OK", "", "")
+                }
+                return sip_resp(481, "Call/Transaction Does Not Exist", data, dl, "b2bua-bye")
+            }
+            if sent == 1 { return sip_resp(100, "Trying", data, dl, "") }
+            return sip_resp(503, "Service Unavailable", data, dl, "b2bua-invite")
+        }
+    }
+    if len(b2_out_key) > 0 {
+        if is_bye == 1 {
+            let peer_request = b2bua_request_to_peer(data, b2_out_key, cache)
+            let mut sent = 0
+            if len(peer_request) > 0 { sent = sip_forward_target(b2bua_peer(b2_out_key, cache), peer_request, b2bua_peer_transport(b2_out_key, cache), cache, forward_fd) }
+            if sent == 1 {
+                let _ = rtp_process_delete(b2bua_in_cid(b2_out_key, cache), db, db_ok, cache)
+                let _ = b2bua_cleanup(b2_out_key, cache)
+                return sip_reply(data, 200, "OK", "", "")
+            }
+            return sip_resp(481, "Call/Transaction Does Not Exist", data, dl, "b2bua-peer-bye")
+        }
+        if is_ack == 1 { return sip_reply(data, 200, "OK", "", "") }
+        return sip_resp(501, "Not Implemented", data, dl, "b2bua-method")
+    }
+
     // === REGISTER ===
     if is_register == 1 {
         // IP auth: skip digest if source IP is trusted
@@ -614,6 +745,44 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
         let ims_server_name = env_get_or("SIP_IMS_SERVER_NAME", "sip:" + node_id + "." + realm)
         if ims_cx_register_gate(cache, diameter_lock, ims_public_identity, ims_private_identity, ims_visited_network, ims_server_name) == 0 {
             return sip_resp(403, "IMS Registration Not Authorized", data, dl, "ims-cx")
+        }
+        let mut reg_app_raw = app_gateway_call(msg, ip, port, tr, "request")
+        let mut reg_app_id = app_gateway_request_id_for(msg, "request")
+        let mut reg_app_action = app_gateway_action(reg_app_raw, reg_app_id, 0)
+        let mut reg_command_token = env_get_or("SIP_APP_TOKEN", "")
+        if str_eq(reg_app_action, "module") && app_gateway_command_valid(reg_app_raw, reg_app_id, 0) == 1 {
+            let module_name = json_get_string(reg_app_raw, "module")
+            let module_operation = json_get_string(reg_app_raw, "operation")
+            let module_payload = json_get_string(reg_app_raw, "payload")
+            let module_raw = module_gateway_call(msg, ip, port, tr, "request", module_name, module_operation, module_payload)
+            let module_id = module_gateway_request_id(msg, "request", module_name, module_operation, module_payload)
+            let module_action = module_gateway_action(module_raw, msg, "request", module_name, module_operation, module_payload)
+            if str_eq(module_action, "fail") { return sip_resp(503, "Service Unavailable", data, dl, "module") }
+            if str_eq(module_action, "drop") { return "" }
+            reg_app_raw = module_raw
+            reg_app_id = module_id
+            reg_app_action = module_action
+            reg_command_token = env_get_or("SIP_MODULE_TOKEN", "")
+        }
+        if str_eq(reg_app_action, "fail") { return sip_resp(503, "Service Unavailable", data, dl, "app") }
+        if str_eq(reg_app_action, "drop") { return "" }
+        if str_eq(reg_app_action, "reply") || str_eq(reg_app_action, "redirect") {
+            if app_gateway_command_valid_token(reg_app_raw, reg_app_id, 0, reg_command_token) == 1 { return app_command_reply(data, reg_app_raw) }
+            if app_gateway_fail_closed() == 1 { return sip_resp(503, "Service Unavailable", data, dl, "app") }
+        }
+        if str_eq(reg_app_action, "proxy") || str_eq(reg_app_action, "route") || str_eq(reg_app_action, "dispatch") {
+            let routed = app_command_apply(msg, reg_app_raw)
+            if str_eq(routed, "__APP_INVALID_MESSAGE__") { return sip_resp(400, "Bad Request", data, dl, "app-message") }
+            let primary = sip_forward_fork(json_get_string(reg_app_raw, "target"), routed, ip, port, tr, public_ip, cache, cid, forward_fd)
+            if len(primary) == 0 { return sip_resp(503, "Service Unavailable", data, dl, "app-route") }
+            return sip_resp(100, "Trying", data, dl, "")
+        }
+        if str_eq(reg_app_action, "b2bua") { return sip_resp(400, "Bad Request", data, dl, "app-action") }
+        if len(reg_app_raw) > 0 && str_eq(reg_app_action, "continue") && app_gateway_command_valid_token(reg_app_raw, reg_app_id, 0, reg_command_token) == 1 {
+            let changed = app_command_apply(msg, reg_app_raw)
+            if str_eq(changed, "__APP_INVALID_MESSAGE__") {
+                if app_gateway_fail_closed() == 1 { return sip_resp(400, "Bad Request", data, dl, "app-message") }
+            } else { msg = changed }
         }
         let contact_items = sip_split_contact_values(contact)
         let mut ci = 0
@@ -703,6 +872,41 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
             return sip_resp(402, "Payment Required", data, dl, "charge")
         }
 
+        // The application hook runs only after Madis security, SIP core
+        // validation, digest authentication, and online charging. An
+        // external application can make the call decision, but cannot bypass
+        // those controls or mutate transaction identity headers.
+        let mut inv_app_raw = app_gateway_call(msg, ip, port, tr, "request")
+        let mut inv_app_id = app_gateway_request_id_for(msg, "request")
+        let mut inv_app_action = app_gateway_action(inv_app_raw, inv_app_id, 0)
+        let mut inv_command_token = env_get_or("SIP_APP_TOKEN", "")
+        if str_eq(inv_app_action, "module") && app_gateway_command_valid(inv_app_raw, inv_app_id, 0) == 1 {
+            let module_name = json_get_string(inv_app_raw, "module")
+            let module_operation = json_get_string(inv_app_raw, "operation")
+            let module_payload = json_get_string(inv_app_raw, "payload")
+            let module_raw = module_gateway_call(msg, ip, port, tr, "request", module_name, module_operation, module_payload)
+            let module_id = module_gateway_request_id(msg, "request", module_name, module_operation, module_payload)
+            let module_action = module_gateway_action(module_raw, msg, "request", module_name, module_operation, module_payload)
+            if str_eq(module_action, "fail") { return sip_resp(503, "Service Unavailable", data, dl, "module") }
+            if str_eq(module_action, "drop") { return "" }
+            inv_app_raw = module_raw
+            inv_app_id = module_id
+            inv_app_action = module_action
+            inv_command_token = env_get_or("SIP_MODULE_TOKEN", "")
+        }
+        if str_eq(inv_app_action, "fail") { return sip_resp(503, "Service Unavailable", data, dl, "app") }
+        if str_eq(inv_app_action, "drop") { return "" }
+        if str_eq(inv_app_action, "reply") || str_eq(inv_app_action, "redirect") {
+            if app_gateway_command_valid_token(inv_app_raw, inv_app_id, 0, inv_command_token) == 1 { return app_command_reply(data, inv_app_raw) }
+            if app_gateway_fail_closed() == 1 { return sip_resp(503, "Service Unavailable", data, dl, "app") }
+        }
+        if len(inv_app_raw) > 0 && (str_eq(inv_app_action, "continue") || str_eq(inv_app_action, "proxy") || str_eq(inv_app_action, "route") || str_eq(inv_app_action, "dispatch") || str_eq(inv_app_action, "b2bua")) && app_gateway_command_valid_token(inv_app_raw, inv_app_id, 0, inv_command_token) == 1 {
+            let changed = app_command_apply(msg, inv_app_raw)
+            if str_eq(changed, "__APP_INVALID_MESSAGE__") {
+                if app_gateway_fail_closed() == 1 { return sip_resp(400, "Bad Request", data, dl, "app-message") }
+            } else { msg = changed }
+        }
+
         // CDR start
         let _ = db_cdr(db, db_ok, cid, caller_id, translated, "TRYING")
         let _ = db_cdr_detail(db, db_ok, cid, ip, "", tr)
@@ -723,6 +927,27 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
         inv_msg = rtp_process_offer(inv_msg, len(inv_msg), cid, from_tag, db, db_ok, cache)
         let inv_dl = len(inv_msg)
 
+        if (str_eq(inv_app_action, "proxy") || str_eq(inv_app_action, "route") || str_eq(inv_app_action, "dispatch")) && len(next_hop) == 0 {
+            let targets = json_get_string(inv_app_raw, "target")
+            let primary = sip_forward_fork(targets, inv_msg, ip, port, tr, public_ip, cache, cid, forward_fd)
+            if len(primary) == 0 { return sip_resp(503, "Service Unavailable", data, dl, "app-route") }
+            let _ = db_cdr(db, db_ok, cid, caller_id, translated, "APP_ROUTING:" + primary)
+            return sip_resp(100, "Trying", data, dl, "")
+        }
+        if str_eq(inv_app_action, "b2bua") && len(next_hop) == 0 {
+            if b2bua_enabled() == 0 { return sip_resp(503, "Service Unavailable", data, dl, "b2bua-disabled") }
+            let target = json_get_string(inv_app_raw, "target")
+            let b2_msg = b2bua_prepare_invite(inv_msg, target, sip_transport_param(target, tr), ip + ":" + string(port), tr, cache)
+            let mut sent = 0
+            if len(b2_msg) > 0 { sent = sip_forward_target(target, b2_msg, sip_transport_param(target, tr), cache, forward_fd) }
+            if sent == 0 {
+                let failed_key = b2bua_lookup_in(inv_msg, cache)
+                if len(failed_key) > 0 { let _ = b2bua_cleanup(failed_key, cache) }
+                return sip_resp(503, "Service Unavailable", data, dl, "app-b2bua")
+            }
+            let _ = db_cdr(db, db_ok, cid, caller_id, translated, "APP_B2BUA:" + target)
+            return sip_resp(100, "Trying", data, dl, "")
+        }
         if len(next_hop) > 0 {
             let fwd = nat_fix_sdp(proxy_hop(inv_msg, ip, port, tr), inv_dl, public_ip)
             let sent_to = sip_forward_target(next_hop, fwd, sip_transport_param(next_hop, "udp"), cache, forward_fd)
@@ -831,6 +1056,20 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
                 let _ = db_sip_tx(db, db_ok, cid, "send", "INVITE", 0, "proxy", primary)
                 return sip_resp(100, "Trying", data, dl, "")
             } else {
+            if str_has_prefix(route_result, "b2bua|") {
+                if b2bua_enabled() == 0 { return sip_resp(503, "Service Unavailable", data, dl, "b2bua-disabled") }
+                let target = route_result[6:]
+                let b2_msg = b2bua_prepare_invite(inv_msg, target, sip_transport_param(target, tr), ip + ":" + string(port), tr, cache)
+                let mut sent = 0
+                if len(b2_msg) > 0 { sent = sip_forward_target(target, b2_msg, sip_transport_param(target, tr), cache, forward_fd) }
+                if sent == 0 {
+                    let failed_key = b2bua_lookup_in(inv_msg, cache)
+                    if len(failed_key) > 0 { let _ = b2bua_cleanup(failed_key, cache) }
+                    return sip_resp(503, "Service Unavailable", data, dl, "b2bua-route")
+                }
+                let _ = db_cdr(db, db_ok, cid, caller_id, translated, "B2BUA:" + target)
+                return sip_resp(100, "Trying", data, dl, "")
+            } else {
             if str_has_prefix(route_result, "dispatch|") {
                 let targets = route_result[9:]
                 let primary = sip_forward_fork(targets, inv_msg, ip, port, tr, public_ip, cache, cid, forward_fd)
@@ -839,13 +1078,57 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
                 return sip_resp(100, "Trying", data, dl, "")
             } else {
                 // Unknown action
-            }}}}
+            }}}}}
         }
 
         let _ = db_cdr(db, db_ok, cid, from_user, translated, "NOT_FOUND")
         return sip_resp(404, "Not Found", data, dl, "nf")
 
     } else {
+    let mut other_app_raw = app_gateway_call(msg, ip, port, tr, "request")
+    let mut other_app_id = app_gateway_request_id_for(msg, "request")
+    let mut other_app_action = app_gateway_action(other_app_raw, other_app_id, 0)
+    let mut other_command_token = env_get_or("SIP_APP_TOKEN", "")
+    if str_eq(other_app_action, "module") && app_gateway_command_valid(other_app_raw, other_app_id, 0) == 1 {
+        let module_name = json_get_string(other_app_raw, "module")
+        let module_operation = json_get_string(other_app_raw, "operation")
+        let module_payload = json_get_string(other_app_raw, "payload")
+        let module_raw = module_gateway_call(msg, ip, port, tr, "request", module_name, module_operation, module_payload)
+        let module_id = module_gateway_request_id(msg, "request", module_name, module_operation, module_payload)
+        let module_action = module_gateway_action(module_raw, msg, "request", module_name, module_operation, module_payload)
+        if str_eq(module_action, "fail") { return sip_resp(503, "Service Unavailable", data, dl, "module") }
+        if str_eq(module_action, "drop") { return "" }
+        other_app_raw = module_raw
+        other_app_id = module_id
+        other_app_action = module_action
+        other_command_token = env_get_or("SIP_MODULE_TOKEN", "")
+    }
+    if str_eq(other_app_action, "fail") { return sip_resp(503, "Service Unavailable", data, dl, "app") }
+    if str_eq(other_app_action, "drop") { return "" }
+    if str_eq(other_app_action, "reply") || str_eq(other_app_action, "redirect") {
+        if app_gateway_command_valid_token(other_app_raw, other_app_id, 0, other_command_token) == 1 { return app_command_reply(data, other_app_raw) }
+        if app_gateway_fail_closed() == 1 { return sip_resp(503, "Service Unavailable", data, dl, "app") }
+    }
+    if str_eq(other_app_action, "b2bua") { return sip_resp(400, "Bad Request", data, dl, "app-action") }
+    if len(other_app_raw) > 0 && (str_eq(other_app_action, "continue") || str_eq(other_app_action, "proxy") || str_eq(other_app_action, "route") || str_eq(other_app_action, "dispatch")) && app_gateway_command_valid_token(other_app_raw, other_app_id, 0, other_command_token) == 1 {
+        let changed = app_command_apply(msg, other_app_raw)
+        if str_eq(changed, "__APP_INVALID_MESSAGE__") {
+            if app_gateway_fail_closed() == 1 { return sip_resp(400, "Bad Request", data, dl, "app-message") }
+        } else { msg = changed }
+    }
+    if (str_eq(other_app_action, "proxy") || str_eq(other_app_action, "route") || str_eq(other_app_action, "dispatch")) && len(other_app_raw) > 0 {
+        let target_items = str_split(json_get_string(other_app_raw, "target"), ",")
+        let mut app_target = ""
+        if len(target_items) > 0 { app_target = str_trim_space(target_items[0]) }
+        if is_ack == 1 || is_bye == 1 || is_cancel == 1 {
+            let sent = sip_forward_dialog_request(msg, cid, method, app_target, ip, port, tr, cache, forward_fd)
+            if sent == 1 { return "" }
+            return sip_resp(503, "Service Unavailable", data, dl, "app-route")
+        }
+        let primary = sip_forward_fork(json_get_string(other_app_raw, "target"), msg, ip, port, tr, public_ip, cache, cid, forward_fd)
+        if len(primary) == 0 { return sip_resp(503, "Service Unavailable", data, dl, "app-route") }
+        return sip_resp(100, "Trying", data, dl, "")
+    }
     // === ACK ===
     if is_ack == 1 {
         let sent = sip_forward_dialog_request(msg, cid, "ACK", next_hop, ip, port, tr, cache, forward_fd)

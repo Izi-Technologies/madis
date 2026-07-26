@@ -26,4 +26,10 @@ export class MadisCarrier {
   pendingEvents(limit = 100) { return this.request("GET", `/api/v1/billing/events?limit=${Math.min(Math.max(limit, 1), 100)}`); }
   publish(event) { return this.request("POST", "/api/v1/billing/events", event); }
   ack(eventId) { return this.request("POST", `/api/v1/billing/events/ack?event_id=${encodeURIComponent(eventId)}`); }
+  controlStatus() { return this.request("GET", "/api/v1/control/status"); }
+  routingRules(limit = 100) { return this.request("GET", `/api/v1/control/routing-rules?limit=${Math.min(Math.max(limit, 1), 100)}`); }
+  createRoutingRule(rule) { return this.request("POST", "/api/v1/control/routing-rules", rule); }
+  setRoutingRuleEnabled(ruleId, enabled) {
+    return this.request("POST", `/api/v1/control/routing-rules/${Number(ruleId)}/${enabled ? "enable" : "disable"}`);
+  }
 }

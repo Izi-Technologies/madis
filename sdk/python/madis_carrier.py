@@ -1,4 +1,4 @@
-"""Small standard-library client for the Madis carrier API."""
+"""Standard-library client example for the Madis carrier API."""
 import json
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -32,3 +32,18 @@ class MadisCarrier:
 
     def ack(self, event_id):
         return self._request("POST", "/api/v1/billing/events/ack?" + urlencode({"event_id": event_id}))
+
+    def control_status(self):
+        return self._request("GET", "/api/v1/control/status")
+
+    def routing_rules(self, limit=100):
+        return self._request("GET", "/api/v1/control/routing-rules?" + urlencode({"limit": min(max(limit, 1), 100)}))
+
+    def create_routing_rule(self, rule):
+        return self._request("POST", "/api/v1/control/routing-rules", rule)
+
+    def enable_routing_rule(self, rule_id):
+        return self._request("POST", f"/api/v1/control/routing-rules/{int(rule_id)}/enable")
+
+    def disable_routing_rule(self, rule_id):
+        return self._request("POST", f"/api/v1/control/routing-rules/{int(rule_id)}/disable")

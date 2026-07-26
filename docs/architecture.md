@@ -54,7 +54,7 @@ status and known omissions are recorded in [`../RFC_COMPLIANCE.md`](../RFC_COMPL
 UDP and stream listeners use Mako event and worker primitives. `crew`/`kick`
 can use a bounded Mako scheduler pool through `SIP_SCHED_WORKERS`; `0` keeps
 the default one-pthread-per-kick behavior. The setting changes scheduling, not
-the protocol or the maximum safe capacity of a host.
+the protocol or the capacity of a host.
 
 State that can grow from attacker-controlled input is kept behind explicit
 limits: registration contacts, dialogs, forks, authentication state, DNS and
@@ -75,6 +75,20 @@ events are at-least-once: consumers must commit their own transaction,
 deduplicate by `event_id`, and then acknowledge the event. The API stores
 caller-defined JSON data; it does not replace a carrier's rating, invoice, or
 charging system.
+
+The control API uses a second bearer token and exposes only bounded routing
+policy operations. A client can create or disable a routing rule, including an
+explicit `b2bua:` action, but cannot execute Mako, SQL, shell commands, or
+arbitrary application code in the SIP worker. B2BUA state remains in the
+worker's bounded in-memory map; PostgreSQL stores the policy that selects it.
+
+The optional SIP application gateway extends this boundary to live decisions.
+It sends signed, bounded SIP events to an out-of-process service and accepts
+only validated commands for routing, replies, B2BUA, validated headers/body, or
+module invocation. The module bus uses the same boundary for TTS, STT, LLM,
+recording, media, fraud, and billing workers. External services own their
+frameworks and durable state; Madis retains transaction, dialog, and transport
+ownership. See [`modules.md`](modules.md) for the wire contract.
 
 ## Integration boundaries
 

@@ -197,11 +197,18 @@ fn main() {
                         // Machine API: bearer token only, never a browser
                         // session. This keeps carrier integrations independent
                         // of HTML cookies and CSRF semantics.
-                        if len(resp) == 0 && carrier_api_route(method, path) > 0 {
-                            if carrier_api_token_ok(raw, rl) == 1 {
+                        let machine_kind = carrier_api_route(method, path)
+                        if len(resp) == 0 && machine_kind > 0 {
+                            let mut machine_auth = carrier_api_token_ok(raw, rl)
+                            if carrier_api_requires_control(machine_kind) == 1 {
+                                machine_auth = carrier_api_control_token_ok(raw, rl)
+                            }
+                            if machine_auth == 1 {
                                 resp = carrier_api_handle(db, db_ok, method, path, raw, rl)
                             } else {
-                                resp = http_resp(401, "application/json", "{\"ok\":false,\"error\":\"carrier bearer token required\"}\n", "WWW-Authenticate: Bearer\r\n")
+                                let mut message = "carrier bearer token required"
+                                if carrier_api_requires_control(machine_kind) == 1 { message = "control bearer token required" }
+                                resp = http_resp(401, "application/json", "{\"ok\":false,\"error\":\"" + message + "\"}\n", "WWW-Authenticate: Bearer\r\n")
                             }
                         }
 

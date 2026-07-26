@@ -19,6 +19,12 @@ function M.new(base_url, token)
   function client:pending_events(limit) limit=math.min(math.max(limit or 100,1),100); return self:request("GET", "/api/v1/billing/events?limit=" .. limit) end
   function client:publish(json) return self:request("POST", "/api/v1/billing/events", json) end
   function client:ack(event_id) return self:request("POST", "/api/v1/billing/events/ack?event_id=" .. event_id) end
+  function client:control_status() return self:request("GET", "/api/v1/control/status") end
+  function client:routing_rules(limit) limit=math.min(math.max(limit or 100,1),100); return self:request("GET", "/api/v1/control/routing-rules?limit=" .. limit) end
+  function client:create_routing_rule(json) return self:request("POST", "/api/v1/control/routing-rules", json) end
+  function client:set_routing_rule_enabled(rule_id, enabled)
+    return self:request("POST", "/api/v1/control/routing-rules/" .. tostring(rule_id) .. "/" .. (enabled and "enable" or "disable"))
+  end
   return client
 end
 return M

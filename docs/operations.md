@@ -20,9 +20,10 @@ offline package. Confirm the compiler reports 0.4.16; do not mix a different
 runtime with generated C.
 
 The installer creates `/etc/madis/madis.env`, `/opt/madis` by default, and the
-units `madis.service` and `madis-admin.service`. Save the generated database,
-admin, carrier API, and WebUI credentials securely; the installer prints them
-once and stores them in the protected environment file.
+units `madis.service` and `madis-admin.service`. The generated database,
+admin, carrier API, control API, application, module, and WebUI credentials are
+printed once and stored in the protected environment file. Restrict access to
+that file.
 
 ## Docker
 
@@ -30,6 +31,11 @@ once and stores them in the protected environment file.
 MADIS_DB_PASS='long-random-password' \
 MADIS_ADMIN_TOKEN='long-random-admin-token' \
 MADIS_CARRIER_API_TOKEN='long-random-carrier-token' \
+MADIS_CONTROL_API_TOKEN='long-random-control-token' \
+MADIS_APP_TOKEN='long-random-application-token' \
+MADIS_MODULE_TOKEN='long-random-module-token' \
+MADIS_APP_URL='https://app.example.net/madis/sip' \
+MADIS_MODULE_URL='https://modules.example.net/madis/dispatch' \
 docker compose up -d --build
 ```
 
@@ -40,6 +46,13 @@ the secrets and put the WebUI behind a reverse proxy before using a shared or
 public host. PostgreSQL is bound to loopback by compose. The current Docker
 image does not start `madis-admin.service`; use the installer or build/run
 `admin-bin` separately for the browser WebUI.
+
+The application and module hooks remain disabled when their URLs are empty.
+Configure both URL and token only after the external service is ready to
+verify the signed envelopes. Set `SIP_MODULES` in the compose environment (or
+in an environment file) to restrict module names, for example
+`tts,stt,llm,media,recording`. See [`modules.md`](modules.md) for the wire
+contract and failure behavior.
 
 Verify the container:
 
@@ -65,7 +78,7 @@ The SIP worker's local endpoints are `/healthz`, `/readyz`, `/metrics`,
 `/state`, and `POST /reload`. The standalone WebUI is normally at
 `/admin/login`; its machine API is under `/admin/api/v1/`. Authentication and
 binding depend on the chosen layout, so do not assume that a health endpoint
-is public or that it is safe to expose without a reverse proxy.
+is public or that it can be exposed without a reverse proxy.
 
 ## Reverse proxy
 
