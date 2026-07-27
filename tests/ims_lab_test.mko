@@ -1,0 +1,84 @@
+// Deterministic two-subscriber IMS lab path.
+//
+// This is a test-only HSS/Cx double. It builds real MAR/MAA-shaped Diameter
+// messages, feeds them through the production correlation and AKA boundaries,
+// creates real registration bindings, and verifies the S-CSCF session gate.
+// It never changes production peer behavior or stores AKA material outside the
+// test-local cache.
+pull . "../main.mko"
+
+fn ims_lab_maa(request: string, authenticate: string, authorization: string) -> string {
+    let item = diameter_grouped_vendor(612, ims_3gpp_vendor(),
+        diameter_avp_vendor_u32(613, ims_3gpp_vendor(), 0)
+        + diameter_avp_vendor_string(608, ims_3gpp_vendor(), "Digest-AKAv1-MD5")
+        + diameter_avp_vendor_m(609, ims_3gpp_vendor(), authenticate)
+        + diameter_avp_vendor_m(610, ims_3gpp_vendor(), authorization))
+    let body = diameter_avp_string(263, diameter_find_avp(request, 263))
+        + ims_vsa(ims_cx_application())
+        + madis_diameter_avp_u32(268, 2001)
+        + madis_diameter_avp_u32(277, 1)
+        + diameter_avp_string(264, "hss.lab.example")
+        + diameter_avp_string(296, "example.com")
+        + item
+    return diameter_header(0, ims_cx_mar_command(), ims_cx_application(), diameter_read_u32(request, 12), diameter_read_u32(request, 16), body)
+}
+
+fn ims_lab_register_message(private_identity: string, public_identity: string, response: string, nonce: string) -> string {
+    return "REGISTER " + public_identity + " SIP/2.0\r\n"
+        + "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-" + private_identity + "\r\n"
+        + "From: <sip:" + private_identity + ">;tag=lab-" + private_identity + "\r\n"
+        + "To: <" + public_identity + ">\r\n"
+        + "Call-ID: lab-register-" + private_identity + "\r\n"
+        + "CSeq: 1 REGISTER\r\n"
+        + "Authorization: Digest username=\"" + private_identity + "\", realm=\"example.com\", nonce=\"" + nonce + "\", uri=\"" + public_identity + "\", response=\"" + response + "\", algorithm=AKAv1-MD5, qop=auth, nc=00000001, cnonce=\"lab-cnonce\"\r\n"
+        + "Contact: <sip:" + private_identity + ">\r\n"
+        + "Content-Length: 0\r\n\r\n"
+}
+
+fn ims_lab_seed_aka(cache: CMap, private_identity: string, public_identity: string, xres: string) -> string {
+    let request = ims_cx_mar(public_identity, private_identity, "sip:scscf.example.com", "Digest-AKAv1-MD5", 0, 1)
+    let authenticate = "rand-" + private_identity
+    let answer = ims_lab_maa(request, authenticate, xres)
+    assert_eq(diameter_message_valid(answer), 1)
+    let extracted_authenticate = ims_cx_mar_aka_field_from_answer(request, answer, 0, "Digest-AKAv1-MD5", 609)
+    let extracted_xres = ims_cx_mar_aka_field_from_answer(request, answer, 0, "Digest-AKAv1-MD5", 610)
+    assert_eq_str(extracted_authenticate, authenticate)
+    assert_eq_str(extracted_xres, xres)
+    let nonce = base64_encode(extracted_authenticate)
+    let key = ims_aka_cache_key(nonce, private_identity)
+    let _ = bounded_cache_pair_set(cache, "ims_aka_seq", "ims_aka_ring|", key, extracted_xres, mono_ms(), 65536)
+    let ha1 = sip_md5_hex(private_identity + ":example.com:" + extracted_xres)
+    let response = digest_response_ha1_qop(ha1, "REGISTER", public_identity, nonce, "00000001", "lab-cnonce", "auth")
+    return ims_lab_register_message(private_identity, public_identity, response, nonce)
+}
+
+fn TestIMSTwoSubscriberLabRegistrationAndSession() {
+    let cache = cmap_new()
+    let alice = ims_lab_seed_aka(cache, "alice@example.com", "sip:alice@example.com", "xres-alice-example")
+    let bob = ims_lab_seed_aka(cache, "bob@example.com", "sip:bob@example.com", "xres-bob-example")
+    assert_eq(ims_aka_response_valid(alice, len(alice), cache, "sip:alice@example.com", "alice@example.com", "example.com"), 1)
+    assert_eq(ims_aka_response_valid(bob, len(bob), cache, "sip:bob@example.com", "bob@example.com", "example.com"), 1)
+    assert_eq(ims_aka_response_valid(alice, len(alice), cache, "sip:alice@example.com", "alice@example.com", "example.com"), 0)
+
+    let reg = cmap_new()
+    let _ = registration_store(reg, "alice@example.com", "sip:alice@192.0.2.10:5060", "UDP", 300, "192.0.2.10", 5060)
+    let _ = registration_store(reg, "bob@example.com", "sip:bob@192.0.2.11:5060", "UDP", 300, "192.0.2.11", 5060)
+    let _ = env_set("SIP_IMS_SESSION", "1")
+    assert_eq(ims_session_originator_registered("scscf", reg, "alice@example.com"), 1)
+    assert_eq(ims_session_originator_registered("scscf", reg, "bob@example.com"), 1)
+    assert(str_contains(ims_session_destination_contact("scscf", reg, "bob@example.com"), "192.0.2.11"))
+    assert_eq_str(ims_session_destination_contact("scscf", reg, "missing@example.com"), "")
+    assert(str_contains(registration_find(reg, "bob@example.com"), "192.0.2.11"))
+    let _ = env_set("SIP_IMS_SESSION", "0")
+}
+
+fn TestIMSTwoSubscriberLabIsolation() {
+    let cache = cmap_new()
+    let alice = ims_lab_seed_aka(cache, "alice@example.com", "sip:alice@example.com", "xres-alice-example")
+    assert_eq(ims_aka_response_valid(alice, len(alice), cache, "sip:alice@example.com", "bob@example.com", "example.com"), 0)
+    let nonce = base64_encode("rand-alice@example.com")
+    let wrong_ha1 = sip_md5_hex("alice@example.com:example.com:xres-bob-example")
+    let wrong_digest = digest_response_ha1_qop(wrong_ha1, "REGISTER", "sip:alice@example.com", nonce, "00000001", "lab-cnonce", "auth")
+    let wrong = ims_lab_register_message("alice@example.com", "sip:alice@example.com", wrong_digest, nonce)
+    assert_eq(ims_aka_response_valid(wrong, len(wrong), cache, "sip:alice@example.com", "alice@example.com", "example.com"), 0)
+}

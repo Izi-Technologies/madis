@@ -1,0 +1,115 @@
+// IMS AKA REGISTER challenge and response handling.
+//
+// The HSS supplies the vector through Cx MAR/MAA. Madis stores only the
+// short-lived XRES value in a bounded in-memory cache; it does not
+// generate or persist AKA secrets.
+
+fn ims_aka_requested() -> int {
+    let value = str_to_lower(str_trim_space(env_get_or("SIP_IMS_AKA", "0")))
+    if not (str_eq(value, "1") || str_eq(value, "true") || str_eq(value, "yes")) { return 0 }
+    return 1
+}
+
+fn ims_aka_enabled() -> int {
+    if ims_aka_requested() == 0 { return 0 }
+    return ims_cx_registration_enabled()
+}
+
+fn ims_aka_identity_ok(value: string, max: int) -> int {
+    if ims_text_ok(value, max) == 0 || str_index(value, "|") >= 0 || str_index(value, "\"") >= 0 { return 0 }
+    return 1
+}
+
+fn ims_aka_nonce_ok(value: string) -> int {
+    if len(value) < 16 || len(value) > 4096 { return 0 }
+    let mut i = 0
+    while i < len(value) {
+        let c = int(value[i])
+        if c == 0 || c == 10 || c == 13 || c == 34 || c == 92 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn ims_aka_hex_ok(value: string) -> int {
+    if len(value) < 2 || len(value) > 512 || (len(value) % 2) != 0 { return 0 }
+    let mut i = 0
+    while i < len(value) {
+        if diameter_hex_value(int(value[i])) < 0 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn ims_aka_cache_key(nonce: string, private_identity: string) -> string {
+    return "ims-aka|" + nonce + "|" + private_identity
+}
+
+fn ims_aka_challenge(realm: string, msg: string, nonce: string, stale: int) -> string {
+    let mut value = "Digest realm=\"" + realm + "\", nonce=\"" + nonce + "\", algorithm=AKAv1-MD5, qop=\"auth\""
+    if stale == 1 { value = value + ", stale=true" }
+    return sip_reply(msg, 401, "Unauthorized", sip_header_line("WWW-Authenticate", value), "")
+}
+
+fn ims_aka_vector_challenge(realm: string, msg: string, cache: CMap, peer_lock: Mutex, public_identity: string, private_identity: string, server_name: string, stale: int) -> string {
+    let scheme = env_get_or("SIP_IMS_AKA_SCHEME", "Digest-AKAv1-MD5")
+    if not str_eq(scheme, "Digest-AKAv1-MD5") { return sip_resp(501, "IMS AKA Scheme Not Supported", msg, len(msg), "ims-aka-scheme") }
+    let request = ims_cx_mar(public_identity, private_identity, server_name, scheme, 0, 1)
+    let response = ims_cx_exchange(cache, peer_lock, request, ims_cx_mar_command())
+    let authenticate = ims_cx_mar_aka_field_from_answer(request, response, 0, scheme, 609)
+    let expected = ims_cx_mar_aka_field_from_answer(request, response, 0, scheme, 610)
+    if len(authenticate) == 0 || len(expected) == 0 { return sip_resp(503, "IMS Authentication Unavailable", msg, len(msg), "ims-aka-vector") }
+    let nonce = base64_encode(authenticate)
+    if ims_aka_nonce_ok(nonce) == 0 { return sip_resp(503, "Invalid IMS Authentication Vector", msg, len(msg), "ims-aka-vector") }
+    let key = ims_aka_cache_key(nonce, private_identity)
+    let _ = bounded_cache_pair_set(cache, "ims_aka_seq", "ims_aka_ring|", key, expected, mono_ms(), 65536)
+    return ims_aka_challenge(realm, msg, nonce, stale)
+}
+
+// Return 1 for a valid response, 2 when the vector is missing or stale, and
+// 0 for a bad/replayed response.
+fn ims_aka_response_valid(msg: string, n: int, cache: CMap, public_identity: string, private_identity: string, expected_realm: string) -> int {
+    let auth = auth_header(msg, n)
+    if len(auth) == 0 { return 2 }
+    let username = sip_auth_param(auth, "username")
+    let auth_realm = sip_auth_param(auth, "realm")
+    let algorithm = str_to_lower(sip_auth_param(auth, "algorithm"))
+    let qop = str_to_lower(sip_auth_param(auth, "qop"))
+    let nonce = sip_auth_param(auth, "nonce")
+    let uri = sip_auth_param(auth, "uri")
+    let nc = str_to_lower(str_trim_space(sip_auth_param(auth, "nc")))
+    let cnonce = sip_auth_param(auth, "cnonce")
+    let response = str_to_lower(str_trim_space(sip_auth_param(auth, "response")))
+    if len(sip_auth_param(auth, "auts")) > 0 { return 0 }
+    if not str_eq(username, private_identity) || not str_eq(auth_realm, expected_realm) || not str_eq(algorithm, "akav1-md5") || not str_eq(qop, "auth") || ims_aka_nonce_ok(nonce) == 0 || ims_text_ok(uri, 2048) == 0 || len(nc) != 8 || ims_aka_hex_ok(nc) == 0 || ims_text_ok(cnonce, 512) == 0 || len(response) != 32 || ims_aka_hex_ok(response) == 0 { return 0 }
+    let key = ims_aka_cache_key(nonce, private_identity)
+    if cmap_has(cache, key) == 0 { return 2 }
+    let at_key = key + "|at"
+    let mut created_at = 0
+    match parse_int(cmap_get(cache, at_key)) {
+        Ok(v) => { created_at = v }
+        Err(_) => { return 2 }
+    }
+    if mono_ms() - created_at > 300000 { return 2 }
+    if cmap_has(cache, "ims-aka-used|" + key) == 1 { return 0 }
+    let xres = cmap_get(cache, key)
+    let ha1 = sip_md5_hex(username + ":" + auth_realm + ":" + xres)
+    let expected = digest_response_ha1_qop(ha1, "REGISTER", uri, nonce, nc, cnonce, "auth")
+    if not str_eq(response, str_to_lower(expected)) { return 0 }
+    let _ = auth_nonce_used_set(cache, "ims-aka-used|" + key, mono_ms())
+    let _ = public_identity
+    return 1
+}
+
+// Empty string means the REGISTER passed AKA. A non-empty string is the SIP
+// response that must be returned to the endpoint.
+fn ims_aka_register_gate(realm: string, msg: string, n: int, cache: CMap, peer_lock: Mutex, public_identity: string, private_identity: string, server_name: string) -> string {
+    if ims_aka_requested() == 0 { return "" }
+    if ims_cx_registration_enabled() == 0 { return sip_resp(503, "IMS AKA Requires Cx", msg, n, "ims-aka-cx") }
+    if ims_aka_identity_ok(public_identity, 2048) == 0 || ims_aka_identity_ok(private_identity, 1024) == 0 { return sip_resp(403, "Invalid IMS Identity", msg, n, "ims-aka-identity") }
+    if has_auth(msg, n) == 0 { return ims_aka_vector_challenge(realm, msg, cache, peer_lock, public_identity, private_identity, server_name, 0) }
+    let result = ims_aka_response_valid(msg, n, cache, public_identity, private_identity, realm)
+    if result == 1 { return "" }
+    if result == 2 { return ims_aka_vector_challenge(realm, msg, cache, peer_lock, public_identity, private_identity, server_name, 1) }
+    return sip_resp(403, "Bad IMS AKA Credentials", msg, n, "ims-aka-auth")
+}

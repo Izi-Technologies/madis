@@ -10,6 +10,7 @@ pull . "./routing.mko"
 pull . "./billing.mko"
 pull . "./charging.mko"
 pull . "./ims_diameter.mko"
+pull . "./ims_aka.mko"
 pull . "./dialplan.mko"
 pull . "./headers.mko"
 pull . "./shaken.mko"
@@ -21,6 +22,8 @@ pull . "./registration.mko"
 pull . "./transport.mko"
 pull . "./b2bua.mko"
 pull . "./app_gateway.mko"
+pull . "./ims_subscriber.mko"
+pull . "./ims_roles.mko"
 pull . "./module_gateway.mko"
 pull . "./ops.mko"
 
@@ -217,16 +220,30 @@ fn sip_proxy_hop_with_branch(msg: string, ip: string, port: int, tr: string, bra
     return sip_insert_via(msg, sip_via_value_rport(tr, ip, port, branch))
 }
 
+fn sip_dialog_target_for_request(msg: string, cid: string, route_target: string, cache: CMap) -> string {
+    let mut target = route_target
+    if len(target) == 0 {
+        let to_tag = sip_addr_tag(sip_header(msg, "To"))
+        if len(to_tag) > 0 {
+            let tagged_key = "dialog_dst|" + cid + "|" + to_tag
+            if cmap_has(cache, tagged_key) == 1 {
+                target = cmap_get(cache, tagged_key)
+            }
+        }
+    }
+    if len(target) == 0 {
+        let key = "dialog_dst|" + cid
+        if cmap_has(cache, key) == 0 { return "" }
+        target = cmap_get(cache, key)
+    }
+    return target
+}
+
 // Mid-dialog requests must be sent to the dialog's terminating contact. The
 // worker sends non-response return values back to the ingress peer, so forward
 // these requests here and return an empty string once the datagram is sent.
 fn sip_forward_dialog_request(msg: string, cid: string, method: string, route_target: string, ip: string, port: int, tr: string, cache: CMap, out_fd: int) -> int {
-    let mut target = route_target
-    if len(target) == 0 {
-        let key = "dialog_dst|" + cid
-        if cmap_has(cache, key) == 0 { return 0 }
-        target = cmap_get(cache, key)
-    }
+    let target = sip_dialog_target_for_request(msg, cid, route_target, cache)
     if len(target) == 0 { return 0 }
     let mut forwarded = proxy_hop_via(msg, ip, port, tr)
     let branch_key = "dialog_branch|" + cid
@@ -409,7 +426,26 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
         if len(downstream_request) > 0 && str_eq(madis_method(downstream_request), "CANCEL") { return "" }
         let response_branch = sip_via_branch(sip_header(response_input, "Via"))
         let mut response_data = response_input
-        if sip_status_code(response_input) >= 200 && sip_status_code(response_input) < 300 {
+        let response_code = sip_status_code(response_input)
+        if len(downstream_request) > 0 && response_code >= 180 && response_code < 200 {
+            let _ = sip_relprov_record(response_input, cache)
+        }
+        if len(downstream_request) > 0 && response_code >= 200 && response_code < 700 {
+            let _ = sip_relprov_close(response_input, cache)
+        }
+        if response_code >= 180 && response_code < 300 && cmap_has(cache, "fork_branch|" + response_branch) == 1 {
+            // Early-dialog PRACK must return to the fork that produced the
+            // provisional response. The To-tag is the stable branch key on
+            // the request leg; do not collapse multiple early dialogs into
+            // one Call-ID-only destination.
+            let early_cid = cmap_get(cache, "fork_branch|" + response_branch)
+            let early_target = cmap_get(cache, "fork_target|" + early_cid + "|" + response_branch)
+            let early_to_tag = sip_addr_tag(sip_header(response_input, "To"))
+            if len(early_target) > 0 && len(early_to_tag) > 0 {
+                let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_dst|" + early_cid + "|" + early_to_tag, early_target, 65536)
+            }
+        }
+        if response_code >= 200 && response_code < 300 {
             if cmap_has(cache, "fork_branch|" + response_branch) == 1 {
                 let fork_cid = cmap_get(cache, "fork_branch|" + response_branch)
                 let fork_target = cmap_get(cache, "fork_target|" + fork_cid + "|" + response_branch)
@@ -469,6 +505,8 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
     let mut is_bye = 0
     let mut is_cancel = 0
     let mut is_options = 0
+    let mut is_prack = 0
+    let mut is_update = 0
     let method = madis_method(data)
     if str_eq(method, "REGISTER") { is_register = 1 }
     if str_eq(method, "INVITE") { is_invite = 1 }
@@ -476,6 +514,8 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
     if str_eq(method, "BYE") { is_bye = 1 }
     if str_eq(method, "CANCEL") { is_cancel = 1 }
     if str_eq(method, "OPTIONS") { is_options = 1 }
+    if str_eq(method, "PRACK") { is_prack = 1 }
+    if str_eq(method, "UPDATE") { is_update = 1 }
     let mut ruri = ""
     if is_invite == 1 { ruri = sip_request_uri(data) }
     let cid = sip_header(data, "Call-ID")
@@ -486,8 +526,6 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
     let from_user = sip_user(from)
     let from_domain = sip_domain(from)
     let from_tag = sip_addr_tag(from)
-    let to_tag = sip_addr_tag(to)
-    let _ = to_tag
     let _ = from_tag
 
     // ===== SECURITY LAYER =====
@@ -715,6 +753,40 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
 
     // === REGISTER ===
     if is_register == 1 {
+        let contact = sip_hdr(data, "Contact", dl)
+        let aor = sip_user(to) + "@" + sip_domain(to)
+        let ims_private_identity = from_user + "@" + from_domain
+        let ims_public_identity = "sip:" + aor
+        let ims_visited_network = env_get_or("SIP_IMS_VISITED_NETWORK", realm)
+        let ims_server_name = env_get_or("SIP_IMS_SERVER_NAME", "sip:" + node_id + "." + realm)
+
+        // Keep the three CSCF responsibilities explicit even when they share
+        // one worker binary. P-/I-CSCF roles forward REGISTER and never run
+        // the local S-CSCF authentication or registrar write path.
+        let ims_role = ims_role_configured()
+        if len(ims_role) == 0 {
+            return sip_resp(500, "IMS Role Misconfigured", data, dl, "ims-role")
+        }
+        if ims_role_local_register(ims_role) == 0 {
+            let role_target = ims_role_register_target(ims_role, cache, diameter_lock, ims_public_identity, ims_visited_network)
+            if len(role_target) == 0 {
+                return sip_resp(503, "IMS Role Unavailable", data, dl, "ims-role")
+            }
+            let role_forwarded = sip_forward_fork(role_target, msg, ip, port, tr, public_ip, cache, cid, forward_fd)
+            if len(role_forwarded) == 0 {
+                return sip_resp(503, "IMS Role Unavailable", data, dl, "ims-role")
+            }
+            return sip_resp(100, "Trying", data, dl, "ims-role")
+        }
+
+        // IMS AKA is an HSS-backed alternative to local SIP digest auth.
+        // Evaluate it before IP trust so a trusted source cannot bypass it.
+        let aka_reply = ims_aka_register_gate(realm, data, dl, cache, diameter_lock, ims_public_identity, ims_private_identity, ims_server_name)
+        if len(aka_reply) > 0 {
+            return aka_reply
+        }
+
+        if ims_aka_enabled() == 0 {
         // IP auth: skip digest if source IP is trusted
         let ip_trusted = db_ip_auth(db, db_ok, ip, cache)
         if ip_trusted == 0 {
@@ -737,13 +809,13 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
             }
         }
 
-        let contact = sip_hdr(data, "Contact", dl)
-        let aor = sip_user(to) + "@" + sip_domain(to)
-        let ims_private_identity = from_user + "@" + from_domain
-        let ims_public_identity = "sip:" + aor
-        let ims_visited_network = env_get_or("SIP_IMS_VISITED_NETWORK", realm)
-        let ims_server_name = env_get_or("SIP_IMS_SERVER_NAME", "sip:" + node_id + "." + realm)
-        if ims_cx_register_gate(cache, diameter_lock, ims_public_identity, ims_private_identity, ims_visited_network, ims_server_name) == 0 {
+        }
+
+        if ims_subscriber_register_gate(ims_public_identity, ims_private_identity, ims_visited_network, ims_server_name) == 0 {
+            return sip_resp(403, "IMS Subscriber Not Authorized", data, dl, "ims-subscriber")
+        }
+        let ims_assignment_type = registration_cx_assignment_type(reg, aor, contact, data, dl)
+        if ims_cx_register_gate(cache, diameter_lock, ims_public_identity, ims_private_identity, ims_visited_network, ims_server_name, ims_assignment_type) == 0 {
             return sip_resp(403, "IMS Registration Not Authorized", data, dl, "ims-cx")
         }
         let mut reg_app_raw = app_gateway_call(msg, ip, port, tr, "request")
@@ -855,6 +927,50 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
 
         let dest_user = sip_user(ruri)
         let dest_domain = sip_domain(ruri)
+
+        // An established dialog is already bound to its terminating contact.
+        // Forward a re-INVITE through that binding before any IMS role,
+        // application, charging, dial-plan, or new-call state work. The
+        // ingress transaction cache above still handles retransmissions, so a
+        // repeated re-INVITE cannot create a second downstream transaction.
+        let initial_dialog = ims_initial_dialog_request(data, dl)
+        if initial_dialog == 0 {
+            let dialog_msg = rtp_process_offer(msg, len(msg), cid, from_tag, db, db_ok, cache)
+            let sent = sip_forward_dialog_request(dialog_msg, cid, "INVITE", next_hop, ip, port, tr, cache, forward_fd)
+            if sent == 1 { return "" }
+            return sip_resp(481, "Call/Transaction Does Not Exist", data, dl, "ims-dialog")
+        }
+
+        // P-/I-CSCF roles route the initial terminating session toward the
+        // next IMS role before dialplan, application, charging, or local
+        // contact lookup. In-dialog requests follow the existing Route and
+        // dialog state machinery instead of being re-selected here.
+        let session_role = ims_role_configured()
+        if len(session_role) == 0 {
+            return sip_resp(500, "IMS Role Misconfigured", data, dl, "ims-role")
+        }
+        if ims_session_originator_registered(session_role, reg, from_user + "@" + from_domain) == 0 {
+            return sip_resp(403, "IMS Registration Required", data, dl, "ims-session")
+        }
+        if initial_dialog == 1 && ims_session_requested() == 1 && ims_role_local_register(session_role) == 1 {
+            let destination_aor = dest_user + "@" + dest_domain
+            if len(ims_session_destination_contact(session_role, reg, destination_aor)) == 0 {
+                return sip_resp(404, "IMS Destination Not Registered", data, dl, "ims-session-destination")
+            }
+        }
+        if initial_dialog == 1 && len(next_hop) == 0 && ims_role_local_register(session_role) == 0 {
+            let destination_identity = "sip:" + dest_user + "@" + dest_domain
+            let session_target = ims_role_invite_target(session_role, cache, diameter_lock, destination_identity)
+            if len(session_target) == 0 {
+                return sip_resp(503, "IMS Role Unavailable", data, dl, "ims-role")
+            }
+            let session_primary = sip_forward_fork(session_target, msg, ip, port, tr, public_ip, cache, cid, forward_fd)
+            if len(session_primary) == 0 {
+                return sip_resp(503, "IMS Role Unavailable", data, dl, "ims-role")
+            }
+            let _ = db_cdr(db, db_ok, cid, from_user, dest_user, "IMS_ROLE:" + session_primary)
+            return sip_resp(100, "Trying", data, dl, "ims-role")
+        }
 
         // Number manipulation: transform both caller and callee
         let dp_result = db_dialplan(db, db_ok, from_user, dest_user, "outbound", cache)
@@ -992,7 +1108,7 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
 
         // 2b. Cluster: user not local — check which node has them
         if db_ok == 1 {
-            let remote_node = sql_query_str(db, "SELECT cn.address || ':' || cn.port FROM registrations r JOIN cluster_nodes cn ON r.node_id = cn.id WHERE r.aor = $1 AND cn.status = 'active' AND cn.last_heartbeat > NOW() - INTERVAL '30 seconds' LIMIT 1", aor)
+            let remote_node = sql_query_str(db, registration_cluster_owner_query(), aor)
             if len(remote_node) > 0 {
                 // Forward INVITE to the remote node that owns this registration
                 let fwd = nat_fix_sdp(proxy_hop(inv_msg, ip, port, tr), inv_dl, public_ip)
@@ -1085,6 +1201,26 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
         return sip_resp(404, "Not Found", data, dl, "nf")
 
     } else {
+    // PRACK and UPDATE are dialog-scoped requests. Forward them through the
+    // existing Route/To-tag binding before application or new-call routing.
+    // Reliable provisional-response generation remains an endpoint
+    // responsibility; the proxy validates PRACK RSeq/RAck against tracked
+    // downstream provisional responses.
+    if is_prack == 1 || is_update == 1 {
+        if is_prack == 1 && sip_prack_matches_relprov(data, cache) == 0 {
+            return sip_resp(481, "Call/Transaction Does Not Exist", data, dl, "prack-rack")
+        }
+        if ims_initial_dialog_request(data, dl) == 1 {
+            return sip_resp(481, "Call/Transaction Does Not Exist", data, dl, "dialog-method")
+        }
+        let mut dialog_msg = msg
+        if is_update == 1 {
+            dialog_msg = rtp_process_offer(msg, len(msg), cid, from_tag, db, db_ok, cache)
+        }
+        let sent = sip_forward_dialog_request(dialog_msg, cid, method, next_hop, ip, port, tr, cache, forward_fd)
+        if sent == 1 { return "" }
+        return sip_resp(481, "Call/Transaction Does Not Exist", data, dl, "dialog-method")
+    }
     let mut other_app_raw = app_gateway_call(msg, ip, port, tr, "request")
     let mut other_app_id = app_gateway_request_id_for(msg, "request")
     let mut other_app_action = app_gateway_action(other_app_raw, other_app_id, 0)

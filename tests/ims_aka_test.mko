@@ -1,0 +1,53 @@
+// SIP AKA gate tests. These exercise the worker-side cache boundary only;
+// the HSS remains responsible for generating the AKA vector.
+pull . "../main.mko"
+
+fn ims_aka_test_register(auth: string) -> string {
+    return "REGISTER sip:example.com SIP/2.0\r\n" +
+        "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-aka-test\r\n" +
+        "From: <sip:alice@example.com>;tag=aka1\r\n" +
+        "To: <sip:alice@example.com>\r\n" +
+        "Call-ID: aka-test@example.com\r\n" +
+        "CSeq: 1 REGISTER\r\n" +
+        auth +
+        "Contact: <sip:alice@192.0.2.10>\r\n" +
+        "Content-Length: 0\r\n\r\n"
+}
+
+fn ims_aka_test_auth(response: string, nonce: string) -> string {
+    return "Authorization: Digest username=\"alice@example.com\", realm=\"example.com\", nonce=\"" + nonce + "\", uri=\"sip:example.com\", response=\"" + response + "\", algorithm=AKAv1-MD5, qop=auth, nc=00000001, cnonce=\"0a4f113b\"\r\n"
+}
+
+fn TestIMS_AKAInputGuards() {
+    assert_eq(ims_aka_hex_ok("aabbccdd"), 1)
+    assert_eq(ims_aka_hex_ok("aabbc"), 0)
+    assert_eq(ims_aka_hex_ok("zz"), 0)
+    assert_eq(ims_aka_nonce_ok("nonce-value-123456"), 1)
+    assert_eq(ims_aka_nonce_ok("nonce-value-123\r\nX-Evil: 1"), 0)
+    assert_eq(ims_aka_identity_ok("alice@example.com", 1024), 1)
+    assert_eq(ims_aka_identity_ok("alice|example.com", 1024), 0)
+}
+
+fn TestIMS_AKAReplayAndExpiry() {
+    let cache = cmap_new()
+    let nonce = "nonce-value-123456"
+    let private_identity = "alice@example.com"
+    let public_identity = "sip:alice@example.com"
+    let key = ims_aka_cache_key(nonce, private_identity)
+    let _ = bounded_cache_pair_set(cache, "ims_aka_seq", "ims_aka_ring|", key, "aabbccdd", mono_ms(), 65536)
+    let ha1 = sip_md5_hex("alice@example.com:example.com:aabbccdd")
+    let response = digest_response_ha1_qop(ha1, "REGISTER", "sip:example.com", nonce, "00000001", "0a4f113b", "auth")
+    let first = ims_aka_test_register(ims_aka_test_auth(response, nonce))
+    assert_eq(ims_aka_response_valid(first, len(first), cache, public_identity, private_identity, "example.com"), 1)
+    assert_eq(ims_aka_response_valid(first, len(first), cache, public_identity, private_identity, "example.com"), 0)
+    let wrong = ims_aka_test_register(ims_aka_test_auth("00000000000000000000000000000000", nonce))
+    assert_eq(ims_aka_response_valid(wrong, len(wrong), cache, public_identity, private_identity, "example.com"), 0)
+}
+
+fn TestIMS_AKAMissingVectorAndMalformedAuth() {
+    let cache = cmap_new()
+    let msg = ims_aka_test_register(ims_aka_test_auth("00000000000000000000000000000000", "nonce-value-123456"))
+    assert_eq(ims_aka_response_valid(msg, len(msg), cache, "sip:alice@example.com", "alice@example.com", "example.com"), 2)
+    let malformed = ims_aka_test_register("Authorization: Digest username=\"alice@example.com\", algorithm=AKAv1-MD5, qop=auth\r\n")
+    assert_eq(ims_aka_response_valid(malformed, len(malformed), cache, "sip:alice@example.com", "alice@example.com", "example.com"), 0)
+}

@@ -128,7 +128,7 @@ fn module_gateway_call(msg: string, ip: string, port: int, tr: string, event: st
         + "\"message\":\"" + app_json_escape(app_cap(msg, 65535)) + "\","
         + "\"payload\":\"" + app_json_escape(payload) + "\""
         + "}"
-    let signed = body[0:len(body) - 1] + ",\"signature\":\"" + sha256(token + "|" + module_gateway_mac_input(msg, ip, port, tr, event, module, operation, payload, request_id)) + "\"}"
+    let signed = body[0:len(body) - 1] + ",\"signature\":\"" + sha256("madis.module.v2|" + sha256(token) + "|" + sha256(module_gateway_mac_input(msg, ip, port, tr, event, module, operation, payload, request_id))) + "\"}"
     let response = app_gateway_http_post_ca(url, token, signed, module_gateway_timeout_ms(), env_get_or("SIP_MODULE_CA", ""))
     if len(response) == 0 {
         if module_gateway_fail_closed() == 1 { return "__MODULE_FAIL__" }

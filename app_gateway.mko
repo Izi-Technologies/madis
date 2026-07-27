@@ -232,7 +232,7 @@ fn app_gateway_call(msg: string, ip: string, port: int, tr: string, event: strin
     let token = env_get_or("SIP_APP_TOKEN", "")
     let request_id = app_gateway_request_id(msg, event)
     let payload = app_gateway_event(msg, ip, port, tr, event, request_id)
-    let signature = sha256(token + "|" + app_gateway_event_mac_input(msg, ip, port, tr, event, request_id))
+    let signature = sha256("madis.sip.event.v2|" + sha256(token) + "|" + sha256(app_gateway_event_mac_input(msg, ip, port, tr, event, request_id)))
     let request = payload[0:len(payload) - 1] + ",\"signature\":\"" + signature + "\"}"
     let response = app_gateway_http_post(url, token, request, app_gateway_timeout_ms())
     if len(response) == 0 {
@@ -254,7 +254,19 @@ fn app_gateway_command_signature(raw: string, token: string, request_id: string)
     let module = json_get_string(raw, "module")
     let operation = json_get_string(raw, "operation")
     let payload = json_get_string(raw, "payload")
-    return sha256(token + "|" + request_id + "|" + action + "|" + target + "|" + string(status) + "|" + reason + "|" + set_headers + "|" + add_headers + "|" + remove_headers + "|" + body + "|" + module + "|" + operation + "|" + payload)
+    let canonical = request_id + "|" + action + "|" + target + "|" + string(status) + "|" + reason + "|" + set_headers + "|" + add_headers + "|" + remove_headers + "|" + body + "|" + module + "|" + operation + "|" + payload
+    return sha256("madis.sip.command.v2|" + sha256(token) + "|" + sha256(canonical))
+}
+
+fn app_gateway_signature_equal(actual: string, expected: string) int {
+    if len(actual) == 0 || len(actual) != len(expected) { return 0 }
+    let mut diff = 0
+    let mut i = 0
+    while i < len(actual) {
+        diff = diff | (int(actual[i]) ^ int(expected[i]))
+        i = i + 1
+    }
+    return if diff == 0 { 1 } else { 0 }
 }
 
 fn app_gateway_text_safe(value: string, max: int) -> int {
@@ -352,7 +364,7 @@ fn app_gateway_command_valid_token(raw: string, request_id: string, for_response
     if not str_eq(json_get_string(raw, "schema"), "madis.sip.command.v1") { return 0 }
     if not str_eq(json_get_string(raw, "request_id"), request_id) { return 0 }
     let signature = json_get_string(raw, "signature")
-    if len(signature) != 64 || not str_eq(signature, app_gateway_command_signature(raw, token, request_id)) { return 0 }
+    if len(signature) != 64 || app_gateway_signature_equal(signature, app_gateway_command_signature(raw, token, request_id)) == 0 { return 0 }
     let action = str_to_lower(str_trim_space(json_get_string(raw, "action")))
     if str_eq(action, "continue") || str_eq(action, "drop") { }
     else {

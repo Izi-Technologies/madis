@@ -37,12 +37,17 @@ The installer provisions PostgreSQL state, systemd units, the SIP worker, the st
 For a local Docker deployment:
 
 ```sh
+export MADIS_DB_PASS='replace-with-a-random-database-password'
+export MADIS_ADMIN_TOKEN='replace-with-a-random-admin-token'
+export MADIS_CARRIER_API_TOKEN='replace-with-a-random-carrier-token'
+export MADIS_CONTROL_API_TOKEN='replace-with-a-random-control-write-token'
+export MADIS_CONTROL_API_READ_TOKEN='replace-with-a-random-control-read-token'
 docker compose up -d --build
 curl -fsS http://127.0.0.1:8080/readyz
 curl -fsS http://127.0.0.1:8080/healthz
 ```
 
-The compose service runs the SIP worker and its internal HTTP endpoint. It does not start the standalone WebUI; build and run `admin/main.mko` separately when browser administration is needed. The compose defaults are for local testing, not a public deployment.
+The Compose file requires these secrets and binds the worker HTTP and PostgreSQL ports to loopback. It runs the SIP worker, not the standalone WebUI; build and run `admin/main.mko` separately when browser administration is required. Compose remains a local-development profile, not a public deployment.
 
 ## Documentation map
 
@@ -57,6 +62,7 @@ The compose service runs the SIP worker and its internal HTTP endpoint. It does 
 | Build the WebUI | [`admin/README.md`](admin/README.md) |
 | Add live SIP applications or external modules | [`docs/modules.md`](docs/modules.md) |
 | Use Diameter, IMS, or SS7 integration contracts | [`api/diameter.md`](api/diameter.md), [`api/ims-diameter.md`](api/ims-diameter.md) |
+| Plan the IMS implementation | [`docs/ims-roadmap.md`](docs/ims-roadmap.md) |
 | Review deployment and protocol boundaries | [`PRODUCTION.md`](PRODUCTION.md), [`RFC_COMPLIANCE.md`](RFC_COMPLIANCE.md) |
 
 ## Machine APIs
@@ -132,6 +138,10 @@ MAKO_BIN=mako MAKO_RUNTIME=/path/to/mako/runtime \
 
 ## Integration boundaries
 
+For the bounded IMS session path, established-dialog re-INVITEs follow recorded SIP dialog/Route state before role selection or new-call policy; this does not make Madis a complete IMS dialog or service-role implementation.
+
+Transparent in-dialog PRACK and UPDATE forwarding is supported for early and confirmed dialogs; the proxy validates tracked RSeq/RAck state but does not generate reliable provisional responses or claim endpoint-level conformance.
+
 Madis owns SIP transaction, dialog, registration, routing, and transport state. External services own their application frameworks, tenant authorization, rating, invoices, durable business state, media plane, HSS/UDM, and SS7 gateway behavior.
 
 | Area | Madis provides | External system remains responsible for |
@@ -139,7 +149,7 @@ Madis owns SIP transaction, dialog, registration, routing, and transport state. 
 | Billing | CDRs, durable outbox, idempotent acknowledgement, optional preauthorization | Rating, ledger, invoicing, settlement, tax, and tenant business rules |
 | Media | RTPEngine control messages and SDP hooks | RTP, ICE, DTLS-SRTP, codecs, recording, and media policy |
 | Diameter | RFC 6733 framing, RFC 8506 credit control, selected Cx/Sh builders | General relay, peer scheduler, HSS/UDM, quota timers, and carrier-specific conformance |
-| IMS | Cx/Sh wire contracts and optional Cx REGISTER authorization | P-/I-/S-CSCF, HSS/UDM, TAS/MMTel, PCRF/PCF, and the complete IMS core |
+| IMS | Cx/Sh wire contracts, bounded P-/I-/S-CSCF REGISTER and initial-INVITE role routing, optional Cx UAR/SAR/LIR authorization, optional Cx MAR/MAA-backed AKAv1-MD5 REGISTER, and optional HTTPS subscriber authorization | HSS/UDM and AKA generation, TAS/MMTel, PCRF/PCF, full dialog/service-role behavior, and the complete IMS core |
 | SS7/SIGTRAN | Versioned M3UA/SCCP/ISUP/TCAP envelope | Native M3UA/SCCP/ISUP/TCAP termination and gateway operations |
 | Applications/modules | Signed, bounded HTTP contracts and command validation | Application logic, long-running jobs, model/media workers, and business persistence |
 

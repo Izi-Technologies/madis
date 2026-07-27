@@ -54,14 +54,14 @@ Use long, random values for every token. The installer generates these credentia
 
 ## Worker HTTP and WebUI
 
-The worker exposes local infrastructure endpoints such as `/healthz`, `/readyz`, `/metrics`, `/state`, and `POST /reload` on `SIP_ADMIN_PORT`. Protect this listener with network policy. If `SIP_ADMIN_TOKEN` is set, authenticated worker requests require that bearer token.
+The worker exposes local infrastructure endpoints such as `/healthz`, `/readyz`, `/metrics`, `/state`, and `POST /reload` on `SIP_ADMIN_PORT`. `SIP_ADMIN_TOKEN` must be a 16–512 character bearer token; worker requests fail closed when it is missing or invalid. Keep this listener protected by network policy.
 
 The standalone WebUI serves `/admin/login`, browser pages, WebSocket live updates, and the machine API under `/admin/api/v1/`.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `SIP_ADMIN_PORT` | Installer `9090` | Worker-local HTTP port. Set to `0` only when the worker HTTP surface is intentionally disabled. |
-| `SIP_ADMIN_TOKEN` | Empty | Bearer token for protected worker HTTP requests and WebUI-to-worker probes. |
+| `SIP_ADMIN_TOKEN` | Required | 16–512 character bearer token for worker HTTP requests and WebUI-to-worker probes. |
 | `SIP_METRICS_HOST` | `127.0.0.1` | Worker host targeted by the WebUI. |
 | `SIP_METRICS_PORT` | `9090` in the installer layout | Worker port targeted by the WebUI. |
 | `ADMIN_BIND` | `127.0.0.1` | Standalone WebUI bind address. |
@@ -70,7 +70,7 @@ The standalone WebUI serves `/admin/login`, browser pages, WebSocket live update
 | `ADMIN_SESSION_TTL_SECS` | `86400` | WebUI session lifetime, capped by the implementation. |
 | `ADMIN_LOGIN_MAX_FAILS` | `5` | Failed-login threshold. |
 | `ADMIN_LOGIN_LOCK_SECS` | `900` | Login lockout period. |
-| `ADMIN_METRICS_TOKEN` | Empty | Optional token for machine-only Prometheus/statistics proxy routes. |
+| `ADMIN_METRICS_TOKEN` | Empty | Optional 16–512 character bearer token for machine-only Prometheus/statistics proxy routes; query-string tokens are rejected. |
 
 Terminate public HTTPS and WebSocket traffic in nginx, Caddy, HAProxy, or an equivalent edge. Preserve `Host`, `Origin`, and WebSocket upgrade headers. Browser POSTs use an `Origin`/`Host` check; origin-less machine requests remain supported.
 
@@ -97,8 +97,11 @@ Terminate public HTTPS and WebSocket traffic in nginx, Caddy, HAProxy, or an equ
 | `SIP_TIMER_L_MS` | `32000` | Server 2xx retention bound. |
 | `SIP_MAX_REG_EXPIRES` | `3600` | Maximum registration expiry in seconds. |
 | `SIP_MIN_EXPIRES` | `60` | Minimum accepted registration expiry in seconds. |
+
 | `SIP_CONFIG_FILE` | Empty | Watched path; touching it triggers the documented configuration reload path. |
 | `SIP_CRASH_REPORT` | Empty | Optional crash-reporting configuration. |
+
+Cluster INVITE fallback routes only through live `registration_bindings` rows whose `expires_at` and owning-node heartbeat are current. The legacy `registrations` table is not authoritative for active remote routing, so expired contacts fail closed.
 
 ## API credentials and live integrations
 
@@ -148,6 +151,22 @@ B2BUA state is bounded in memory and owned by the SIP worker. The control API ch
 | `SIP_CHARGING_FAIL_OPEN=1` | `0` | Explicitly allow an authorization dependency failure to proceed. This trades revenue protection for availability. |
 
 Post-call outbox failures do not change a completed SIP dialog. Initial preauthorization is fail-closed unless `SIP_CHARGING_FAIL_OPEN=1` is explicitly set.
+
+## IMS subscriber authorization
+
+Set `SIP_IMS_SUBSCRIBER_URL` to enable the optional fail-closed HTTPS subscriber authorization contract. Configure `SIP_IMS_SUBSCRIBER_TOKEN`, and optionally `SIP_IMS_SUBSCRIBER_CA` and `SIP_IMS_SUBSCRIBER_TIMEOUT_MS`. The service owns IMS identities and AKA material; Madis only sends a bounded request and accepts a matching `allow` response. If both this adapter and `SIP_IMS_CX=1` are enabled, both gates must authorize REGISTER. See [`../api/ims-subscriber.md`](../api/ims-subscriber.md).
+
+To use HSS-provided SIP AKA vectors, set `SIP_IMS_CX=1` and `SIP_IMS_AKA=1`. The current implementation uses Cx MAR/MAA and accepts `SIP_IMS_AKA_SCHEME=Digest-AKAv1-MD5` (the default). It fails closed when the HSS is unavailable, keeps only XRES in a short-lived bounded cache, derives the RFC 3310 Digest response, rejects stale or replayed credentials, and requires the subscriber service’s assigned S-CSCF to match the configured server. It does not generate or persist Milenage/TUAK secrets. Enable this only after the selected HSS/UE profile has been interoperability-tested.
+
+For explicit REGISTER and initial-session role behavior, set `SIP_IMS_ROLE=scscf` for local S-CSCF processing (the default), `SIP_IMS_ROLE=pcscf` with `SIP_IMS_PCSCF_NEXT_HOP=sip:icscf.example.com`, or `SIP_IMS_ROLE=icscf` with `SIP_IMS_ICSCF_NEXT_HOP=sip:scscf.example.com`. Set `SIP_IMS_SESSION=1` to require an active REGISTER binding for S-CSCF-originated INVITEs. With `SIP_IMS_CX=1`, I-CSCF uses Cx LIR/LIA for the selected S-CSCF and fails closed if the HSS does not return a valid target. P-/I-CSCF roles forward initial REGISTER and INVITE requests and do not write local registrations; in-dialog requests follow SIP Route/dialog state.
+
+For `SIP_IMS_SESSION=1`, the active-binding requirement applies to both the caller and destination during an initial local S-CSCF INVITE. A missing caller binding returns 403; a missing destination binding returns 404 before charging, application, or contact routing. The default remains `0` for compatibility with non-IMS SIP deployments.
+
+With `SIP_IMS_CX=1`, the HSS UAA must return a `Server-Name` exactly matching `SIP_IMS_SERVER_NAME`; missing or mismatched assignment fails REGISTER before SAR and no local binding is written.
+
+Cx SAR receives `REGISTRATION` for a new binding, `RE_REGISTRATION` for a refresh of an active binding, and `USER_DEREGISTRATION` for `Contact: *` or an explicit `expires=0` removal. Mixed or malformed Contact lists remain subject to the normal SIP validation path.
+
+PRACK and UPDATE are forwarded only for an existing early or confirmed dialog. Forked early dialogs use the response To-tag to select the matching downstream target. Madis validates PRACK against tracked RSeq/RAck state, but does not generate reliable provisional responses or claim endpoint-level conformance.
 
 ## Diameter and IMS
 

@@ -142,6 +142,14 @@ Typical responses are `200` for reads/state changes, `201` for creates, `202` fo
 
 Put the standalone WebUI behind an HTTPS reverse proxy, preserve `Host` and `Origin` for browser requests, and never expose bearer tokens in browser code. See [`../docs/operations.md`](../docs/operations.md) for service layout and [`../docs/integrations.md`](../docs/integrations.md) for application patterns.
 
+## IMS subscriber authorization
+
+The optional HTTPS IMS subscriber authorization contract is documented in [`ims-subscriber.md`](ims-subscriber.md) and validated by [`ims-subscriber.schema.json`](ims-subscriber.schema.json). It is a REGISTER authorization boundary, not an HSS/UDM implementation.
+
+Cx MAA authentication-data extraction is documented in [`ims-diameter.md`](ims-diameter.md) and validated by [`ims-aka-vector.schema.json`](ims-aka-vector.schema.json). The envelope is opaque and is not a local AKA implementation.
+
+When `SIP_IMS_AKA=1` and `SIP_IMS_CX=1`, the SIP worker can use that Cx vector boundary for the selected `Digest-AKAv1-MD5` REGISTER profile. HSS/UDM remains responsible for AKA generation, subscriber secrets, and interoperability with the UE.
+
 ## What remains external
 
 Madis stores the SIP state needed to route calls and deliver events. The external application remains the source of truth for tenants, products, tariffs, invoices, ledgers, tax, settlement, long-running jobs, and business-specific JSON schemas.

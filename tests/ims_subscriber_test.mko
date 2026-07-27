@@ -1,0 +1,41 @@
+// IMS subscriber authorization contract tests. These use pure builders and
+// validators; no subscriber service or network connection is required.
+pull . "../main.mko"
+
+fn ims_subscriber_test_request() -> string {
+    return ims_subscriber_authorize_request("sip:alice@example.com", "alice@example.com", "visited.example", "sip:scscf.example.com")
+}
+
+fn ims_subscriber_test_response(decision: string) -> string {
+    let request = ims_subscriber_test_request()
+    let request_id = json_get_string(request, "request_id")
+    return "{\"schema\":\"" + ims_subscriber_schema() + "\",\"operation\":\"authorize-register\",\"request_id\":\"" + request_id + "\",\"public_identity\":\"sip:alice@example.com\",\"private_identity\":\"alice@example.com\",\"decision\":\"" + decision + "\",\"assigned_server_name\":\"sip:scscf.example.com\"}"
+}
+
+fn TestIMSSubscriberAuthorizationContract() {
+    let request = ims_subscriber_test_request()
+    assert_eq_str(json_get_string(request, "schema"), "madis.ims.subscriber.authorization.v1")
+    assert_eq_str(json_get_string(request, "operation"), "authorize-register")
+    assert_eq_str(json_get_string(request, "public_identity"), "sip:alice@example.com")
+    assert_eq_str(json_get_string(request, "private_identity"), "alice@example.com")
+    assert_eq(ims_subscriber_response_allowed(ims_subscriber_test_response("allow"), json_get_string(request, "request_id"), "sip:alice@example.com", "alice@example.com", "sip:scscf.example.com"), 1)
+}
+
+fn TestIMSSubscriberAuthorizationFailsClosed() {
+    let request = ims_subscriber_test_request()
+    let request_id = json_get_string(request, "request_id")
+    assert_eq(ims_subscriber_response_allowed(ims_subscriber_test_response("deny"), request_id, "sip:alice@example.com", "alice@example.com", "sip:scscf.example.com"), 0)
+    assert_eq(ims_subscriber_response_allowed(ims_subscriber_test_response("allow"), request_id, "sip:bob@example.com", "alice@example.com", "sip:scscf.example.com"), 0)
+    assert_eq(ims_subscriber_response_allowed("", request_id, "sip:alice@example.com", "alice@example.com", "sip:scscf.example.com"), 0)
+    assert_eq(ims_subscriber_response_allowed("{\"schema\":\"madis.ims.subscriber.authorization.v1\",\"decision\":\"allow\"}", request_id, "sip:alice@example.com", "alice@example.com", "sip:scscf.example.com"), 0)
+    let mismatched = ims_subscriber_test_response("allow")
+    assert_eq(ims_subscriber_response_allowed(mismatched, request_id, "sip:alice@example.com", "alice@example.com", "sip:other-scscf.example.com"), 0)
+}
+
+fn TestIMSSubscriberRequestBounds() {
+    assert_eq_str(ims_subscriber_authorize_request("", "alice@example.com", "visited.example", "sip:scscf.example.com"), "")
+    assert_eq_str(ims_subscriber_authorize_request("sip:alice@example.com", "alice\r@example.com", "visited.example", "sip:scscf.example.com"), "")
+    assert_eq(ims_subscriber_token_ok("0123456789abcdef"), 1)
+    assert_eq(ims_subscriber_token_ok("0123456789abc\rdef"), 0)
+    assert_eq(ims_subscriber_token_ok("0123456789 abcdef"), 0)
+}
