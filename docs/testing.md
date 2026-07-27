@@ -21,6 +21,8 @@ The checks are deterministic contract and regression tests. They do not establis
 
 ## Focused tests
 
+`tests/ims_lab_test.mko` is a deterministic two-subscriber HSS/Cx test double. It exercises real MAR/MAA message construction, Cx correlation, AKA response verification, replay rejection, registration bindings, and the S-CSCF session gate. It is not a substitute for interoperability testing against an external HSS/UDM, UE, or media system.
+
 | Test | Coverage |
 | --- | --- |
 | `tests/admin_http_test.mko` | HTTP framing, cookie boundaries, form decoding, and Origin checks. |
@@ -30,7 +32,8 @@ The checks are deterministic contract and regression tests. They do not establis
 | `tests/b2bua_test.mko` | Independent B2BUA legs, dialog translation, cleanup, and header safety. |
 | `tests/carrier_contract_test.mko` | Billing identity/escaping, control API routes, validation, and resource allowlists. |
 | `tests/diameter_codec_test.mko` | Diameter headers, AVPs, grouping, malformed input, Cx/Sh correlation, and credit-control fields. |
-| `tests/proxy_state_test.mko` | Registration, transactions, forks, ACK/CANCEL/BYE, routes, and state limits. |
+| `tests/proxy_state_test.mko` | Registration, transaction replay, INVITE/CANCEL isolation, dialog phase classification/teardown, forks, ACK/CANCEL/BYE, routes, and state limits. |
+| `tests/ims_roles_test.mko` | IMS role boundaries, initial versus in-dialog classification, To-tag-specific PRACK/UPDATE target selection, and bounded RSeq/RAck validation. |
 | `tests/rfc3261_abnf_test.mko` | Compact headers, quoted values, continuation, Via grammar, and Proxy-Require. |
 | `tests/rfc3263_test.mko` | NAPTR/SRV ordering, transport selection, IPv6 targets, and port validation. |
 

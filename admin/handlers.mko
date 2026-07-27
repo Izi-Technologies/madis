@@ -313,7 +313,9 @@ fn handle_api(path: string, fields: CMap, role: string, user: string, db: SqlDB,
     }
     if str_eq(path, "/admin/api/admins") {
         if check_role("super_admin", role) == 0 { return "FORBIDDEN" }
-        let _ = sql_exec_str4(db, "INSERT INTO admin_users (username, password_hash, role) VALUES ($1, $2, $3)", form_get(fields, "username"), sha256(form_get(fields, "password")), form_get(fields, "role"), "")
+        let password_hash = admin_password_hash(form_get(fields, "password"))
+        if len(password_hash) == 0 { return "<div class=\"alert err\">Password is required.</div>" + f_admins(db, db_ok) }
+        let _ = sql_exec_str4(db, "INSERT INTO admin_users (username, password_hash, role) VALUES ($1, $2, $3)", form_get(fields, "username"), password_hash, form_get(fields, "role"), "")
         return f_admins(db, db_ok)
     }
     // Clear stuck live dialog(s) via metrics API on the SIP host
@@ -344,10 +346,11 @@ fn handle_api(path: string, fields: CMap, role: string, user: string, db: SqlDB,
             return "<div class=\"alert err\">New password and confirmation do not match.</div>" + f_account()
         }
         let stored = sql_query_str(db, "SELECT password_hash FROM admin_users WHERE username = $1 AND enabled = true", user)
-        if not str_eq(stored, sha256(oldp)) {
+        if admin_password_valid(stored, oldp) == 0 {
             return "<div class=\"alert err\">Current password is incorrect.</div>" + f_account()
         }
-        let _ = sql_exec_str4(db, "UPDATE admin_users SET password_hash = $2 WHERE username = $1", user, sha256(newp), "", "")
+        let new_hash = admin_password_hash(newp)
+        let _ = sql_exec_str4(db, "UPDATE admin_users SET password_hash = $2 WHERE username = $1", user, new_hash, "", "")
         // Invalidate other sessions for this user
         let _ = sql_exec_str4(db, "DELETE FROM admin_sessions WHERE username = $1", user, "", "", "")
         return "<div class=\"alert ok\">Password updated. Other sessions were signed out.</div>" + f_account()

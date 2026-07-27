@@ -27,12 +27,12 @@ Keep the admin listener private and terminate public HTTPS/WSS in nginx, Caddy, 
 | `SIP_DB_URL` | PostgreSQL connection string. |
 | `ADMIN_BIND`, `ADMIN_PORT` | WebUI bind address and port. |
 | `SIP_METRICS_HOST`, `SIP_METRICS_PORT` | Worker HTTP endpoint used for live metrics/state. |
-| `SIP_ADMIN_TOKEN` | Optional bearer token forwarded to protected worker probes. |
+| `SIP_ADMIN_TOKEN` | Required 16–512 character bearer token forwarded to protected worker probes. |
 | `SIP_ADMIN_PASSWORD` | Bootstrap password when no admin user exists. |
 | `ADMIN_SECURE_COOKIE` | Secure session cookie behavior; keep enabled for HTTPS. |
 | `ADMIN_SESSION_TTL_SECS` | Browser session lifetime. |
 | `ADMIN_LOGIN_MAX_FAILS`, `ADMIN_LOGIN_LOCK_SECS` | Login failure controls. |
-| `ADMIN_METRICS_TOKEN` | Optional token for machine-only metrics/statistics proxy routes. |
+| `ADMIN_METRICS_TOKEN` | Optional 16–512 character bearer token for machine-only metrics/statistics proxy routes; query-string tokens are rejected. |
 
 ## WebUI coverage
 

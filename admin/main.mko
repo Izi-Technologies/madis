@@ -5,6 +5,7 @@ import "./pages.mko"
 import "./http.mko"
 import "./handlers.mko"
 pull . "../carrier_api.mko"
+pull . "../ims_subscriber_service.mko"
 pull . "../control_resources.mko"
 
 fn main() {
@@ -14,6 +15,7 @@ fn main() {
     if len(db_url) > 0 {
         db = sql_open_postgres(db_url)
         db_ok = 1
+        let _ = ims_subscriber_service_bootstrap(db)
         let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS admin_users (id SERIAL PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, role TEXT DEFAULT 'viewer', enabled BOOLEAN DEFAULT true, created_at TIMESTAMP DEFAULT NOW())")
         let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS admin_sessions (token TEXT PRIMARY KEY, username TEXT NOT NULL, role TEXT NOT NULL, created_at TIMESTAMP DEFAULT NOW())")
         let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS billing_events (event_id TEXT PRIMARY KEY, call_id TEXT NOT NULL DEFAULT '', event_type TEXT NOT NULL, payload_json JSONB NOT NULL, occurred_at TIMESTAMP DEFAULT NOW(), available_at TIMESTAMP DEFAULT NOW(), delivered_at TIMESTAMP, attempts INT NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '', CONSTRAINT billing_event_id_size CHECK (char_length(event_id) BETWEEN 16 AND 128), CONSTRAINT billing_event_payload_size CHECK (octet_length(payload_json::text) <= 65536))")
@@ -32,7 +34,10 @@ fn main() {
             // Bootstrap only when SIP_ADMIN_PASSWORD is set — never hardcode admin/admin.
             let init = env_get_or("SIP_ADMIN_PASSWORD", "")
             if len(init) > 0 {
-                let _ = sql_exec_str4(db, "INSERT INTO admin_users (username, password_hash, role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING", "admin", sha256(init), "super_admin", "")
+            let password_hash = admin_password_hash(init)
+            if len(password_hash) > 0 {
+                let _ = sql_exec_str4(db, "INSERT INTO admin_users (username, password_hash, role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING", "admin", password_hash, "super_admin", "")
+            }
                 slog("  Bootstrap admin created from SIP_ADMIN_PASSWORD")
             } else {
                 slog("  WARNING: no admin users — set SIP_ADMIN_PASSWORD and restart to bootstrap")
@@ -121,10 +126,14 @@ fn main() {
                                 if login_is_locked(login_fails, u) == 1 {
                                     resp = http_resp(200, "text/html", html_login_msg("Too many failed attempts. Wait a few minutes and try again."), "")
                                 } else {
-                                    let p = sha256(form_get(fields, "password"))
-                                    if db_ok == 1 {
-                                        let stored = sql_query_str(db, "SELECT password_hash FROM admin_users WHERE username = $1 AND enabled = true", u)
-                                        if str_eq(stored, p) {
+                            let password = form_get(fields, "password")
+                            if db_ok == 1 {
+                                let stored = sql_query_str(db, "SELECT password_hash FROM admin_users WHERE username = $1 AND enabled = true", u)
+                                if admin_password_valid(stored, password) == 1 {
+                                    if admin_password_is_modern(stored) == 0 {
+                                        let migrated = admin_password_hash(password)
+                                        if len(migrated) > 0 { let _ = sql_exec_str4(db, "UPDATE admin_users SET password_hash = $2 WHERE username = $1", u, migrated, "", "") }
+                                    }
                                             login_clear_fails(login_fails, u)
                                             let role = sql_query_str(db, "SELECT role FROM admin_users WHERE username = $1", u)
                                             let token = session_token_new()
@@ -161,18 +170,13 @@ fn main() {
 
                         // Prometheus scrape without browser session:
                         //   Authorization: Bearer $ADMIN_METRICS_TOKEN
-                        //   or GET /admin/api/prom?token=$ADMIN_METRICS_TOKEN
+                        //   (query-string tokens are deliberately rejected)
                         if len(resp) == 0 {
                             if str_eq(method, "GET") {
                                 let mtok = env_get_or("ADMIN_METRICS_TOKEN", "")
-                                if len(mtok) > 0 {
-                                    let q = parse_query(raw, rl)
-                                    let qtok = query_val(q, "token")
+                                if len(mtok) >= 16 && len(mtok) <= 512 {
                                     let btok = parse_bearer(raw, rl)
-                                    let mut ok_tok = 0
-                                    if str_eq(btok, mtok) { ok_tok = 1 }
-                                    if str_eq(qtok, mtok) { ok_tok = 1 }
-                                    if ok_tok == 1 {
+                                    if admin_metrics_token_valid(btok, mtok) == 1 {
                                         if str_eq(path, "/admin/api/prom") {
                                             let body = fetch_metrics_path("/metrics")
                                             if len(body) == 0 {
@@ -207,7 +211,9 @@ fn main() {
                         // Machine API: bearer token only, never a browser
                         // session. This keeps carrier integrations independent
                         // of HTML cookies and CSRF semantics.
-                        let machine_kind = carrier_api_route(method, path)
+    let subscriber_service_resp = ims_subscriber_service_handle(db, db_ok, method, path, raw, rl)
+    if len(resp) == 0 && len(subscriber_service_resp) > 0 { resp = subscriber_service_resp }
+    let machine_kind = carrier_api_route(method, path)
                         if len(resp) == 0 && machine_kind > 0 {
                             let mut machine_auth = carrier_api_token_ok(raw, rl)
                             let mut control_scope = 0

@@ -1,0 +1,31 @@
+// IMS subscriber provider contract tests. These avoid PostgreSQL and exercise
+// the bounded/authenticated parts of the service boundary.
+pull . "../admin/http.mko"
+pull . "../admin/ui.mko"
+pull . "../admin/pages.mko"
+pull . "../carrier_api.mko"
+pull . "../control_resources.mko"
+pull . "../ims_subscriber_service.mko"
+
+fn ims_service_test_request() -> string {
+    return "POST /admin/api/v1/ims/subscriber/authorize HTTP/1.1\r\nHost: subscriber.example\r\nAuthorization: Bearer 0123456789abcdef\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}"
+}
+
+fn TestIMSSubscriberProviderTokenAndBounds() {
+    let raw = ims_service_test_request()
+    assert_eq(ims_service_token_ok(raw, len(raw), "0123456789abcdef"), 1)
+    assert_eq(ims_service_token_ok(raw, len(raw), "wrong-token-0123456"), 0)
+    assert_eq(ims_service_token_ok(str_replace(raw, "Bearer 0123456789abcdef", "Bearer 0123456789abc\rdef"), len(raw), "0123456789abcdef"), 0)
+    assert_eq(ims_service_json_request_ok(raw, len(raw)), 1)
+    assert_eq(ims_service_json_request_ok(str_replace(raw, "Content-Type: application/json", "Content-Type: text/plain"), len(raw)), 0)
+    assert_eq(ims_service_text_ok("sip:alice@example.com", 2048), 1)
+    assert_eq(ims_service_text_ok("alice\n@example.com", 1024), 0)
+}
+
+fn TestIMSSubscriberProviderResponseEnvelope() {
+    let response = ims_service_response("0123456789abcdef0123456789abcdef", "sip:alice@example.com", "alice@example.com", "allow", "", "sip:scscf.example.com", "{\"initial_filter_criteria\":[]}")
+    assert_eq_str(json_get_string(response, "schema"), "madis.ims.subscriber.authorization.v1")
+    assert_eq_str(json_get_string(response, "operation"), "authorize-register")
+    assert_eq_str(json_get_string(response, "decision"), "allow")
+    assert_eq_str(json_get_string(response, "assigned_server_name"), "sip:scscf.example.com")
+}

@@ -1,0 +1,192 @@
+// IMS CSCF role boundary tests. These exercise configuration validation and
+// fail-closed routing without opening a SIP socket or Diameter peer.
+pull . "../main.mko"
+
+fn TestIMSRoleNormalization() {
+    assert_eq_str(ims_role_normalize(""), "scscf")
+    assert_eq_str(ims_role_normalize(" P-CSCF "), "")
+    assert_eq_str(ims_role_normalize("pcscf"), "pcscf")
+    assert_eq_str(ims_role_normalize("ICSCF"), "icscf")
+    assert_eq_str(ims_role_normalize("scscf"), "scscf")
+    assert_eq_str(ims_role_normalize("hss"), "")
+}
+
+fn TestIMSRoleTargetValidation() {
+    assert_eq(ims_role_target_valid("sip:scscf.example.com"), 1)
+    assert_eq(ims_role_target_valid("sips:scscf.example.com;transport=tls"), 1)
+    assert_eq(ims_role_target_valid("udp://scscf.example.com"), 0)
+    assert_eq(ims_role_target_valid("sip:") , 0)
+    assert_eq(ims_role_target_valid("sip:scscf.example.com\r\nX-Evil: 1"), 0)
+    assert_eq(ims_role_target_valid("sip:scscf.\texample.com"), 0)
+    assert_eq(ims_role_target_valid(""), 0)
+}
+
+fn TestIMSRoleRoutingBoundary() {
+    assert_eq_str(ims_role_target_for("pcscf", "sip:icscf.example.com", "sip:unused.example.com"), "sip:icscf.example.com")
+    assert_eq_str(ims_role_target_for("icscf", "sip:unused.example.com", "sip:scscf.example.com"), "sip:scscf.example.com")
+    assert_eq_str(ims_role_target_for("scscf", "sip:unused.example.com", "sip:unused.example.com"), "")
+    assert_eq(ims_role_local_register("scscf"), 1)
+    assert_eq(ims_role_local_register("pcscf"), 0)
+    assert_eq(ims_role_local_register("bad"), 0)
+}
+
+fn TestIMSRoleSessionBoundary() {
+    assert_eq_str(ims_role_target_for("pcscf", "sip:icscf.example.com", ""), "sip:icscf.example.com")
+    assert_eq_str(ims_role_target_for("icscf", "", "sips:scscf.example.com;transport=tls"), "sips:scscf.example.com;transport=tls")
+    assert_eq_str(ims_role_target_for("scscf", "sip:unused.example.com", "sip:unused.example.com"), "")
+    assert_eq_str(ims_role_target_for("icscf", "", "sip:\r\nX-Evil: 1"), "")
+}
+
+fn TestIMSSessionOriginatorRegistrationGate() {
+    let _ = env_set("SIP_IMS_SESSION", "1")
+    let reg = cmap_new()
+    assert_eq(ims_session_originator_registered("scscf", reg, "alice@example.com"), 0)
+    let _ = registration_store(reg, "alice@example.com", "sip:alice@192.0.2.10:5060", "UDP", 300, "192.0.2.10", 5060)
+    assert_eq(ims_session_originator_registered("scscf", reg, "alice@example.com"), 1)
+    assert_eq(ims_session_originator_registered("scscf", reg, ""), 0)
+    assert_eq(ims_session_originator_registered("pcscf", reg, "alice@example.com"), 1)
+    let _ = registration_store(reg, "expired@example.com", "sip:expired@192.0.2.11:5060", "UDP", 0, "192.0.2.11", 5060)
+    assert_eq(ims_session_originator_registered("scscf", reg, "expired@example.com"), 0)
+    let _ = env_set("SIP_IMS_SESSION", "0")
+    assert_eq(ims_session_originator_registered("scscf", reg, "missing@example.com"), 1)
+}
+
+fn TestIMSSessionDestinationRegistrationGate() {
+    let _ = env_set("SIP_IMS_SESSION", "1")
+    let reg = cmap_new()
+    assert_eq_str(ims_session_destination_contact("scscf", reg, "bob@example.com"), "")
+    let _ = registration_store(reg, "bob@example.com", "sip:bob@192.0.2.11:5060", "UDP", 300, "192.0.2.11", 5060)
+    assert(str_contains(ims_session_destination_contact("scscf", reg, "bob@example.com"), "192.0.2.11"))
+    let _ = registration_store(reg, "expired@example.com", "sip:expired@192.0.2.12:5060", "UDP", 0, "192.0.2.12", 5060)
+    assert_eq_str(ims_session_destination_contact("scscf", reg, "expired@example.com"), "")
+    assert_eq_str(ims_session_destination_contact("pcscf", reg, "bob@example.com"), "")
+    let _ = env_set("SIP_IMS_SESSION", "0")
+    assert_eq_str(ims_session_destination_contact("scscf", reg, "missing@example.com"), "")
+}
+
+fn TestIMSInitialDialogClassification() {
+    let initial = "INVITE sip:b@example.com SIP/2.0\r\n"
+        + "To: <sip:b@example.com>\r\n"
+        + "From: <sip:a@example.com>;tag=from1\r\n"
+        + "Call-ID: dialog-classification\r\n"
+        + "CSeq: 1 INVITE\r\n"
+        + "Content-Length: 0\r\n\r\n"
+    let confirmed = str_replace(initial, "To: <sip:b@example.com>\r\n", "To: <sip:b@example.com>;tag=to1\r\n")
+    let missing_to = str_replace(initial, "To: <sip:b@example.com>\r\n", "")
+    assert_eq(ims_initial_dialog_request(initial, len(initial)), 1)
+    assert_eq(ims_initial_dialog_request(confirmed, len(confirmed)), 0)
+    assert_eq(ims_initial_dialog_request(missing_to, len(missing_to)), 0)
+}
+
+fn TestIMSEarlyDialogTargetSelection() {
+    let prack = "PRACK sip:b@example.com SIP/2.0\r\n"
+        + "To: <sip:b@example.com>;tag=early-b\r\n"
+        + "From: <sip:a@example.com>;tag=from1\r\n"
+        + "Call-ID: early-dialog\r\n"
+        + "CSeq: 2 PRACK\r\n"
+        + "Content-Length: 0\r\n\r\n"
+    let cache = cmap_new()
+    cmap_set(cache, "dialog_dst|early-dialog|early-b", "sip:uas-b.example.com")
+    cmap_set(cache, "dialog_dst|early-dialog", "sip:uas-default.example.com")
+    assert_eq_str(sip_dialog_target_for_request(prack, "early-dialog", "", cache), "sip:uas-b.example.com")
+    assert_eq_str(sip_dialog_target_for_request(prack, "early-dialog", "sip:route.example.com", cache), "sip:route.example.com")
+    assert_eq(ims_initial_dialog_request(prack, len(prack)), 0)
+}
+
+fn TestIMSReliableProvisionalPrackMatching() {
+    let provisional = "SIP/2.0 183 Session Progress\r\n"
+        + "Via: SIP/2.0/UDP 192.0.2.20:5060;branch=z9hG4bK-rel\r\n"
+        + "To: <sip:b@example.com>;tag=early-rel\r\n"
+        + "From: <sip:a@example.com>;tag=from1\r\n"
+        + "Call-ID: reliable-dialog\r\n"
+        + "CSeq: 1 INVITE\r\n"
+        + "Require: 100rel\r\n"
+        + "RSeq: 7\r\n"
+        + "Content-Length: 0\r\n\r\n"
+    let prack = "PRACK sip:b@example.com SIP/2.0\r\n"
+        + "To: <sip:b@example.com>;tag=early-rel\r\n"
+        + "From: <sip:a@example.com>;tag=from1\r\n"
+        + "Call-ID: reliable-dialog\r\n"
+        + "CSeq: 2 PRACK\r\n"
+        + "RAck: 7\t1\tINVITE\r\n"
+        + "Content-Length: 0\r\n\r\n"
+    let cache = cmap_new()
+    assert_eq_str(sip_header(provisional, "CSeq"), "1 INVITE")
+    let cseq_parts = sip_space_tokens("1 INVITE")
+    assert_eq(len(cseq_parts), 2)
+    assert_eq_str(cseq_parts[0], "1")
+    assert_eq(sip_cseq_number_value(provisional), 1)
+    assert_eq_str(sip_cseq_method_value(provisional), "INVITE")
+    assert_eq_str(sip_header(provisional, "RSeq"), "7")
+    assert_eq_str(sip_header(provisional, "Require"), "100rel")
+    let parsed_rseq = match parse_int("7") { Ok(v) => v, Err(_) => -1 }
+    assert_eq(parsed_rseq, 7)
+    assert_eq(sip_rseq_number_value(provisional), 7)
+    assert_eq(sip_header_token_present("100rel", "100rel"), 1)
+    assert_eq(sip_header_token_present(sip_header(provisional, "Require"), "100rel"), 1)
+    assert_eq(sip_relprov_record(provisional, cache), 1)
+    assert_eq_str(sip_header(prack, "RAck"), "7\t1\tINVITE")
+    let rack_parts = sip_space_tokens(sip_header(prack, "RAck"))
+    assert_eq(len(rack_parts), 3)
+    assert_eq_str(rack_parts[0], "7")
+    assert_eq_str(rack_parts[1], "1")
+    assert_eq_str(rack_parts[2], "INVITE")
+    let bad_rseq = str_replace(prack, "RAck: 7\t1\tINVITE", "RAck: 8 1 INVITE")
+    let bad_cseq = str_replace(prack, "RAck: 7\t1\tINVITE", "RAck: 7 2 INVITE")
+    assert_eq(sip_prack_matches_relprov(bad_rseq, cache), 0)
+    assert_eq(sip_prack_matches_relprov(bad_cseq, cache), 0)
+    assert_eq(sip_prack_matches_relprov(prack, cache), 1)
+    assert_eq(sip_prack_matches_relprov(prack, cache), 1)
+    assert_eq(sip_relprov_close(provisional, cache), 1)
+    assert_eq(sip_prack_matches_relprov(prack, cache), 0)
+
+    let no_require = str_replace(provisional, "Require: 100rel\r\n", "")
+    let no_require_cache = cmap_new()
+    assert_eq(sip_relprov_record(no_require, no_require_cache), 0)
+}
+
+fn TestIMSRelProvRecordOnly() {
+    let provisional = "SIP/2.0 183 Session Progress\r\n"
+        + "To: <sip:b@example.com>;tag=record-only\r\n"
+        + "From: <sip:a@example.com>;tag=from1\r\n"
+        + "Call-ID: record-only\r\n"
+        + "CSeq: 1 INVITE\r\n"
+        + "Require: 100rel\r\n"
+        + "RSeq: 7\r\n"
+        + "Content-Length: 0\r\n\r\n"
+    assert_eq(sip_relprov_record(provisional, cmap_new()), 1)
+}
+
+fn TestIMSRelProvMatchOnly() {
+    let provisional = "SIP/2.0 183 Session Progress\r\n"
+        + "To: <sip:b@example.com>;tag=match-only\r\n"
+        + "From: <sip:a@example.com>;tag=from1\r\n"
+        + "Call-ID: match-only\r\n"
+        + "CSeq: 1 INVITE\r\n"
+        + "Require: 100rel\r\n"
+        + "RSeq: 7\r\n"
+        + "Content-Length: 0\r\n\r\n"
+    let mut prack = str_replace(provisional, "SIP/2.0 183 Session Progress", "PRACK sip:b@example.com SIP/2.0")
+    prack = str_replace(prack, "Require: 100rel\r\n", "RAck: 7 1 INVITE\r\n")
+    prack = str_replace(prack, "CSeq: 1 INVITE", "CSeq: 2 PRACK")
+    let cache = cmap_new()
+    assert_eq(sip_relprov_record(provisional, cache), 1)
+    assert_eq(sip_prack_matches_relprov(prack, cache), 1)
+}
+
+fn TestIMSRelProvTabMatch() {
+    let provisional = "SIP/2.0 183 Session Progress\r\n"
+        + "To: <sip:b@example.com>;tag=tab-match\r\n"
+        + "From: <sip:a@example.com>;tag=from1\r\n"
+        + "Call-ID: tab-match\r\n"
+        + "CSeq: 1 INVITE\r\n"
+        + "Require: 100rel\r\n"
+        + "RSeq: 7\r\n"
+        + "Content-Length: 0\r\n\r\n"
+    let mut prack = str_replace(provisional, "SIP/2.0 183 Session Progress", "PRACK sip:b@example.com SIP/2.0")
+    prack = str_replace(prack, "Require: 100rel\r\n", "RAck: 7\t1\tINVITE\r\n")
+    prack = str_replace(prack, "CSeq: 1 INVITE", "CSeq: 2 PRACK")
+    let cache = cmap_new()
+    assert_eq(sip_relprov_record(provisional, cache), 1)
+    assert_eq(sip_prack_matches_relprov(prack, cache), 1)
+}

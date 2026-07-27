@@ -1,0 +1,109 @@
+// Explicit IMS CSCF role boundary for REGISTER.
+//
+// The worker remains one deployable unit, but REGISTER behavior is selected by
+// SIP_IMS_ROLE so access, interrogating, and serving responsibilities do not
+// silently collapse into the local registrar. P-CSCF and I-CSCF forward only
+// to operator-configured SIP targets. S-CSCF retains the local auth path.
+
+fn ims_role_normalize(value: string) -> string {
+    let role = str_to_lower(str_trim_space(value))
+    if len(role) == 0 { return "scscf" }
+    if str_eq(role, "pcscf") || str_eq(role, "icscf") || str_eq(role, "scscf") { return role }
+    return ""
+}
+
+// An INVITE without a To-tag creates a dialog. Once the peer has assigned a
+// To-tag, the request is an in-dialog re-INVITE and must not re-enter IMS role
+// selection or create a second originating session.
+fn ims_initial_dialog_request(msg: string, n: int) int {
+    let to = sip_hdr(msg, "To", n)
+    if len(to) == 0 { return 0 }
+    if len(sip_addr_tag(to)) == 0 { return 1 }
+    return 0
+}
+
+fn ims_role_target_valid(target: string) -> int {
+    let value = str_trim_space(target)
+    if len(value) == 0 || len(value) > 2048 { return 0 }
+    if str_index(value, "\r") >= 0 || str_index(value, "\n") >= 0 { return 0 }
+    let mut i = 0
+    while i < len(value) {
+        let c = int(value[i])
+        if c < 33 || c == 127 { return 0 }
+        i = i + 1
+    }
+    let low = str_to_lower(value)
+    if not str_has_prefix(low, "sip:") && not str_has_prefix(low, "sips:") { return 0 }
+    if len(value) <= 4 { return 0 }
+    return 1
+}
+
+fn ims_role_target_for(role: string, pcscf_target: string, icscf_target: string) -> string {
+    let normalized = ims_role_normalize(role)
+    let target = if str_eq(normalized, "pcscf") { pcscf_target } else if str_eq(normalized, "icscf") { icscf_target } else { "" }
+    if ims_role_target_valid(target) == 0 { return "" }
+    return str_trim_space(target)
+}
+
+fn ims_role_local_register(role: string) -> int {
+    return if str_eq(ims_role_normalize(role), "scscf") { 1 } else { 0 }
+}
+
+fn ims_role_configured() -> string {
+    return ims_role_normalize(env_get_or("SIP_IMS_ROLE", "scscf"))
+}
+
+fn ims_role_register_target(role: string, cache: CMap, peer_lock: Mutex, public_identity: string, visited_network: string) -> string {
+    let normalized = ims_role_normalize(role)
+    if str_eq(normalized, "pcscf") {
+        return ims_role_target_for(normalized, env_get_or("SIP_IMS_PCSCF_NEXT_HOP", ""), "")
+    }
+    if str_eq(normalized, "icscf") {
+        // With Cx enabled, LIR/LIA is the authoritative S-CSCF selection.
+        // Do not fall back to a static route after a failed HSS lookup.
+        if ims_cx_registration_enabled() == 1 {
+            let selected = ims_cx_lir_server(cache, peer_lock, public_identity, 1)
+            if ims_role_target_valid(selected) == 0 { return "" }
+            return selected
+        }
+        return ims_role_target_for(normalized, "", env_get_or("SIP_IMS_ICSCF_NEXT_HOP", ""))
+    }
+    return ""
+}
+
+fn ims_role_invite_target(role: string, cache: CMap, peer_lock: Mutex, public_identity: string) -> string {
+    let normalized = ims_role_normalize(role)
+    if str_eq(normalized, "pcscf") {
+        return ims_role_target_for(normalized, env_get_or("SIP_IMS_PCSCF_NEXT_HOP", ""), "")
+    }
+    if str_eq(normalized, "icscf") {
+        // A terminating request is selected with Originating-Request = 0.
+        // When Cx is enabled, a failed LIR is a hard routing failure.
+        if ims_cx_registration_enabled() == 1 {
+            let selected = ims_cx_lir_server(cache, peer_lock, public_identity, 0)
+            if ims_role_target_valid(selected) == 0 { return "" }
+            return selected
+        }
+        return ims_role_target_for(normalized, "", env_get_or("SIP_IMS_ICSCF_NEXT_HOP", ""))
+    }
+    return ""
+}
+
+fn ims_session_requested() int {
+    let value = str_to_lower(str_trim_space(env_get_or("SIP_IMS_SESSION", "0")))
+    return if str_eq(value, "1") || str_eq(value, "true") || str_eq(value, "yes") { 1 } else { 0 }
+}
+
+fn ims_session_originator_registered(role: string, reg: CMap, private_identity: string) -> int {
+    if ims_session_requested() == 0 { return 1 }
+    if ims_role_local_register(role) == 0 { return 1 }
+    if len(private_identity) == 0 || len(private_identity) > 1024 { return 0 }
+    return if len(registration_find(reg, private_identity)) > 0 { 1 } else { 0 }
+}
+
+fn ims_session_destination_contact(role: string, reg: CMap, public_identity: string) -> string {
+    if ims_session_requested() == 0 { return "" }
+    if ims_role_local_register(role) == 0 { return "" }
+    if len(public_identity) == 0 || len(public_identity) > 1024 { return "" }
+    return registration_find(reg, public_identity)
+}

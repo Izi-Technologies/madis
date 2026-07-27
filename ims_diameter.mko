@@ -222,6 +222,87 @@ fn ims_answer_success(request: string, response: string, application: int, comma
     return 0
 }
 
+fn ims_cx_lir_server_name(response: string) -> string {
+    let server_name = diameter_find_vendor_avp(response, 602, 10415)
+    if ims_text_ok(server_name, 2048) == 0 { return "" }
+    return server_name
+}
+
+fn ims_cx_lir_server_from_answer(request: string, response: string) -> string {
+    if ims_answer_success(request, response, ims_cx_application(), ims_cx_lir_command()) == 0 { return "" }
+    return ims_cx_lir_server_name(response)
+}
+
+fn ims_cx_uar_server_from_answer(request: string, response: string) -> string {
+    if ims_answer_success(request, response, ims_cx_application(), ims_cx_uar_command()) == 0 { return "" }
+    return ims_cx_lir_server_name(response)
+}
+
+fn ims_cx_uar_server_matches(request: string, response: string, expected_server_name: string) -> int {
+    if ims_text_ok(expected_server_name, 2048) == 0 { return 0 }
+    let assigned_server_name = ims_cx_uar_server_from_answer(request, response)
+    if len(assigned_server_name) == 0 { return 0 }
+    return if str_eq(assigned_server_name, expected_server_name) { 1 } else { 0 }
+}
+
+fn ims_cx_lir_server(cache: CMap, peer_lock: Mutex, public_identity: string, originating_request: int) -> string {
+    let request = ims_cx_lir(public_identity, originating_request)
+    if len(request) == 0 { return "" }
+    let response = ims_cx_exchange(cache, peer_lock, request, ims_cx_lir_command())
+    return ims_cx_lir_server_from_answer(request, response)
+}
+
+// Extract one real Cx MAA authentication-data item without interpreting the
+// AKA payload. The HSS owns Milenage/TUAK generation; Madis validates the
+// Diameter correlation and returns opaque fields for the next SIP-AKA layer.
+fn ims_hex_encode(value: string) -> string {
+    let digits = "0123456789abcdef"
+    let b = str_builder()
+    let mut i = 0
+    while i < len(value) {
+        let c = int(value[i])
+        let hi = c / 16
+        let lo = c - (hi * 16)
+        builder_write(b, digits[hi:hi + 1])
+        builder_write(b, digits[lo:lo + 1])
+        i = i + 1
+    }
+    return builder_string(b)
+}
+
+fn ims_cx_mar_vector_from_answer(request: string, response: string, item_number: int) -> string {
+    if item_number < 0 || item_number > 4294967295 { return "" }
+    if ims_answer_success(request, response, ims_cx_application(), ims_cx_mar_command()) == 0 { return "" }
+    let item = diameter_find_vendor_avp(response, 612, ims_3gpp_vendor())
+    if len(item) == 0 || diameter_find_grouped_vendor_u32(item, 613, ims_3gpp_vendor()) != item_number { return "" }
+    let scheme = diameter_find_grouped_vendor_avp(item, 608, ims_3gpp_vendor())
+    let authenticate = diameter_find_grouped_vendor_avp(item, 609, ims_3gpp_vendor())
+    if len(scheme) == 0 || len(authenticate) == 0 { return "" }
+    let authorization = diameter_find_grouped_vendor_avp(item, 610, ims_3gpp_vendor())
+    let confidentiality_key = diameter_find_grouped_vendor_avp(item, 625, ims_3gpp_vendor())
+    let integrity_key = diameter_find_grouped_vendor_avp(item, 626, ims_3gpp_vendor())
+    return "{\"schema\":\"madis.ims.aka.vector.v1\",\"source\":\"cx-maa\",\"item_number\":" + string(item_number) + ",\"scheme\":\"" + scheme + "\",\"sip_authenticate\":\"" + base64_encode(authenticate) + "\",\"sip_authorization\":\"" + base64_encode(authorization) + "\",\"sip_authorization_hex\":\"" + ims_hex_encode(authorization) + "\",\"confidentiality_key\":\"" + base64_encode(confidentiality_key) + "\",\"integrity_key\":\"" + base64_encode(integrity_key) + "\"}"
+}
+
+fn ims_cx_mar_vector(cache: CMap, peer_lock: Mutex, public_identity: string, private_identity: string, server_name: string, scheme: string, item_number: int, number_of_items: int) -> string {
+    let request = ims_cx_mar(public_identity, private_identity, server_name, scheme, item_number, number_of_items)
+    let response = ims_cx_exchange(cache, peer_lock, request, ims_cx_mar_command())
+    return ims_cx_mar_vector_from_answer(request, response, item_number)
+}
+
+// Return a raw field needed by the SIP AKA gate after validating the same
+// Cx correlation and scheme checks as the public vector envelope. This stays
+// internal so binary XRES never crosses a JSON or administration boundary.
+fn ims_cx_mar_aka_field_from_answer(request: string, response: string, item_number: int, scheme: string, code: int) -> string {
+    if item_number < 0 || item_number > 4294967295 { return "" }
+    if ims_answer_success(request, response, ims_cx_application(), ims_cx_mar_command()) == 0 { return "" }
+    let item = diameter_find_vendor_avp(response, 612, ims_3gpp_vendor())
+    if len(item) == 0 || diameter_find_grouped_vendor_u32(item, 613, ims_3gpp_vendor()) != item_number { return "" }
+    let vector_scheme = diameter_find_grouped_vendor_avp(item, 608, ims_3gpp_vendor())
+    if not str_eq(vector_scheme, scheme) { return "" }
+    return diameter_find_grouped_vendor_avp(item, code, ims_3gpp_vendor())
+}
+
 fn ims_cx_exchange(cache: CMap, peer_lock: Mutex, request: string, command: int) -> string {
     return diameter_peer_exchange(cache, peer_lock, request, ims_cx_application(), command)
 }
@@ -230,10 +311,10 @@ fn ims_sh_exchange(cache: CMap, peer_lock: Mutex, request: string, command: int)
     return diameter_peer_exchange(cache, peer_lock, request, ims_sh_application(), command)
 }
 
-fn ims_cx_uar_authorized(cache: CMap, peer_lock: Mutex, public_identity: string, private_identity: string, visited_network: string, authorization_type: int) -> int {
+fn ims_cx_uar_authorized(cache: CMap, peer_lock: Mutex, public_identity: string, private_identity: string, visited_network: string, authorization_type: int, expected_server_name: string) -> int {
     let request = ims_cx_uar(public_identity, private_identity, visited_network, authorization_type)
     let response = ims_cx_exchange(cache, peer_lock, request, ims_cx_uar_command())
-    return ims_answer_success(request, response, ims_cx_application(), ims_cx_uar_command())
+    return ims_cx_uar_server_matches(request, response, expected_server_name)
 }
 
 fn ims_cx_sar_accepted(cache: CMap, peer_lock: Mutex, public_identity: string, private_identity: string, server_name: string, assignment_type: int, user_data_available: int) -> int {
@@ -256,8 +337,9 @@ fn ims_cx_registration_enabled() -> int {
 // Registration is fail-closed when Cx mode is explicitly enabled. Local SIP
 // digest remains an access-control check; Cx is the HSS authorization and
 // S-CSCF assignment check layered on top of it.
-fn ims_cx_register_gate(cache: CMap, peer_lock: Mutex, public_identity: string, private_identity: string, visited_network: string, server_name: string) -> int {
+fn ims_cx_register_gate(cache: CMap, peer_lock: Mutex, public_identity: string, private_identity: string, visited_network: string, server_name: string, assignment_type: int) -> int {
     if ims_cx_registration_enabled() == 0 { return 1 }
-    if ims_cx_uar_authorized(cache, peer_lock, public_identity, private_identity, visited_network, 0) == 0 { return 0 }
-    return ims_cx_sar_accepted(cache, peer_lock, public_identity, private_identity, server_name, 1, 0)
+    if assignment_type < 1 || assignment_type > 8 { return 0 }
+    if ims_cx_uar_authorized(cache, peer_lock, public_identity, private_identity, visited_network, 0, server_name) == 0 { return 0 }
+    return ims_cx_sar_accepted(cache, peer_lock, public_identity, private_identity, server_name, assignment_type, 0)
 }

@@ -37,11 +37,22 @@ fn proxy_metric_message(msg: string, reply: string, elapsed: int, calls: CMap) -
     return 0
 }
 
+fn proxy_admin_secret_equal(actual: string, expected: string) int {
+    if len(actual) == 0 || len(actual) != len(expected) { return 0 }
+    let mut diff = 0
+    let mut i = 0
+    while i < len(actual) {
+        diff = diff | (int(actual[i]) ^ int(expected[i]))
+        i = i + 1
+    }
+    return if diff == 0 { 1 } else { 0 }
+}
+
 fn proxy_admin_authorized(c: int) -> int {
     let expected = env_get_or("SIP_ADMIN_TOKEN", "")
-    if len(expected) == 0 { return 1 }
+    if len(expected) < 16 || len(expected) > 512 { return 0 }
     let header = http_header(c, "Authorization")
-    if str_eq(header, "Bearer " + expected) { return 1 }
+    if proxy_admin_secret_equal(header, "Bearer " + expected) == 1 { return 1 }
     return 0
 }
 

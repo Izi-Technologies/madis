@@ -1,0 +1,93 @@
+// Versioned external IMS subscriber authorization contract.
+//
+// This is intentionally narrower than an HSS/UDM implementation. The
+// subscriber service owns IMS identities, AKA material, profiles, and
+// assignment state; Madis only sends a bounded authorization request and
+// accepts an explicitly matching allow response.
+
+fn ims_subscriber_schema() -> string {
+    return "madis.ims.subscriber.authorization.v1"
+}
+
+fn ims_subscriber_text_ok(value: string, max: int) -> int {
+    if max < 1 || len(value) < 1 || len(value) > max { return 0 }
+    let mut i = 0
+    while i < len(value) {
+        let c = int(value[i])
+        if c == 0 || c == 10 || c == 13 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn ims_subscriber_timeout_ms() -> int {
+    let mut value = 250
+    match parse_int(env_get_or("SIP_IMS_SUBSCRIBER_TIMEOUT_MS", "250")) {
+        Ok(v) => { value = v }
+        Err(_) => {}
+    }
+    if value < 10 { value = 10 }
+    if value > 1000 { value = 1000 }
+    return value
+}
+
+fn ims_subscriber_enabled() -> int {
+    let url = str_trim_space(env_get_or("SIP_IMS_SUBSCRIBER_URL", ""))
+    return if len(url) > 0 { 1 } else { 0 }
+}
+
+fn ims_subscriber_token_ok(token: string) -> int {
+    if len(token) < 16 || len(token) > 512 { return 0 }
+    let mut i = 0
+    while i < len(token) {
+        let c = int(token[i])
+        if c < 33 || c == 127 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn ims_subscriber_request_id(public_identity: string, private_identity: string, visited_network: string, server_name: string) -> string {
+    return sha256("madis.ims.subscriber|register|" + public_identity + "|" + private_identity + "|" + visited_network + "|" + server_name)[0:32]
+}
+
+fn ims_subscriber_authorize_request(public_identity: string, private_identity: string, visited_network: string, server_name: string) -> string {
+    if ims_subscriber_text_ok(public_identity, 2048) == 0 || ims_subscriber_text_ok(private_identity, 1024) == 0 || ims_subscriber_text_ok(visited_network, 2048) == 0 || ims_subscriber_text_ok(server_name, 2048) == 0 { return "" }
+    let request_id = ims_subscriber_request_id(public_identity, private_identity, visited_network, server_name)
+    return "{\"schema\":\"" + ims_subscriber_schema() + "\",\"operation\":\"authorize-register\",\"request_id\":\"" + request_id + "\",\"public_identity\":\"" + app_json_escape(public_identity) + "\",\"private_identity\":\"" + app_json_escape(private_identity) + "\",\"visited_network\":\"" + app_json_escape(visited_network) + "\",\"server_name\":\"" + app_json_escape(server_name) + "\"}"
+}
+
+fn ims_subscriber_response_allowed(response: string, request_id: string, public_identity: string, private_identity: string, requested_server_name: string) -> int {
+    if len(response) < 1 || len(response) > 65536 { return 0 }
+    if not str_eq(json_get_string(response, "schema"), ims_subscriber_schema()) { return 0 }
+    if not str_eq(json_get_string(response, "operation"), "authorize-register") { return 0 }
+    if not str_eq(json_get_string(response, "request_id"), request_id) { return 0 }
+    if not str_eq(json_get_string(response, "public_identity"), public_identity) { return 0 }
+    if not str_eq(json_get_string(response, "private_identity"), private_identity) { return 0 }
+    let decision = str_to_lower(str_trim_space(json_get_string(response, "decision")))
+    if not str_eq(decision, "allow") { return 0 }
+    let assigned_server_name = json_get_string(response, "assigned_server_name")
+    if ims_subscriber_text_ok(assigned_server_name, 2048) == 0 || not str_eq(assigned_server_name, requested_server_name) { return 0 }
+    return 1
+}
+
+fn ims_subscriber_authorized(public_identity: string, private_identity: string, visited_network: string, server_name: string) -> int {
+    if ims_subscriber_enabled() == 0 { return 1 }
+
+    // Subscriber authorization carries private identity data and must use TLS.
+    let url = str_trim_space(env_get_or("SIP_IMS_SUBSCRIBER_URL", ""))
+    let token = env_get_or("SIP_IMS_SUBSCRIBER_TOKEN", "")
+    if app_url_is_https(url) == 0 || ims_subscriber_token_ok(token) == 0 { return 0 }
+
+    let request = ims_subscriber_authorize_request(public_identity, private_identity, visited_network, server_name)
+    if len(request) == 0 { return 0 }
+    let request_id = ims_subscriber_request_id(public_identity, private_identity, visited_network, server_name)
+    let response = app_gateway_http_post_ca(url, token, request, ims_subscriber_timeout_ms(), env_get_or("SIP_IMS_SUBSCRIBER_CA", ""))
+    return ims_subscriber_response_allowed(response, request_id, public_identity, private_identity, server_name)
+}
+
+// Explicit subscriber-service gate. Disabled configuration is a no-op; any
+// configured service error is a denial so REGISTER cannot bypass the boundary.
+fn ims_subscriber_register_gate(public_identity: string, private_identity: string, visited_network: string, server_name: string) -> int {
+    return ims_subscriber_authorized(public_identity, private_identity, visited_network, server_name)
+}

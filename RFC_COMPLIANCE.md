@@ -78,6 +78,9 @@ The runnable validation commands and their limits are documented in
 [`docs/testing.md`](docs/testing.md). This file is a protocol-status summary,
 not a certificate of universal compliance.
 
+- Established-dialog re-INVITEs are forwarded through the recorded dialog/Route target before IMS role selection, charging, dial-plan, application, or new-call state work; transaction replay and BYE teardown are covered by focused regression tests.
+- Transparent in-dialog PRACK and UPDATE forwarding uses Route state and To-tag-specific fork targets. The proxy validates tracked RSeq/RAck state but does not generate reliable provisional responses or claim endpoint-level conformance.
+
 ## Not yet complete
 
 These remain material blockers to a 100% RFC 3261 proxy claim:
@@ -104,7 +107,8 @@ These remain material blockers to a 100% RFC 3261 proxy claim:
 
 The following extension families remain explicitly outside the supported
 surface and require implementation plus separate conformance suites before
-they can be claimed: RFC 3262 (100rel/PRACK), RFC 3264 (offer/answer),
+they can be claimed: RFC 3262 reliable provisional-response generation and
+endpoint RSeq/RAck conformance, RFC 3264 (offer/answer),
 RFC 3265/RFC 6665 (event packages), RFC 3325/RFC 8224 (identity), RFC 5626
 (outbound), and RFC 5923 (SIPS/TLS connection reuse).
 

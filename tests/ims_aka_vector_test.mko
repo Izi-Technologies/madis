@@ -1,0 +1,50 @@
+// Cx MAR/MAA authentication-data extraction tests. The payload is treated as
+// opaque; no local AKA algorithm is exercised here.
+pull . "../ims_diameter.mko"
+
+fn ims_aka_test_answer(request: string, item: string) -> string {
+    let body = diameter_avp_string(263, diameter_find_avp(request, 263))
+        + ims_vsa(ims_cx_application())
+        + madis_diameter_avp_u32(268, 2001)
+        + madis_diameter_avp_u32(277, 1)
+        + diameter_avp_string(264, "hss.example.com")
+        + diameter_avp_string(296, "example.com")
+        + item
+    return diameter_header(0, ims_cx_mar_command(), ims_cx_application(), diameter_read_u32(request, 12), diameter_read_u32(request, 16), body)
+}
+
+fn TestIMS_CxMaaOpaqueVectorExtraction() {
+    let request = ims_cx_mar("sip:alice@example.com", "alice@example.com", "sip:scscf.example.com", "Digest-AKAv1-MD5", 0, 1)
+    let item = diameter_grouped_vendor(612, ims_3gpp_vendor(),
+        diameter_avp_vendor_u32(613, ims_3gpp_vendor(), 0)
+        + diameter_avp_vendor_string(608, ims_3gpp_vendor(), "Digest-AKAv1-MD5")
+        + diameter_avp_vendor_m(609, ims_3gpp_vendor(), "opaque-authenticate")
+        + diameter_avp_vendor_m(610, ims_3gpp_vendor(), "opaque-authorization")
+        + diameter_avp_vendor_m(625, ims_3gpp_vendor(), "confidentiality")
+        + diameter_avp_vendor_m(626, ims_3gpp_vendor(), "integrity"))
+    let response = ims_aka_test_answer(request, item)
+    let vector = ims_cx_mar_vector_from_answer(request, response, 0)
+    assert_eq_str(json_get_string(vector, "schema"), "madis.ims.aka.vector.v1")
+    assert_eq_str(json_get_string(vector, "source"), "cx-maa")
+    assert_eq_str(json_get_string(vector, "scheme"), "Digest-AKAv1-MD5")
+    assert_eq_str(json_get_string(vector, "sip_authenticate"), base64_encode("opaque-authenticate"))
+    assert_eq_str(json_get_string(vector, "sip_authorization_hex"), "6f70617175652d617574686f72697a6174696f6e")
+    assert_eq_str(json_get_string(vector, "integrity_key"), base64_encode("integrity"))
+    assert_eq_str(ims_cx_mar_aka_field_from_answer(request, response, 0, "Digest-AKAv1-MD5", 609), "opaque-authenticate")
+    assert_eq_str(ims_cx_mar_aka_field_from_answer(request, response, 0, "Digest-AKAv1-MD5", 610), "opaque-authorization")
+}
+
+fn TestIMS_CxMaaVectorCorrelationAndPayloadGuards() {
+    let request = ims_cx_mar("sip:alice@example.com", "alice@example.com", "sip:scscf.example.com", "Digest-AKAv1-MD5", 0, 1)
+    let item = diameter_grouped_vendor(612, ims_3gpp_vendor(),
+        diameter_avp_vendor_u32(613, ims_3gpp_vendor(), 1)
+        + diameter_avp_vendor_string(608, ims_3gpp_vendor(), "Digest-AKAv1-MD5")
+        + diameter_avp_vendor_m(609, ims_3gpp_vendor(), "opaque-authenticate"))
+    let response = ims_aka_test_answer(request, item)
+    assert_eq_str(ims_cx_mar_vector_from_answer(request, response, 0), "")
+
+    let empty_item = diameter_grouped_vendor(612, ims_3gpp_vendor(),
+        diameter_avp_vendor_u32(613, ims_3gpp_vendor(), 0)
+        + diameter_avp_vendor_string(608, ims_3gpp_vendor(), "Digest-AKAv1-MD5"))
+    assert_eq_str(ims_cx_mar_vector_from_answer(request, ims_aka_test_answer(request, empty_item), 0), "")
+}

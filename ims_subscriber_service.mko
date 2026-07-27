@@ -1,0 +1,138 @@
+// Database-backed IMS subscriber authorization provider.
+//
+// This provider is deliberately narrower than a full HSS/UDM. It owns the
+// subscriber identity pair, assignment, and service profile used by the
+// first IMS registration slice. AKA vector generation and secure key storage
+// remain a separate increment.
+
+fn ims_service_schema() -> string {
+    return "madis.ims.subscriber.authorization.v1"
+}
+
+fn ims_service_provision_schema() -> string {
+    return "madis.ims.subscriber.provision.v1"
+}
+
+fn ims_service_text_ok(value: string, max: int) -> int {
+    if max < 1 || len(value) < 1 || len(value) > max { return 0 }
+    let mut i = 0
+    while i < len(value) {
+        let c = int(value[i])
+        if c < 32 || c == 127 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn ims_service_json_escape(value: string) -> string {
+    let b = str_builder()
+    let mut i = 0
+    while i < len(value) {
+        let c = int(value[i])
+        if c == 34 { builder_write(b, "\\\"") }
+        else if c == 92 { builder_write(b, "\\\\") }
+        else if c == 10 { builder_write(b, "\\n") }
+        else if c == 13 { builder_write(b, "\\r") }
+        else if c == 9 { builder_write(b, "\\t") }
+        else if c < 32 || c == 127 { builder_write_byte(b, byte(32)) }
+        else { builder_write_byte(b, byte(c)) }
+        i = i + 1
+    }
+    return builder_string(b)
+}
+
+fn ims_service_token_ok(raw: string, n: int, expected: string) -> int {
+    if len(expected) < 16 || len(expected) > 512 { return 0 }
+    let header = parse_header(raw, n, "Authorization")
+    if not str_has_prefix(str_to_lower(header), "bearer ") { return 0 }
+    let actual = str_trim_space(header[7:])
+    if len(actual) < 16 || len(actual) > 512 { return 0 }
+    let mut i = 0
+    while i < len(actual) {
+        let c = int(actual[i])
+        if c < 33 || c == 127 { return 0 }
+        i = i + 1
+    }
+    let mut diff = 0
+    if len(actual) != len(expected) { return 0 }
+    let mut j = 0
+    while j < len(actual) {
+        diff = diff | (int(actual[j]) ^ int(expected[j]))
+        j = j + 1
+    }
+    return if diff == 0 { 1 } else { 0 }
+}
+
+fn ims_service_json_request_ok(raw: string, n: int) -> int {
+    let content_type = str_to_lower(parse_header(raw, n, "Content-Type"))
+    if not str_has_prefix(content_type, "application/json") { return 0 }
+    let body = parse_body(raw, n)
+    return if len(body) > 0 && len(body) <= 65536 { 1 } else { 0 }
+}
+
+fn ims_subscriber_service_bootstrap(db: SqlDB) -> int {
+    let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS ims_subscribers (id BIGSERIAL PRIMARY KEY, public_identity TEXT NOT NULL, private_identity TEXT NOT NULL, realm TEXT NOT NULL DEFAULT '', assigned_server_name TEXT NOT NULL DEFAULT '', service_profile JSONB NOT NULL DEFAULT '{}'::jsonb, enabled BOOLEAN NOT NULL DEFAULT true, created_at TIMESTAMP NOT NULL DEFAULT NOW(), updated_at TIMESTAMP NOT NULL DEFAULT NOW(), UNIQUE (public_identity, private_identity), CONSTRAINT ims_subscriber_profile_object CHECK (jsonb_typeof(service_profile) = 'object'), CONSTRAINT ims_subscriber_public_identity_size CHECK (char_length(public_identity) BETWEEN 1 AND 2048), CONSTRAINT ims_subscriber_private_identity_size CHECK (char_length(private_identity) BETWEEN 1 AND 1024), CONSTRAINT ims_subscriber_server_name_size CHECK (char_length(assigned_server_name) BETWEEN 1 AND 2048))")
+    let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_ims_subscribers_private_identity ON ims_subscribers (private_identity)")
+    return 1
+}
+
+fn ims_service_response(request_id: string, public_identity: string, private_identity: string, decision: string, reason: string, assigned_server_name: string, service_profile: string) -> string {
+    let mut body = "{\"schema\":\"" + ims_service_schema() + "\",\"operation\":\"authorize-register\",\"request_id\":\"" + ims_service_json_escape(request_id) + "\",\"public_identity\":\"" + ims_service_json_escape(public_identity) + "\",\"private_identity\":\"" + ims_service_json_escape(private_identity) + "\",\"decision\":\"" + ims_service_json_escape(decision) + "\""
+    if len(reason) > 0 { body = body + ",\"reason\":\"" + ims_service_json_escape(reason) + "\"" }
+    if str_eq(decision, "allow") {
+        body = body + ",\"assigned_server_name\":\"" + ims_service_json_escape(assigned_server_name) + "\",\"service_profile\":" + service_profile
+    }
+    return body + "}"
+}
+
+fn ims_service_authorize(db: SqlDB, body: string) -> string {
+    let request_schema = json_get_string(body, "schema")
+    let operation = json_get_string(body, "operation")
+    let request_id = json_get_string(body, "request_id")
+    let public_identity = json_get_string(body, "public_identity")
+    let private_identity = json_get_string(body, "private_identity")
+    let visited_network = json_get_string(body, "visited_network")
+    let requested_server_name = json_get_string(body, "server_name")
+    if not str_eq(request_schema, ims_service_schema()) || not str_eq(operation, "authorize-register") { return http_resp(400, "application/json", "{\"ok\":false,\"error\":\"invalid IMS subscriber request\"}\n", "") }
+    if ims_service_text_ok(request_id, 32) == 0 || len(request_id) != 32 || ims_service_text_ok(public_identity, 2048) == 0 || ims_service_text_ok(private_identity, 1024) == 0 || ims_service_text_ok(visited_network, 2048) == 0 || ims_service_text_ok(requested_server_name, 2048) == 0 { return http_resp(400, "application/json", "{\"ok\":false,\"error\":\"invalid IMS subscriber fields\"}\n", "") }
+
+    let enabled = sql_query_str2(db, "SELECT CASE WHEN enabled THEN 'true' ELSE 'false' END FROM ims_subscribers WHERE public_identity = $1 AND private_identity = $2 LIMIT 1", public_identity, private_identity)
+    if len(enabled) == 0 { return http_resp(200, "application/json", ims_service_response(request_id, public_identity, private_identity, "deny", "subscriber-not-found", "", "{}"), "Cache-Control: no-store\r\n") }
+    if not str_eq(enabled, "true") { return http_resp(200, "application/json", ims_service_response(request_id, public_identity, private_identity, "deny", "subscriber-disabled", "", "{}"), "Cache-Control: no-store\r\n") }
+
+    let assigned_server_name = sql_query_str2(db, "SELECT assigned_server_name FROM ims_subscribers WHERE public_identity = $1 AND private_identity = $2 LIMIT 1", public_identity, private_identity)
+    if ims_service_text_ok(assigned_server_name, 2048) == 0 { return http_resp(200, "application/json", ims_service_response(request_id, public_identity, private_identity, "deny", "server-assignment-missing", "", "{}"), "Cache-Control: no-store\r\n") }
+    let service_profile = sql_query_str2(db, "SELECT CASE WHEN jsonb_typeof(service_profile) = 'object' THEN service_profile::text ELSE '{}' END FROM ims_subscribers WHERE public_identity = $1 AND private_identity = $2 LIMIT 1", public_identity, private_identity)
+    if len(service_profile) == 0 { return http_resp(503, "application/json", "{\"ok\":false,\"error\":\"subscriber profile unavailable\"}\n", "") }
+    return http_resp(200, "application/json", ims_service_response(request_id, public_identity, private_identity, "allow", "", assigned_server_name, service_profile), "Cache-Control: no-store\r\n")
+}
+
+fn ims_service_provision(db: SqlDB, body: string) -> string {
+    let request_schema = json_get_string(body, "schema")
+    let operation = json_get_string(body, "operation")
+    let public_identity = json_get_string(body, "public_identity")
+    let private_identity = json_get_string(body, "private_identity")
+    let realm = json_get_string(body, "realm")
+    let assigned_server_name = json_get_string(body, "assigned_server_name")
+    if not str_eq(request_schema, ims_service_provision_schema()) || not str_eq(operation, "provision") { return http_resp(400, "application/json", "{\"ok\":false,\"error\":\"invalid IMS provision request\"}\n", "") }
+    if ims_service_text_ok(public_identity, 2048) == 0 || ims_service_text_ok(private_identity, 1024) == 0 || ims_service_text_ok(assigned_server_name, 2048) == 0 || (len(realm) > 0 && ims_service_text_ok(realm, 2048) == 0) { return http_resp(400, "application/json", "{\"ok\":false,\"error\":\"invalid IMS subscriber fields\"}\n", "") }
+
+    let rc = sql_exec_str4(db, "INSERT INTO ims_subscribers (public_identity, private_identity, realm, assigned_server_name, service_profile, enabled, updated_at) SELECT $4::jsonb->>'public_identity', $4::jsonb->>'private_identity', COALESCE($4::jsonb->>'realm',''), $4::jsonb->>'assigned_server_name', COALESCE($4::jsonb->'service_profile','{}'::jsonb), true, NOW() ON CONFLICT (public_identity, private_identity) DO UPDATE SET realm = EXCLUDED.realm, assigned_server_name = EXCLUDED.assigned_server_name, service_profile = EXCLUDED.service_profile, enabled = true, updated_at = NOW()", "", "", "", body)
+    if rc < 0 { return http_resp(400, "application/json", "{\"ok\":false,\"error\":\"subscriber could not be provisioned\"}\n", "") }
+    return http_resp(201, "application/json", "{\"ok\":true,\"provisioned\":true}\n", "")
+}
+
+fn ims_subscriber_service_handle(db: SqlDB, db_ok: int, method: string, path: string, raw: string, n: int) -> string {
+    let is_authorize = str_eq(method, "POST") && str_eq(path, "/admin/api/v1/ims/subscriber/authorize")
+    let is_provision = str_eq(method, "POST") && str_eq(path, "/admin/api/v1/control/ims/subscribers")
+    if not is_authorize && not is_provision { return "" }
+    if is_authorize {
+        if ims_service_token_ok(raw, n, env_get_or("SIP_IMS_SUBSCRIBER_TOKEN", "")) == 0 { return http_resp(401, "application/json", "{\"ok\":false,\"error\":\"subscriber bearer token required\"}\n", "WWW-Authenticate: Bearer\r\n") }
+    } else {
+        if ims_service_token_ok(raw, n, env_get_or("SIP_CONTROL_API_TOKEN", "")) == 0 { return http_resp(401, "application/json", "{\"ok\":false,\"error\":\"control bearer token required\"}\n", "WWW-Authenticate: Bearer\r\n") }
+    }
+    if ims_service_json_request_ok(raw, n) == 0 { return http_resp(400, "application/json", "{\"ok\":false,\"error\":\"application/json body required\"}\n", "") }
+    if db_ok == 0 { return http_resp(503, "application/json", "{\"ok\":false,\"error\":\"database unavailable\"}\n", "") }
+    let body = parse_body(raw, n)
+    return if is_authorize { ims_service_authorize(db, body) } else { ims_service_provision(db, body) }
+}

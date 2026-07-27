@@ -12,6 +12,7 @@ Madis is a SIP proxy/registrar with a separate WebUI and language-neutral carrie
 | What do tests and benchmarks prove? | [`testing.md`](testing.md), [`../bench/README.md`](../bench/README.md) |
 | How do I build the browser WebUI? | [`../admin/README.md`](../admin/README.md) |
 | What Diameter and IMS contracts are present? | [`../api/diameter.md`](../api/diameter.md), [`../api/ims-diameter.md`](../api/ims-diameter.md) |
+| What is the plan to build IMS capabilities? | [`ims-roadmap.md`](ims-roadmap.md) |
 | What schemas and client examples are available? | [`../api/`](../api/), [`../sdk/README.md`](../sdk/README.md) |
 | What are the production and RFC boundaries? | [`../PRODUCTION.md`](../PRODUCTION.md), [`../RFC_COMPLIANCE.md`](../RFC_COMPLIANCE.md) |
 

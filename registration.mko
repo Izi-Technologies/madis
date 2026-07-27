@@ -61,6 +61,17 @@ fn registration_expires(contact: string, msg: string, n: int) -> int {
     return value
 }
 
+fn registration_cx_assignment_type(reg: CMap, aor: string, contact: string, msg: string, n: int) -> int {
+    let contact_items = sip_split_contact_values(contact)
+    if len(contact_items) == 1 {
+        let item = str_trim_space(contact_items[0])
+        if str_eq(item, "*") { return 5 }
+        if registration_expires(item, msg, n) == 0 { return 5 }
+    }
+    if len(registration_find(reg, aor)) > 0 { return 2 }
+    return 1
+}
+
 fn registration_value(contact: string, transport: string, expires_at: int, ip: string, port: int) -> string {
     return contact + "|" + transport + "|" + string(expires_at) + "|" + ip + "|" + string(port)
 }
@@ -102,7 +113,11 @@ fn registration_find(reg: CMap, aor: string) -> string {
     if cmap_has(reg, aor) == 1 {
         let old = cmap_get(reg, aor)
         let old_parts = str_split(old, "|")
-        if len(old_parts) >= 3 && registration_live(old) == 1 { return old }
+        if len(old_parts) >= 3 {
+            if registration_live(old) == 1 { return old }
+            let _ = cmap_del(reg, aor)
+            return ""
+        }
         if len(old_parts) >= 2 {
             // Old values had no expiry; accept them only during migration.
             return registration_value(old_parts[0], old_parts[1], now_ms() + 300000, "", 0)
@@ -230,6 +245,10 @@ fn registration_remove(reg: CMap, aor: string, contact: string) -> int {
     let remaining = registration_find(reg, aor)
     if len(remaining) > 0 { cmap_set(reg, aor, remaining) } else { let _ = cmap_del(reg, aor) }
     return removed
+}
+
+fn registration_cluster_owner_query() -> string {
+    return "SELECT cn.address || ':' || cn.port FROM registration_bindings r JOIN cluster_nodes cn ON r.node_id = cn.id WHERE r.aor = $1 AND r.expires_at > NOW() AND cn.status = 'active' AND cn.last_heartbeat > NOW() - INTERVAL '30 seconds' LIMIT 1"
 }
 
 fn registration_db_upsert(db: SqlDB, db_ok: int, aor: string, contact: string, transport: string, node_id: string, expires_s: int, ip: string, port: int) -> int {

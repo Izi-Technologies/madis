@@ -387,7 +387,7 @@ fn f_dashboard(db: SqlDB, ok: int) -> string {
         + "<tr><td>Media</td><td>rtpengine ports <code>30000–40000/udp</code> (SDP rewritten to public IP)</td></tr>"
         + "<tr><td>DTMF</td><td>RFC 4733 <code>telephone-event</code> in RTP (via rtpengine) · SIP INFO <code>application/dtmf-relay</code> mid-dialog (proxy transparent)</td></tr>"
         + "</table>"
-        + "<p style=\"color:var(--faint);font-size:12px;margin-top:12px\">Prometheus: session cookie <code>GET /admin/api/prom</code> or bearer <code>ADMIN_METRICS_TOKEN</code> → <code>/admin/api/prom?token=…</code></p>"
+        + "<p style=\"color:var(--faint);font-size:12px;margin-top:12px\">Prometheus: session cookie <code>GET /admin/api/prom</code> or <code>Authorization: Bearer ADMIN_METRICS_TOKEN</code></p>"
         + "</div>"
 
     // Ops panels: failed CDRs, auth fails, gateway health

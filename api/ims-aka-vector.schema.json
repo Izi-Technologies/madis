@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://madis.example/schemas/ims-aka-vector.v1.json",
+  "title": "Madis IMS AKA vector envelope",
+  "description": "Opaque authentication data retrieved from a Cx MAA response. Madis does not generate or persist the AKA material.",
+  "type": "object",
+  "required": ["schema", "source", "item_number", "scheme", "sip_authenticate"],
+  "properties": {
+    "schema": { "const": "madis.ims.aka.vector.v1" },
+    "source": { "const": "cx-maa" },
+    "item_number": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+    "scheme": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "sip_authenticate": { "type": "string", "minLength": 1, "maxLength": 131072 },
+    "sip_authorization": { "type": "string", "maxLength": 131072 },
+    "sip_authorization_hex": { "type": "string", "pattern": "^[0-9a-f]*$", "maxLength": 131072 },
+    "confidentiality_key": { "type": "string", "maxLength": 131072 },
+    "integrity_key": { "type": "string", "maxLength": 131072 }
+  },
+  "additionalProperties": false
+}

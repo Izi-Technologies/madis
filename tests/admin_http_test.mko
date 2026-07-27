@@ -33,3 +33,11 @@ fn TestAdminHttpOriginAndFormDecoding() {
     let cross = "POST /admin/api/config HTTP/1.1\r\nHost: admin.example\r\nOrigin: https://evil.example\r\nContent-Length: 0\r\n\r\n"
     assert_eq(http_post_origin_ok(cross, len(cross)), 0)
 }
+
+fn TestAdminMetricsTokenValidation() {
+    let expected = "0123456789abcdef"
+    assert_eq(admin_metrics_token_valid(expected, expected), 1)
+    assert_eq(admin_metrics_token_valid("0123456789abcde0", expected), 0)
+    assert_eq(admin_metrics_token_valid(expected, "short"), 0)
+    assert_eq(admin_metrics_token_valid("", expected), 0)
+}

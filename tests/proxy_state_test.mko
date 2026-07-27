@@ -86,6 +86,27 @@ fn TestRegistrationExpiryPolicy() {
     assert_eq(registration_expires(sip_header(malformed, "Contact"), malformed, len(malformed)), -1)
 }
 
+fn TestRegistrationCxAssignmentTypes() {
+    let initial = proxy_test_register_message("<sip:alice@192.0.2.10:5060>", "300")
+    let reg = cmap_new()
+    assert_eq(registration_cx_assignment_type(reg, "alice@example.com", sip_header(initial, "Contact"), initial, len(initial)), 1)
+    let _ = registration_store(reg, "alice@example.com", "sip:alice@192.0.2.10:5060", "UDP", 300, "192.0.2.10", 5060)
+    assert_eq(registration_cx_assignment_type(reg, "alice@example.com", sip_header(initial, "Contact"), initial, len(initial)), 2)
+
+    let contact_dereg = proxy_test_register_message("<sip:alice@192.0.2.10:5060;expires=0>", "300")
+    assert_eq(registration_cx_assignment_type(reg, "alice@example.com", sip_header(contact_dereg, "Contact"), contact_dereg, len(contact_dereg)), 5)
+    let wildcard_dereg = proxy_test_register_message("*", "0")
+    assert_eq(registration_cx_assignment_type(reg, "alice@example.com", sip_header(wildcard_dereg, "Contact"), wildcard_dereg, len(wildcard_dereg)), 5)
+}
+
+fn TestClusterOwnerQueryUsesLiveBindings() {
+    let query = registration_cluster_owner_query()
+    assert(str_contains(query, "registration_bindings"))
+    assert(str_contains(query, "expires_at > NOW()"))
+    assert(str_contains(query, "last_heartbeat > NOW()"))
+    assert(not str_contains(query, "FROM registrations r"))
+}
+
 fn TestRegistrationExpiryAndMultipleBindings() {
     let msg = proxy_test_register_message("<sip:alice@192.0.2.10:5060;transport=tcp>", "300")
     let contact = sip_header(msg, "Contact")
@@ -104,6 +125,13 @@ fn TestRegistrationExpiryAndMultipleBindings() {
     assert(str_contains(response_contacts, "expires="))
     assert_eq(registration_remove(reg, "alice@example.com", "*"), 1)
     assert_eq(len(registration_find(reg, "alice@example.com")), 0)
+}
+
+fn TestExpiredLegacyBindingIsNotResurrected() {
+    let reg = cmap_new()
+    let _ = registration_store(reg, "expired@example.com", "sip:expired@192.0.2.11:5060", "UDP", 0, "192.0.2.11", 5060)
+    assert_eq_str(registration_find(reg, "expired@example.com"), "")
+    assert_eq(cmap_has(reg, "expired@example.com"), 0)
 }
 
 fn TestTransactionReplayExpiry() {
@@ -184,6 +212,47 @@ fn TestClientTransactionLifecycle() {
     let response = sip_reply(req, 200, "OK", "", "")
     assert_eq(sip_client_txn_finish(response, cache), 1)
     assert_eq(cmap_has(cache, "client_req|" + key), 0)
+}
+
+fn TestInviteRetransmitCacheAndCancelIsolation() {
+    let invite = "INVITE sip:b@example.com SIP/2.0\r\n"
+        + "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-life\r\n"
+        + "From: <sip:a@example.com>;tag=from1\r\n"
+        + "To: <sip:b@example.com>\r\n"
+        + "Call-ID: lifecycle-replay\r\n"
+        + "CSeq: 42 INVITE\r\n"
+        + "Content-Length: 0\r\n\r\n"
+    let cancel = sip_build_cancel(invite)
+    let cache = cmap_new()
+    let invite_key = sip_txn_begin(invite, cache)
+    let response = sip_reply(invite, 100, "Trying", "", "")
+    assert_eq(sip_txn_cache_response(invite, response, cache), 0)
+    assert_eq(sip_is_retransmit(invite_key, cache), 1)
+    assert_eq_str(sip_get_txn_response(invite_key, cache), response)
+    assert_eq_str(sip_txn_begin(invite, cache), invite_key)
+    let cancel_key = sip_transaction_key(cancel, len(cancel))
+    assert(not str_eq(cancel_key, invite_key))
+    assert_eq(sip_is_retransmit(cancel_key, cache), 0)
+}
+
+fn TestDialogLifecycleTeardown() {
+    let invite = "INVITE sip:b@example.com SIP/2.0\r\n"
+        + "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-dialog\r\n"
+        + "From: <sip:a@example.com>;tag=from1\r\n"
+        + "To: <sip:b@example.com>\r\n"
+        + "Call-ID: lifecycle-dialog\r\n"
+        + "CSeq: 42 INVITE\r\n"
+        + "Content-Length: 0\r\n\r\n"
+    let reply = str_replace(sip_reply(invite, 200, "OK", "", ""), "To: <sip:b@example.com>\r\n", "To: <sip:b@example.com>;tag=to1\r\n")
+    let bye = str_replace(invite, "INVITE sip:b@example.com", "BYE sip:b@example.com")
+    let tagged_bye = str_replace(bye, "To: <sip:b@example.com>", "To: <sip:b@example.com>;tag=to1")
+    let calls = cmap_new()
+    let cache = cmap_new()
+    let dialog_key = "dialog|" + proxy_dialog_id("lifecycle-dialog", "from1", "to1")
+    assert_eq(sip_dialog_observe(invite, reply, calls, cache), 1)
+    assert_eq(cmap_has(calls, dialog_key), 1)
+    assert_eq(sip_dialog_observe(tagged_bye, "", calls, cache), 1)
+    assert_eq(cmap_has(calls, dialog_key), 0)
 }
 
 fn TestInviteAckAndCancelConstruction() {
