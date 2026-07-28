@@ -399,5 +399,102 @@ class HssHttpWireTests(unittest.TestCase):
         self.assertTrue(response["provisioned"])
 
 
+@unittest.skipUnless(os.environ.get("IMS_HSS_TEST_TLS") == "1", "set IMS_HSS_TEST_TLS=1 HTTPS listener tests")
+class HssHttpsWireTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        openssl = shutil.which("openssl")
+        if openssl is None:
+            raise unittest.SkipTest("openssl required for HTTPS listener tests")
+        cls.tempdir = tempfile.TemporaryDirectory(prefix="ims-hss-http-tls-")
+        cls.cert = pathlib.Path(cls.tempdir.name) / "hss.crt"
+        cls.key = pathlib.Path(cls.tempdir.name) / "hss.key"
+        try:
+            subprocess.run(
+                [
+                    openssl,
+                    "req",
+                    "-x509",
+                    "-newkey",
+                    "rsa:2048",
+                    "-nodes",
+                    "-keyout",
+                    str(cls.key),
+                    "-out",
+                    str(cls.cert),
+                    "-days",
+                    "1",
+                    "-subj",
+                    "/CN=localhost",
+                    "-addext",
+                    "subjectAltName=IP:127.0.0.1,DNS:localhost",
+                ],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        except (OSError, subprocess.CalledProcessError) as exc:
+            cls.tempdir.cleanup()
+            raise unittest.SkipTest(f"could not generate HTTPS certificate: {exc}")
+
+        store = HssStore()
+        store.provision(
+            {
+                "public_identity": "sip:alice@example.com",
+                "private_identity": "alice@example.com",
+                "assigned_server_name": "sip:scscf.example.com",
+                "xres_base64": base64.b64encode(b"xres-alice").decode("ascii"),
+            }
+        )
+        cls.server = SubscriberHTTPServer(
+            ("127.0.0.1", 0),
+            store,
+            "https-test-token-1234",
+            "provision-token-1234",
+        )
+        context = _tls_context(str(cls.cert), str(cls.key))
+        assert context is not None
+        cls.server.socket = context.wrap_socket(cls.server.socket, server_side=True)
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls.thread.join(timeout=2.0)
+        cls.tempdir.cleanup()
+
+    def test_authorize_over_https(self) -> None:
+        request = {
+            "schema": "madis.ims.subscriber.authorization.v1",
+            "operation": "authorize-register",
+            "public_identity": "sip:alice@example.com",
+            "private_identity": "alice@example.com",
+            "visited_network": "example.com",
+            "server_name": "sip:scscf.example.com",
+        }
+        body = json.dumps(request).encode("utf-8")
+        http_request = urllib.request.Request(
+            f"https://127.0.0.1:{self.server.server_address[1]}/ims/authorize",
+            data=body,
+            headers={
+                "Authorization": "Bearer https-test-token-1234",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.check_hostname = True
+        context.verify_mode = ssl.CERT_REQUIRED
+        context.load_verify_locations(cafile=str(self.cert))
+        with urllib.request.urlopen(http_request, context=context, timeout=2.0) as response:
+            document = json.loads(response.read())
+        self.assertEqual(response.status, 200)
+        self.assertEqual(document["decision"], "allow")
+        self.assertNotIn("xres", document)
+
+
 if __name__ == "__main__":
     unittest.main()

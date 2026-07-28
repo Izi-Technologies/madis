@@ -85,6 +85,9 @@ services:
       SIP_IMS_SERVER_NAME: sip:scscf:5060
       SIP_IMS_DEST_HOST: hss
       SIP_IMS_SESSION: "1"
+      SIP_IMS_SUBSCRIBER_URL: https://hss:8080/ims/authorize
+      SIP_IMS_SUBSCRIBER_TOKEN: ims-docker-hss-http-token-123456
+      SIP_IMS_SUBSCRIBER_CA: /certs/hss.crt
       SIP_RTPENGINE_ENABLED: "1"
       SIP_RTPENGINE_HOST: media
       SIP_RTPENGINE_PORT: "2223"

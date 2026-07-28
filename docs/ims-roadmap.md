@@ -31,7 +31,7 @@ worker:
 
 - [`../lab/ims_hss.py`](../lab/README.md) provides a bounded Cx UAR/SAR/LIR/MAR
   Diameter adapter and the versioned subscriber authorization HTTP/HTTPS
-  contract. Its opt-in wire tests cover TCP, TLS, and HTTP listener behavior. It uses
+  contract. Its opt-in wire tests cover TCP, Diameter TLS, and HTTPS listener behavior. It uses
   configured opaque XRES values for the selected lab profile and does not
   implement Milenage/TUAK or production HSS secret management.
 - [`../media/rtp_module.py`](../media/README.md) provides an RTPEngine-ng
@@ -47,8 +47,9 @@ interoperability evidence.
 The reproducible Docker profile at [`../docker/ims-lab/README.md`](../docker/ims-lab/README.md)
 now composes these adapters with separate Mako `v0.4.18` P-/I-/S-CSCF workers
 and a deterministic two-subscriber client. Its passing smoke test is evidence
-for the selected TLS Cx/AKA, role-chain REGISTER/initial-INVITE forwarding,
-SIP, SDP relay, RTP, and teardown path only; the remaining roadmap
+for the selected TLS Cx/AKA, HTTPS subscriber authorization, role-chain
+REGISTER/initial-INVITE forwarding, SIP, SDP relay, RTP, and teardown path only;
+the remaining roadmap
 items below still require real UE/HSS/UDM/media interoperability and measured
 deployment acceptance.
 

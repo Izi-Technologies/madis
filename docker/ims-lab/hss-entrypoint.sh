@@ -23,6 +23,8 @@ exec python3 /app/lab/ims_hss.py \
     --diameter-key /certs/hss.key \
   --http-host 0.0.0.0 \
   --http-port 8080 \
+  --http-cert /certs/hss.crt \
+  --http-key /certs/hss.key \
   --http-token ims-docker-hss-http-token-123456 \
   --origin-host hss \
     --origin-realm example.com
