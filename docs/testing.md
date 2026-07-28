@@ -25,6 +25,11 @@ The checks are deterministic contract and regression tests. They do not establis
 
 `tests/ims_lab_test.mko` is a deterministic two-subscriber HSS/Cx test double. It exercises real MAR/MAA message construction, Cx correlation, AKA response verification, replay rejection, registration bindings, and the S-CSCF session gate. It is not a substitute for interoperability testing against an external HSS/UDM, UE, or media system.
 
+`tests/ims_aka_test.mko` explicitly covers missing vectors, malformed AKA
+credentials, replay rejection, and an expired cached vector. The expiration
+check validates the worker-side bounded XRES cache; vector generation and
+lifetime policy remain HSS/UDM responsibilities.
+
 `tests/rtpengine_test.mko` validates RTPEngine ng offer/answer/delete command shape, including Call-ID and dialog-tag correlation, plus control-character and length bounds on tags. With `SIP_RTPENGINE_TEST_NETWORK=1`, it also runs a local UDP ng-shaped responder and exercises the production client path end to end: offer/answer SDP replacement, delete acknowledgement, and no-responder timeout failure. It does not replace interoperability testing against a real RTPEngine, RTP, ICE, or DTLS-SRTP endpoint.
 
 The same suite covers the RTPEngine SDP boundary: content-type checks, required `v=0` and `m=` lines, and body-size bounds. The production gate also scans every body byte for NULs before sending it to RTPEngine.

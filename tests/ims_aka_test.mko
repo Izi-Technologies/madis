@@ -40,6 +40,9 @@ fn TestIMS_AKAReplayAndExpiry() {
     let first = ims_aka_test_register(ims_aka_test_auth(response, nonce))
     assert_eq(ims_aka_response_valid(first, len(first), cache, public_identity, private_identity, "example.com"), 1)
     assert_eq(ims_aka_response_valid(first, len(first), cache, public_identity, private_identity, "example.com"), 0)
+    let expired_cache = cmap_new()
+    let _ = bounded_cache_pair_set(expired_cache, "ims_aka_seq", "ims_aka_ring|", key, "aabbccdd", mono_ms() - 300001, 65536)
+    assert_eq(ims_aka_response_valid(first, len(first), expired_cache, public_identity, private_identity, "example.com"), 2)
     let wrong = ims_aka_test_register(ims_aka_test_auth("00000000000000000000000000000000", nonce))
     assert_eq(ims_aka_response_valid(wrong, len(wrong), cache, public_identity, private_identity, "example.com"), 0)
 }

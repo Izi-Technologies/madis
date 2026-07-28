@@ -117,8 +117,9 @@ The phases below are ordered by dependency. A phase is complete only when its ac
 ### Phase 1 — External end-to-end lab interoperability (next)
 
 Local contract coverage now includes deterministic unknown/barred rejection,
-malformed-request drop behavior, Cx malformed-answer guards, and an opt-in
-worker-backed HSS-unavailable `503` check. External HSS/UDM outage and
+an explicitly expired AKA-vector rejection, malformed-request drop behavior,
+Cx malformed-answer guards, and an opt-in worker-backed HSS-unavailable `503`
+check. External HSS/UDM outage and
 malformed-answer interoperability evidence remains open.
 
 The adapter baseline is present; the remaining work is connecting it to the
