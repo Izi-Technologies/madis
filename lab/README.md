@@ -5,7 +5,7 @@ profile. It provides:
 
 - a Diameter TCP/TLS listener for the Cx UAR, SAR, LIR, and MAR requests that
   Madis already emits;
-- the versioned HTTPS subscriber authorization contract used by
+- the versioned HTTP/HTTPS subscriber authorization contract used by
   `SIP_IMS_SUBSCRIBER_URL`;
 - bounded provisioning from a seed JSON file or the protected HTTP endpoint.
 
@@ -26,6 +26,18 @@ python3 lab/ims_hss.py \
   --diameter-port 3868 \
   --http-host 127.0.0.1 \
   --http-port 8444
+```
+
+The local example uses loopback HTTP. Enable HTTPS by supplying an operator-
+managed certificate and key:
+
+```sh
+python3 lab/ims_hss.py \
+  --seed-json /path/to/ims-lab-subscribers.json \
+  --http-host 127.0.0.1 \
+  --http-port 8444 \
+  --http-cert /path/to/subscriber.crt \
+  --http-key /path/to/subscriber.key
 ```
 
 For a local plaintext Diameter-only check, Madis must explicitly opt in:

@@ -16,6 +16,8 @@ The CI script runs:
 - All repository Mako test files.
 - Native SIP worker and WebUI links, including the `madis_memory.c` bridge.
 - JSON-schema parsing, shell syntax validation, and Python SDK compilation.
+- Default Python unit tests for the standalone `lab/` HSS adapter and `media/`
+  RTPEngine-compatible sidecar.
 
 The checks are deterministic contract and regression tests. They do not establish interoperability with every SIP, WebRTC, Diameter, IMS, or SS7 implementation.
 
@@ -150,8 +152,10 @@ transaction affinity and TCP/TLS/WebSocket connection affinity; see
 
 ## External IMS lab adapters
 
-The repository checks the standalone lab components without requiring external
-services:
+The repository also checks the standalone lab components without requiring
+external services. The default commands run offline unit/contract coverage;
+listener and worker-backed checks are opt-in because they need local sockets or
+an executable worker:
 
 ```sh
 python3 -m unittest discover -s lab -p 'test_*.py'

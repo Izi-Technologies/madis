@@ -30,8 +30,8 @@ existing boundaries without moving subscriber secrets or RTP into the SIP
 worker:
 
 - [`../lab/ims_hss.py`](../lab/README.md) provides a bounded Cx UAR/SAR/LIR/MAR
-  Diameter adapter and the versioned subscriber authorization HTTP contract.
-  Its opt-in wire tests cover TCP, TLS, and HTTP listener behavior. It uses
+  Diameter adapter and the versioned subscriber authorization HTTP/HTTPS
+  contract. Its opt-in wire tests cover TCP, TLS, and HTTP listener behavior. It uses
   configured opaque XRES values for the selected lab profile and does not
   implement Milenage/TUAK or production HSS secret management.
 - [`../media/rtp_module.py`](../media/README.md) provides an RTPEngine-ng
@@ -39,8 +39,9 @@ worker:
   It does not implement ICE, DTLS-SRTP termination, codec transcoding,
   recording, or production media failover.
 
-Their unit and localhost wire tests are now part of the repository checks.
-They reduce the integration gap; they do not constitute external IMS or media
+Their unit tests are part of the default repository checks; localhost wire
+tests are opt-in checks documented in [`testing.md`](testing.md). They reduce
+the integration gap; they do not constitute external IMS or media
 interoperability evidence.
 
 The reproducible Docker profile at [`../docker/ims-lab/README.md`](../docker/ims-lab/README.md)
