@@ -26,6 +26,7 @@ run_mako lint admin/main.mko
 BUILD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/madis-ci.XXXXXX")
 trap 'rm -rf "$BUILD_DIR"' EXIT
 
+CC_BIN="${CC:-cc}"
 RUNTIME_DIR="${MAKO_RUNTIME:-}"
 if [[ -z "$RUNTIME_DIR" ]]; then
   for candidate in /usr/local/share/mako/runtime /usr/share/mako/runtime /Users/loreste/mako/runtime; do
@@ -34,8 +35,28 @@ if [[ -z "$RUNTIME_DIR" ]]; then
 fi
 [[ -d "$RUNTIME_DIR" ]] || { echo "Mako runtime directory is required for the native link" >&2; exit 1; }
 
-# Mako 0.4.18 links the production CMap bridge explicitly for the test suite.
-run_mako test tests --native-source "$ROOT/madis_memory.c"
+NATIVE_CFLAGS=(-I"$RUNTIME_DIR")
+for include_dir in \
+  /usr/include/postgresql \
+  /usr/local/include \
+  /opt/homebrew/include \
+  /opt/homebrew/opt/libpq/include \
+  /usr/local/opt/libpq/include \
+  /opt/homebrew/opt/openssl@3/include \
+  /usr/local/opt/openssl@3/include; do
+  if [[ -d "$include_dir" ]]; then NATIVE_CFLAGS+=("-I$include_dir"); fi
+done
+
+# Mako 0.4.18 release binaries do not expose --native-source on `mako test`.
+# Compile the test bridge once and pass it through the supported linker
+# environment so local and GitHub Actions use the same test invocation.
+"$CC_BIN" -std=c11 -O2 -DNDEBUG -w "${NATIVE_CFLAGS[@]}" \
+  -c "$ROOT/madis_memory.c" -o "$BUILD_DIR/madis_memory.o"
+TEST_LDFLAGS="$BUILD_DIR/madis_memory.o"
+if [[ -n "${MAKO_LDFLAGS:-}" ]]; then
+  TEST_LDFLAGS="$TEST_LDFLAGS $MAKO_LDFLAGS"
+fi
+MAKO_LDFLAGS="$TEST_LDFLAGS" run_mako test tests
 
 build_native() {
   local source="$1"
