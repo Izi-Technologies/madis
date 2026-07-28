@@ -13,6 +13,7 @@ import uuid
 MADIS_HOST = os.environ.get("MADIS_HOST", "madis")
 MADIS_SIP_PORT = int(os.environ.get("MADIS_SIP_PORT", "5060"))
 CLIENT_MEDIA_IP = os.environ.get("CLIENT_MEDIA_IP", "172.30.0.5")
+MEDIA_HOST = os.environ.get("MEDIA_HOST", "172.30.0.3")
 
 
 def status(message: str) -> int:
@@ -235,12 +236,12 @@ def run_call(alice: SipClient, bob: SipClient) -> None:
         raise AssertionError("Madis did not rewrite the answer for media")
 
     alice_packet = b"\x80\x00\x00\x01\x00\x00\x00\x01\x12\x34\x56\x78docker-alice"
-    alice.media.sendto(alice_packet, ("172.30.0.3", forwarded_offer_port))
+    alice.media.sendto(alice_packet, (MEDIA_HOST, forwarded_offer_port))
     received_by_bob, _ = bob.media.recvfrom(4096)
     if received_by_bob != alice_packet:
         raise AssertionError("Alice RTP did not reach Bob")
     bob_packet = b"\x80\x00\x00\x02\x00\x00\x00\x02\x87\x65\x43\x21docker-bob"
-    bob.media.sendto(bob_packet, ("172.30.0.3", forwarded_answer_port))
+    bob.media.sendto(bob_packet, (MEDIA_HOST, forwarded_answer_port))
     received_by_alice, _ = alice.media.recvfrom(4096)
     if received_by_alice != bob_packet:
         raise AssertionError("Bob RTP did not reach Alice")
@@ -296,7 +297,7 @@ def main() -> int:
         register(alice, "alice", "xres-alice")
         register(bob, "bob", "xres-bob")
         run_call(alice, bob)
-        print("Docker IMS lab passed: Cx/AKA REGISTER, authenticated INVITE, SDP relay, bidirectional RTP, ACK, BYE")
+        print("Docker IMS lab passed: P-/I-/S-CSCF Cx/AKA REGISTER, authenticated INVITE, SDP relay, bidirectional RTP, ACK, BYE")
         return 0
     finally:
         alice.close()
