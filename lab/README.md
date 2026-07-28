@@ -62,11 +62,13 @@ the adapter on any shared network. The HTTP provisioning token must be at
 least 16 characters. The service rejects non-loopback HTTP without an HTTP
 token and never includes XRES in an authorization response.
 
-The opt-in TLS wire test generates its certificate in a temporary directory;
-no certificate or private key is stored in the repository:
+The opt-in Diameter and HTTPS TLS wire tests generate certificates in a
+temporary directory; no certificate or private key is stored in the repository:
 
 ```sh
-IMS_HSS_TEST_TLS=1 python3 -m unittest lab.test_ims_hss.HssDiameterTlsWireTests -v
+IMS_HSS_TEST_TLS=1 python3 -m unittest \
+  lab.test_ims_hss.HssDiameterTlsWireTests \
+  lab.test_ims_hss.HssHttpsWireTests -v
 ```
 
 ## Seed shape

@@ -99,8 +99,8 @@ This verifies the Madis UDP client against a test responder in the same process 
 
 The repository includes a containerized six-service smoke environment for the
 implemented IMS boundary. It builds separate Mako `v0.4.18` P-/I-/S-CSCF
-workers, starts a TLS Cx/AKA HSS adapter and an RTPEngine-ng-compatible media
-relay, then runs two test subscribers through role-chain REGISTER and
+workers, starts TLS Cx/AKA and HTTPS subscriber-authority endpoints in the HSS
+adapter plus an RTPEngine-ng-compatible media relay, then runs two test subscribers through role-chain REGISTER and
 initial-INVITE forwarding, SDP offer/answer, bidirectional RTP, ACK, and BYE:
 
 ```sh
@@ -164,8 +164,10 @@ python3 -m unittest discover -s media -p 'test_*.py'
 # Listener tests: Diameter TCP and HTTP authorization/provisioning
 IMS_HSS_TEST_NETWORK=1 python3 -m unittest discover -s lab -p 'test_*.py'
 
-# Diameter TLS listener with an ephemeral certificate
-IMS_HSS_TEST_TLS=1 python3 -m unittest lab.test_ims_hss.HssDiameterTlsWireTests -v
+# Diameter and HTTPS TLS listeners with ephemeral certificates
+IMS_HSS_TEST_TLS=1 python3 -m unittest \
+  lab.test_ims_hss.HssDiameterTlsWireTests \
+  lab.test_ims_hss.HssHttpsWireTests -v
 
 # Full worker-backed two-subscriber IMS smoke with a local S-CSCF and external RTP sidecar
 IMS_END_TO_END=1 MADIS_BIN=/path/to/madis \

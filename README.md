@@ -21,7 +21,7 @@ The repository includes an opt-in lab that exercises the implemented IMS boundar
 - [`media/rtp_module.py`](media/README.md) is a separate RTPEngine-ng-compatible control sidecar with a bounded one-audio-stream RTP/RTCP relay. It is not a production media server.
 - [`docker-compose.ims-lab.yml`](docker-compose.ims-lab.yml) composes the adapters, separate Mako `v0.4.18` P-/I-/S-CSCF workers, and a deterministic two-subscriber client.
 
-The Docker smoke path covers TLS Cx/AKA, P-/I-/S-CSCF REGISTER and initial-INVITE forwarding, SDP offer/answer rewriting, bidirectional RTP, ACK, and BYE. It does not establish full 3GPP IMS, real UE/HSS/UDM interoperability, carrier capacity, ICE/DTLS-SRTP support, or production failover. See [`docs/ims-roadmap.md`](docs/ims-roadmap.md) for the remaining work and acceptance evidence.
+The Docker smoke path covers TLS Cx/AKA, HTTPS subscriber authorization, P-/I-/S-CSCF REGISTER and initial-INVITE forwarding, SDP offer/answer rewriting, bidirectional RTP, ACK, and BYE. It does not establish full 3GPP IMS, real UE/HSS/UDM interoperability, carrier capacity, ICE/DTLS-SRTP support, or production failover. See [`docs/ims-roadmap.md`](docs/ims-roadmap.md) for the remaining work and acceptance evidence.
 
 Run the lab from the repository root:
 
