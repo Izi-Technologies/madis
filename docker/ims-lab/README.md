@@ -3,7 +3,7 @@
 This profile runs a reproducible local IMS smoke environment:
 
 - `hss`: the bounded Cx/AKA HSS adapter with a TLS-only Diameter listener.
-- `madis`: the Mako 0.4.18 SIP worker in standalone in-memory mode.
+- `pcscf`, `icscf`, and `scscf`: separate Mako 0.4.18 SIP workers in standalone in-memory mode. P-CSCF forwards REGISTER and initial INVITE to I-CSCF; I-CSCF uses Cx LIR to select S-CSCF; S-CSCF owns AKA, registrations, dialogs, and media control.
 - `media`: the bounded RTPEngine-ng-compatible RTP relay module.
 - `client`: two deterministic SIP user agents that register, authenticate, place a call, exchange RTP, and tear down the dialog.
 
@@ -22,10 +22,10 @@ docker compose -f docker-compose.ims-lab.yml up \
 A successful run ends with:
 
 ```text
-IMS Cx/AKA REGISTER, INVITE, SDP RTP, ACK, BYE
+P-/I-/S-CSCF Cx/AKA REGISTER, authenticated INVITE, SDP relay, bidirectional RTP, ACK, BYE
 ```
 
-The worker SIP and admin ports are published only on loopback as `15060/udp` and `18080/tcp`. The HSS and media control ports stay on the private Docker network. Madis may send media control commands only from its fixed lab address (`172.30.0.4`); loopback is allowed only for the media container healthcheck.
+The P-CSCF SIP and admin ports are published only on loopback as `15060/udp` and `18080/tcp`. The HSS and media control ports stay on the private Docker network. Only the S-CSCF (`172.30.0.6`) may send media control commands; loopback is allowed only for the media container healthcheck.
 
 Stop the containers and network with:
 
@@ -41,6 +41,6 @@ docker volume rm sipproxy_ims-hss-certs
 
 ## What the test proves
 
-The client checks TLS certificate validation from Madis to the HSS, Cx/AKA challenge and response handling for two subscribers, SIP INVITE forwarding, SDP offer/answer rewrite to the relay, RTP in both directions, ACK, and BYE. It does not test real UE behavior, full 3GPP IMS procedures, ICE/DTLS-SRTP, codecs, recording, external RTPEngine interoperability, or clustered state.
+The client checks TLS certificate validation from S-CSCF/I-CSCF to the HSS, Cx/AKA challenge and response handling for two subscribers, P-/I-/S-CSCF REGISTER and initial-INVITE forwarding, SDP offer/answer rewrite to the relay, RTP in both directions, ACK, and BYE. It does not test real UE behavior, full 3GPP IMS procedures, ICE/DTLS-SRTP, codecs, recording, external RTPEngine interoperability, or clustered state.
 
 The Dockerfiles pin the Mako source to tag `v0.4.18` and build the worker inside the image with a matching runtime. The build requires Docker Desktop or a Linux Docker Engine with network access to the Mako repository and base-image registry.

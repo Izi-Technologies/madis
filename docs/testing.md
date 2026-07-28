@@ -97,11 +97,11 @@ This verifies the Madis UDP client against a test responder in the same process 
 
 ## Docker IMS integration lab
 
-The repository includes a containerized four-service smoke environment for the
-implemented IMS boundary. It builds the Mako `v0.4.18` worker, starts a TLS
-Cx/AKA HSS adapter and an RTPEngine-ng-compatible media relay, then runs two
-test subscribers through REGISTER, INVITE, SDP offer/answer, bidirectional RTP,
-ACK, and BYE:
+The repository includes a containerized six-service smoke environment for the
+implemented IMS boundary. It builds separate Mako `v0.4.18` P-/I-/S-CSCF
+workers, starts a TLS Cx/AKA HSS adapter and an RTPEngine-ng-compatible media
+relay, then runs two test subscribers through role-chain REGISTER and
+initial-INVITE forwarding, SDP offer/answer, bidirectional RTP, ACK, and BYE:
 
 ```sh
 docker compose -f docker-compose.ims-lab.yml up \
@@ -167,7 +167,7 @@ IMS_HSS_TEST_NETWORK=1 python3 -m unittest discover -s lab -p 'test_*.py'
 # Diameter TLS listener with an ephemeral certificate
 IMS_HSS_TEST_TLS=1 python3 -m unittest lab.test_ims_hss.HssDiameterTlsWireTests -v
 
-# Full worker-backed two-subscriber IMS smoke with the external RTP sidecar
+# Full worker-backed two-subscriber IMS smoke with a local S-CSCF and external RTP sidecar
 IMS_END_TO_END=1 MADIS_BIN=/path/to/madis \
   python3 -m unittest lab.test_ims_end_to_end -v
 
@@ -183,5 +183,7 @@ SDP rewriting, offer/answer/delete lifecycle, malformed input rejection, and
 localhost RTP forwarding. The worker-backed test additionally verifies that
 standalone `SIP_RTPENGINE_*` configuration reaches the call path, that both
 SDP legs are rewritten, and that RTP crosses the sidecar in both directions.
-These tests are lab-contract evidence; they do not replace tests against real
-UEs, HSS/UDM systems, RTPEngine deployments, or media/security profiles.
+The Docker profile extends that same contract across separate P-/I-/S-CSCF
+workers and uses Cx LIR to select the S-CSCF. These tests are lab-contract
+evidence; they do not replace tests against real UEs, HSS/UDM systems,
+RTPEngine deployments, or media/security profiles.

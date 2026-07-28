@@ -45,9 +45,10 @@ the integration gap; they do not constitute external IMS or media
 interoperability evidence.
 
 The reproducible Docker profile at [`../docker/ims-lab/README.md`](../docker/ims-lab/README.md)
-now composes these adapters with a Mako `v0.4.18` worker and deterministic
-two-subscriber client. Its passing smoke test is evidence for the selected
-TLS Cx/AKA, SIP, SDP relay, RTP, and teardown path only; the remaining roadmap
+now composes these adapters with separate Mako `v0.4.18` P-/I-/S-CSCF workers
+and a deterministic two-subscriber client. Its passing smoke test is evidence
+for the selected TLS Cx/AKA, role-chain REGISTER/initial-INVITE forwarding,
+SIP, SDP relay, RTP, and teardown path only; the remaining roadmap
 items below still require real UE/HSS/UDM/media interoperability and measured
 deployment acceptance.
 

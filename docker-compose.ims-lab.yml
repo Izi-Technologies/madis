@@ -24,7 +24,7 @@ services:
       - --control-port
       - "2223"
       - --control-allow
-      - 172.30.0.4,127.0.0.1
+      - 172.30.0.6,127.0.0.1
       - --media-bind
       - 0.0.0.0
       - --media-ip
@@ -46,7 +46,7 @@ services:
       timeout: 2s
       retries: 20
 
-  madis:
+  scscf:
     build:
       context: .
       dockerfile: docker/ims-lab/Dockerfile.madis
@@ -68,7 +68,7 @@ services:
       SIP_ADMIN_TOKEN: ims-docker-admin-token-123456
       SIP_REALM: example.com
       SIP_NODE_ID: ims-docker-scscf
-      SIP_NODE_ADDR: 172.30.0.4
+      SIP_NODE_ADDR: 172.30.0.6
       SIP_DIAMETER_HOST: hss
       SIP_DIAMETER_PORT: "3868"
       SIP_DIAMETER_TLS: "1"
@@ -82,18 +82,96 @@ services:
       SIP_IMS_AKA_SCHEME: Digest-AKAv1-MD5
       SIP_IMS_ROLE: scscf
       SIP_IMS_VISITED_NETWORK: example.com
-      SIP_IMS_SERVER_NAME: sip:scscf.example.com
+      SIP_IMS_SERVER_NAME: sip:scscf:5060
       SIP_IMS_DEST_HOST: hss
       SIP_IMS_SESSION: "1"
       SIP_RTPENGINE_ENABLED: "1"
       SIP_RTPENGINE_HOST: media
       SIP_RTPENGINE_PORT: "2223"
-    ports:
-      - "127.0.0.1:15060:5060/udp"
-      - "127.0.0.1:18080:8080/tcp"
+    networks:
+      ims-lab:
+        ipv4_address: 172.30.0.6
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -H 'Authorization: Bearer ims-docker-admin-token-123456' http://127.0.0.1:8080/healthz >/dev/null"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  icscf:
+    build:
+      context: .
+      dockerfile: docker/ims-lab/Dockerfile.madis
+      args:
+        MAKO_VERSION: "0.4.18"
+    depends_on:
+      hss:
+        condition: service_healthy
+    volumes:
+      - ims-hss-certs:/certs:ro
+    environment:
+      SIP_BIND_IP: 0.0.0.0
+      SIP_IPV6: "0"
+      SIP_UDP_PORT: "5060"
+      SIP_TCP_PORT: "5060"
+      SIP_ADMIN_PORT: "8080"
+      SIP_ADMIN_TOKEN: ims-docker-admin-token-123456
+      SIP_REALM: example.com
+      SIP_NODE_ID: ims-docker-icscf
+      SIP_NODE_ADDR: 172.30.0.5
+      SIP_DIAMETER_HOST: hss
+      SIP_DIAMETER_PORT: "3868"
+      SIP_DIAMETER_TLS: "1"
+      SIP_DIAMETER_ALLOW_PLAINTEXT: "0"
+      SIP_DIAMETER_CA: /certs/hss.crt
+      SIP_DIAMETER_ORIGIN_HOST: icscf.docker
+      SIP_DIAMETER_ORIGIN_REALM: example.com
+      SIP_DIAMETER_DEST_REALM: example.com
+      SIP_IMS_CX: "1"
+      SIP_IMS_AKA: "0"
+      SIP_IMS_ROLE: icscf
+      SIP_IMS_ICSCF_NEXT_HOP: sip:scscf:5060
+      SIP_IMS_VISITED_NETWORK: example.com
+      SIP_IMS_SERVER_NAME: sip:scscf:5060
+      SIP_IMS_DEST_HOST: hss
+      SIP_IMS_SESSION: "0"
+    networks:
+      ims-lab:
+        ipv4_address: 172.30.0.5
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -H 'Authorization: Bearer ims-docker-admin-token-123456' http://127.0.0.1:8080/healthz >/dev/null"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  pcscf:
+    build:
+      context: .
+      dockerfile: docker/ims-lab/Dockerfile.madis
+      args:
+        MAKO_VERSION: "0.4.18"
+    depends_on:
+      icscf:
+        condition: service_healthy
+    environment:
+      SIP_BIND_IP: 0.0.0.0
+      SIP_IPV6: "0"
+      SIP_UDP_PORT: "5060"
+      SIP_TCP_PORT: "5060"
+      SIP_ADMIN_PORT: "8080"
+      SIP_ADMIN_TOKEN: ims-docker-admin-token-123456
+      SIP_REALM: example.com
+      SIP_NODE_ID: ims-docker-pcscf
+      SIP_NODE_ADDR: 172.30.0.4
+      SIP_IMS_ROLE: pcscf
+      SIP_IMS_PCSCF_NEXT_HOP: sip:icscf:5060
+      SIP_IMS_PATH: sip:pcscf:5060;lr
+      SIP_IMS_SESSION: "0"
     networks:
       ims-lab:
         ipv4_address: 172.30.0.4
+    ports:
+      - "127.0.0.1:15060:5060/udp"
+      - "127.0.0.1:18080:8080/tcp"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS -H 'Authorization: Bearer ims-docker-admin-token-123456' http://127.0.0.1:8080/healthz >/dev/null"]
       interval: 2s
@@ -105,19 +183,20 @@ services:
       context: .
       dockerfile: docker/ims-lab/Dockerfile.client
     depends_on:
-      madis:
+      pcscf:
         condition: service_healthy
       hss:
         condition: service_healthy
       media:
         condition: service_healthy
     environment:
-      MADIS_HOST: madis
+      MADIS_HOST: pcscf
       MADIS_SIP_PORT: "5060"
-      CLIENT_MEDIA_IP: 172.30.0.5
+      CLIENT_MEDIA_IP: 172.30.0.7
+      MEDIA_HOST: 172.30.0.3
     networks:
       ims-lab:
-        ipv4_address: 172.30.0.5
+        ipv4_address: 172.30.0.7
 
 volumes:
   ims-hss-certs:
