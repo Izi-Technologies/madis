@@ -100,6 +100,10 @@ class HssAdapterTests(unittest.TestCase):
         mismatch = self.request(300, self.identity_body(300).replace(b"sip:scscf.example.com", b"sip:other.example.com"))
         self.assertEqual(parse_message(self.app.handle(mismatch)).find(268), RESULT_UNKNOWN_USER.to_bytes(4, "big"))
 
+    def test_malformed_diameter_request_returns_no_answer(self) -> None:
+        self.assertEqual(self.app.handle(b"not-a-diameter-message"), b"")
+        self.assertEqual(self.app.handle(b"\x01\x00\x00\x14\x80\x00\x01\x2c"), b"")
+
     def test_disabled_subscriber_fails_closed_without_private_identity(self) -> None:
         self.store.provision(
             {
