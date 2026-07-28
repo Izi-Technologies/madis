@@ -41,6 +41,6 @@ docker volume rm sipproxy_ims-hss-certs
 
 ## What the test proves
 
-The client checks TLS certificate validation from S-CSCF/I-CSCF to the HSS, HTTPS subscriber authorization, Cx/AKA challenge and response handling for two subscribers, P-/I-/S-CSCF REGISTER and initial-INVITE forwarding, SDP offer/answer rewrite to the relay, RTP in both directions, ACK, and BYE. It does not test real UE behavior, full 3GPP IMS procedures, ICE/DTLS-SRTP, codecs, recording, external RTPEngine interoperability, or clustered state.
+The client checks deterministic `503` rejection for an unknown and a disabled subscriber before successful registration, TLS certificate validation from S-CSCF/I-CSCF to the HSS, HTTPS subscriber authorization, Cx/AKA challenge and response handling for two subscribers, P-/I-/S-CSCF REGISTER and initial-INVITE forwarding, SDP offer/answer rewrite to the relay, RTP in both directions, ACK, and BYE. It does not test real UE behavior, full 3GPP IMS procedures, ICE/DTLS-SRTP, codecs, recording, external RTPEngine interoperability, or clustered state.
 
 The Dockerfiles pin the Mako source to tag `v0.4.18` and build the worker inside the image with a matching runtime. The build requires Docker Desktop or a Linux Docker Engine with network access to the Mako repository and base-image registry.

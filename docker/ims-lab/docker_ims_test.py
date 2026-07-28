@@ -140,6 +140,26 @@ def register(client: SipClient, user: str, xres: str) -> None:
         raise AssertionError("REGISTER was not accepted")
 
 
+def expect_register_rejected(client: SipClient, user: str) -> None:
+    call_id = f"reject-{user}-{uuid.uuid4().hex[:12]}"
+    message = (
+        "REGISTER sip:example.com SIP/2.0\r\n"
+        f"Via: SIP/2.0/UDP {CLIENT_MEDIA_IP}:{client.address[1]};branch=z9hG4bK-{uuid.uuid4().hex}\r\n"
+        "Max-Forwards: 70\r\n"
+        f"From: <sip:{user}@example.com>;tag={user}-rejected\r\n"
+        f"To: <sip:{user}@example.com>\r\n"
+        f"Call-ID: {call_id}\r\n"
+        "CSeq: 1 REGISTER\r\n"
+        f"Contact: <sip:{user}@{CLIENT_MEDIA_IP}:{client.address[1]}>\r\n"
+        "Expires: 300\r\n"
+        "Content-Length: 0\r\n\r\n"
+    )
+    client.send(message)
+    rejected = client.receive(lambda item: status(item) in (403, 503))
+    if status(rejected) != 503:
+        raise AssertionError(f"expected 503 for rejected IMS vector, got {status(rejected)}")
+
+
 def run_call(alice: SipClient, bob: SipClient) -> None:
     call_id = "call-" + uuid.uuid4().hex[:12]
     alice_tag = "alice-call"
@@ -294,6 +314,8 @@ def main() -> int:
     alice.media.settimeout(5.0)
     bob.media.settimeout(5.0)
     try:
+        expect_register_rejected(alice, "missing")
+        expect_register_rejected(alice, "barred")
         register(alice, "alice", "xres-alice")
         register(bob, "bob", "xres-bob")
         run_call(alice, bob)
