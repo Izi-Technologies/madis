@@ -60,6 +60,10 @@ The Compose file requires these secrets and binds the worker HTTP and PostgreSQL
 
 ## Documentation map
 
+The IMS lab HSS adapter and media sidecar are documented in [`lab/README.md`](lab/README.md) and [`media/README.md`](media/README.md).
+
+The reproducible Docker IMS integration lab is documented in [`docker/ims-lab/README.md`](docker/ims-lab/README.md) and uses [`docker-compose.ims-lab.yml`](docker-compose.ims-lab.yml) to run HSS/Cx/AKA, the SIP worker, the media relay, and a two-subscriber end-to-end client test.
+
 | Need | Guide |
 | --- | --- |
 | Understand process/data flow | [`docs/architecture.md`](docs/architecture.md) |

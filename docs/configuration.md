@@ -190,6 +190,28 @@ Diameter credit control uses the following settings as applicable:
 
 TLS is the normal transport. Plain TCP or externally protected SCTP requires explicit deployment configuration. `SIP_IMS_CX=1` enables fail-closed Cx UAR/SAR authorization for REGISTER; set the corresponding `SIP_IMS_VISITED_NETWORK`, `SIP_IMS_SERVER_NAME`, and `SIP_IMS_DEST_HOST` values. See [`../api/diameter.md`](../api/diameter.md) and [`../api/ims-diameter.md`](../api/ims-diameter.md).
 
+## RTP media sidecar
+
+Madis can send bounded RTPEngine-ng `offer`, `answer`, and `delete` commands
+to an external media relay. The SIP worker owns signaling and SDP hook
+processing; RTP, RTCP, ICE, DTLS-SRTP, codecs, recording, and media policy
+remain in the external system. Database configuration uses
+`rtpengine_enabled`, `rtpengine_host`, and `rtpengine_port`.
+
+For a standalone worker or a controlled lab override, use:
+
+| Variable | Purpose |
+| --- | --- |
+| `SIP_RTPENGINE_ENABLED` | Explicit `1`, `true`, or `yes` enables; any other non-empty value disables. |
+| `SIP_RTPENGINE_HOST` | RTPEngine-ng control host, bounded to 512 characters. |
+| `SIP_RTPENGINE_PORT` | RTPEngine-ng UDP control port; invalid values fall back to `2223`. |
+
+Environment values override the corresponding database values for that
+worker. The control protocol has no authentication layer, so bind the relay
+and worker to a private network and restrict the control source allow-list.
+See [`../media/README.md`](../media/README.md) for the bundled lab sidecar
+and its unsupported media features.
+
 ## STIR/SHAKEN
 
 The implementation exposes configuration for the STIR/SHAKEN verification/signing path, including `STIR_SHAKEN_ENABLED`, `STIR_SHAKEN_MODE`, `STIR_SHAKEN_ATTESTATION`, `STIR_SHAKEN_CERT_URL`, `STIR_SHAKEN_PRIVATE_KEY`, `STIR_SHAKEN_PUBLIC_KEY`, `STIR_SHAKEN_SECRET`, `STIR_SHAKEN_JWKS`, and `STIR_SHAKEN_JWKS_URL`. Review certificate custody, attestation policy, and carrier interoperability before enabling it.

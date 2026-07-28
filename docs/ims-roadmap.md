@@ -23,6 +23,33 @@ Madis currently provides:
 
 These capabilities are covered by local contract and regression tests. They do not establish interoperability with a real HSS/UDM, IMS UE, RTPEngine, or carrier network.
 
+### Initial Phase 1/2 lab components
+
+The repository now includes two external lab components that exercise the
+existing boundaries without moving subscriber secrets or RTP into the SIP
+worker:
+
+- [`../lab/ims_hss.py`](../lab/README.md) provides a bounded Cx UAR/SAR/LIR/MAR
+  Diameter adapter and the versioned subscriber authorization HTTP contract.
+  Its opt-in wire tests cover TCP, TLS, and HTTP listener behavior. It uses
+  configured opaque XRES values for the selected lab profile and does not
+  implement Milenage/TUAK or production HSS secret management.
+- [`../media/rtp_module.py`](../media/README.md) provides an RTPEngine-ng
+  compatible control sidecar and a bounded one-audio-stream RTP/RTCP relay.
+  It does not implement ICE, DTLS-SRTP termination, codec transcoding,
+  recording, or production media failover.
+
+Their unit and localhost wire tests are now part of the repository checks.
+They reduce the integration gap; they do not constitute external IMS or media
+interoperability evidence.
+
+The reproducible Docker profile at [`../docker/ims-lab/README.md`](../docker/ims-lab/README.md)
+now composes these adapters with a Mako `v0.4.18` worker and deterministic
+two-subscriber client. Its passing smoke test is evidence for the selected
+TLS Cx/AKA, SIP, SDP relay, RTP, and teardown path only; the remaining roadmap
+items below still require real UE/HSS/UDM/media interoperability and measured
+deployment acceptance.
+
 ### Explicit boundaries
 
 - Madis sends bounded RTPEngine control messages; it does not own RTP, ICE, DTLS-SRTP, codecs, recording, or media policy.
@@ -85,6 +112,9 @@ The phases below are ordered by dependency. A phase is complete only when its ac
 
 ### Phase 1 — External end-to-end lab interoperability (next)
 
+The adapter baseline is present; the remaining work is connecting it to the
+Madis deployment and a selected IMS client profile, then collecting evidence.
+
 - Connect Cx to a real HSS/UDM or selected HSS-compatible adapter over the configured Diameter security and identity boundary.
 - Exercise live UAR/UAA, MAR/MAA, SAR/SAA, and LIR/LIA, including unknown subscriber, barred subscriber, expired vector, unavailable HSS, malformed answer, and serving-S-CSCF mismatch cases.
 - Validate a real HTTPS subscriber service with TLS trust, token rotation, provisioning, assigned S-CSCF state, profile retrieval, and fail-closed behavior.
@@ -94,6 +124,9 @@ The phases below are ordered by dependency. A phase is complete only when its ac
 Acceptance evidence: reproducible traces and test logs for two subscribers registering, authenticating, placing, and clearing calls through the selected topology, with deterministic negative responses and no stale registration state.
 
 ### Phase 2 — Real media-path interoperability
+
+The control-compatible relay baseline is present; the remaining work is
+endpoint and network interoperability against the selected media profile.
 
 - Exercise the production RTPEngine offer, answer, and delete path against a real RTPEngine instance.
 - Validate NAT traversal, codec and SDP negotiation, RTP/RTCP anchoring, ICE, DTLS-SRTP, DTMF, and media-session cleanup with selected endpoints.

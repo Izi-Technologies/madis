@@ -1,0 +1,5 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+COPY docker/ims-lab/docker_ims_test.py /app/docker_ims_test.py
+ENTRYPOINT ["python3", "/app/docker_ims_test.py"]

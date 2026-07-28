@@ -1,0 +1,5 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+COPY media/rtp_module.py /app/media/rtp_module.py
+ENTRYPOINT ["python3", "/app/media/rtp_module.py"]

@@ -62,3 +62,12 @@ Do not hold a SIP transaction open while an LLM, speech, media, or fraud system 
 - Test timeout, signature failure, malformed response, unavailable endpoint, and configured open/closed behavior before enabling production traffic.
 
 The live gateway is an extension point, not a claim that every external application or media service implements all SIP, WebRTC, or media standards. See [`../api/README.md`](../api/README.md) for the separate carrier/control API.
+
+## IMS media sidecar
+
+The repository also includes [`../media/rtp_module.py`](../media/README.md), a
+separate RTPEngine-ng compatible lab process. It is configured through the
+existing `rtpengine_enabled`, `rtpengine_host`, and `rtpengine_port` settings;
+Madis remains responsible for bounded SDP control and SIP failure handling,
+while the sidecar owns UDP media sockets. This is a media-plane module, not an
+in-process SIP plugin and not a production media-server implementation.

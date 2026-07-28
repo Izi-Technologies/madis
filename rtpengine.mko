@@ -137,6 +137,33 @@ fn rtp_send(host: string, port: int, command: string) -> string {
 }
 
 // Load rtpengine config from DB
+fn rtp_config_apply_env(result: []string) []string {
+    // Explicit environment values are useful for standalone workers and
+    // smoke tests that intentionally run without a database.  They also
+    // override DB values so an operator can disable a stale media target
+    // during a controlled restart without changing application data.
+    let mut adjusted = make([]string, 3)
+    adjusted[0] = result[0]
+    adjusted[1] = result[1]
+    adjusted[2] = result[2]
+    let env_enabled = str_to_lower(str_trim_space(env_get_or("SIP_RTPENGINE_ENABLED", "")))
+    if len(env_enabled) > 0 {
+        adjusted[0] = "0"
+        if str_eq(env_enabled, "1") || str_eq(env_enabled, "true") || str_eq(env_enabled, "yes") {
+            adjusted[0] = "1"
+        }
+    }
+    let env_host = str_trim_space(env_get_or("SIP_RTPENGINE_HOST", ""))
+    if len(env_host) > 0 && len(env_host) <= 512 {
+        adjusted[1] = env_host
+    }
+    let env_port = str_trim_space(env_get_or("SIP_RTPENGINE_PORT", ""))
+    if len(env_port) > 0 {
+        adjusted[2] = string(rtp_port_value(env_port))
+    }
+    return adjusted
+}
+
 fn rtp_config(db: SqlDB, db_ok: int, cache: CMap) -> []string {
     // Returns [enabled, host, port]
     let mut result = make([]string, 3)
@@ -153,6 +180,7 @@ fn rtp_config(db: SqlDB, db_ok: int, cache: CMap) -> []string {
             result[1] = parts[1]
             result[2] = string(rtp_port_value(parts[2]))
         }
+        result = rtp_config_apply_env(result)
         return result
     }
 
@@ -165,6 +193,7 @@ fn rtp_config(db: SqlDB, db_ok: int, cache: CMap) -> []string {
         if len(port) > 0 { result[2] = port }
     }
     result[2] = string(rtp_port_value(result[2]))
+    result = rtp_config_apply_env(result)
 
     // Start from a fresh buffer.  Array elements are owned by `result`;
     // consuming result[0] with the in-place concat path would leave the

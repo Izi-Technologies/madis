@@ -14,6 +14,9 @@ main.dSYM/
 # Benchmark cache
 bench/__pycache__/
 sdk/python/__pycache__/
+lab/__pycache__/
+media/__pycache__/
+docker/ims-lab/__pycache__/
 bench/sipp_stat.csv
 
 # AI tooling
@@ -23,6 +26,7 @@ bench/sipp_stat.csv
 .copilot/
 .aider*
 .anthropic/
+.tokensave/
 CLAUDE.md
 CLAUDE.local.md
 
