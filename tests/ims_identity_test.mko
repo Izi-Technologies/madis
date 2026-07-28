@@ -1,0 +1,70 @@
+// Opt-in trusted-network identity and privacy boundary tests.
+pull . "../main.mko"
+
+fn ims_identity_test_message(extra: string) -> string {
+    return "INVITE sip:b@example.com SIP/2.0\r\n"
+        + "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-identity-test\r\n"
+        + "From: <sip:a@example.com>;tag=identity-a\r\n"
+        + "To: <sip:b@example.com>\r\n"
+        + "Call-ID: identity-test@example.com\r\n"
+        + "CSeq: 1 INVITE\r\n"
+        + extra
+        + "Content-Length: 0\r\n\r\n"
+}
+
+fn ims_identity_test_enable() {
+    let _ = env_set("SIP_IMS_IDENTITY_POLICY", "1")
+}
+
+fn ims_identity_test_disable() {
+    let _ = env_set("SIP_IMS_IDENTITY_POLICY", "0")
+}
+
+fn TestIMSIdentityPolicyDisabled() {
+    ims_identity_test_disable()
+    let msg = ims_identity_test_message("P-Asserted-Identity: <sip:spoof@example.com>\r\n")
+    assert_eq_str(ims_identity_ingress(msg, 0), msg)
+}
+
+fn TestIMSIdentityStripsUntrustedHeaders() {
+    ims_identity_test_enable()
+    let msg = ims_identity_test_message(
+        "P-Asserted-Identity: <sip:spoof@example.com>\r\n"
+        + "P-Preferred-Identity: <sip:preferred@example.com>\r\n"
+        + "Privacy: id\r\n")
+    let sanitized = ims_identity_ingress(msg, 0)
+    assert_eq_str(sip_header(sanitized, "P-Asserted-Identity"), "")
+    assert_eq_str(sip_header(sanitized, "P-Preferred-Identity"), "")
+    assert_eq_str(sip_header(sanitized, "Privacy"), "id")
+    assert_eq_str(sip_header(sanitized, "From"), "<sip:a@example.com>;tag=identity-a")
+}
+
+fn TestIMSIdentityTrustedValidation() {
+    ims_identity_test_enable()
+    let valid = ims_identity_test_message("P-Asserted-Identity: <sip:asserted@example.com>\r\n")
+    assert_eq_str(sip_header(ims_identity_ingress(valid, 1), "P-Asserted-Identity"), "<sip:asserted@example.com>")
+    let malformed = ims_identity_test_message("P-Asserted-Identity: <sip:bad%ZZ@example.com>\r\n")
+    assert_eq_str(ims_identity_ingress(malformed, 1), "__IMS_IDENTITY_INVALID__")
+    let list = ims_identity_test_message("P-Asserted-Identity: <sip:a@example.com>, <sip:b@example.com>\r\n")
+    assert_eq_str(ims_identity_ingress(list, 1), "__IMS_IDENTITY_INVALID__")
+    let duplicate = ims_identity_test_message(
+        "P-Asserted-Identity: <sip:a@example.com>\r\n"
+        + "P-Asserted-Identity: <sip:b@example.com>\r\n")
+    assert_eq_str(ims_identity_ingress(duplicate, 1), "__IMS_IDENTITY_INVALID__")
+}
+
+fn TestIMSIdentityPrivacyApplication() {
+    ims_identity_test_enable()
+    let private_msg = ims_identity_test_message(
+        "P-Asserted-Identity: <sip:asserted@example.com>\r\n"
+        + "P-Preferred-Identity: <sip:preferred@example.com>\r\n"
+        + "Privacy: id\r\n")
+    let private_out = ims_identity_apply_privacy(private_msg)
+    assert_eq_str(sip_header(private_out, "P-Asserted-Identity"), "")
+    assert_eq_str(sip_header(private_out, "P-Preferred-Identity"), "")
+    let public_msg = ims_identity_test_message(
+        "P-Asserted-Identity: <sip:asserted@example.com>\r\n"
+        + "Privacy: none\r\n")
+    assert_eq_str(sip_header(ims_identity_apply_privacy(public_msg), "P-Asserted-Identity"), "<sip:asserted@example.com>")
+    ims_identity_test_disable()
+}

@@ -91,6 +91,8 @@ Terminate public HTTPS and WebSocket traffic in nginx, Caddy, HAProxy, or an equ
 | `SIP_UDP_WORKERS` | `1` | UDP listener worker count. |
 | `SIP_TCP_WORKERS` | `1` | Stream listener worker count. |
 | `SIP_SCHED_WORKERS` | `0` | Bounded Mako scheduler pool; `0` keeps the default per-kick threading behavior. |
+| `SIP_TCP_MAX_CONNECTIONS` | `65536` | Per-TCP-worker accepted-connection ceiling; bounded to `1024..1048576`, with excess connections closed before SIP parsing. |
+| `SIP_CALL_STATE_CAPACITY` | `262144` | Per-process SIP call/dialog state-record budget; bounded to `16384..1048576`, with new calls rejected at the limit instead of evicting live state. |
 | `SIP_T1_MS` | `500` | Base transaction timer. |
 | `SIP_T2_MS` | `4000` | Non-INVITE retransmission ceiling. |
 | `SIP_TIMER_C_MS` | `180000` | Proxy INVITE timer C bound. |
@@ -162,6 +164,18 @@ For explicit REGISTER and initial-session role behavior, set `SIP_IMS_ROLE=scscf
 
 For `SIP_IMS_SESSION=1`, the active-binding requirement applies to both the caller and destination during an initial local S-CSCF INVITE. A missing caller binding returns 403; a missing destination binding returns 404 before charging, application, or contact routing. The default remains `0` for compatibility with non-IMS SIP deployments.
 
+For the opt-in RFC 4028 request boundary, set `SIP_IMS_SESSION_TIMERS=1`. INVITE and UPDATE requests with `Session-Expires` or `Min-SE` are checked for bounded decimal syntax, duplicate headers, supported `refresher=uac|uas` parameters, and configured limits. The default minimum is 90 seconds and the default maximum is 86,400 seconds; override them with `SIP_IMS_SESSION_MIN_SE` and `SIP_IMS_SESSION_MAX_SE`. Malformed or out-of-range values return 400; an interval below the effective minimum returns 422 with `Min-SE`. The default is disabled, and this setting does not generate refresh requests or implement endpoint timer state.
+
+For the opt-in trusted-network identity boundary, set `SIP_IMS_IDENTITY_POLICY=1`. The existing IP-authenticated or loopback source boundary is trusted; `P-Asserted-Identity` and `P-Preferred-Identity` from other sources are removed before forwarding. Trusted peers must supply at most one valid SIP identity, otherwise the request returns 400. `Privacy: id` removes asserted/preferred identity on outbound INVITEs. The policy does not generate asserted identities, rewrite From, or implement full RFC 3325/RFC 8224 behavior.
+
+To advertise one local S-CSCF route after successful REGISTER, set `SIP_IMS_SERVICE_ROUTE=sip:scscf.example.com;lr` (or a validated `sips:` URI). The value is emitted as `Service-Route: <...>` only by the local registrar path; empty or unsafe values are ignored only when unset, while configured invalid values fail REGISTER with 500. Subscriber-profile-derived route sets and third-party registration are not implemented.
+
+For the P-CSCF REGISTER forwarding boundary, set `SIP_IMS_PATH=sip:pcscf.example.com;lr` (or a validated `sips:` URI). The value is emitted as one `Path: <...>` header only when `SIP_IMS_ROLE=pcscf`; any UE-supplied `Path` headers are removed before forwarding. Empty configuration preserves existing behavior, while a configured invalid, list-valued, control-character, or embedded name-addr value returns `500 IMS Path Misconfigured`. Dynamic Path discovery, outbound flow-token state, and multi-hop profile-derived Path sets are not implemented.
+
+To advertise one local S-CSCF public identity in a successful REGISTER response, set `SIP_IMS_ASSOCIATED_URI=sip:alice@example.com` (or a validated `sips:` URI). The value is emitted as `P-Associated-URI: <...>` only by the local registrar path and is used as a fallback when an authorized subscriber response does not contain `service_profile.associated_uris`. Configured invalid, list-valued, control-character, or embedded name-addr values fail REGISTER with 500. The subscriber profile may instead provide up to eight unique SIP/SIPS identities in `associated_uris`; malformed profile data fails closed before registration state is written. iFC/TAS behavior is not implemented.
+
+An authorized subscriber may also return `service_profile.initial_filter_criteria` as up to four unique SIP/SIPS application target URIs. On the local S-CSCF, an initial originating INVITE from a live registered source, or an initial terminating INVITE for a live registered destination, is terminally forked to those targets. This is a target-only boundary: standard iFC condition objects, session/header conditions, third-party REGISTER, and TAS logic are not evaluated. Empty or absent criteria clears the prior trigger; final contact expiry or explicit deregistration also clears the in-memory trigger; malformed criteria rejects REGISTER before registration state is written.
+
 With `SIP_IMS_CX=1`, the HSS UAA must return a `Server-Name` exactly matching `SIP_IMS_SERVER_NAME`; missing or mismatched assignment fails REGISTER before SAR and no local binding is written.
 
 Cx SAR receives `REGISTRATION` for a new binding, `RE_REGISTRATION` for a refresh of an active binding, and `USER_DEREGISTRATION` for `Contact: *` or an explicit `expires=0` removal. Mixed or malformed Contact lists remain subject to the normal SIP validation path.
@@ -185,3 +199,25 @@ The implementation exposes configuration for the STIR/SHAKEN verification/signin
 Configuration changes generally require restarting the affected process. The watched `SIP_CONFIG_FILE` path is the supported trigger for a worker reload; verify `/readyz`, logs, and a representative OPTIONS/REGISTER/INVITE flow afterward.
 
 Do not commit database URLs, passwords, private keys, or bearer tokens. Restrict `/etc/madis/madis.env`, use a secret manager where available, and keep the worker and WebUI listeners on private interfaces unless an authenticated reverse proxy and firewall policy are in place.
+## HEPv3 capture
+
+HEP export is disabled by default. When enabled, each validated inbound SIP
+message is encoded as a bounded HEPv3 packet and sent best-effort over UDP to
+the configured collector. Capture errors are dropped and do not alter SIP
+responses or transaction handling.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SIP_HEP_ENABLE` | `0` | Set to `1`, `true`, or `yes` to enable capture. |
+| `SIP_HEP_HOST` | Empty | HEP collector hostname or IP. Empty disables sending. |
+| `SIP_HEP_PORT` | `9060` | HEP UDP destination port, bounded to `1..65535`. |
+| `SIP_HEP_LOCAL_IP` | `SIP_PUBLIC_IP` or `127.0.0.1` | Local address encoded in HEP metadata. Current exporter requires IPv4 metadata. |
+| `SIP_HEP_CAPTURE_ID` | `1` | HEP capture-agent ID, bounded to `0..65535`. |
+| `SIP_HEP_MAX_PAYLOAD` | `60000` | Maximum SIP payload bytes exported per packet. |
+| `SIP_HEP_QUEUE_CAPACITY` | `8192` | Per-process bounded HEP wire-packet queue; clamped `256..65536`. Full queues drop HEP capture only. |
+
+The exporter uses one detached worker and one process-local UDP socket. SIP ingress only encodes and non-blockingly enqueues bounded wire packets; it does not wait for collector I/O.
+A full queue, socket error, or collector outage drops HEP capture only and
+does not change SIP responses or transaction handling. There are no retries or
+collector acknowledgements, so HEP is not durable recording. Use a local or
+nearby collector and scale collectors independently.

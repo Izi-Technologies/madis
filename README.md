@@ -6,13 +6,22 @@ Madis is not a complete telecom business platform. It does not provide rating, i
 
 ## What Madis provides
 
+- RTPEngine offer/answer/delete commands include Call-ID and SIP dialog-tag correlation; RTP, ICE, DTLS-SRTP, codecs, and recording remain external.
+- Only bounded `application/sdp` bodies with the required session and media lines are sent to RTPEngine; invalid or non-SDP bodies continue without media rewriting.
+- Optional RFC 4028 request-side session-timer validation for INVITE and UPDATE, including bounded `Session-Expires`/`Min-SE` syntax, duplicate-header rejection, 400 malformed-request responses, and 422 minimum-interval responses. Endpoint refresh generation remains external.
+- Optional trusted-network IMS identity/privacy boundary: untrusted ingress cannot supply `P-Asserted-Identity` or `P-Preferred-Identity`; trusted IP-authenticated peers receive strict single-identity validation, and `Privacy: id` removes asserted/preferred identity on outbound INVITEs.
+- Optional P-CSCF `Path` insertion for forwarded REGISTER requests via `SIP_IMS_PATH`; the configured route is strictly validated and replaces UE-supplied Path headers only in the P-CSCF role.
+- Optional local-S-CSCF `Service-Route` in successful REGISTER responses via `SIP_IMS_SERVICE_ROUTE`; the configured route is strictly validated and third-party registration remains external.
+- Optional local-S-CSCF `P-Associated-URI` in successful REGISTER responses via `SIP_IMS_ASSOCIATED_URI`, or from up to eight validated `service_profile.associated_uris` values returned by the subscriber service.
+- Bounded subscriber-profile `initial_filter_criteria`: up to four unique SIP/SIPS application targets can terminally fork an originating initial INVITE from a live local registration or a terminating initial INVITE for a live destination registration; full iFC conditions and TAS behavior remain external.
+
 - SIP proxy and registrar behavior with UDP, TCP, TLS, WS, and WSS listeners.
 - REGISTER contact storage, expiry handling, wildcard removal, digest authentication, and database hydration.
 - RFC 3261 transaction behavior, retransmission handling, forking, CANCEL, ACK, response routing, Via/Route/Record-Route, Max-Forwards, and Content-Length checks.
 - RFC 3263-style NAPTR/SRV transport selection with A/AAAA fallback, IPv6 signaling, and outbound WSS connection reuse.
 - Database-backed routing rules, dispatch groups, failover, dialplan number transformation, access-control policy, security bans, ANI ranges, gateways, and header rules.
 - Optional single-target B2BUA routing. Enable it with `SIP_B2BUA_MODE=enabled` before using a `b2bua:` route action.
-- RTPEngine control-plane hooks for SDP processing. RTP, ICE, DTLS-SRTP, codecs, and media recording are outside the SIP worker.
+- RTPEngine control-plane hooks for bounded SDP offer/answer and delete exchanges. RTP, ICE, DTLS-SRTP, codecs, and media recording are outside the SIP worker.
 - A separate authenticated WebUI and a versioned machine API under `/admin/api/v1/`.
 - Durable billing events, bounded CDR reads, and optional online charging through HTTP or Diameter.
 - Signed HTTP application and module contracts for live SIP decisions and external TTS/STT/LLM/media/recording/fraud/billing workers.
@@ -124,7 +133,7 @@ Mutable responses include a `revision`. Send `expected_revision` when concurrent
 
 ## Installation and builds
 
-The supported source entry point is [`main.mko`](main.mko); [`sipproxy_full.mko`](sipproxy_full.mko) is a legacy monolithic reference and is not the deployment target. Builds require Mako 0.4.16 and its matching runtime:
+The supported source entry point is [`main.mko`](main.mko); [`sipproxy_full.mko`](sipproxy_full.mko) is a legacy monolithic reference and is not the deployment target. Builds require Mako 0.4.18 and its matching runtime:
 
 ```sh
 MAKO_BIN=mako MAKO_RUNTIME=/path/to/mako/runtime \
@@ -138,9 +147,11 @@ MAKO_BIN=mako MAKO_RUNTIME=/path/to/mako/runtime \
 
 ## Integration boundaries
 
-For the bounded IMS session path, established-dialog re-INVITEs follow recorded SIP dialog/Route state before role selection or new-call policy; this does not make Madis a complete IMS dialog or service-role implementation.
+For the bounded IMS session path, established-dialog re-INVITEs follow recorded SIP dialog/Route state before role selection or new-call policy; this does not make Madis a complete IMS dialog or service-role implementation. When `SIP_IMS_SESSION_TIMERS=1`, INVITE and UPDATE request headers are checked against configured 90–86,400 second bounds; the feature does not generate refreshes or maintain endpoint timer state.
 
 Transparent in-dialog PRACK and UPDATE forwarding is supported for early and confirmed dialogs; the proxy validates tracked RSeq/RAck state but does not generate reliable provisional responses or claim endpoint-level conformance.
+
+When `SIP_IMS_IDENTITY_POLICY=1`, trusted identity means the existing IP-authenticated or loopback source boundary. This policy does not generate P-Asserted-Identity, rewrite From to anonymous, or implement complete RFC 3325/RFC 8224 interworking. In the P-CSCF role, `SIP_IMS_PATH` adds one validated Path to forwarded REGISTER requests and removes UE-supplied Path headers; it does not implement dynamic Path discovery or flow-token management. `SIP_IMS_SERVICE_ROUTE` adds one validated Service-Route to local S-CSCF REGISTER responses. `SIP_IMS_ASSOCIATED_URI` is a validated static fallback; an authorized subscriber `service_profile.associated_uris` list takes precedence when present. Target-only `service_profile.initial_filter_criteria` is limited to four validated application targets on originating initial INVITEs from live local registrations and terminating initial INVITEs for live destination registrations. Full iFC condition evaluation, third-party registration, and TAS routing remain external.
 
 Madis owns SIP transaction, dialog, registration, routing, and transport state. External services own their application frameworks, tenant authorization, rating, invoices, durable business state, media plane, HSS/UDM, and SS7 gateway behavior.
 
@@ -149,8 +160,13 @@ Madis owns SIP transaction, dialog, registration, routing, and transport state. 
 | Billing | CDRs, durable outbox, idempotent acknowledgement, optional preauthorization | Rating, ledger, invoicing, settlement, tax, and tenant business rules |
 | Media | RTPEngine control messages and SDP hooks | RTP, ICE, DTLS-SRTP, codecs, recording, and media policy |
 | Diameter | RFC 6733 framing, RFC 8506 credit control, selected Cx/Sh builders | General relay, peer scheduler, HSS/UDM, quota timers, and carrier-specific conformance |
-| IMS | Cx/Sh wire contracts, bounded P-/I-/S-CSCF REGISTER and initial-INVITE role routing, optional Cx UAR/SAR/LIR authorization, optional Cx MAR/MAA-backed AKAv1-MD5 REGISTER, and optional HTTPS subscriber authorization | HSS/UDM and AKA generation, TAS/MMTel, PCRF/PCF, full dialog/service-role behavior, and the complete IMS core |
+| IMS | Cx/Sh wire contracts, bounded P-/I-/S-CSCF REGISTER and initial-INVITE role routing, optional Cx UAR/SAR/LIR authorization, optional Cx MAR/MAA-backed AKAv1-MD5 REGISTER, optional HTTPS subscriber authorization with bounded associated-identity and target-only `service_profile` fields, opt-in RFC 4028 request-side interval validation, trusted-network identity/privacy filtering, one configured P-CSCF Path, one configured local-S-CSCF Service-Route, and one configured local-S-CSCF P-Associated-URI fallback | HSS/UDM and AKA generation, endpoint session refreshes, identity assertion generation, dynamic Path/flow-token management, full iFC condition evaluation, third-party registration, TAS/MMTel, PCRF/PCF, full dialog/service-role behavior, and the complete IMS core |
 | SS7/SIGTRAN | Versioned M3UA/SCCP/ISUP/TCAP envelope | Native M3UA/SCCP/ISUP/TCAP termination and gateway operations |
 | Applications/modules | Signed, bounded HTTP contracts and command validation | Application logic, long-running jobs, model/media workers, and business persistence |
 
 For the detailed support matrix, read [`RFC_COMPLIANCE.md`](RFC_COMPLIANCE.md). Local tests and wire-contract checks are evidence for the tested paths; they are not universal interoperability or security certification.
+## Scale, clustering, and HEP
+
+Active-active deployment guidance is in [`docs/clustering.md`](docs/clustering.md).
+Optional HEPv3 UDP capture is configured in [`docs/configuration.md`](docs/configuration.md)
+and is best-effort so a collector outage cannot block SIP processing.

@@ -420,6 +420,28 @@ fn rfc_bounded_state_set(store: CMap, index: CMap, seq_key: string, ring_prefix:
     return 0
 }
 
+// Call/dialog state is bounded separately from short-lived transaction and
+// security caches. Capacity is a state-record limit, not a performance claim.
+// Refuse new records at the limit so an active dialog is never evicted merely
+// because traffic exceeded the configured memory budget.
+fn sip_call_state_capacity() -> int {
+    let mut capacity = 262144
+    match parse_int(env_get_or("SIP_CALL_STATE_CAPACITY", "262144")) {
+        Ok(value) => { capacity = value }
+        Err(_) => {}
+    }
+    if capacity < 16384 { capacity = 16384 }
+    if capacity > 1048576 { capacity = 1048576 }
+    return capacity
+}
+
+fn sip_call_state_set(calls: CMap, cache: CMap, key: string, value: string) -> int {
+    if cmap_has(calls, key) == 0 && cmap_len(calls) >= sip_call_state_capacity() {
+        return -1
+    }
+    return rfc_bounded_state_set(calls, cache, "call_state_seq", "call_state_ring|", key, value, sip_call_state_capacity())
+}
+
 fn sip_dialog_observe(msg: string, reply: string, calls: CMap, cache: CMap) -> int {
     let cid = sip_header(msg, "Call-ID")
     if len(cid) == 0 { return 0 }
@@ -438,7 +460,7 @@ fn sip_dialog_observe(msg: string, reply: string, calls: CMap, cache: CMap) -> i
         if code >= 200 && code < 300 { state = "confirmed" }
         if code >= 300 { state = "failed" }
     }
-    let _ = rfc_bounded_state_set(calls, cache, "call_state_seq", "call_state_ring|", key, state + "|" + string(now_ms()), 65536)
+    let _ = sip_call_state_set(calls, cache, key, state + "|" + string(now_ms()))
     if str_eq(state, "terminated") || str_eq(state, "failed") {
         let _ = cmap_del(calls, key)
     }

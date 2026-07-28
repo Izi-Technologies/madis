@@ -1,0 +1,40 @@
+// RTPEngine SDP content and body boundary tests.
+pull . "../main.mko"
+
+fn TestRTPEngineSDPValidBody() {
+    let sdp = "v=0\r\n"
+        + "o=- 1 1 IN IP4 192.0.2.1\r\n"
+        + "s=-\r\n"
+        + "c=IN IP4 192.0.2.1\r\n"
+        + "m=audio 49170 RTP/AVP 0\r\n"
+    assert_eq(rtp_sdp_body_safe(sdp), 1)
+}
+
+fn TestRTPEngineSDPMissingMedia() {
+    assert_eq(rtp_sdp_body_safe("v=0\r\ns=-\r\nc=IN IP4 192.0.2.1\r\n"), 0)
+}
+
+fn TestRTPEngineSDPContentType() {
+    let valid = "INVITE sip:b@example.com SIP/2.0\r\n"
+        + "Content-Type: application/sdp; charset=utf-8\r\n"
+        + "Content-Length: 0\r\n\r\n"
+    assert_eq(rtp_sdp_content_type_safe(valid), 1)
+    let wrong_type = "INVITE sip:b@example.com SIP/2.0\r\n"
+        + "Content-Type: application/json\r\n"
+        + "Content-Length: 0\r\n\r\n"
+    assert_eq(rtp_sdp_content_type_safe(wrong_type), 0)
+}
+
+fn TestRTPEngineSDPBodyExtraction() {
+    let sdp = "v=0\r\n"
+        + "o=- 1 1 IN IP4 192.0.2.1\r\n"
+        + "s=-\r\n"
+        + "c=IN IP4 192.0.2.1\r\n"
+        + "m=audio 49170 RTP/AVP 0\r\n"
+    let valid = "INVITE sip:b@example.com SIP/2.0\r\n"
+        + "Content-Type: application/sdp; charset=utf-8\r\n"
+        + "Content-Length: " + string(len(sdp)) + "\r\n\r\n"
+        + sdp
+    assert_eq_str(sip_body(valid), sdp)
+    assert_eq(rtp_sdp_body_safe(sip_body(valid)), 1)
+}

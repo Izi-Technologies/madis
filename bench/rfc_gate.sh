@@ -8,10 +8,7 @@ cd "$ROOT"
 
 MAKO_RUNTIME="$RUNTIME" "$MAKO" check --no-incremental main.mko
 MAKO_RUNTIME="$RUNTIME" "$MAKO" lint main.mko
-BRIDGE_TMP=$(mktemp "${TMPDIR:-/tmp}/madis-rfc-bridge.XXXXXX.o")
-trap 'rm -f "$BRIDGE_TMP"' EXIT HUP INT TERM
-cc -std=c11 -O2 -DNDEBUG -w -I"$RUNTIME" -c madis_memory.c -o "$BRIDGE_TMP"
-MAKO_RUNTIME="$RUNTIME" MAKO_LDFLAGS="$BRIDGE_TMP ${MAKO_LDFLAGS:-}" "$MAKO" test tests
+MAKO_RUNTIME="$RUNTIME" "$MAKO" test tests --native-source "$ROOT/madis_memory.c"
 MAKO_BIN="$MAKO" MAKO_RUNTIME="$RUNTIME" "$ROOT/scripts/build-native.sh" main.mko main
 
 python3 bench/transport_matrix.py --binary ./main --base-port 18560

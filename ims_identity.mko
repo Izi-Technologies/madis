@@ -1,0 +1,56 @@
+// Opt-in IMS asserted-identity and privacy boundary.
+//
+// P-Asserted-Identity and P-Preferred-Identity are trusted-network headers.
+// This module deliberately does not invent an asserted identity or implement
+// full RFC 3325/RFC 8224 semantics. It only validates one asserted identity
+// from an already trusted source and removes spoofable identity headers from
+// untrusted ingress.
+
+fn ims_identity_policy_requested() -> int {
+    let value = str_to_lower(str_trim_space(env_get_or("SIP_IMS_IDENTITY_POLICY", "0")))
+    if str_eq(value, "1") || str_eq(value, "true") || str_eq(value, "yes") { return 1 }
+    return 0
+}
+
+fn ims_identity_policy_enabled() -> int {
+    return ims_identity_policy_requested()
+}
+
+fn ims_identity_header_valid(msg: string, name: string) -> int {
+    if madis_header_count(msg, name) != 1 { return 0 }
+    let value = sip_header(msg, name)
+    if len(value) == 0 || len(value) > 2048 { return 0 }
+    if str_index(value, ",") >= 0 || str_index(value, "\r") >= 0 || str_index(value, "\n") >= 0 { return 0 }
+    return sip_name_addr_valid(value)
+}
+
+fn ims_identity_ingress(msg: string, trusted: int) -> string {
+    if ims_identity_policy_enabled() == 0 { return msg }
+
+    let asserted_count = madis_header_count(msg, "P-Asserted-Identity")
+    let preferred_count = madis_header_count(msg, "P-Preferred-Identity")
+    if asserted_count > 1 || preferred_count > 1 { return "__IMS_IDENTITY_INVALID__" }
+    if trusted == 1 {
+        if asserted_count == 1 && ims_identity_header_valid(msg, "P-Asserted-Identity") == 0 { return "__IMS_IDENTITY_INVALID__" }
+        if preferred_count == 1 && ims_identity_header_valid(msg, "P-Preferred-Identity") == 0 { return "__IMS_IDENTITY_INVALID__" }
+        return msg
+    }
+
+    let mut result = hdr_remove(msg, "P-Asserted-Identity")
+    result = hdr_remove(result, "P-Preferred-Identity")
+    return result
+}
+
+fn ims_identity_privacy_id(msg: string) -> int {
+    if madis_header_count(msg, "Privacy") != 1 { return 0 }
+    return sip_header_token_present(sip_header(msg, "Privacy"), "id")
+}
+
+// Apply only the identity portion of Privacy. The From header is not rewritten
+// here because that requires an endpoint/dialog policy and a generated Contact.
+fn ims_identity_apply_privacy(msg: string) -> string {
+    if ims_identity_policy_enabled() == 0 || ims_identity_privacy_id(msg) == 0 { return msg }
+    let mut result = hdr_remove(msg, "P-Asserted-Identity")
+    result = hdr_remove(result, "P-Preferred-Identity")
+    return result
+}

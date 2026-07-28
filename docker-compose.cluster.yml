@@ -1,0 +1,55 @@
+# Two-node active-active development/staging topology.
+# Put a SIP-aware L4 load balancer in front of these services; this file
+# deliberately does not publish SIP ports directly to the host.
+services:
+  db:
+    extends:
+      file: docker-compose.yml
+      service: db
+
+  madis-node1:
+    extends:
+      file: docker-compose.yml
+      service: madis
+    container_name: madis-node1
+    hostname: madis-node1
+    ports: []
+    expose:
+      - "5060/udp"
+      - "5060/tcp"
+      - "5061/tcp"
+      - "8443/tcp"
+      - "8080/tcp"
+    environment:
+      SIP_NODE_ID: "${MADIS_NODE_1_ID:-cluster-node-1}"
+      SIP_NODE_ADDR: "madis-node1"
+      SIP_UDP_WORKERS: "${MADIS_NODE_UDP_WORKERS:-4}"
+      SIP_TCP_WORKERS: "${MADIS_NODE_TCP_WORKERS:-4}"
+      SIP_SCHED_WORKERS: "${MADIS_NODE_SCHED_WORKERS:-2}"
+
+  madis-node2:
+    extends:
+      file: docker-compose.yml
+      service: madis
+    container_name: madis-node2
+    hostname: madis-node2
+    ports: []
+    expose:
+      - "5060/udp"
+      - "5060/tcp"
+      - "5061/tcp"
+      - "8443/tcp"
+      - "8080/tcp"
+    environment:
+      SIP_NODE_ID: "${MADIS_NODE_2_ID:-cluster-node-2}"
+      SIP_NODE_ADDR: "madis-node2"
+      SIP_UDP_WORKERS: "${MADIS_NODE_UDP_WORKERS:-4}"
+      SIP_TCP_WORKERS: "${MADIS_NODE_TCP_WORKERS:-4}"
+      SIP_SCHED_WORKERS: "${MADIS_NODE_SCHED_WORKERS:-2}"
+
+networks:
+  madis-net:
+    name: madis-net
+
+volumes:
+  madis-pgdata:

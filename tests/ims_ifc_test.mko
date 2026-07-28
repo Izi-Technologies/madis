@@ -1,0 +1,60 @@
+// Target-only profile iFC tests. No subscriber service or network connection.
+pull . "../main.mko"
+
+fn ims_ifc_test_response(criteria: string) -> string {
+    return "{\"schema\":\"" + ims_subscriber_schema() + "\",\"operation\":\"authorize-register\",\"service_profile\":{\"initial_filter_criteria\":" + criteria + "}}"
+}
+
+fn TestIMSIFCProfileTargets() {
+    let response = ims_ifc_test_response("[\"sip:tas.example.com\",\"sips:tas2.example.com;transport=tls\"]")
+    assert_eq_str(ims_ifc_profile_targets(response), "sip:tas.example.com,sips:tas2.example.com;transport=tls")
+    assert_eq_str(ims_ifc_profile_targets(ims_ifc_test_response("[]")), "")
+    assert_eq_str(ims_ifc_profile_targets("{}"), "")
+    assert_eq_str(ims_ifc_profile_targets("__IMS_SUBSCRIBER_DISABLED__"), "")
+}
+
+fn TestIMSIFCOriginatingForkPrivacy() {
+    let _ = env_set("SIP_IMS_IDENTITY_POLICY", "1")
+    let msg = "INVITE sip:tas.example.com SIP/2.0\r\n" + "P-Asserted-Identity: <sip:alice@example.com>\r\n" + "P-Preferred-Identity: <sip:alice@example.com>\r\n" + "Privacy: id\r\nContent-Length: 0\r\n\r\n"
+    let outbound = ims_ifc_prepare_outbound(msg)
+    assert_eq(str_index(outbound, "P-Asserted-Identity:"), -1)
+    assert_eq(str_index(outbound, "P-Preferred-Identity:"), -1)
+    let _ = env_set("SIP_IMS_IDENTITY_POLICY", "0")
+}
+
+fn TestIMSIFCProfileRejectsUnsafe() {
+    let valid = ims_ifc_test_response("[\"sip:tas.example.com\",\"sips:tas2.example.com\"]")
+    let bad_scheme = str_replace(valid, "sip:tas.example.com", "udp://tas.example.com")
+    assert_eq_str(ims_ifc_profile_targets(bad_scheme), "__IMS_IFC_INVALID__")
+    let bad_delimiter = str_replace(valid, "sip:tas.example.com", "sip:tas.example.com\\\\evil")
+    assert_eq_str(ims_ifc_profile_targets(bad_delimiter), "__IMS_IFC_INVALID__")
+    let duplicate = str_replace(valid, "sips:tas2.example.com", "sip:tas.example.com")
+    assert_eq_str(ims_ifc_profile_targets(duplicate), "__IMS_IFC_INVALID__")
+    assert_eq_str(ims_ifc_profile_targets(ims_ifc_test_response("[{\"id\":1}]")), "__IMS_IFC_INVALID__")
+    assert_eq_str(ims_ifc_profile_targets(ims_ifc_test_response("[\"sip:a.example.com\",\"sip:b.example.com\",\"sip:c.example.com\",\"sip:d.example.com\",\"sip:e.example.com\"]")), "__IMS_IFC_INVALID__")
+    assert_eq_str(ims_ifc_profile_targets(ims_ifc_test_response("\"sip:tas.example.com\"")), "__IMS_IFC_INVALID__")
+}
+
+fn TestIMSIFCStateBoundedAndCleared() {
+    let reg = cmap_new()
+    assert_eq(ims_ifc_set(reg, "alice@example.com", "sip:tas.example.com,sips:tas2.example.com"), 1)
+    assert_eq_str(ims_ifc_targets(reg, "alice@example.com"), "sip:tas.example.com,sips:tas2.example.com")
+    assert_eq(ims_ifc_set(reg, "alice@example.com", "udp://tas.example.com"), 0)
+    assert_eq_str(ims_ifc_targets(reg, "alice@example.com"), "sip:tas.example.com,sips:tas2.example.com")
+    assert_eq(registration_store(reg, "alice@example.com", "sip:alice@192.0.2.10", "udp", 300, "192.0.2.10", 5060), 1)
+    assert_eq_str(ims_ifc_originating_targets(reg, "alice@example.com", 1, 1), "sip:tas.example.com,sips:tas2.example.com")
+    assert_eq_str(ims_ifc_terminating_targets(reg, "alice@example.com", 1, 1), "sip:tas.example.com,sips:tas2.example.com")
+    assert_eq_str(ims_ifc_originating_targets(reg, "alice@example.com", 0, 1), "")
+    assert_eq_str(ims_ifc_terminating_targets(reg, "alice@example.com", 1, 0), "")
+    assert_eq_str(ims_ifc_originating_targets(reg, "alice@example.com", 1, 0), "")
+    assert_eq_str(ims_ifc_originating_targets(reg, "nobody@example.com", 1, 1), "")
+    assert_eq(ims_ifc_set(reg, "alice@example.com", ""), 1)
+    assert_eq_str(ims_ifc_targets(reg, "alice@example.com"), "")
+    assert_eq(ims_ifc_set(reg, "alice|evil@example.com", "sip:tas.example.com"), 0)
+
+    let expired_reg = cmap_new()
+    assert_eq(ims_ifc_set(expired_reg, "alice@example.com", "sip:tas.example.com"), 1)
+    assert_eq(registration_store(expired_reg, "alice@example.com", "sip:alice@192.0.2.10", "udp", 0, "192.0.2.10", 5060), 1)
+    assert_eq(ims_ifc_reconcile_registration(expired_reg, "alice@example.com", "sip:tas.example.com"), 1)
+    assert_eq_str(ims_ifc_targets(expired_reg, "alice@example.com"), "")
+}

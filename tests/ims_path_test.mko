@@ -1,0 +1,46 @@
+// Opt-in IMS P-CSCF Path boundary tests.
+pull . "../main.mko"
+
+fn ims_path_test_disable() {
+    let _ = env_set("SIP_IMS_PATH", "")
+}
+
+fn ims_path_test_register() -> string {
+    return "REGISTER sip:example.com SIP/2.0\r\n"
+        + "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-path\r\n"
+        + "From: <sip:alice@example.com>;tag=path\r\n"
+        + "To: <sip:alice@example.com>\r\n"
+        + "Call-ID: path-test\r\n"
+        + "CSeq: 1 REGISTER\r\n"
+        + "Contact: <sip:alice@192.0.2.10:5060>\r\n"
+        + "Content-Length: 0\r\n\r\n"
+}
+
+fn TestIMSPathDisabled() {
+    ims_path_test_disable()
+    let msg = ims_path_test_register()
+    assert_eq_str(ims_path_apply(msg), msg)
+}
+
+fn TestIMSPathReplacesUntrustedHeader() {
+    let _ = env_set("SIP_IMS_PATH", "sip:pcscf.example.com;lr")
+    let msg = hdr_add(ims_path_test_register(), "Path", "<sip:attacker.example.com;lr>")
+    let changed = ims_path_apply(msg)
+    assert_eq(madis_header_count(changed, "Path"), 1)
+    assert(str_contains(changed, "Path: <sip:pcscf.example.com;lr>\r\n"))
+    assert(str_contains(changed, "Content-Length: 0\r\n\r\n"))
+    assert(not str_contains(changed, "attacker.example.com"))
+    ims_path_test_disable()
+}
+
+fn TestIMSPathRejectsUnsafeConfig() {
+    let _ = env_set("SIP_IMS_PATH", "udp://pcscf.example.com")
+    assert_eq_str(ims_path_apply(ims_path_test_register()), "__IMS_PATH_INVALID__")
+    let _ = env_set("SIP_IMS_PATH", "sip:pcscf.example.com\r\nX-Evil: yes")
+    assert_eq_str(ims_path_apply(ims_path_test_register()), "__IMS_PATH_INVALID__")
+    let _ = env_set("SIP_IMS_PATH", "sip:a.example.com,sip:b.example.com")
+    assert_eq_str(ims_path_apply(ims_path_test_register()), "__IMS_PATH_INVALID__")
+    let _ = env_set("SIP_IMS_PATH", "<sip:pcscf.example.com>")
+    assert_eq_str(ims_path_apply(ims_path_test_register()), "__IMS_PATH_INVALID__")
+    ims_path_test_disable()
+}

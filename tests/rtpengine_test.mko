@@ -1,0 +1,112 @@
+// RTPEngine ng command correlation and input-boundary tests.
+pull . "../main.mko"
+
+fn TestRTPEngineOfferCarriesFromTag() {
+    let command = bencode_dict_4(
+        "command", "offer",
+        "call-id", "call-1",
+        "from-tag", "from-1",
+        "sdp", "v=0\r\n"
+    )
+    assert_eq_str(bencode_get(command, "command"), "offer")
+    assert_eq_str(bencode_get(command, "call-id"), "call-1")
+    assert_eq_str(bencode_get(command, "from-tag"), "from-1")
+    assert_eq_str(bencode_get(command, "sdp"), "v=0\r\n")
+}
+
+fn TestRTPEngineAnswerCarriesDialogTags() {
+    let command = bencode_dict_5(
+        "command", "answer",
+        "call-id", "call-2",
+        "from-tag", "from-2",
+        "to-tag", "to-2",
+        "sdp", "v=0\r\n"
+    )
+    assert_eq_str(bencode_get(command, "command"), "answer")
+    assert_eq_str(bencode_get(command, "call-id"), "call-2")
+    assert_eq_str(bencode_get(command, "from-tag"), "from-2")
+    assert_eq_str(bencode_get(command, "to-tag"), "to-2")
+}
+
+fn TestRTPEngineDialogTagBounds() {
+    assert_eq(rtp_dialog_tag_safe("from-1"), 1)
+    assert_eq(rtp_dialog_tag_safe(""), 0)
+    assert_eq(rtp_dialog_tag_safe("from\r\nX-Evil: 1"), 0)
+    assert_eq(rtp_dialog_tag_safe("from\tvalue"), 0)
+    assert_eq(rtp_dialog_tag_safe("from value"), 0)
+    assert_eq(rtp_dialog_tag_safe("from;value"), 0)
+    let oversized = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    assert_eq(rtp_dialog_tag_safe(oversized), 0)
+}
+
+// Optional wire-level test double. This exercises the production UDP client
+// without requiring a real RTPEngine process or making ordinary CI depend on
+// a host network service.
+fn rtpengine_test_server(fd: int, state: CMap) -> int {
+    let request = udp_recv(fd, 65535)
+    if len(request) < 3 {
+        cmap_set(state, "operation", "missing")
+        return 0
+    }
+    let separator = str_index(request, " ")
+    if separator <= 0 || separator + 1 >= len(request) {
+        cmap_set(state, "operation", "malformed")
+        return 0
+    }
+    let cookie = request[0:separator]
+    let command = request[separator + 1:]
+    let operation = bencode_get(command, "command")
+    cmap_set(state, "operation", operation)
+
+    let response = if str_eq(operation, "offer") || str_eq(operation, "answer") {
+        bencode_dict_2(
+            "result", "ok",
+            "sdp", "v=0\r\no=- 2 2 IN IP4 198.51.100.20\r\ns=-\r\nc=IN IP4 198.51.100.20\r\nt=0 0\r\nm=audio 30000 RTP/AVP 0\r\n"
+        )
+    } else {
+        bencode_dict_2("result", "ok", "call-id", bencode_get(command, "call-id"))
+    }
+    let _ = udp_send_to(fd, udp_last_sender_host(), udp_last_sender_port(), cookie + " " + response)
+    return 0
+}
+
+fn TestRTPEngineLiveNgControlLoopback() {
+    if not str_eq(env_get_or("SIP_RTPENGINE_TEST_NETWORK", "0"), "1") { return }
+
+    let sdp = "v=0\r\no=- 1 1 IN IP4 192.0.2.10\r\ns=-\r\nc=IN IP4 192.0.2.10\r\nt=0 0\r\nm=audio 49170 RTP/AVP 0\r\n"
+    let server = udp_bind(0)
+    if server < 0 { return }
+    let port = udp_local_port(server)
+    let state = cmap_new()
+
+    detach rtpengine_test_server(server, state)
+    let offer = rtp_offer("127.0.0.1", port, "call-live", "from-live", sdp)
+    assert_eq_str(cmap_get(state, "operation"), "offer")
+    assert(str_contains(offer, "198.51.100.20"))
+    assert(str_contains(offer, "m=audio 30000 RTP/AVP 0"))
+    detached_join_all()
+
+    detach rtpengine_test_server(server, state)
+    let answer = rtp_answer("127.0.0.1", port, "call-live", "from-live", "to-live", sdp)
+    assert_eq_str(cmap_get(state, "operation"), "answer")
+    assert(str_contains(answer, "m=audio 30000 RTP/AVP 0"))
+    detached_join_all()
+
+    detach rtpengine_test_server(server, state)
+    assert_eq(rtp_delete("127.0.0.1", port, "call-live"), 1)
+    assert_eq_str(cmap_get(state, "operation"), "delete")
+    detached_join_all()
+
+    let _ = udp_close(server)
+}
+
+fn TestRTPEngineControlTimeoutFailsClosed() {
+    if not str_eq(env_get_or("SIP_RTPENGINE_TEST_NETWORK", "0"), "1") { return }
+
+    let unused = udp_bind(0)
+    if unused < 0 { return }
+    let port = udp_local_port(unused)
+    let _ = udp_close(unused)
+    let sdp = "v=0\r\no=- 1 1 IN IP4 192.0.2.10\r\ns=-\r\nc=IN IP4 192.0.2.10\r\nt=0 0\r\nm=audio 49170 RTP/AVP 0\r\n"
+    assert_eq_str(rtp_offer("127.0.0.1", port, "call-timeout", "from-timeout", sdp), "")
+}

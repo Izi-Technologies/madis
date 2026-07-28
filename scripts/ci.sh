@@ -5,8 +5,8 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 MAKO_BIN="${MAKO_BIN:-mako}"
 MAKO_VERSION_TEXT=$("$MAKO_BIN" --version 2>/dev/null || true)
 case "$MAKO_VERSION_TEXT" in
-  *0.4.16*) ;;
-  *) echo "Mako 0.4.16 is required (found: ${MAKO_VERSION_TEXT:-unknown})" >&2; exit 1 ;;
+  *0.4.18*) ;;
+  *) echo "Mako 0.4.18 is required (found: ${MAKO_VERSION_TEXT:-unknown})" >&2; exit 1 ;;
 esac
 
 run_mako() {
@@ -26,7 +26,6 @@ run_mako lint admin/main.mko
 BUILD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/madis-ci.XXXXXX")
 trap 'rm -rf "$BUILD_DIR"' EXIT
 
-CC_BIN="${CC:-cc}"
 RUNTIME_DIR="${MAKO_RUNTIME:-}"
 if [[ -z "$RUNTIME_DIR" ]]; then
   for candidate in /usr/local/share/mako/runtime /usr/share/mako/runtime /Users/loreste/mako/runtime; do
@@ -35,27 +34,8 @@ if [[ -z "$RUNTIME_DIR" ]]; then
 fi
 [[ -d "$RUNTIME_DIR" ]] || { echo "Mako runtime directory is required for the native link" >&2; exit 1; }
 
-NATIVE_CFLAGS=(-I"$RUNTIME_DIR")
-for include_dir in \
-  /usr/include/postgresql \
-  /usr/local/include \
-  /opt/homebrew/include \
-  /opt/homebrew/opt/libpq/include \
-  /usr/local/opt/libpq/include \
-  /opt/homebrew/opt/openssl@3/include \
-  /usr/local/opt/openssl@3/include; do
-  if [[ -d "$include_dir" ]]; then NATIVE_CFLAGS+=("-I$include_dir"); fi
-done
-# The proxy state tests pull in the same native CMap helpers as production.
-# Mako's test runner honors MAKO_LDFLAGS, so link the bridge once for every
-# generated test binary instead of allowing a test-only unresolved symbol.
-"$CC_BIN" -std=c11 -O2 -DNDEBUG -w "${NATIVE_CFLAGS[@]}" \
-  -c "$ROOT/madis_memory.c" -o "$BUILD_DIR/madis_memory.o"
-TEST_LDFLAGS="$BUILD_DIR/madis_memory.o"
-if [[ -n "${MAKO_LDFLAGS:-}" ]]; then
-  TEST_LDFLAGS="$TEST_LDFLAGS $MAKO_LDFLAGS"
-fi
-MAKO_LDFLAGS="$TEST_LDFLAGS" run_mako test tests
+# Mako 0.4.18 links the production CMap bridge explicitly for the test suite.
+run_mako test tests --native-source "$ROOT/madis_memory.c"
 
 build_native() {
   local source="$1"
@@ -78,4 +58,4 @@ PY
 bash -n install.sh
 python3 -m py_compile sdk/python/madis_carrier.py
 
-echo "Madis CI checks passed with Mako 0.4.16"
+echo "Madis CI checks passed with Mako 0.4.18"

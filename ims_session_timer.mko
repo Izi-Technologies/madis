@@ -1,0 +1,185 @@
+// RFC 4028 request-side session-timer boundary.
+//
+// This module validates the bounded syntax Madis understands for INVITE and
+// UPDATE requests. It does not generate refresh requests or act as an
+// endpoint/UAS timer state machine; those responsibilities remain with the
+// dialog endpoints or a dedicated session service.
+
+fn ims_session_timer_requested() -> int {
+    let value = str_to_lower(str_trim_space(env_get_or("SIP_IMS_SESSION_TIMERS", "0")))
+    if str_eq(value, "1") || str_eq(value, "true") || str_eq(value, "yes") { return 1 }
+    return 0
+}
+
+fn ims_session_timer_enabled() -> int {
+    return ims_session_timer_requested()
+}
+
+fn ims_session_timer_decimal(value: string) -> int {
+    let raw = str_trim_space(value)
+    if len(raw) == 0 || len(raw) > 10 { return -1 }
+    let mut result = 0
+    let mut i = 0
+    while i < len(raw) {
+        let c = int(raw[i])
+        if c < 48 || c > 57 { return -1 }
+        if result > 214748364 { return -1 }
+        result = result * 10 + c - 48
+        i = i + 1
+    }
+    return result
+}
+
+fn ims_session_timer_max_se() -> int {
+    let configured = ims_session_timer_decimal(env_get_or("SIP_IMS_SESSION_MAX_SE", "86400"))
+    if configured < 90 { return 90 }
+    if configured > 86400 { return 86400 }
+    return configured
+}
+
+fn ims_session_timer_min_se() -> int {
+    let configured = ims_session_timer_decimal(env_get_or("SIP_IMS_SESSION_MIN_SE", "90"))
+    let maximum = ims_session_timer_max_se()
+    if configured < 90 { return 90 }
+    if configured > maximum { return maximum }
+    return configured
+}
+
+fn ims_session_timer_token_ok(value: string) -> int {
+    if len(value) == 0 { return 0 }
+    let mut i = 0
+    while i < len(value) {
+        if sip_token_char(int(value[i])) == 0 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn ims_session_timer_quoted_ok(value: string) -> int {
+    if len(value) < 2 || int(value[0]) != 34 || int(value[len(value) - 1]) != 34 { return 0 }
+    let mut escaped = 0
+    let mut i = 1
+    while i + 1 < len(value) {
+        let c = int(value[i])
+        if escaped == 1 {
+            if c == 0 || c == 10 || c == 13 || c < 32 || c == 127 { return 0 }
+            escaped = 0
+        } else if c == 34 {
+            return 0
+        } else if c == 92 {
+            escaped = 1
+        } else {
+            if c == 0 || c == 10 || c == 13 || c < 32 || c == 127 { return 0 }
+        }
+        i = i + 1
+    }
+    if escaped == 1 { return 0 }
+    return 1
+}
+
+// Validate one Session-Expires parameter. The return value is 1 for a
+// generic parameter, 2 for the refresher parameter, and 0 for malformed
+// syntax. Generic parameters are accepted in token or quoted-string form.
+fn ims_session_timer_param_ok(value: string, refresher_seen: int) -> int {
+    let raw = str_trim_space(value)
+    if len(raw) == 0 { return 0 }
+    let equals = str_index(raw, "=")
+    let name = if equals >= 0 { str_trim_space(raw[0:equals]) } else { raw }
+    if ims_session_timer_token_ok(name) == 0 { return 0 }
+    let lower_name = str_to_lower(name)
+    if str_eq(lower_name, "refresher") {
+        if refresher_seen == 1 || equals < 0 { return 0 }
+        let refresher = str_to_lower(str_trim_space(raw[equals + 1:]))
+        if not str_eq(refresher, "uac") && not str_eq(refresher, "uas") { return 0 }
+        return 2
+    }
+    if equals < 0 { return 1 }
+    let parameter_value = str_trim_space(raw[equals + 1:])
+    if len(parameter_value) == 0 { return 0 }
+    if ims_session_timer_token_ok(parameter_value) == 1 || ims_session_timer_quoted_ok(parameter_value) == 1 { return 1 }
+    return 0
+}
+
+fn ims_session_timer_session_expires(value: string) -> int {
+    if len(value) == 0 { return -1 }
+    let mut i = 0
+    let mut quoted = 0
+    let mut escaped = 0
+    while i < len(value) {
+        let c = int(value[i])
+        if c == 0 || c == 10 || c == 13 || c == 127 || (c < 32 && c != 9) { return -1 }
+        if escaped == 1 {
+            escaped = 0
+        } else if quoted == 1 && c == 92 {
+            escaped = 1
+        } else if c == 34 {
+            if quoted == 1 { quoted = 0 } else { quoted = 1 }
+        }
+        i = i + 1
+    }
+    if quoted == 1 || escaped == 1 { return -1 }
+
+    let separator = str_index(value, ";")
+    let first = if separator >= 0 { value[0:separator] } else { value }
+    let seconds = ims_session_timer_decimal(first)
+    if seconds < 0 { return -1 }
+    if separator < 0 { return seconds }
+
+    let mut start = separator + 1
+    let mut refresher_seen = 0
+    let mut in_quotes = 0
+    let mut escaped_param = 0
+    let mut cursor = start
+    while cursor <= len(value) {
+        let at_end = cursor == len(value)
+        let c = if at_end { 59 } else { int(value[cursor]) }
+        if escaped_param == 1 {
+            escaped_param = 0
+        } else if in_quotes == 1 && c == 92 {
+            escaped_param = 1
+        } else if c == 34 {
+            if in_quotes == 1 { in_quotes = 0 } else { in_quotes = 1 }
+        }
+        if (c == 59 && in_quotes == 0) || at_end {
+            let status = ims_session_timer_param_ok(value[start:cursor], refresher_seen)
+            if status == 0 { return -1 }
+            if status == 2 { refresher_seen = 1 }
+            start = cursor + 1
+        }
+        cursor = cursor + 1
+    }
+    return seconds
+}
+
+fn ims_session_timer_min_header(value: string) -> int {
+    let raw = str_trim_space(value)
+    if len(raw) == 0 || str_index(raw, ";") >= 0 { return -1 }
+    let seconds = ims_session_timer_decimal(raw)
+    if seconds < 0 || seconds > ims_session_timer_max_se() { return -1 }
+    return seconds
+}
+
+fn ims_session_timer_effective_min(msg: string) -> int {
+    let mut effective = ims_session_timer_min_se()
+    if madis_header_count(msg, "Min-SE") == 1 {
+        let requested = ims_session_timer_min_header(sip_header(msg, "Min-SE"))
+        if requested > effective { effective = requested }
+    }
+    return effective
+}
+
+// Return 1 for absent/valid, 2 for a valid interval below the effective
+// minimum, and 0 for malformed, duplicated, or out-of-range timer headers.
+fn ims_session_timer_request_check(msg: string) -> int {
+    if ims_session_timer_enabled() == 0 { return 1 }
+    let session_count = madis_header_count(msg, "Session-Expires")
+    let min_count = madis_header_count(msg, "Min-SE")
+    if session_count > 1 || min_count > 1 { return 0 }
+    if min_count == 1 && ims_session_timer_min_header(sip_header(msg, "Min-SE")) < 0 { return 0 }
+    if session_count == 0 { return 1 }
+
+    let seconds = ims_session_timer_session_expires(sip_header(msg, "Session-Expires"))
+    if seconds < 0 || seconds > ims_session_timer_max_se() { return 0 }
+    if seconds < ims_session_timer_effective_min(msg) { return 2 }
+    return 1
+}

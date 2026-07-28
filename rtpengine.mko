@@ -25,6 +25,14 @@ fn bencode_dict_3(k1: string, v1: string, k2: string, v2: string, k3: string, v3
     return "d" + bencode_str(k1) + bencode_str(v1) + bencode_str(k2) + bencode_str(v2) + bencode_str(k3) + bencode_str(v3) + "e"
 }
 
+fn bencode_dict_4(k1: string, v1: string, k2: string, v2: string, k3: string, v3: string, k4: string, v4: string) -> string {
+    return "d" + bencode_str(k1) + bencode_str(v1) + bencode_str(k2) + bencode_str(v2) + bencode_str(k3) + bencode_str(v3) + bencode_str(k4) + bencode_str(v4) + "e"
+}
+
+fn bencode_dict_5(k1: string, v1: string, k2: string, v2: string, k3: string, v3: string, k4: string, v4: string, k5: string, v5: string) -> string {
+    return "d" + bencode_str(k1) + bencode_str(v1) + bencode_str(k2) + bencode_str(v2) + bencode_str(k3) + bencode_str(v3) + bencode_str(k4) + bencode_str(v4) + bencode_str(k5) + bencode_str(v5) + "e"
+}
+
 // Parse a bencode response to extract a value by key
 // Simple parser: finds "N:key" then reads the next "N:value"
 fn bencode_get(resp: string, key: string) -> string {
@@ -60,6 +68,42 @@ fn rtp_port_value(raw: string) -> int {
         Err(_) => {}
     }
     return 2223
+}
+
+fn rtp_dialog_tag_safe(value: string) -> int {
+    if len(value) < 1 || len(value) > 256 { return 0 }
+    let mut i = 0
+    while i < len(value) {
+        let c = int(value[i])
+        if sip_token_char(c) == 0 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn rtp_sdp_content_type_safe(msg: string) -> int {
+    let raw = str_to_lower(str_trim_space(sip_header(msg, "Content-Type")))
+    if len(raw) == 0 { return 1 }
+    let semi = str_index(raw, ";")
+    let mut media = raw
+    if semi >= 0 { media = raw[0:semi] }
+    return if str_eq(str_trim_space(media), "application/sdp") { 1 } else { 0 }
+}
+
+fn rtp_sdp_body_safe(sdp: string) -> int {
+    if len(sdp) < 1 || len(sdp) > 65535 { return 0 }
+    let mut i = 0
+    while i < len(sdp) {
+        if int(sdp[i]) == 0 { return 0 }
+        i = i + 1
+    }
+    if len(sdp) < 5 || int(sdp[0]) != 118 || int(sdp[1]) != 61 || int(sdp[2]) != 48 || int(sdp[3]) != 13 || int(sdp[4]) != 10 { return 0 }
+    let mut j = 0
+    while j + 3 < len(sdp) {
+        if int(sdp[j]) == 13 && int(sdp[j + 1]) == 10 && int(sdp[j + 2]) == 109 && int(sdp[j + 3]) == 61 { return 1 }
+        j = j + 1
+    }
+    return 0
 }
 
 // Send ng command to rtpengine and get response
@@ -133,9 +177,11 @@ fn rtp_config(db: SqlDB, db_ok: int, cache: CMap) -> []string {
 // OFFER: called when forwarding an INVITE (caller's SDP)
 // Sends SDP to rtpengine, gets back rewritten SDP with relay addresses
 fn rtp_offer(host: string, port: int, call_id: string, from_tag: string, sdp: string) -> string {
-    let cmd = bencode_dict_3(
+    if rtp_dialog_tag_safe(from_tag) == 0 { return "" }
+    let cmd = bencode_dict_4(
         "command", "offer",
         "call-id", call_id,
+        "from-tag", from_tag,
         "sdp", sdp
     )
     let resp = rtp_send(host, port, cmd)
@@ -152,9 +198,12 @@ fn rtp_offer(host: string, port: int, call_id: string, from_tag: string, sdp: st
 
 // ANSWER: called when forwarding 200 OK (callee's SDP)
 fn rtp_answer(host: string, port: int, call_id: string, from_tag: string, to_tag: string, sdp: string) -> string {
-    let cmd = bencode_dict_3(
+    if rtp_dialog_tag_safe(from_tag) == 0 || rtp_dialog_tag_safe(to_tag) == 0 { return "" }
+    let cmd = bencode_dict_5(
         "command", "answer",
         "call-id", call_id,
+        "from-tag", from_tag,
+        "to-tag", to_tag,
         "sdp", sdp
     )
     let resp = rtp_send(host, port, cmd)
@@ -188,6 +237,7 @@ fn rtp_process_offer(msg: string, msglen: int, call_id: string, from_tag: string
 
     let sdp = sip_body(msg)
     if len(sdp) == 0 { return msg }
+    if rtp_sdp_content_type_safe(msg) == 0 || rtp_sdp_body_safe(sdp) == 0 { return msg }
 
     let mut rtp_port = 2223
     match parse_int(cfg[2]) {
@@ -209,6 +259,7 @@ fn rtp_process_answer(msg: string, msglen: int, call_id: string, from_tag: strin
 
     let sdp = sip_body(msg)
     if len(sdp) == 0 { return msg }
+    if rtp_sdp_content_type_safe(msg) == 0 || rtp_sdp_body_safe(sdp) == 0 { return msg }
 
     let mut rtp_port = 2223
     match parse_int(cfg[2]) {

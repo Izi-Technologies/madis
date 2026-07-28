@@ -33,7 +33,7 @@ the database.
 
 ## Standalone WebUI
 
-The control-plane UI is built from `admin/main.mko` with Mako 0.4.16 and runs
+The control-plane UI is built from `admin/main.mko` with Mako 0.4.18 and runs
 as `madis-admin.service`, independently of the SIP worker.
 Use loopback binding and put nginx or another TLS reverse proxy in front of
 it:
@@ -112,13 +112,13 @@ rate limiting, and public exposure.
 
 ## Mako runtime prerequisites
 
-The supported compiler/runtime version is **Mako 0.4.16**. Use the same
-0.4.16 compiler and runtime directory for C emission, native linking, the
+The supported compiler/runtime version is **Mako 0.4.18**. Use the same
+0.4.18 compiler and runtime directory for C emission, native linking, the
 WebUI, and the benchmark harness. Local filesystem paths are intentionally not
 part of the deployment contract.
 
 Build this proxy with `MAKO_RUNTIME=/path/to/mako/runtime` so the generated C
-links against the Mako 0.4.16 runtime. Do not mix a different compiler and
+links against the Mako 0.4.18 runtime. Do not mix a different compiler and
 runtime version. STIR/SHAKEN signing mode and key handling must be reviewed
 against the deployed configuration; the repository does not provide carrier
 certificate provisioning or rotation.

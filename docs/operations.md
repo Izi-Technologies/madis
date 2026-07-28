@@ -22,7 +22,7 @@ sudo MADIS_DB_NAME=mysipdb \
   ./install.sh
 ```
 
-Mako 0.4.16 is required. For an offline or prebuilt install, place `main` and `admin-bin` beside the installer. Otherwise provide `MADIS_MAKO_BIN` and `MAKO_RUNTIME` so the installer can build the processes.
+Mako 0.4.18 is required. For an offline or prebuilt install, place `main` and `admin-bin` beside the installer. Otherwise provide `MADIS_MAKO_BIN` and `MAKO_RUNTIME` so the installer can build the processes.
 
 ## Docker
 
@@ -97,7 +97,7 @@ List calls are capped at 100 records and JSON bodies at 64 KiB. Billing consumer
 
 ## Upgrade and rollback
 
-Build and test the exact source revision with Mako 0.4.16 before replacing the live processes:
+Build and test the exact source revision with Mako 0.4.18 before replacing the live processes:
 
 ```sh
 MAKO_BIN=/path/to/mako MAKO_RUNTIME=/path/to/mako/runtime \

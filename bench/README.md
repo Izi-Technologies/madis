@@ -16,7 +16,7 @@ RATE=100 CALLS=1000 CONCURRENCY=200 WORKERS=1 ./bench/benchmark.sh
 ```
 
 The harness expects `sipp` unless `SIPP=/path/to/sipp` is set. Build the
-proxy with Mako 0.4.16 first, and keep the UAS, database, route data, CPU
+proxy with Mako 0.4.18 first, and keep the UAS, database, route data, CPU
 affinity, and message mix identical across candidates.
 
 The scenario holds each dialog for one second. Change that pause in
@@ -78,3 +78,15 @@ associations expire according to `SIP_WSS_IDLE_MS` (default 10 minutes).
 `abnf_corpus.py` crosses 24 valid compact/long, quoted/unquoted, IPv4/IPv6,
 URI-escaped, and Via-parameter forms, then checks 13 one-rule invalid
 mutations receive 4xx responses.
+
+For long-lived TCP connection measurements, use the dependency-free probe:
+
+```sh
+SIP_TCP_MAX_CONNECTIONS=100000 \
+  python3 bench/tcp_connection_soak.py \
+  --port 15060 --connections 10000 --duration 60 --interval 5
+```
+
+Run this with increasing connection counts while recording file descriptors,
+RSS, CPU, response counts, and failed connections. The requested count is an
+input to the experiment; the output is not a capacity guarantee.

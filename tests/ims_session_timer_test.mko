@@ -1,0 +1,73 @@
+// RFC 4028 request-side validation tests. Endpoint refresh behavior remains
+// outside this proxy boundary.
+pull . "../main.mko"
+
+fn ims_timer_test_request_with_second_min(session: string, min_se: string, second_min: string) -> string {
+    let mut extra = ""
+    if len(session) > 0 { extra = extra + "Session-Expires: " + session + "\r\n" }
+    if len(min_se) > 0 { extra = extra + "Min-SE: " + min_se + "\r\n" }
+    if len(second_min) > 0 { extra = extra + "Min-SE: " + second_min + "\r\n" }
+    return "INVITE sip:b@example.com SIP/2.0\r\n"
+        + "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-timer-test\r\n"
+        + "From: <sip:a@example.com>;tag=timer-a\r\n"
+        + "To: <sip:b@example.com>\r\n"
+        + "Call-ID: timer-test@example.com\r\n"
+        + "CSeq: 1 INVITE\r\n"
+        + extra
+        + "Content-Length: 0\r\n\r\n"
+}
+
+fn ims_timer_test_request(session: string, min_se: string) -> string {
+    return ims_timer_test_request_with_second_min(session, min_se, "")
+}
+
+fn ims_timer_test_enable() {
+    let _ = env_set("SIP_IMS_SESSION_TIMERS", "1")
+    let _ = env_set("SIP_IMS_SESSION_MIN_SE", "90")
+    let _ = env_set("SIP_IMS_SESSION_MAX_SE", "3600")
+}
+
+fn ims_timer_test_disable() {
+    let _ = env_set("SIP_IMS_SESSION_TIMERS", "0")
+    let _ = env_set("SIP_IMS_SESSION_MIN_SE", "90")
+    let _ = env_set("SIP_IMS_SESSION_MAX_SE", "86400")
+}
+
+fn TestIMSSessionTimerDisabledByDefault() {
+    ims_timer_test_disable()
+    assert_eq(ims_session_timer_enabled(), 0)
+    assert_eq(ims_session_timer_request_check(ims_timer_test_request("bad", "bad")), 1)
+}
+
+fn TestIMSSessionTimerValidIntervals() {
+    ims_timer_test_enable()
+    assert_eq(ims_session_timer_min_se(), 90)
+    assert_eq(ims_session_timer_max_se(), 3600)
+    assert_eq(ims_session_timer_request_check(ims_timer_test_request("1800;refresher=uac", "")), 1)
+    assert_eq(ims_session_timer_request_check(ims_timer_test_request("90;refresher=uas;foo=bar", "")), 1)
+    assert_eq(ims_session_timer_request_check(ims_timer_test_request("1800;foo=\"quoted value\"", "")), 1)
+}
+
+fn TestIMSSessionTimerMinimumAndMaximum() {
+    ims_timer_test_enable()
+    assert_eq(ims_session_timer_request_check(ims_timer_test_request("89;refresher=uac", "")), 2)
+    assert_eq(ims_session_timer_request_check(ims_timer_test_request("300;refresher=uac", "600")), 2)
+    assert_eq(ims_session_timer_request_check(ims_timer_test_request("3601;refresher=uac", "")), 0)
+    assert_eq(ims_session_timer_request_check(ims_timer_test_request("300;refresher=uac", "4000")), 0)
+}
+
+fn TestIMSSessionTimerRejectsAmbiguityAndInjection() {
+    ims_timer_test_enable()
+    assert_eq(ims_session_timer_request_check(ims_timer_test_request("1800;refresher=bad", "")), 0)
+    assert_eq(ims_session_timer_request_check(ims_timer_test_request("1800;refresher=uac;refresher=uas", "")), 0)
+    assert_eq(ims_session_timer_session_expires("1800;refresher=uac\t"), 1800)
+    assert_eq(ims_session_timer_session_expires("1800;refresher=uac\r\nX-Evil: 1"), -1)
+    assert_eq(ims_session_timer_min_header("90\r\nX-Evil: 1"), -1)
+    assert_eq(ims_session_timer_request_check(ims_timer_test_request_with_second_min("1800", "90", "100")), 0)
+}
+
+fn TestIMSSessionTimerAbsentSessionHeader() {
+    ims_timer_test_enable()
+    assert_eq(ims_session_timer_request_check(ims_timer_test_request("", "600")), 1)
+    ims_timer_test_disable()
+}

@@ -1,0 +1,37 @@
+// Opt-in IMS REGISTER response routing boundary.
+//
+// A local S-CSCF may advertise one operator-configured Service-Route in the
+// 200 response. The route is validated before insertion; this module does not
+// infer a route from subscriber data or implement third-party registration.
+
+fn ims_service_route_value() -> string {
+    let value = str_trim_space(env_get_or("SIP_IMS_SERVICE_ROUTE", ""))
+    if len(value) == 0 { return "" }
+    if len(value) > 2048 || str_index(value, ",") >= 0 || str_index(value, "\r") >= 0 || str_index(value, "\n") >= 0 { return "__IMS_SERVICE_ROUTE_INVALID__" }
+    if sip_name_addr_valid("<" + value + ">") == 0 { return "__IMS_SERVICE_ROUTE_INVALID__" }
+    return value
+}
+
+fn ims_service_route_header() -> string {
+    let value = ims_service_route_value()
+    if len(value) == 0 || str_eq(value, "__IMS_SERVICE_ROUTE_INVALID__") { return "" }
+    return "Service-Route: <" + value + ">\r\n"
+}
+
+// A local S-CSCF may advertise one operator-configured public identity in the
+// successful REGISTER response. Profile-derived alias lists remain external.
+fn ims_associated_uri_value() -> string {
+    let value = str_trim_space(env_get_or("SIP_IMS_ASSOCIATED_URI", ""))
+    if len(value) == 0 { return "" }
+    if len(value) > 2048 || str_index(value, ",") >= 0 || str_index(value, "\r") >= 0 || str_index(value, "\n") >= 0 || str_index(value, "<") >= 0 || str_index(value, ">") >= 0 {
+        return "__IMS_ASSOCIATED_URI_INVALID__"
+    }
+    if sip_name_addr_valid("<" + value + ">") == 0 { return "__IMS_ASSOCIATED_URI_INVALID__" }
+    return value
+}
+
+fn ims_associated_uri_header() -> string {
+    let value = ims_associated_uri_value()
+    if len(value) == 0 || str_eq(value, "__IMS_ASSOCIATED_URI_INVALID__") { return "" }
+    return "P-Associated-URI: <" + value + ">\r\n"
+}
