@@ -1,0 +1,113 @@
+// Bounded subscriber-profile initial-filter criteria.
+//
+// This is deliberately target-only: the subscriber service supplies a small
+// list of SIP application targets. Madis does not evaluate standard iFC
+// condition expressions or execute TAS logic here.
+
+fn ims_ifc_target_valid(target: string) -> int {
+    if len(target) < 1 || len(target) > 2048 { return 0 }
+    if str_index(target, ",") >= 0 || str_index(target, "\r") >= 0 || str_index(target, "\n") >= 0 || str_index(target, "\\") >= 0 || str_index(target, "|") >= 0 || str_index(target, "<") >= 0 || str_index(target, ">") >= 0 {
+        return 0
+    }
+    return sip_name_addr_valid("<" + target + ">")
+}
+
+fn ims_ifc_targets_valid(targets: string) -> int {
+    if len(targets) < 1 || len(targets) > 8192 { return 0 }
+    let items = str_split(targets, ",")
+    if len(items) < 1 || len(items) > 4 { return 0 }
+    let mut seen = ""
+    let mut i = 0
+    while i < len(items) {
+        let target = str_trim_space(items[i])
+        if ims_ifc_target_valid(target) == 0 { return 0 }
+        let marker = "|" + target + "|"
+        if str_index(seen, marker) >= 0 { return 0 }
+        seen = seen + marker
+        i = i + 1
+    }
+    return 1
+}
+
+// Return a comma-separated target list. Missing or empty profile data is
+// compatible. A present but malformed criteria field fails closed.
+fn ims_ifc_profile_targets(response: string) -> string {
+    if len(response) == 0 || str_eq(response, "__IMS_SUBSCRIBER_DISABLED__") { return "" }
+    let profile = json_get_object(response, "service_profile")
+    if len(profile) == 0 || str_index(profile, "\"initial_filter_criteria\"") < 0 { return "" }
+    let criteria = json_get_object(profile, "initial_filter_criteria")
+    if len(criteria) == 0 { return "__IMS_IFC_INVALID__" }
+    let count = json_array_len(criteria)
+    if count < 0 || count > 4 { return "__IMS_IFC_INVALID__" }
+    if count == 0 { return "" }
+
+    let mut result = ""
+    let mut i = 0
+    while i < count {
+        let target = json_array_get_string(criteria, i)
+        if ims_ifc_target_valid(target) == 0 { return "__IMS_IFC_INVALID__" }
+        if i > 0 { result = result + "," }
+        result = result + target
+        i = i + 1
+    }
+    if ims_ifc_targets_valid(result) == 0 { return "__IMS_IFC_INVALID__" }
+    return result
+}
+
+fn ims_ifc_key(aor: string) -> string {
+    return "ims-ifc|" + aor
+}
+
+fn ims_ifc_targets(reg: CMap, aor: string) -> string {
+    if len(aor) < 1 || len(aor) > 512 || str_index(aor, "|") >= 0 || str_index(aor, "\r") >= 0 || str_index(aor, "\n") >= 0 {
+        return ""
+    }
+    let key = ims_ifc_key(aor)
+    if cmap_has(reg, key) == 0 { return "" }
+    let targets = cmap_get(reg, key)
+    if ims_ifc_targets_valid(targets) == 0 { return "" }
+    return targets
+}
+
+// State is written only after a successful REGISTER contact transaction.
+// Empty criteria explicitly removes the prior profile trigger.
+fn ims_ifc_originating_targets(reg: CMap, aor: string, initial_dialog: int, local_role: int) -> string {
+    if initial_dialog != 1 || local_role != 1 { return "" }
+    if len(registration_find(reg, aor)) == 0 { return "" }
+    return ims_ifc_targets(reg, aor)
+}
+
+fn ims_ifc_terminating_targets(reg: CMap, aor: string, initial_dialog: int, local_role: int) -> string {
+    if initial_dialog != 1 || local_role != 1 { return "" }
+    if len(registration_find(reg, aor)) == 0 { return "" }
+    return ims_ifc_targets(reg, aor)
+}
+
+fn ims_ifc_set(reg: CMap, aor: string, targets: string) -> int {
+    if len(aor) < 1 || len(aor) > 512 || str_index(aor, "|") >= 0 || str_index(aor, "\r") >= 0 || str_index(aor, "\n") >= 0 {
+        return 0
+    }
+    let key = ims_ifc_key(aor)
+    if len(targets) == 0 {
+        let _ = cmap_del(reg, key)
+        return 1
+    }
+    if ims_ifc_targets_valid(targets) == 0 { return 0 }
+    cmap_set(reg, key, targets)
+    return 1
+}
+
+fn ims_ifc_clear(reg: CMap, aor: string) -> int {
+    if len(aor) < 1 || len(aor) > 512 { return 0 }
+    let _ = cmap_del(reg, ims_ifc_key(aor))
+    return 1
+}
+
+// Reconcile profile state only after REGISTER contact mutations. A profile
+// never survives the final expired or explicit deregistered binding.
+fn ims_ifc_reconcile_registration(reg: CMap, aor: string, targets: string) -> int {
+    if len(registration_find(reg, aor)) == 0 {
+        return ims_ifc_clear(reg, aor)
+    }
+    return ims_ifc_set(reg, aor, targets)
+}

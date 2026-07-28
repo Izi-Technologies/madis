@@ -39,11 +39,19 @@ madis.ims.subscriber.authorization.v1
   "private_identity": "alice@example.com",
   "decision": "allow",
   "assigned_server_name": "sip:scscf.example.com",
-  "service_profile": {}
+  "service_profile": {
+    "associated_uris": [
+      "sip:alice@example.com",
+      "sips:alias@example.com;user=phone"
+    ],
+    "initial_filter_criteria": ["sip:tas.example.com"]
+  }
 }
 ```
 
 Madis requires the schema, operation, request ID, public identity, private identity, and `decision` to match the request. `decision` must be `allow`; all other responses fail closed. An allow response must include `assigned_server_name`, and it must exactly match the S-CSCF requested by the worker. Dynamic S-CSCF selection is not implemented yet; the assignment is currently an integrity binding for the configured role.
+
+The SIP worker consumes two bounded profile fields. `service_profile.associated_uris`, when present, must be an array of at most eight unique SIP/SIPS identities; validated values are emitted as `P-Associated-URI` in the local S-CSCF 200 response. `service_profile.initial_filter_criteria`, when present, must be an array of at most four unique SIP/SIPS application targets. On an initial originating INVITE from that live local registration, or an initial terminating INVITE for that live destination registration, the local S-CSCF forwards the transaction to those targets as a terminal fork. Trigger state is in-memory and is cleared when the AOR has no remaining live binding. The worker does not evaluate standard iFC condition objects, session cases, header conditions, third-party REGISTER, or TAS logic. Malformed profile data fails closed before registration state is written. Other profile fields remain an authorization envelope. `SIP_IMS_ASSOCIATED_URI` remains the static single-identity fallback when no profile list is present.
 
 ## Configuration
 
@@ -75,7 +83,8 @@ Content-Type: application/json
   "realm": "example.com",
   "assigned_server_name": "sip:scscf.example.com",
   "service_profile": {
-    "initial_filter_criteria": []
+    "associated_uris": ["sip:alice@example.com"],
+    "initial_filter_criteria": ["sip:tas.example.com"]
   }
 }
 ```

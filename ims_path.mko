@@ -1,0 +1,24 @@
+// Opt-in IMS P-CSCF Path boundary.
+//
+// A configured P-CSCF Path is inserted into forwarded REGISTER requests. Any
+// UE-supplied Path is removed when this boundary is enabled so it cannot
+// replace the operator's route. I-CSCF and S-CSCF paths do not add or remove
+// Path headers here.
+
+fn ims_path_value() -> string {
+    let value = str_trim_space(env_get_or("SIP_IMS_PATH", ""))
+    if len(value) == 0 { return "" }
+    if len(value) > 2048 || str_index(value, ",") >= 0 || str_index(value, "\r") >= 0 || str_index(value, "\n") >= 0 || str_index(value, "<") >= 0 || str_index(value, ">") >= 0 {
+        return "__IMS_PATH_INVALID__"
+    }
+    if sip_name_addr_valid("<" + value + ">") == 0 { return "__IMS_PATH_INVALID__" }
+    return value
+}
+
+fn ims_path_apply(msg: string) -> string {
+    let value = ims_path_value()
+    if str_eq(value, "__IMS_PATH_INVALID__") { return value }
+    if len(value) == 0 { return msg }
+    let result = hdr_remove(msg, "Path")
+    return hdr_add(result, "Path", "<" + value + ">")
+}

@@ -34,7 +34,7 @@ items are implemented and exercised against independent SIP stacks.
   branch-race suppression, and same-class 401/407 challenge aggregation.
 - RFC 3263 NAPTR service selection, RFC 2782 SRV priority/weight ordering,
   alternate-target failover, 60-second DNS caching, and direct A/AAAA fallback.
-  The NAPTR/SRV resolver hooks are built into pinned Mako 0.4.16.
+  The NAPTR/SRV resolver hooks are built into pinned Mako 0.4.18.
 - Bracketed IPv6 SIP target parsing and Digest MD5/SHA-256 verification with
   `auth`, `auth-int`, and `-sess` handling, stale nonce challenges, and
   qop-aware replay keys.
@@ -80,6 +80,12 @@ not a certificate of universal compliance.
 
 - Established-dialog re-INVITEs are forwarded through the recorded dialog/Route target before IMS role selection, charging, dial-plan, application, or new-call state work; transaction replay and BYE teardown are covered by focused regression tests.
 - Transparent in-dialog PRACK and UPDATE forwarding uses Route state and To-tag-specific fork targets. The proxy validates tracked RSeq/RAck state but does not generate reliable provisional responses or claim endpoint-level conformance.
+- RFC 4028 request-side boundary when `SIP_IMS_SESSION_TIMERS=1`: bounded `Session-Expires`/`Min-SE` parsing for INVITE/UPDATE, duplicate-header rejection, configured 90–86,400 second limits, 400 malformed-request responses, and 422 minimum-interval responses. This is not endpoint timer or refresher-ownership conformance.
+- Opt-in trusted-network identity boundary when `SIP_IMS_IDENTITY_POLICY=1`: IP-authenticated/loopback trust, untrusted `P-Asserted-Identity`/`P-Preferred-Identity` stripping, single trusted identity validation, and `Privacy: id` filtering on outbound INVITEs. This is not full RFC 3325 or RFC 8224 conformance.
+- Optional P-CSCF `Path` insertion for forwarded REGISTER requests when `SIP_IMS_PATH` is configured, with strict single-URI validation and replacement of UE-supplied Path headers. Dynamic Path discovery, flow-token management, and multi-hop profile-derived routes remain outside the implementation.
+- Optional local S-CSCF `Service-Route` response insertion when `SIP_IMS_SERVICE_ROUTE` is configured, with strict single-URI validation. Subscriber-profile-derived route sets and third-party registration remain outside the implementation.
+- Optional local S-CSCF `P-Associated-URI` response insertion when `SIP_IMS_ASSOCIATED_URI` is configured, with strict single-URI validation, or from up to eight validated `service_profile.associated_uris` identities. iFC/TAS execution remains outside the implementation.
+- Bounded subscriber-profile target-only iFC trigger: up to four unique SIP/SIPS `service_profile.initial_filter_criteria` targets can receive an originating initial INVITE from a live local registration or a terminating initial INVITE for a live destination registration. Originating AS forks use the outbound `Privacy: id` identity filter. Standard iFC conditions, session/header criteria, third-party registration, and TAS execution remain outside the implementation.
 
 ## Not yet complete
 
@@ -99,6 +105,12 @@ These remain material blockers to a 100% RFC 3261 proxy claim:
 - DNS failure injection and long-duration resource/leak monitoring still need
   external transport fixtures. The local TLS matrix now uses a temporary CA
   with certificate verification enabled, including SNI and hostname rejection.
+- RFC 4028 endpoint behavior remains open: Madis does not generate refresh
+  requests, negotiate refresher ownership across a dialog, or provide a full
+  external-stack session-timer interoperability matrix.
+- Full IMS identity/privacy behavior remains open: Madis does not generate
+  asserted identities, rewrite From for anonymity, or provide independent
+  RFC 3325/RFC 8224 interoperability coverage.
 - WSS outbound now uses bounded persistent associations with idle expiry,
   readiness polling, RFC 6455 control-frame handling, response routing, and
   ACK/BYE reuse. The local fixture proves an INVITE/180/200/ACK/BYE dialog on

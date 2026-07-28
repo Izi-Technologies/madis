@@ -96,7 +96,7 @@ fn carrier_api_capabilities() -> string {
     return "{"
         + "\"schema\":\"madis.capabilities.v1\","
         + "\"version\":\"" + carrier_json_escape(carrier_cap(env_get_or("MADIS_VERSION", "dev"), 128)) + "\","
-        + "\"mako_version\":\"0.4.16\","
+        + "\"mako_version\":\"0.4.18\","
         + "\"transports\":[\"udp\",\"tcp\",\"tls\",\"ws\",\"wss\"],"
         + "\"contracts\":[\"billing-event-v1\",\"billing-cdr-v1\",\"charging-request-v1\",\"diameter-rfc8506-v1\",\"diameter-rfc6733-peer-v1\",\"ims-cx-dx-v1\",\"ims-sh-v1\",\"ims-session-v1\",\"ss7-m3ua-envelope-v1\"],"
         + "\"charging\":{\"outbox\":true,\"preauth_http_adapter\":true,\"diameter_native\":true,\"diameter_transport\":\"tcp_tls_sctp\",\"diameter_persistent_peer\":true,\"diameter_sctp\":true,\"diameter_sctp_runtime\":\"platform_dependent\",\"diameter_peer_failover\":false},"
@@ -193,7 +193,7 @@ fn carrier_api_control_status() -> string {
     let mode = str_to_lower(str_trim_space(env_get_or("SIP_B2BUA_MODE", "proxy")))
     let mut enabled = "false"
     if str_eq(mode, "1") || str_eq(mode, "enabled") || str_eq(mode, "b2bua") { enabled = "true" }
-    return "{\"schema\":\"madis.control.v1\",\"mako_version\":\"0.4.16\",\"b2bua\":{\"enabled\":" + enabled + ",\"mode\":\"" + carrier_json_escape(carrier_cap(mode, 32)) + "\"},\"application_database\":\"external\",\"operations\":[\"routing-rules.read\",\"routing-rules.create\",\"routing-rules.enable\",\"routing-rules.disable\",\"dialplans.read\",\"dialplans.create\",\"dialplans.enable\",\"dialplans.disable\",\"resources.read\",\"resources.write\"]}"
+    return "{\"schema\":\"madis.control.v1\",\"mako_version\":\"0.4.18\",\"b2bua\":{\"enabled\":" + enabled + ",\"mode\":\"" + carrier_json_escape(carrier_cap(mode, 32)) + "\"},\"application_database\":\"external\",\"operations\":[\"routing-rules.read\",\"routing-rules.create\",\"routing-rules.enable\",\"routing-rules.disable\",\"dialplans.read\",\"dialplans.create\",\"dialplans.enable\",\"dialplans.disable\",\"resources.read\",\"resources.write\"]}"
 }
 
 fn carrier_api_control_rules(db: SqlDB, ok: int, limit: int) -> string {

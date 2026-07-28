@@ -1,0 +1,181 @@
+// ============ HEPv3 SIP CAPTURE ============
+// Best-effort UDP export for Homer/HEP collectors. Capture is disabled unless
+// SIP_HEP_ENABLE=1; failures never change SIP request handling.
+
+fn hep_enabled() -> int {
+    let value = str_to_lower(str_trim_space(env_get_or("SIP_HEP_ENABLE", "0")))
+    if str_eq(value, "1") || str_eq(value, "true") || str_eq(value, "yes") {
+        return 1
+    }
+    return 0
+}
+
+fn hep_port() -> int {
+    let mut port = 9060
+    match parse_int(env_get_or("SIP_HEP_PORT", "9060")) {
+        Ok(value) => { port = value }
+        Err(_) => {}
+    }
+    if port < 1 { port = 1 }
+    if port > 65535 { port = 65535 }
+    return port
+}
+
+fn hep_capture_id() -> int {
+    let mut id = 1
+    match parse_int(env_get_or("SIP_HEP_CAPTURE_ID", "1")) {
+        Ok(value) => { id = value }
+        Err(_) => {}
+    }
+    if id < 0 { id = 0 }
+    if id > 65535 { id = 65535 }
+    return id
+}
+
+fn hep_payload_limit() -> int {
+    let mut limit = 60000
+    match parse_int(env_get_or("SIP_HEP_MAX_PAYLOAD", "60000")) {
+        Ok(value) => { limit = value }
+        Err(_) => {}
+    }
+    if limit < 256 { limit = 256 }
+    if limit > 65400 { limit = 65400 }
+    return limit
+}
+
+fn hep_queue_capacity() -> int {
+    let mut capacity = 8192
+    match parse_int(env_get_or("SIP_HEP_QUEUE_CAPACITY", "8192")) {
+        Ok(value) => { capacity = value }
+        Err(_) => {}
+    }
+    if capacity < 256 { capacity = 256 }
+    if capacity > 65536 { capacity = 65536 }
+    return capacity
+}
+
+fn hep_queue_new() -> chan[string] {
+    return chan_open[string](hep_queue_capacity())
+}
+
+fn hep_ipv4_valid(ip: string) -> int {
+    let parts = str_split(ip, ".")
+    if len(parts) != 4 { return 0 }
+    let mut i = 0
+    while i < 4 {
+        match parse_int(parts[i]) {
+            Ok(value) => {
+                if value < 0 || value > 255 { return 0 }
+            }
+            Err(_) => { return 0 }
+        }
+        i = i + 1
+    }
+    return 1
+}
+
+fn hep_chunk_header(b: Buf, typ: int, data_len: int) {
+    // HEPv3 chunk header: vendor id, type id, total chunk length.
+    buf_write_u16be(b, 0)
+    buf_write_u16be(b, typ)
+    buf_write_u16be(b, 6 + data_len)
+}
+
+fn hep_write_ipv4(b: Buf, typ: int, ip: string) {
+    let parts = str_split(ip, ".")
+    hep_chunk_header(b, typ, 4)
+    let mut i = 0
+    while i < 4 {
+        let value = match parse_int(parts[i]) {
+            Ok(v) => v
+            Err(_) => 0
+        }
+        buf_write_u8(b, value)
+        i = i + 1
+    }
+}
+
+fn hep_ip_protocol(transport: string) -> int {
+    let value = str_to_lower(str_trim_space(transport))
+    if str_eq(value, "tcp") || str_eq(value, "tls") || str_eq(value, "ws") || str_eq(value, "wss") {
+        return 6
+    }
+    if str_eq(value, "sctp") { return 132 }
+    return 17
+}
+
+fn hep_sender_fd(cache: CMap) -> int {
+    if cmap_has(cache, "hep|fd") == 1 {
+        match parse_int(cmap_get(cache, "hep|fd")) {
+            Ok(fd) => {
+                if fd >= 0 { return fd }
+            }
+            Err(_) => {}
+        }
+    }
+// One process-local ephemeral UDP socket is reused by the HEP worker.
+    // A first-packet creation race can create at most one short-lived extra
+    // socket per racing worker; normal sends never reopen or close the fd.
+    let fd = udp_bind_addr("0.0.0.0", 0)
+    if fd < 0 { return -1 }
+    cmap_set(cache, "hep|fd", string(fd))
+    return fd
+}
+
+fn hep_packet(msg: string, src_ip: string, src_port: int, dst_ip: string, dst_port: int, transport: string) -> string {
+    if len(msg) == 0 || hep_ipv4_valid(src_ip) == 0 || hep_ipv4_valid(dst_ip) == 0 {
+        return ""
+    }
+    let mut payload = msg
+    let limit = hep_payload_limit()
+    if len(payload) > limit { payload = payload[0:limit] }
+
+    let b = buf_pack_new(limit + 128)
+    buf_write_bytes(b, "HEP3")
+    hep_chunk_header(b, 1, 1)
+    buf_write_u8(b, 2) // AF_INET
+    hep_chunk_header(b, 2, 1)
+    buf_write_u8(b, hep_ip_protocol(transport))
+    hep_chunk_header(b, 3, 2)
+    buf_write_u16be(b, src_port)
+    hep_chunk_header(b, 4, 2)
+    buf_write_u16be(b, dst_port)
+    hep_write_ipv4(b, 5, src_ip)
+    hep_write_ipv4(b, 6, dst_ip)
+    hep_chunk_header(b, 9, 4)
+    buf_write_u32be(b, now_ms() / 1000)
+    hep_chunk_header(b, 10, 4)
+    buf_write_u32be(b, (now_ms() % 1000) * 1000)
+    hep_chunk_header(b, 11, 2)
+    buf_write_u16be(b, 1) // SIP
+    hep_chunk_header(b, 12, 2)
+    buf_write_u16be(b, hep_capture_id())
+    hep_chunk_header(b, 13, len(payload))
+    buf_write_bytes(b, payload)
+    let wire = buf_to_string(b)
+    buf_free(b)
+    return wire
+}
+
+fn hep_capture(outbox: chan[string], cache: CMap, msg: string, src_ip: string, src_port: int, dst_ip: string, dst_port: int, transport: string) -> int {
+    if hep_enabled() == 0 { return -1 }
+    let host = str_trim_space(env_get_or("SIP_HEP_HOST", ""))
+    if len(host) == 0 { return 0 }
+    let wire = hep_packet(msg, src_ip, src_port, dst_ip, dst_port, transport)
+    if len(wire) == 0 { return 0 }
+    let _ = cache
+    return chan_str_try_send_take(outbox, wire)
+}
+
+fn hep_worker(outbox: chan[string], cache: CMap) -> int {
+    while shutdown_requested() == 0 {
+        let wire = outbox.recv()
+        if len(wire) == 0 { break }
+        let host = str_trim_space(env_get_or("SIP_HEP_HOST", ""))
+        if len(host) == 0 { continue }
+        let fd = hep_sender_fd(cache)
+        if fd < 0 { continue }
+        let _ = udp_send_to(fd, host, hep_port(), wire)
+    }
+    return 0
+}

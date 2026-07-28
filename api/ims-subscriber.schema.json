@@ -15,6 +15,24 @@
       "maxLength": 2048,
       "pattern": "^[^\\r\\n\\u0000]+$"
     },
+    "service_profile": {
+      "type": "object",
+      "properties": {
+        "associated_uris": {
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/identity" }
+        },
+        "initial_filter_criteria": {
+          "type": "array",
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/identity" }
+        }
+      },
+      "additionalProperties": true
+    },
     "request": {
       "type": "object",
       "required": ["schema", "operation", "request_id", "public_identity", "private_identity", "visited_network", "server_name"],
@@ -41,7 +59,7 @@
         "decision": { "enum": ["allow", "deny"] },
         "reason": { "type": "string", "maxLength": 256 },
         "assigned_server_name": { "$ref": "#/$defs/identity" },
-        "service_profile": { "type": "object", "additionalProperties": true }
+        "service_profile": { "$ref": "#/$defs/service_profile" }
       },
       "additionalProperties": false,
       "allOf": [
@@ -61,7 +79,7 @@
         "private_identity": { "$ref": "#/$defs/identity", "maxLength": 1024 },
         "realm": { "$ref": "#/$defs/identity" },
         "assigned_server_name": { "$ref": "#/$defs/identity" },
-        "service_profile": { "type": "object", "additionalProperties": true }
+        "service_profile": { "$ref": "#/$defs/service_profile" }
       },
       "additionalProperties": false
     }

@@ -4,7 +4,7 @@ The `admin/` directory contains the standalone Mako WebUI and the machine API ga
 
 ## Build and run
 
-Mako 0.4.16 is required:
+Mako 0.4.18 is required:
 
 ```sh
 MAKO_RUNTIME=/path/to/mako/runtime \

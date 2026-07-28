@@ -71,19 +71,59 @@ fn ims_subscriber_response_allowed(response: string, request_id: string, public_
     return 1
 }
 
-fn ims_subscriber_authorized(public_identity: string, private_identity: string, visited_network: string, server_name: string) -> int {
-    if ims_subscriber_enabled() == 0 { return 1 }
+fn ims_subscriber_register_response(public_identity: string, private_identity: string, visited_network: string, server_name: string) -> string {
+    if ims_subscriber_enabled() == 0 { return "__IMS_SUBSCRIBER_DISABLED__" }
 
     // Subscriber authorization carries private identity data and must use TLS.
     let url = str_trim_space(env_get_or("SIP_IMS_SUBSCRIBER_URL", ""))
     let token = env_get_or("SIP_IMS_SUBSCRIBER_TOKEN", "")
-    if app_url_is_https(url) == 0 || ims_subscriber_token_ok(token) == 0 { return 0 }
+    if app_url_is_https(url) == 0 || ims_subscriber_token_ok(token) == 0 { return "" }
 
     let request = ims_subscriber_authorize_request(public_identity, private_identity, visited_network, server_name)
-    if len(request) == 0 { return 0 }
+    if len(request) == 0 { return "" }
     let request_id = ims_subscriber_request_id(public_identity, private_identity, visited_network, server_name)
     let response = app_gateway_http_post_ca(url, token, request, ims_subscriber_timeout_ms(), env_get_or("SIP_IMS_SUBSCRIBER_CA", ""))
-    return ims_subscriber_response_allowed(response, request_id, public_identity, private_identity, server_name)
+    if ims_subscriber_response_allowed(response, request_id, public_identity, private_identity, server_name) == 0 { return "" }
+    return response
+}
+
+fn ims_subscriber_authorized(public_identity: string, private_identity: string, visited_network: string, server_name: string) -> int {
+    let response = ims_subscriber_register_response(public_identity, private_identity, visited_network, server_name)
+    return if str_eq(response, "__IMS_SUBSCRIBER_DISABLED__") || len(response) > 0 { 1 } else { 0 }
+}
+
+// Extract only the explicitly defined public-identity alias list from an
+// already-authorized response. Missing profile data is compatible; malformed
+// present data fails closed before any registrar state is written.
+fn ims_subscriber_profile_associated_header(response: string) -> string {
+    if len(response) == 0 || str_eq(response, "__IMS_SUBSCRIBER_DISABLED__") { return "" }
+    let profile = json_get_object(response, "service_profile")
+    if len(profile) == 0 { return "" }
+    if str_index(profile, "\"associated_uris\"") < 0 { return "" }
+    let uris = json_get_object(profile, "associated_uris")
+    if len(uris) == 0 { return "__IMS_PROFILE_INVALID__" }
+    let count = json_array_len(uris)
+    if count < 0 || count > 8 { return "__IMS_PROFILE_INVALID__" }
+    if count == 0 { return "" }
+
+    let mut result = "P-Associated-URI: "
+    let mut seen = ""
+    let mut i = 0
+    while i < count {
+        let uri = json_array_get_string(uris, i)
+        if ims_subscriber_text_ok(uri, 2048) == 0 || str_index(uri, ",") >= 0 || str_index(uri, "\\") >= 0 || str_index(uri, "|") >= 0 || str_index(uri, "<") >= 0 || str_index(uri, ">") >= 0 || sip_name_addr_valid("<" + uri + ">") == 0 {
+            return "__IMS_PROFILE_INVALID__"
+        }
+        let marker = "|" + uri + "|"
+        if str_index(seen, marker) >= 0 { return "__IMS_PROFILE_INVALID__" }
+        seen = seen + marker
+        let rendered = "<" + uri + ">"
+        if len(result) + len(rendered) + 2 > 8192 { return "__IMS_PROFILE_INVALID__" }
+        if i > 0 { result = result + ", " }
+        result = result + rendered
+        i = i + 1
+    }
+    return result + "\r\n"
 }
 
 // Explicit subscriber-service gate. Disabled configuration is a no-op; any

@@ -1,0 +1,53 @@
+// Opt-in IMS REGISTER Service-Route response configuration tests.
+pull . "../main.mko"
+
+fn ims_registration_test_disable() {
+    let _ = env_set("SIP_IMS_SERVICE_ROUTE", "")
+    let _ = env_set("SIP_IMS_ASSOCIATED_URI", "")
+}
+
+fn TestIMSServiceRouteDisabled() {
+    ims_registration_test_disable()
+    assert_eq_str(ims_service_route_value(), "")
+    assert_eq_str(ims_service_route_header(), "")
+}
+
+fn TestIMSServiceRouteValid() {
+    let _ = env_set("SIP_IMS_SERVICE_ROUTE", "sip:scscf.example.com;lr")
+    assert_eq_str(ims_service_route_value(), "sip:scscf.example.com;lr")
+    assert_eq_str(ims_service_route_header(), "Service-Route: <sip:scscf.example.com;lr>\r\n")
+    let _ = env_set("SIP_IMS_SERVICE_ROUTE", "sips:scscf.example.com;transport=tls;lr")
+    assert_eq_str(ims_service_route_value(), "sips:scscf.example.com;transport=tls;lr")
+}
+
+fn TestIMSServiceRouteRejectsUnsafeConfig() {
+    let _ = env_set("SIP_IMS_SERVICE_ROUTE", "udp://scscf.example.com")
+    assert_eq_str(ims_service_route_value(), "__IMS_SERVICE_ROUTE_INVALID__")
+    let _ = env_set("SIP_IMS_SERVICE_ROUTE", "sip:scscf.example.com\r\nX-Evil: yes")
+    assert_eq_str(ims_service_route_value(), "__IMS_SERVICE_ROUTE_INVALID__")
+    let _ = env_set("SIP_IMS_SERVICE_ROUTE", "sip:a.example.com,sip:b.example.com")
+    assert_eq_str(ims_service_route_value(), "__IMS_SERVICE_ROUTE_INVALID__")
+    ims_registration_test_disable()
+}
+
+fn TestIMSAssociatedURIValid() {
+    ims_registration_test_disable()
+    let _ = env_set("SIP_IMS_ASSOCIATED_URI", "sip:alice@example.com")
+    assert_eq_str(ims_associated_uri_value(), "sip:alice@example.com")
+    assert_eq_str(ims_associated_uri_header(), "P-Associated-URI: <sip:alice@example.com>\r\n")
+    let _ = env_set("SIP_IMS_ASSOCIATED_URI", "sips:alice@example.com;user=phone")
+    assert_eq_str(ims_associated_uri_value(), "sips:alice@example.com;user=phone")
+    ims_registration_test_disable()
+}
+
+fn TestIMSAssociatedURIRejectsUnsafeConfig() {
+    let _ = env_set("SIP_IMS_ASSOCIATED_URI", "udp://alice.example.com")
+    assert_eq_str(ims_associated_uri_value(), "__IMS_ASSOCIATED_URI_INVALID__")
+    let _ = env_set("SIP_IMS_ASSOCIATED_URI", "sip:alice@example.com\r\nX-Evil: yes")
+    assert_eq_str(ims_associated_uri_value(), "__IMS_ASSOCIATED_URI_INVALID__")
+    let _ = env_set("SIP_IMS_ASSOCIATED_URI", "sip:alice@example.com,sip:alias@example.com")
+    assert_eq_str(ims_associated_uri_value(), "__IMS_ASSOCIATED_URI_INVALID__")
+    let _ = env_set("SIP_IMS_ASSOCIATED_URI", "<sip:alice@example.com>")
+    assert_eq_str(ims_associated_uri_value(), "__IMS_ASSOCIATED_URI_INVALID__")
+    ims_registration_test_disable()
+}

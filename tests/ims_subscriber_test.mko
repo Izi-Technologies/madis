@@ -12,6 +12,12 @@ fn ims_subscriber_test_response(decision: string) -> string {
     return "{\"schema\":\"" + ims_subscriber_schema() + "\",\"operation\":\"authorize-register\",\"request_id\":\"" + request_id + "\",\"public_identity\":\"sip:alice@example.com\",\"private_identity\":\"alice@example.com\",\"decision\":\"" + decision + "\",\"assigned_server_name\":\"sip:scscf.example.com\"}"
 }
 
+fn ims_subscriber_test_profile_response() -> string {
+    let request = ims_subscriber_test_request()
+    let request_id = json_get_string(request, "request_id")
+    return "{\"schema\":\"" + ims_subscriber_schema() + "\",\"operation\":\"authorize-register\",\"request_id\":\"" + request_id + "\",\"public_identity\":\"sip:alice@example.com\",\"private_identity\":\"alice@example.com\",\"decision\":\"allow\",\"assigned_server_name\":\"sip:scscf.example.com\",\"service_profile\":{\"associated_uris\":[\"sip:alice@example.com\",\"sips:alias@example.com;user=phone\"]}}"
+}
+
 fn TestIMSSubscriberAuthorizationContract() {
     let request = ims_subscriber_test_request()
     assert_eq_str(json_get_string(request, "schema"), "madis.ims.subscriber.authorization.v1")
@@ -38,4 +44,23 @@ fn TestIMSSubscriberRequestBounds() {
     assert_eq(ims_subscriber_token_ok("0123456789abcdef"), 1)
     assert_eq(ims_subscriber_token_ok("0123456789abc\rdef"), 0)
     assert_eq(ims_subscriber_token_ok("0123456789 abcdef"), 0)
+}
+
+fn TestIMSSubscriberProfileAssociatedURIs() {
+    let response = ims_subscriber_test_profile_response()
+    assert_eq_str(ims_subscriber_profile_associated_header(response), "P-Associated-URI: <sip:alice@example.com>, <sips:alias@example.com;user=phone>\r\n")
+    assert_eq_str(ims_subscriber_profile_associated_header(ims_subscriber_test_response("allow")), "")
+    assert_eq_str(ims_subscriber_profile_associated_header("__IMS_SUBSCRIBER_DISABLED__"), "")
+}
+
+fn TestIMSSubscriberProfileAssociatedURIsFailClosed() {
+    let valid = ims_subscriber_test_profile_response()
+    let bad_scheme = str_replace(valid, "sips:alias@example.com;user=phone", "udp://alias.example.com")
+    assert_eq_str(ims_subscriber_profile_associated_header(bad_scheme), "__IMS_PROFILE_INVALID__")
+    let bad_shape = str_replace(valid, "[\"sip:alice@example.com\",\"sips:alias@example.com;user=phone\"]", "\"sip:alice@example.com\"")
+    assert_eq_str(ims_subscriber_profile_associated_header(bad_shape), "__IMS_PROFILE_INVALID__")
+    let bad_element = str_replace(valid, "sips:alias@example.com;user=phone", "sip:alias@example.com\\\\evil")
+    assert_eq_str(ims_subscriber_profile_associated_header(bad_element), "__IMS_PROFILE_INVALID__")
+    let duplicate = str_replace(valid, "sips:alias@example.com;user=phone", "sip:alice@example.com")
+    assert_eq_str(ims_subscriber_profile_associated_header(duplicate), "__IMS_PROFILE_INVALID__")
 }

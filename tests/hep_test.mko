@@ -1,0 +1,88 @@
+pull . "../hep.mko"
+
+fn TestHEP3IPv4Packet() {
+    let packet = hep_packet(
+        "OPTIONS sip:collector@example.com SIP/2.0\r\nContent-Length: 0\r\n\r\n",
+        "192.0.2.10",
+        5060,
+        "198.51.100.20",
+        5060,
+        "UDP"
+    )
+    let b = buf_from_string(packet)
+    assert_eq_str(buf_read_bytes(b, 4), "HEP3")
+    assert_eq(buf_read_u16be(b), 0)
+    assert_eq(buf_read_u16be(b), 1)
+    assert_eq(buf_read_u16be(b), 7)
+    assert_eq(buf_read_u8(b), 2)
+    assert_eq(buf_read_u16be(b), 0)
+    assert_eq(buf_read_u16be(b), 2)
+    assert_eq(buf_read_u16be(b), 7)
+    assert_eq(buf_read_u8(b), 17)
+    buf_free(b)
+}
+
+fn TestHEP3RejectsNonIPv4() {
+    assert_eq(hep_ipv4_valid("192.0.2.1"), 1)
+    assert_eq(hep_ipv4_valid("192.0.2.999"), 0)
+    assert_eq(hep_ipv4_valid("2001:db8::1"), 0)
+    assert_eq_str(hep_packet("SIP/2.0 200 OK\r\n\r\n", "2001:db8::1", 5060, "198.51.100.20", 5060, "UDP"), "")
+}
+
+fn TestHEPProtocolMapping() {
+    assert_eq(hep_ip_protocol("UDP"), 17)
+    assert_eq(hep_ip_protocol("TCP"), 6)
+    assert_eq(hep_ip_protocol("TLS"), 6)
+    assert_eq(hep_ip_protocol("SCTP"), 132)
+}
+
+fn TestHEPDisabledIsNoop() {
+    let _ = env_set("SIP_HEP_ENABLE", "0")
+    let outbox = chan_open[string](1)
+    let cache = cmap_new()
+    assert_eq(hep_capture(outbox, cache, "OPTIONS sip:test@example.com SIP/2.0\r\n\r\n", "192.0.2.10", 5060, "198.51.100.20", 9060, "UDP"), -1)
+    outbox.close()
+}
+
+fn TestHEPEnabledQueuesPacket() {
+    let _ = env_set("SIP_HEP_ENABLE", "1")
+    let _ = env_set("SIP_HEP_HOST", "127.0.0.1")
+    let outbox = chan_open[string](1)
+    let cache = cmap_new()
+    assert_eq(hep_capture(outbox, cache, "OPTIONS sip:test@example.com SIP/2.0\r\n\r\n", "192.0.2.10", 5060, "198.51.100.20", 5060, "UDP"), 1)
+    let packet = outbox.recv()
+    assert_eq_str(packet[0:4], "HEP3")
+    outbox.close()
+    let _ = env_set("SIP_HEP_ENABLE", "0")
+}
+
+fn TestHEPWorkerSendsPacket() {
+    if not str_eq(env_get_or("SIP_HEP_TEST_NETWORK", "0"), "1") { return }
+    let collector = udp_bind(0)
+    if collector < 0 { return }
+    let port = udp_local_port(collector)
+    let _ = env_set("SIP_HEP_ENABLE", "1")
+    let _ = env_set("SIP_HEP_HOST", "127.0.0.1")
+    let _ = env_set("SIP_HEP_PORT", string(port))
+    let outbox = chan_open[string](1)
+    let cache = cmap_new()
+    detach hep_worker(outbox, cache)
+    assert_eq(hep_capture(outbox, cache, "OPTIONS sip:test@example.com SIP/2.0\r\n\r\n", "192.0.2.10", 5060, "198.51.100.20", 5060, "UDP"), 1)
+    let packet = udp_recv(collector, 65535)
+    assert_eq_str(packet[0:4], "HEP3")
+    outbox.close()
+    let _ = detached_join_all()
+    let _ = udp_close(collector)
+    let _ = env_set("SIP_HEP_ENABLE", "0")
+}
+
+fn TestHEPQueueCapacityBounds() {
+    let _ = env_set("SIP_HEP_QUEUE_CAPACITY", "1")
+    assert_eq(hep_queue_capacity(), 256)
+    let _ = env_set("SIP_HEP_QUEUE_CAPACITY", "999999")
+    assert_eq(hep_queue_capacity(), 65536)
+    let outbox = chan_open[string](1)
+    assert_eq(chan_str_try_send_take(outbox, "wire-1"), 1)
+    assert_eq(chan_str_try_send_take(outbox, "wire-2"), 0)
+    outbox.close()
+}

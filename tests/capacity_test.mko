@@ -1,0 +1,28 @@
+pull . "../main.mko"
+
+fn TestCallStateCapacityDefaultsAndClamps() {
+    let _ = env_set("SIP_CALL_STATE_CAPACITY", "262144")
+    assert_eq(sip_call_state_capacity(), 262144)
+    let _ = env_set("SIP_CALL_STATE_CAPACITY", "1")
+    assert_eq(sip_call_state_capacity(), 16384)
+    let _ = env_set("SIP_CALL_STATE_CAPACITY", "999999999")
+    assert_eq(sip_call_state_capacity(), 1048576)
+}
+
+fn TestCallStateUpdatesExistingRecord() {
+    let _ = env_set("SIP_CALL_STATE_CAPACITY", "262144")
+    let calls = cmap_new()
+    let cache = cmap_new()
+    assert_eq(sip_call_state_set(calls, cache, "dialog|capacity-test", "trying|1"), 0)
+    assert_eq(sip_call_state_set(calls, cache, "dialog|capacity-test", "confirmed|2"), 0)
+    assert_eq_str(cmap_get(calls, "dialog|capacity-test"), "confirmed|2")
+}
+
+fn TestTcpConnectionCapacityBounds() {
+    let _ = env_set("SIP_TCP_MAX_CONNECTIONS", "65536")
+    assert_eq(sip_tcp_connection_limit(), 65536)
+    let _ = env_set("SIP_TCP_MAX_CONNECTIONS", "1")
+    assert_eq(sip_tcp_connection_limit(), 1024)
+    let _ = env_set("SIP_TCP_MAX_CONNECTIONS", "999999999")
+    assert_eq(sip_tcp_connection_limit(), 1048576)
+}

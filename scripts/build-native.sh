@@ -9,8 +9,8 @@ CC_BIN="${CC:-cc}"
 
 VERSION=$($MAKO_BIN --version 2>/dev/null || true)
 case "$VERSION" in
-  *0.4.16*) ;;
-  *) echo "Mako 0.4.16 is required (found: ${VERSION:-unknown})" >&2; exit 1 ;;
+  *0.4.18*) ;;
+  *) echo "Mako 0.4.18 is required (found: ${VERSION:-unknown})" >&2; exit 1 ;;
 esac
 
 RUNTIME_DIR="${MAKO_RUNTIME_PATH:-${MAKO_RUNTIME:-}}"
@@ -72,4 +72,4 @@ if [[ -n "$EXTRA_CFLAGS" ]]; then CC_ARGS+=("${EXTRA_CFLAGS_ARGS[@]}"); fi
 if [[ -n "$EXTRA_LDFLAGS" ]]; then LD_ARGS+=("${EXTRA_LDFLAGS_ARGS[@]}"); fi
 "$CC_BIN" "${CC_ARGS[@]}" "$GENERATED" "$ROOT/madis_memory.c" -o "$OUTPUT" "${LD_ARGS[@]}"
 
-echo "Built $OUTPUT with Mako 0.4.16"
+echo "Built $OUTPUT with Mako 0.4.18"
