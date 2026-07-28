@@ -221,6 +221,7 @@ class TwoSubscriberImsSmokeTests(unittest.TestCase):
         self.bob_media.bind(("127.0.0.1", 0))
         self.bob_media.settimeout(2.0)
         self.processes: list[subprocess.Popen] = []
+        self.hss_process: subprocess.Popen | None = None
         self.tempdir = tempfile.TemporaryDirectory(prefix="madis-ims-e2e-")
         self.use_diameter_tls = RUN_E2E_TLS
         self.diameter_cert: Path | None = None
@@ -333,12 +334,24 @@ class TwoSubscriberImsSmokeTests(unittest.TestCase):
             )
         hss_env = os.environ.copy()
         process = subprocess.Popen(command, env=hss_env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        self.hss_process = process
         self.processes.append(process)
         if self.use_diameter_tls:
             assert self.diameter_cert is not None
             _wait_diameter_tls("127.0.0.1", self.hss_diameter_port, self.diameter_cert)
         else:
             _wait_tcp("127.0.0.1", self.hss_diameter_port)
+
+    @staticmethod
+    def _stop_child(process: subprocess.Popen) -> None:
+        if process.poll() is not None:
+            return
+        process.terminate()
+        try:
+            process.wait(timeout=3.0)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=3.0)
 
     def _start_media(self) -> None:
         command = [
@@ -463,6 +476,26 @@ class TwoSubscriberImsSmokeTests(unittest.TestCase):
         client.send(make_register(2, "z9hG4bK-" + uuid.uuid4().hex, authorization), self.sip_port)
         accepted = client.receive(lambda message: _status(message) == 200)
         self.assertEqual(_status(accepted), 200)
+
+    def test_hss_unavailable_fails_closed(self) -> None:
+        """A live worker must reject a REGISTER when its Cx peer disappears."""
+        assert self.hss_process is not None
+        self._stop_child(self.hss_process)
+        message = (
+            "REGISTER sip:example.com SIP/2.0\r\n"
+            f"Via: SIP/2.0/UDP 127.0.0.1:{self.alice.address[1]};branch=z9hG4bK-hss-down\r\n"
+            "Max-Forwards: 70\r\n"
+            "From: <sip:alice@example.com>;tag=hss-down\r\n"
+            "To: <sip:alice@example.com>\r\n"
+            "Call-ID: hss-down@example.com\r\n"
+            "CSeq: 1 REGISTER\r\n"
+            f"Contact: <sip:alice@127.0.0.1:{self.alice.address[1]}>\r\n"
+            "Expires: 300\r\n"
+            "Content-Length: 0\r\n\r\n"
+        )
+        self.alice.send(message, self.sip_port)
+        rejected = self.alice.receive(lambda item: _status(item) in (500, 503))
+        self.assertEqual(_status(rejected), 503)
 
     def _invite(self) -> tuple[str, str, str, str]:
         call_id = "call-" + uuid.uuid4().hex[:12]

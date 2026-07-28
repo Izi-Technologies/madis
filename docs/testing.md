@@ -181,13 +181,16 @@ IMS_END_TO_END=1 IMS_END_TO_END_TLS=1 MADIS_BIN=/path/to/madis \
 ```
 
 The HSS tests cover Cx answer construction, unknown-subscriber and serving-
-server rejection, opaque vector handling, and the rule that HTTP subscriber
-authorization never returns XRES. The media tests cover bounded ng control,
+server rejection, opaque vector handling, malformed Diameter requests being
+dropped without an answer, and the rule that HTTP subscriber authorization
+never returns XRES. The media tests cover bounded ng control,
 SDP rewriting, offer/answer/delete lifecycle, malformed input rejection, and
 localhost RTP forwarding. The worker-backed test additionally verifies that
 standalone `SIP_RTPENGINE_*` configuration reaches the call path, that both
 SDP legs are rewritten, and that RTP crosses the sidecar in both directions.
-The Docker profile extends that same contract across separate P-/I-/S-CSCF
+It also has an opt-in HSS-unavailable case that requires the worker to fail
+closed with SIP `503`; it is skipped unless a built worker is supplied. The
+Docker profile extends that same contract across separate P-/I-/S-CSCF
 workers and uses Cx LIR to select the S-CSCF. These tests are lab-contract
 evidence; they do not replace tests against real UEs, HSS/UDM systems,
 RTPEngine deployments, or media/security profiles.
