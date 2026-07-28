@@ -47,8 +47,9 @@ interoperability evidence.
 The reproducible Docker profile at [`../docker/ims-lab/README.md`](../docker/ims-lab/README.md)
 now composes these adapters with separate Mako `v0.4.18` P-/I-/S-CSCF workers
 and a deterministic two-subscriber client. Its passing smoke test is evidence
-for the selected TLS Cx/AKA, HTTPS subscriber authorization, role-chain
-REGISTER/initial-INVITE forwarding, SIP, SDP relay, RTP, and teardown path only;
+for the selected TLS Cx/AKA, HTTPS subscriber authorization, deterministic
+unknown/barred registration rejection, role-chain REGISTER/initial-INVITE
+forwarding, SIP, SDP relay, RTP, and teardown path only;
 the remaining roadmap
 items below still require real UE/HSS/UDM/media interoperability and measured
 deployment acceptance.

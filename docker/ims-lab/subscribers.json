@@ -6,11 +6,18 @@
       "assigned_server_name": "sip:scscf:5060",
       "xres_base64": "eHJlcy1hbGljZQ=="
     },
-    {
-      "public_identity": "sip:bob@example.com",
-      "private_identity": "bob@example.com",
-      "assigned_server_name": "sip:scscf:5060",
-      "xres_base64": "eHJlcy1ib2I="
-    }
+  {
+    "public_identity": "sip:bob@example.com",
+    "private_identity": "bob@example.com",
+    "assigned_server_name": "sip:scscf:5060",
+    "xres_base64": "eHJlcy1ib2I="
+  },
+  {
+    "public_identity": "sip:barred@example.com",
+    "private_identity": "barred@example.com",
+    "assigned_server_name": "sip:scscf:5060",
+    "xres_base64": "eHJlcy1iYXJyZWQ=",
+    "enabled": false
+  }
   ]
 }

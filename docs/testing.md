@@ -100,8 +100,10 @@ This verifies the Madis UDP client against a test responder in the same process 
 The repository includes a containerized six-service smoke environment for the
 implemented IMS boundary. It builds separate Mako `v0.4.18` P-/I-/S-CSCF
 workers, starts TLS Cx/AKA and HTTPS subscriber-authority endpoints in the HSS
-adapter plus an RTPEngine-ng-compatible media relay, then runs two test subscribers through role-chain REGISTER and
-initial-INVITE forwarding, SDP offer/answer, bidirectional RTP, ACK, and BYE:
+adapter plus an RTPEngine-ng-compatible media relay, rejects unknown and
+disabled subscribers, then runs two test subscribers through role-chain
+REGISTER and initial-INVITE forwarding, SDP offer/answer, bidirectional RTP,
+ACK, and BYE:
 
 ```sh
 docker compose -f docker-compose.ims-lab.yml up \
