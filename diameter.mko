@@ -927,6 +927,36 @@ fn diameter_peer_receive_answer(cache: CMap, handle: int, request: string, appli
 
 // Serialize the full send/receive exchange. Diameter requests on one peer
 // connection cannot be interleaved: the lock covers CER reuse and the answer.
+// Plain TCP is intentionally one request per connection and requires the
+// explicit lab/deployment opt-in. The normal persistent Cx path remains TLS.
+fn diameter_plain_peer_exchange(request: string, application: int, command: int) -> string {
+    let host = diameter_peer_host()
+    let port = diameter_peer_port()
+    let timeout_ms = diameter_timeout_ms()
+    if len(host) == 0 || port < 1 || timeout_ms < 1 { return "" }
+    if not str_eq(env_get_or("SIP_DIAMETER_ALLOW_PLAINTEXT", "0"), "1") { return "" }
+    let fd = tcp_connect_timeout(host, port, timeout_ms)
+    if fd < 0 { return "" }
+    let _ = tcp_set_timeout(fd, timeout_ms)
+    let cer = diameter_cer_message_for(application)
+    if len(cer) == 0 || tcp_write_all(fd, cer) != len(cer) {
+        let _ = tcp_close(fd)
+        return ""
+    }
+    let cea = diameter_read_tcp_message(fd)
+    if diameter_cea_matches(cea, diameter_read_u32(cer, 12)) == 0 {
+        let _ = tcp_close(fd)
+        return ""
+    }
+    if tcp_write_all(fd, request) != len(request) {
+        let _ = tcp_close(fd)
+        return ""
+    }
+    let response = diameter_read_tcp_message(fd)
+    let _ = tcp_close(fd)
+    return if diameter_peer_answer_matches(request, response, application, command) == 1 { response } else { "" }
+}
+
 fn diameter_peer_exchange(cache: CMap, peer_lock: Mutex, request: string, application: int, command: int) -> string {
     if len(request) < 20 || diameter_message_valid(request) == 0 { return "" }
     if diameter_header_application(request) != application || diameter_header_command(request) != command { return "" }
@@ -935,6 +965,14 @@ fn diameter_peer_exchange(cache: CMap, peer_lock: Mutex, request: string, applic
     if str_eq(diameter_transport(), "sctp") {
         mutex_lock(peer_lock)
         let response = diameter_sctp_exchange_once(request, application, command)
+        mutex_unlock(peer_lock)
+        return response
+    }
+    let use_tls = str_to_lower(str_trim_space(env_get_or("SIP_DIAMETER_TLS", "1")))
+    let plaintext = str_eq(use_tls, "0") || str_eq(use_tls, "false") || str_eq(use_tls, "no")
+    if plaintext && str_eq(env_get_or("SIP_DIAMETER_ALLOW_PLAINTEXT", "0"), "1") {
+        mutex_lock(peer_lock)
+        let response = diameter_plain_peer_exchange(request, application, command)
         mutex_unlock(peer_lock)
         return response
     }

@@ -78,5 +78,7 @@ PY
 
 bash -n install.sh
 python3 -m py_compile sdk/python/madis_carrier.py
+python3 -m unittest discover -s lab -p 'test_*.py'
+python3 -m unittest discover -s media -p 'test_*.py'
 
 echo "Madis CI checks passed with Mako 0.4.18"

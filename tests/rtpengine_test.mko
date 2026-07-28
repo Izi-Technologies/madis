@@ -39,6 +39,28 @@ fn TestRTPEngineDialogTagBounds() {
     assert_eq(rtp_dialog_tag_safe(oversized), 0)
 }
 
+fn TestRTPEngineEnvironmentOverrides() {
+    let _ = env_set("SIP_RTPENGINE_ENABLED", "true")
+    let _ = env_set("SIP_RTPENGINE_HOST", "127.0.0.1")
+    let _ = env_set("SIP_RTPENGINE_PORT", "2233")
+    let mut base = make([]string, 3)
+    base[0] = "0"
+    base[1] = "db-media.internal"
+    base[2] = "2223"
+    let enabled = rtp_config_apply_env(base)
+    assert_eq_str(enabled[0], "1")
+    assert_eq_str(enabled[1], "127.0.0.1")
+    assert_eq_str(enabled[2], "2233")
+
+    let _ = env_set("SIP_RTPENGINE_ENABLED", "0")
+    let disabled = rtp_config_apply_env(base)
+    assert_eq_str(disabled[0], "0")
+
+    let _ = env_set("SIP_RTPENGINE_ENABLED", "")
+    let _ = env_set("SIP_RTPENGINE_HOST", "")
+    let _ = env_set("SIP_RTPENGINE_PORT", "")
+}
+
 // Optional wire-level test double. This exercises the production UDP client
 // without requiring a real RTPEngine process or making ordinary CI depend on
 // a host network service.

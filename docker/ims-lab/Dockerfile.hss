@@ -1,0 +1,11 @@
+FROM python:3.12-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openssl \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY lab/ims_hss.py /app/lab/ims_hss.py
+COPY docker/ims-lab/subscribers.json /app/subscribers.json
+COPY docker/ims-lab/hss-entrypoint.sh /usr/local/bin/hss-entrypoint
+RUN chmod 0755 /usr/local/bin/hss-entrypoint
+ENTRYPOINT ["/usr/local/bin/hss-entrypoint"]

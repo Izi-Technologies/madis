@@ -16,6 +16,8 @@ The CI script runs:
 - All repository Mako test files.
 - Native SIP worker and WebUI links, including the `madis_memory.c` bridge.
 - JSON-schema parsing, shell syntax validation, and Python SDK compilation.
+- Default Python unit tests for the standalone `lab/` HSS adapter and `media/`
+  RTPEngine-compatible sidecar.
 
 The checks are deterministic contract and regression tests. They do not establish interoperability with every SIP, WebRTC, Diameter, IMS, or SS7 implementation.
 
@@ -93,6 +95,28 @@ SIP_RTPENGINE_TEST_NETWORK=1 \
 
 This verifies the Madis UDP client against a test responder in the same process boundary; it is not evidence of RTP, ICE, DTLS-SRTP, endpoint, or production RTPEngine interoperability.
 
+## Docker IMS integration lab
+
+The repository includes a containerized four-service smoke environment for the
+implemented IMS boundary. It builds the Mako `v0.4.18` worker, starts a TLS
+Cx/AKA HSS adapter and an RTPEngine-ng-compatible media relay, then runs two
+test subscribers through REGISTER, INVITE, SDP offer/answer, bidirectional RTP,
+ACK, and BYE:
+
+```sh
+docker compose -f docker-compose.ims-lab.yml up \
+  --abort-on-container-exit \
+  --exit-code-from client
+docker compose -f docker-compose.ims-lab.yml down
+```
+
+The lab uses fake subscriber data and short-lived runtime certificates. The
+HSS private key is generated inside a named Docker volume and is never copied
+into the repository. SIP/admin ports are loopback-published; HSS and media
+control remain on the private Compose network. A passing run is an integration
+smoke result, not proof of complete 3GPP IMS interoperability, ICE/DTLS-SRTP,
+real UE compatibility, clustered state, or production capacity.
+
 ## Release checklist
 
 - [ ] `scripts/ci.sh` passes with Mako 0.4.18.
@@ -125,3 +149,39 @@ unreachable collector. SIP success/error rates and transaction timing must be
 unchanged by collector failure. Cluster test runs must preserve UDP
 transaction affinity and TCP/TLS/WebSocket connection affinity; see
 [`clustering.md`](clustering.md).
+
+## External IMS lab adapters
+
+The repository also checks the standalone lab components without requiring
+external services. The default commands run offline unit/contract coverage;
+listener and worker-backed checks are opt-in because they need local sockets or
+an executable worker:
+
+```sh
+python3 -m unittest discover -s lab -p 'test_*.py'
+python3 -m unittest discover -s media -p 'test_*.py'
+
+# Listener tests: Diameter TCP and HTTP authorization/provisioning
+IMS_HSS_TEST_NETWORK=1 python3 -m unittest discover -s lab -p 'test_*.py'
+
+# Diameter TLS listener with an ephemeral certificate
+IMS_HSS_TEST_TLS=1 python3 -m unittest lab.test_ims_hss.HssDiameterTlsWireTests -v
+
+# Full worker-backed two-subscriber IMS smoke with the external RTP sidecar
+IMS_END_TO_END=1 MADIS_BIN=/path/to/madis \
+  python3 -m unittest lab.test_ims_end_to_end -v
+
+# The same call with Diameter TLS and an ephemeral HSS certificate
+IMS_END_TO_END=1 IMS_END_TO_END_TLS=1 MADIS_BIN=/path/to/madis \
+  python3 -m unittest lab.test_ims_end_to_end -v
+```
+
+The HSS tests cover Cx answer construction, unknown-subscriber and serving-
+server rejection, opaque vector handling, and the rule that HTTP subscriber
+authorization never returns XRES. The media tests cover bounded ng control,
+SDP rewriting, offer/answer/delete lifecycle, malformed input rejection, and
+localhost RTP forwarding. The worker-backed test additionally verifies that
+standalone `SIP_RTPENGINE_*` configuration reaches the call path, that both
+SDP legs are rewritten, and that RTP crosses the sidecar in both directions.
+These tests are lab-contract evidence; they do not replace tests against real
+UEs, HSS/UDM systems, RTPEngine deployments, or media/security profiles.

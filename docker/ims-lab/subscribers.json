@@ -1,0 +1,16 @@
+{
+  "subscribers": [
+    {
+      "public_identity": "sip:alice@example.com",
+      "private_identity": "alice@example.com",
+      "assigned_server_name": "sip:scscf.example.com",
+      "xres_base64": "eHJlcy1hbGljZQ=="
+    },
+    {
+      "public_identity": "sip:bob@example.com",
+      "private_identity": "bob@example.com",
+      "assigned_server_name": "sip:scscf.example.com",
+      "xres_base64": "eHJlcy1ib2I="
+    }
+  ]
+}
