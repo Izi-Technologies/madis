@@ -76,6 +76,159 @@ That Compose file is a local SIP-worker profile, not the IMS lab and not a publi
 
 ## APIs and documentation
 
+### MADIS Application Fabric (MAF)
+
+The **MADIS Application Fabric (MAF)** is Madis's language-neutral HTTP/JSON
+application boundary. Services written in Go, JavaScript/TypeScript, Python,
+or another language can observe call resources, submit bounded commands, and
+consume replayable events without writing Mako, SQL, SIP bytes, or worker
+memory. Madis remains the owner of SIP signaling state; the external
+application owns business logic and persistence.
+
+The standalone admin process currently exposes all eight MAF routes:
+
+```text
+POST /admin/api/v1/maf/calls
+GET  /admin/api/v1/maf/calls/{call_id}
+POST /admin/api/v1/maf/calls/{call_id}/answer
+POST /admin/api/v1/maf/calls/{call_id}/reject
+POST /admin/api/v1/maf/calls/{call_id}/hangup
+POST /admin/api/v1/maf/calls/{call_id}/bridges
+POST /admin/api/v1/maf/calls/{call_id}/media
+GET  /admin/api/v1/maf/events?cursor=...&event_type=...
+```
+
+MAF mutating requests are asynchronous. A `202` response means that the
+command and its initial event were durably accepted by PostgreSQL; it does not
+mean that the SIP dialog has already changed. Use the call resource or event
+cursor to observe progress. The current SIP worker executes outbound
+`calls.create`, early-dialog reject/hangup as `CANCEL`, and confirmed-dialog
+hangup as `BYE`. Answer, bridge, and media commands are accepted into the
+durable queue but return explicit failed receipts until their worker-owned
+executors are implemented. They are never reported as successful.
+
+MAF credentials are separate from admin, carrier, control, and SIP-worker
+credentials. Configure a write token, an optional read-only token, and the
+process tenant in the admin environment:
+
+```sh
+export SIP_MAF_API_TOKEN="$(openssl rand -hex 32)"
+export SIP_MAF_API_READ_TOKEN="$(openssl rand -hex 32)"
+export SIP_MAF_TENANT="default"
+```
+
+Put the admin listener behind HTTPS and, for production, a private mTLS edge.
+The route still requires a MAF bearer token after mTLS. Keep tokens in
+server-side services; do not place them in browser bundles, SIP headers, URLs,
+logs, or user payloads.
+
+#### curl: originate and observe a call
+
+This example uses a write token to create a call, then a read-capable token to
+read the resource and replay events. The same `Idempotency-Key` safely
+retries the create request; reusing it with a different body returns `409`.
+
+```sh
+MAF_BASE_URL="${MAF_BASE_URL:-https://proxy.example.net/admin}"
+MAF_WRITE_TOKEN="${SIP_MAF_API_TOKEN:?set SIP_MAF_API_TOKEN in the admin environment}"
+MAF_READ_TOKEN="${SIP_MAF_API_READ_TOKEN:-$MAF_WRITE_TOKEN}"
+
+RECEIPT="$(curl --fail-with-body -sS -X POST "$MAF_BASE_URL/api/v1/maf/calls" \
+  -H "Authorization: Bearer $MAF_WRITE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: readme-call-20260729" \
+  --data '{"from":"sip:alice@example.net","to":"sip:bob@example.net"}')"
+printf '%s\n' "$RECEIPT"
+CALL_ID="$(printf '%s' "$RECEIPT" | jq -r '.resource_id')"
+
+curl --fail-with-body -sS \
+  -H "Authorization: Bearer $MAF_READ_TOKEN" \
+  "$MAF_BASE_URL/api/v1/maf/calls/$CALL_ID"
+
+curl --fail-with-body -sS \
+  -H "Authorization: Bearer $MAF_READ_TOKEN" \
+  "$MAF_BASE_URL/api/v1/maf/events?cursor=0&limit=50"
+```
+
+The receipt has schema `madis.maf.command-receipt.v1` and includes the
+`command_id`, `status`, `resource_id`, and `trace_id`. Persist the event cursor
+only after durable application processing, and deduplicate by event ID when a
+consumer reconnects.
+
+#### JavaScript/TypeScript: server-side command client
+
+```js
+const baseUrl = process.env.MAF_BASE_URL ?? "https://proxy.example.net/admin";
+const token = process.env.SIP_MAF_API_TOKEN;
+if (!token) throw new Error("SIP_MAF_API_TOKEN is required");
+
+const response = await fetch(`${baseUrl}/api/v1/maf/calls`, {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
+    "Idempotency-Key": "js-call-20260729",
+  },
+  body: JSON.stringify({
+    from: "sip:alice@example.net",
+    to: "sip:bob@example.net",
+  }),
+});
+
+const receipt = await response.json();
+if (!response.ok) throw new Error(`${response.status}: ${JSON.stringify(receipt)}`);
+console.log(receipt);
+```
+
+#### Go: server-side command client
+
+```go
+package main
+
+import (
+    "bytes"
+    "encoding/json"
+    "fmt"
+    "net/http"
+    "os"
+)
+
+func main() {
+    baseURL := os.Getenv("MAF_BASE_URL")
+    if baseURL == "" { baseURL = "https://proxy.example.net/admin" }
+    payload, _ := json.Marshal(map[string]string{
+        "from": "sip:alice@example.net",
+        "to":   "sip:bob@example.net",
+    })
+
+    req, _ := http.NewRequest(http.MethodPost,
+        baseURL+"/api/v1/maf/calls", bytes.NewReader(payload))
+    req.Header.Set("Authorization", "Bearer "+os.Getenv("SIP_MAF_API_TOKEN"))
+    req.Header.Set("Content-Type", "application/json")
+    req.Header.Set("Idempotency-Key", "go-call-20260729")
+
+    res, err := http.DefaultClient.Do(req)
+    if err != nil { panic(err) }
+    defer res.Body.Close()
+
+    var receipt map[string]any
+    _ = json.NewDecoder(res.Body).Decode(&receipt)
+    if res.StatusCode < 200 || res.StatusCode >= 300 {
+        panic(fmt.Sprintf("MAF returned %d: %v", res.StatusCode, receipt))
+    }
+    fmt.Printf("%v\n", receipt)
+}
+```
+
+MAF is a bounded command/event contract, not a generic code-execution or raw
+SIP injection API. The HTTP boundary is enabled now; public WebSocket/gRPC
+subscriptions, inbound-dialog answer execution, bridge/media ownership,
+maintained generated clients, and independent interoperability evidence remain
+follow-up work. Read the complete contract in [`api/maf.md`](api/maf.md), the
+machine-readable schema in [`api/maf.openapi.yaml`](api/maf.openapi.yaml), and
+deployment guidance in [`docs/integrations.md`](docs/integrations.md) and
+[`docs/configuration.md`](docs/configuration.md).
+
 The machine API is served by the standalone WebUI at `/admin/api/v1/`. Bearer-token scopes, endpoint schemas, control resources, and billing/CDR flows are documented in [`api/README.md`](api/README.md), [`api/openapi.yaml`](api/openapi.yaml), and [`docs/configuration.md`](docs/configuration.md). The SIP worker's `/healthz`, `/readyz`, `/metrics`, `/state`, and `/reload` endpoints are a separate local HTTP surface.
 
 | Need | Guide |

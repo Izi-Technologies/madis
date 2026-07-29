@@ -1,5 +1,10 @@
 # Madis carrier integration API
 
+The broader external-application surface is named the **MADIS Application
+Fabric (MAF)**. Read [`maf.md`](maf.md) for the language-neutral application
+model and enabled durable command/event HTTP routes. This document describes
+the currently served carrier and control compatibility surfaces.
+
 Madis exposes a versioned HTTP/JSON machine API from the standalone WebUI. If the WebUI base URL is `https://madis.example/admin`, the API base URL is:
 
 ```text
@@ -8,7 +13,14 @@ https://madis.example/admin/api/v1
 
 The API is for carrier and application services. It is separate from the browser session API and from the SIP worker’s local `/healthz`, `/readyz`, `/metrics`, `/state`, and `/reload` endpoints.
 
-The machine contracts are also represented by [`openapi.yaml`](openapi.yaml), [`madis-carrier.proto`](madis-carrier.proto), and the JSON schemas in this directory. The source-level reference clients are in [`../sdk/README.md`](../sdk/README.md).
+The machine contracts are also represented by [`openapi.yaml`](openapi.yaml), [`madis-carrier.proto`](madis-carrier.proto), [`maf.openapi.yaml`](maf.openapi.yaml), [`madis-maf.proto`](madis-maf.proto), and the JSON schemas in this directory. The source-level reference clients are in [`../sdk/README.md`](../sdk/README.md).
+
+## MAF routes
+
+The enabled MAF routes are listed in [`maf.md`](maf.md). They use separate
+`SIP_MAF_API_TOKEN` and `SIP_MAF_API_READ_TOKEN` credentials, bind requests to
+`SIP_MAF_TENANT`, and return durable asynchronous command receipts. The MAF
+HTTP routes are distinct from the carrier/control compatibility routes below.
 
 ## Authentication
 

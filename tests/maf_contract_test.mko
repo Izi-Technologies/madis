@@ -1,0 +1,82 @@
+// MAF route and boundary tests stay offline: no database, sockets, or worker.
+pull . "../parser.mko"
+pull . "../admin/http.mko"
+pull . "../admin/ui.mko"
+pull . "../maf_api.mko"
+
+// These test-only shims keep worker helpers linkable without the SIP socket
+// forwarding implementation pulled by the production main entry point.
+fn sip_forward_first(targets: string, msg: string, cache: CMap, cid: string, out_fd: int) string { return "" }
+fn sip_forward_target(target: string, msg: string, tr: string, cache: CMap, out_fd: int) int { return 0 }
+fn bounded_cache_set(cache: CMap, seq_key: string, ring_prefix: string, key: string, value: string, capacity: int) int { return 0 }
+pull . "../maf_worker.mko"
+
+// The production admin imports this helper from admin/pages.mko. The contract
+// tests never query a database, so keep the same symbol fail-closed locally.
+fn tbl_query_param(db: SqlDB, ok: int, sql: string, param: string, max: int) []string {
+    let rows = make([]string, 0, 0)
+    return rows
+}
+
+fn TestMafEveryHttpRouteIsAllowlisted() {
+    assert_eq(maf_api_route("POST", "/admin/api/v1/maf/calls"), 1)
+    assert_eq(maf_api_route("GET", "/admin/api/v1/maf/calls/call-12345678"), 2)
+    assert_eq(maf_api_route("POST", "/admin/api/v1/maf/calls/call-12345678/answer"), 3)
+    assert_eq(maf_api_route("POST", "/admin/api/v1/maf/calls/call-12345678/reject"), 4)
+    assert_eq(maf_api_route("POST", "/admin/api/v1/maf/calls/call-12345678/hangup"), 5)
+    assert_eq(maf_api_route("POST", "/admin/api/v1/maf/calls/call-12345678/bridges"), 6)
+    assert_eq(maf_api_route("POST", "/admin/api/v1/maf/calls/call-12345678/media"), 7)
+    assert_eq(maf_api_route("GET", "/admin/api/v1/maf/events"), 8)
+    assert_eq(maf_api_write_required(1), 1)
+    assert_eq(maf_api_write_required(2), 0)
+    assert_eq(maf_api_write_required(3), 1)
+    assert_eq(maf_api_write_required(7), 1)
+    assert_eq(maf_api_write_required(8), 0)
+}
+
+fn TestMafRejectsPathConfusionAndUnsafeIdentifiers() {
+    assert_eq(maf_api_route("GET", "/admin/api/v1/maf/calls/short"), 0)
+    assert_eq(maf_api_route("GET", "/admin/api/v1/maf/calls/call-12345678/extra"), 0)
+    assert_eq(maf_api_route("GET", "/admin/api/v1/maf/calls/call-12345678%2F.."), 0)
+    assert_eq(maf_api_route("GET", "/admin/api/v1/maf/calls/call-12345678/../events"), 0)
+    assert_eq(maf_api_identifier_ok("call-12345678", 8, 128), 1)
+    assert_eq(maf_api_identifier_ok("call/12345678", 8, 128), 0)
+    assert_eq(maf_api_identifier_ok("call-12345678\r\nX-Evil: 1", 8, 128), 0)
+    assert_eq(maf_api_identifier_ok("", 1, 128), 0)
+    assert_eq(maf_api_identifier_ok("abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz", 8, 128), 0)
+}
+
+fn TestMafAuthComparisonAndFramingBoundaries() {
+    assert(len(html_esc("maf")) > 0)
+    assert_eq(maf_api_token_equal("0123456789abcdef", "0123456789abcdef"), 1)
+    assert_eq(maf_api_token_equal("0123456789abcdee", "0123456789abcdef"), 0)
+    assert_eq(maf_api_token_equal("short", "0123456789abcdef"), 0)
+    let request = "POST /admin/api/v1/maf/calls HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}"
+    assert_eq(maf_api_body_ok(request, len(request), 1), 1)
+    let wrong_type = "POST /admin/api/v1/maf/calls HTTP/1.1\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\r\n{}"
+    assert_eq(maf_api_body_ok(wrong_type, len(wrong_type), 1), 0)
+    let missing_body = "POST /admin/api/v1/maf/calls HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: 0\r\n\r\n"
+    assert_eq(maf_api_body_ok(missing_body, len(missing_body), 1), 0)
+}
+
+fn TestMafWorkerEndpointAndInviteBoundaries() {
+    assert_eq(maf_worker_endpoint_ok("sip:alice@example.net"), 1)
+    assert_eq(maf_worker_endpoint_ok("sips:bob@example.net:5061"), 1)
+    assert_eq(maf_worker_endpoint_ok("https://evil.example.net"), 0)
+    assert_eq(maf_worker_endpoint_ok("sip:alice@example.net\r\nX-Evil: 1"), 0)
+    let invite = maf_worker_invite("call-12345678", "sip:alice@example.net", "sip:bob@example.net", "node1", "127.0.0.1")
+    assert_eq(sip_validate_message(invite, len(invite)), 1)
+    assert(str_contains(invite, "CSeq: 1 INVITE"))
+    assert(str_contains(invite, "Call-ID: call-12345678@node1"))
+}
+
+fn TestMafCursorAndBoundedQueryValues() {
+    assert_eq(maf_api_parse_cursor(""), 0)
+    assert_eq(maf_api_parse_cursor("cursor=42"), 42)
+    assert_eq(maf_api_parse_cursor("cursor=-1"), -1)
+    assert_eq(maf_api_parse_cursor("cursor=abc"), -1)
+    assert_eq(maf_api_limit(""), 100)
+    assert_eq(maf_api_limit("limit=0"), 1)
+    assert_eq(maf_api_limit("limit=1000"), 100)
+    assert_eq(maf_api_limit("limit=not-a-number"), 100)
+}

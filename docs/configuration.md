@@ -112,6 +112,9 @@ Cluster INVITE fallback routes only through live `registration_bindings` rows wh
 | `SIP_CARRIER_API_TOKEN` | Carrier API token for capabilities, billing events, acknowledgement, and CDR reads. |
 | `SIP_CONTROL_API_TOKEN` | Control write token for routing, dialplans, and mutable SIP resources. |
 | `SIP_CONTROL_API_READ_TOKEN` | Optional read-only control token for status, validation, reads, and resource lists. |
+| `SIP_MAF_API_TOKEN` | MAF write credential; also permits MAF reads. Keep separate from all admin, carrier, control, and worker credentials. |
+| `SIP_MAF_API_READ_TOKEN` | MAF read-only credential for call and event reads. |
+| `SIP_MAF_TENANT` | Tenant namespace bound to this admin process; defaults to `default`. |
 | `SIP_APP_URL`, `SIP_APP_TOKEN` | Optional signed live SIP application endpoint. Both must be configured to enable it. |
 | `SIP_APP_CA` | CA bundle for the application endpoint. |
 | `SIP_APP_TIMEOUT_MS` | Application decision timeout, clamped to 10–1000 ms. |

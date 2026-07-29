@@ -1,0 +1,278 @@
+openapi: 3.0.3
+info:
+  title: MADIS Application Fabric
+  version: 1.0.0
+  description: >-
+    Language-neutral command and replayable event contract for external MADIS
+    applications. The eight HTTP routes in this document are served by the
+    standalone admin process. Mutating routes durably accept commands into
+    PostgreSQL and return 202; SIP-worker execution is asynchronous.
+  x-madis-status: enabled-durable-command-boundary
+servers:
+  - url: /admin
+security:
+  - mafBearerAuth: []
+paths:
+  /api/v1/maf/calls:
+    post:
+      operationId: createCall
+      summary: Originate a call
+      security:
+        - mafBearerAuth: []
+      parameters:
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json: {schema: {$ref: '#/components/schemas/CreateCallRequest'}}
+      responses:
+        '202': {description: Command accepted, content: {application/json: {schema: {$ref: '#/components/schemas/CommandReceipt'}}}}
+        '401': {description: Authentication failed}
+        '403': {description: Scope or tenant policy denied the command}
+        '409': {description: Idempotency or resource version conflict}
+        '429': {description: Rate limit exceeded}
+  /api/v1/maf/calls/{call_id}:
+    get:
+      operationId: getCall
+      summary: Read a call
+      security:
+        - mafBearerAuth: []
+      responses:
+        '200': {description: Call resource, content: {application/json: {schema: {$ref: '#/components/schemas/Call'}}}}
+        '401': {description: Authentication failed}
+        '403': {description: Resource policy denied the request}
+        '404': {description: Call not found}
+    parameters:
+      - {$ref: '#/components/parameters/CallId'}
+  /api/v1/maf/calls/{call_id}/answer:
+    post:
+      operationId: answerCall
+      summary: Answer a call
+      security:
+        - mafBearerAuth: []
+      parameters:
+        - {$ref: '#/components/parameters/CallId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: false
+        content:
+          application/json: {schema: {$ref: '#/components/schemas/CommandRequest'}}
+      responses:
+        '202': {description: Command accepted, content: {application/json: {schema: {$ref: '#/components/schemas/CommandReceipt'}}}}
+        '401': {description: Authentication failed}
+        '403': {description: Scope or call policy denied the command}
+        '404': {description: Call not found}
+        '409': {description: Call state conflict}
+  /api/v1/maf/calls/{call_id}/reject:
+    post:
+      operationId: rejectCall
+      summary: Reject a call
+      security:
+        - mafBearerAuth: []
+      parameters:
+        - {$ref: '#/components/parameters/CallId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: false
+        content:
+          application/json: {schema: {$ref: '#/components/schemas/RejectCallRequest'}}
+      responses:
+        '202': {description: Command accepted, content: {application/json: {schema: {$ref: '#/components/schemas/CommandReceipt'}}}}
+        '401': {description: Authentication failed}
+        '403': {description: Scope or call policy denied the command}
+        '404': {description: Call not found}
+        '409': {description: Call state conflict}
+  /api/v1/maf/calls/{call_id}/hangup:
+    post:
+      operationId: hangupCall
+      summary: End a call
+      security:
+        - mafBearerAuth: []
+      parameters:
+        - {$ref: '#/components/parameters/CallId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: false
+        content:
+          application/json: {schema: {$ref: '#/components/schemas/CommandRequest'}}
+      responses:
+        '202': {description: Command accepted, content: {application/json: {schema: {$ref: '#/components/schemas/CommandReceipt'}}}}
+        '401': {description: Authentication failed}
+        '403': {description: Scope or call policy denied the command}
+        '404': {description: Call not found}
+        '409': {description: Call state conflict}
+  /api/v1/maf/calls/{call_id}/bridges:
+    post:
+      operationId: bridgeCall
+      summary: Bridge two call channels
+      security:
+        - mafBearerAuth: []
+      parameters:
+        - {$ref: '#/components/parameters/CallId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json: {schema: {$ref: '#/components/schemas/BridgeRequest'}}
+      responses:
+        '202': {description: Command accepted, content: {application/json: {schema: {$ref: '#/components/schemas/CommandReceipt'}}}}
+        '401': {description: Authentication failed}
+        '403': {description: Scope or call policy denied the command}
+        '404': {description: Call or channel not found}
+        '409': {description: Call state conflict}
+  /api/v1/maf/calls/{call_id}/media:
+    post:
+      operationId: controlMedia
+      summary: Request a bounded media operation
+      security:
+        - mafBearerAuth: []
+      parameters:
+        - {$ref: '#/components/parameters/CallId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json: {schema: {$ref: '#/components/schemas/MediaRequest'}}
+      responses:
+        '202': {description: Command accepted, content: {application/json: {schema: {$ref: '#/components/schemas/CommandReceipt'}}}}
+        '401': {description: Authentication failed}
+        '403': {description: Scope or call policy denied the command}
+        '404': {description: Call not found}
+        '409': {description: Call state conflict}
+  /api/v1/maf/events:
+    get:
+      operationId: listEvents
+      summary: Read replayable MAF events
+      description: >-
+        The HTTP form is for bounded replay and recovery. Live subscriptions
+        use WebSocket or the SubscribeEvents gRPC method.
+      security:
+        - mafBearerAuth: []
+      parameters:
+        - {name: cursor, in: query, schema: {type: string, maxLength: 256}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 100}}
+        - {name: event_type, in: query, schema: {type: string, minLength: 1, maxLength: 128}}
+      responses:
+        '200': {description: Event page, content: {application/json: {schema: {$ref: '#/components/schemas/EventPage'}}}}
+        '401': {description: Authentication failed}
+        '403': {description: Subscription policy denied the request}
+components:
+  securitySchemes:
+    mafBearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque-or-jwt
+      description: >-
+        MAF credential enforced by the admin process. The current deployment
+        contract uses separate read and write credentials; an edge identity
+        proxy may issue short-lived credentials after validating issuer,
+        audience, expiry, mTLS identity, and application policy.
+  parameters:
+    CallId:
+      name: call_id
+      in: path
+      required: true
+      schema: {type: string, minLength: 8, maxLength: 128}
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Required unless the JSON body supplies command_id.
+      schema: {type: string, minLength: 8, maxLength: 128}
+  schemas:
+    CommandRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        command_id: {type: string, minLength: 8, maxLength: 128}
+        expected_version: {type: string, maxLength: 64}
+        reason: {type: string, maxLength: 512}
+    CreateCallRequest:
+      allOf:
+        - {$ref: '#/components/schemas/CommandRequest'}
+        - type: object
+          required: [from, to]
+          properties:
+            tenant_id: {type: string, maxLength: 128}
+            from: {type: string, minLength: 1, maxLength: 512}
+            to: {type: string, minLength: 1, maxLength: 512}
+            application_data: {type: object, additionalProperties: true}
+    RejectCallRequest:
+      allOf:
+        - {$ref: '#/components/schemas/CommandRequest'}
+        - type: object
+          properties:
+            sip_code: {type: integer, minimum: 300, maximum: 699, default: 603}
+    BridgeRequest:
+      allOf:
+        - {$ref: '#/components/schemas/CommandRequest'}
+        - type: object
+          required: [channel_ids]
+          properties:
+            channel_ids:
+              type: array
+              minItems: 2
+              maxItems: 8
+              items: {type: string, minLength: 8, maxLength: 128}
+    MediaRequest:
+      allOf:
+        - {$ref: '#/components/schemas/CommandRequest'}
+        - type: object
+          required: [operation]
+          properties:
+            operation: {type: string, enum: [play, record, stop, pause, resume]}
+            resource: {type: string, maxLength: 2048}
+    CommandReceipt:
+      type: object
+      required: [schema, command_id, status, trace_id]
+      properties:
+        schema: {type: string, enum: [madis.maf.command-receipt.v1]}
+        command_id: {type: string}
+        status: {type: string, enum: [accepted, completed, failed]}
+        resource_id: {type: string}
+        trace_id: {type: string}
+        error_code: {type: string}
+        error_message: {type: string}
+    Call:
+      type: object
+      required: [schema, call_id, state, version]
+      properties:
+        schema: {type: string, enum: [madis.maf.call.v1]}
+        call_id: {type: string}
+        tenant_id: {type: string}
+        state: {type: string, enum: [created, ringing, answered, bridged, ending, ended, failed]}
+        version: {type: string}
+        channels: {type: array, items: {$ref: '#/components/schemas/Channel'}}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    Channel:
+      type: object
+      required: [channel_id, state]
+      properties:
+        channel_id: {type: string}
+        state: {type: string, enum: [created, ringing, answered, held, ended]}
+        direction: {type: string, enum: [inbound, outbound]}
+        endpoint: {type: string, maxLength: 512}
+    Event:
+      type: object
+      required: [schema, event_id, event_type, event_version, sequence, occurred_at, payload]
+      properties:
+        schema: {type: string, enum: [madis.maf.event.v1]}
+        event_id: {type: string}
+        event_type: {type: string, maxLength: 128}
+        event_version: {type: integer, minimum: 1}
+        tenant_id: {type: string}
+        call_id: {type: string}
+        channel_id: {type: string}
+        sequence: {type: integer, minimum: 1}
+        occurred_at: {type: string, format: date-time}
+        trace_id: {type: string}
+        payload: {type: object, additionalProperties: true}
+    EventPage:
+      type: object
+      required: [schema, events, next_cursor, truncated]
+      properties:
+        schema: {type: string, enum: [madis.maf.event-page.v1]}
+        events: {type: array, items: {$ref: '#/components/schemas/Event'}}
+        next_cursor: {type: string}
+        truncated: {type: boolean}

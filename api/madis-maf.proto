@@ -1,0 +1,113 @@
+syntax = "proto3";
+
+package madis.maf.v1;
+
+import "google/protobuf/struct.proto";
+
+// The HTTP MAF routes are enabled in the standalone admin process. This
+// protobuf service is reserved for a future gRPC listener; it is not exposed
+// by the current binary.
+service ApplicationFabric {
+  rpc CreateCall(CreateCallRequest) returns (CommandReceipt);
+  rpc GetCall(GetCallRequest) returns (Call);
+  rpc AnswerCall(CallCommandRequest) returns (CommandReceipt);
+  rpc RejectCall(RejectCallRequest) returns (CommandReceipt);
+  rpc HangupCall(CallCommandRequest) returns (CommandReceipt);
+  rpc BridgeCall(BridgeRequest) returns (CommandReceipt);
+  rpc ControlMedia(MediaRequest) returns (CommandReceipt);
+  rpc SubscribeEvents(SubscribeEventsRequest) returns (stream Event);
+}
+
+message CommandMetadata {
+  string command_id = 1;
+  string idempotency_key = 2;
+  string expected_version = 3;
+  string trace_id = 4;
+}
+
+message CreateCallRequest {
+  CommandMetadata command = 1;
+  string tenant_id = 2;
+  string from = 3;
+  string to = 4;
+  google.protobuf.Struct application_data = 5;
+}
+
+message GetCallRequest {
+  string call_id = 1;
+}
+
+message CallCommandRequest {
+  CommandMetadata command = 1;
+  string call_id = 2;
+  string reason = 3;
+}
+
+message RejectCallRequest {
+  CommandMetadata command = 1;
+  string call_id = 2;
+  uint32 sip_code = 3;
+  string reason = 4;
+}
+
+message BridgeRequest {
+  CommandMetadata command = 1;
+  string call_id = 2;
+  repeated string channel_ids = 3;
+}
+
+message MediaRequest {
+  CommandMetadata command = 1;
+  string call_id = 2;
+  string operation = 3;
+  string resource = 4;
+}
+
+message CommandReceipt {
+  string schema = 1;
+  string command_id = 2;
+  string status = 3;
+  string resource_id = 4;
+  string trace_id = 5;
+  string error_code = 6;
+  string error_message = 7;
+}
+
+message Call {
+  string schema = 1;
+  string call_id = 2;
+  string tenant_id = 3;
+  string state = 4;
+  string version = 5;
+  repeated Channel channels = 6;
+  string created_at = 7;
+  string updated_at = 8;
+}
+
+message Channel {
+  string channel_id = 1;
+  string state = 2;
+  string direction = 3;
+  string endpoint = 4;
+}
+
+message SubscribeEventsRequest {
+  string tenant_id = 1;
+  string cursor = 2;
+  repeated string event_types = 3;
+  uint32 max_events = 4;
+}
+
+message Event {
+  string schema = 1;
+  string event_id = 2;
+  string event_type = 3;
+  uint32 event_version = 4;
+  string tenant_id = 5;
+  string call_id = 6;
+  string channel_id = 7;
+  uint64 sequence = 8;
+  string occurred_at = 9;
+  string trace_id = 10;
+  google.protobuf.Struct payload = 11;
+}

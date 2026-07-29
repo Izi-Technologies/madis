@@ -1,0 +1,357 @@
+// MADIS Application Fabric HTTP contract.
+//
+// This module owns the external application boundary. It stores bounded,
+// authenticated commands and durable events in PostgreSQL; it never exposes
+// worker memory, SQL, Mako source, or raw SIP injection to callers.
+
+
+fn maf_api_json_escape(s: string) -> string {
+    let mut b = str_builder()
+    let mut i = 0
+    while i < len(s) {
+        let c = int(s[i])
+        if c == 34 { builder_write(b, "\\\"") }
+        else if c == 92 { builder_write(b, "\\\\") }
+        else if c == 10 { builder_write(b, "\\n") }
+        else if c == 13 { builder_write(b, "\\r") }
+        else if c == 9 { builder_write(b, "\\t") }
+        else if c < 32 || c == 127 { builder_write_byte(b, byte(32)) }
+        else { builder_write_byte(b, byte(c)) }
+        i = i + 1
+    }
+    return builder_string(b)
+}
+
+fn maf_api_text_safe(s: string, max: int) -> int {
+    if len(s) > max { return 0 }
+    let mut i = 0
+    while i < len(s) {
+        let c = int(s[i])
+        if c == 0 || c == 10 || c == 13 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn maf_api_identifier_ok(value: string, min: int, max: int) -> int {
+    if len(value) < min || len(value) > max { return 0 }
+    let mut i = 0
+    while i < len(value) {
+        let c = int(value[i])
+        let ok = (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 45 || c == 46 || c == 58 || c == 64 || c == 95
+        if not ok { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn maf_api_token_equal(actual: string, expected: string) -> int {
+    if len(actual) == 0 || len(actual) != len(expected) { return 0 }
+    let mut diff = 0
+    let mut i = 0
+    while i < len(actual) {
+        diff = diff | (int(actual[i]) ^ int(expected[i]))
+        i = i + 1
+    }
+    return if diff == 0 { 1 } else { 0 }
+}
+
+// MAF credentials are deliberately separate from admin, carrier, and
+// control credentials. The write token includes read access; the read token
+// cannot originate or mutate calls. Deployment TLS/mTLS is terminated by the
+// private reverse proxy in front of this admin process.
+fn maf_api_scope(raw: string, n: int) -> int {
+    let header = parse_header(raw, n, "Authorization")
+    let low = str_to_lower(header)
+    if not str_has_prefix(low, "bearer ") { return 0 }
+    let actual = str_trim_space(header[7:])
+    if len(actual) < 16 || len(actual) > 512 { return 0 }
+    let write_token = env_get_or("SIP_MAF_API_TOKEN", env_get_or("MADIS_MAF_WRITE_TOKEN", ""))
+    if len(write_token) >= 16 && len(write_token) <= 512 && maf_api_token_equal(actual, write_token) == 1 { return 2 }
+    let read_token = env_get_or("SIP_MAF_API_READ_TOKEN", env_get_or("MADIS_MAF_READ_TOKEN", ""))
+    if len(read_token) >= 16 && len(read_token) <= 512 && maf_api_token_equal(actual, read_token) == 1 { return 1 }
+    return 0
+}
+
+fn maf_api_tenant() -> string {
+    let configured = str_trim_space(env_get_or("SIP_MAF_TENANT", "default"))
+    if maf_api_identifier_ok(configured, 1, 128) == 0 { return "default" }
+    return configured
+}
+
+fn maf_api_error(status: int, message: string) -> string {
+    return http_resp(status, "application/json", "{\"ok\":false,\"error\":\"" + maf_api_json_escape(message) + "\"}\n", "Cache-Control: no-store\r\n")
+}
+
+fn maf_api_command_id(raw: string, n: int, body: string) -> string {
+    let mut value = str_trim_space(parse_header(raw, n, "Idempotency-Key"))
+    if len(value) == 0 { value = str_trim_space(json_get_string(body, "command_id")) }
+    return value
+}
+
+fn maf_api_body_ok(raw: string, n: int, required: int) -> int {
+    let body = parse_body(raw, n)
+    if len(body) == 0 { return if required == 1 { 0 } else { 1 } }
+    if len(body) > 65536 || maf_api_text_safe(body, 65536) == 0 { return 0 }
+    let content_type = str_to_lower(parse_header(raw, n, "Content-Type"))
+    if not str_has_prefix(content_type, "application/json") { return 0 }
+    return 1
+}
+
+fn maf_api_call_id(path: string, suffix: string) -> string {
+    let prefix = "/admin/api/v1/maf/calls/"
+    if not str_has_prefix(path, prefix) { return "" }
+    let rest = path[len(prefix):]
+    if len(suffix) == 0 {
+        if str_index(rest, "/") >= 0 { return "" }
+        if maf_api_identifier_ok(rest, 8, 128) == 0 { return "" }
+        return rest
+    }
+    let slash = str_index(rest, "/")
+    if slash <= 0 || not str_eq(rest[slash + 1:], suffix) { return "" }
+    let id = rest[0:slash]
+    if maf_api_identifier_ok(id, 8, 128) == 0 { return "" }
+    return id
+}
+
+fn maf_api_route(method: string, path: string) -> int {
+    if str_eq(method, "POST") && str_eq(path, "/admin/api/v1/maf/calls") { return 1 }
+    if str_eq(method, "GET") && len(maf_api_call_id(path, "")) > 0 { return 2 }
+    if str_eq(method, "POST") && len(maf_api_call_id(path, "answer")) > 0 { return 3 }
+    if str_eq(method, "POST") && len(maf_api_call_id(path, "reject")) > 0 { return 4 }
+    if str_eq(method, "POST") && len(maf_api_call_id(path, "hangup")) > 0 { return 5 }
+    if str_eq(method, "POST") && len(maf_api_call_id(path, "bridges")) > 0 { return 6 }
+    if str_eq(method, "POST") && len(maf_api_call_id(path, "media")) > 0 { return 7 }
+    if str_eq(method, "GET") && str_eq(path, "/admin/api/v1/maf/events") { return 8 }
+    return 0
+}
+
+fn maf_api_write_required(kind: int) -> int {
+    return if kind == 1 || kind >= 3 && kind <= 7 { 1 } else { 0 }
+}
+
+fn maf_api_bootstrap(db: SqlDB) -> int {
+    let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS maf_calls (call_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'created', version BIGINT NOT NULL DEFAULT 1, from_uri TEXT NOT NULL, to_uri TEXT NOT NULL, application_data JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW(), ended_at TIMESTAMP)")
+    let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_maf_calls_tenant_state ON maf_calls (tenant_id, state, updated_at)")
+    let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS maf_channels (channel_id TEXT PRIMARY KEY, call_id TEXT NOT NULL REFERENCES maf_calls(call_id) ON DELETE CASCADE, tenant_id TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'created', direction TEXT NOT NULL, endpoint TEXT NOT NULL, version BIGINT NOT NULL DEFAULT 1, created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW())")
+    let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_maf_channels_call ON maf_channels (call_id, tenant_id)")
+    let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS maf_commands (command_id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE, tenant_id TEXT NOT NULL, call_id TEXT NOT NULL DEFAULT '', operation TEXT NOT NULL, request_json JSONB NOT NULL DEFAULT '{}'::jsonb, request_hash TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'accepted', resource_id TEXT NOT NULL DEFAULT '', trace_id TEXT NOT NULL DEFAULT '', error_code TEXT NOT NULL DEFAULT '', error_message TEXT NOT NULL DEFAULT '', claim_token TEXT NOT NULL DEFAULT '', claimed_at TIMESTAMP, created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW())")
+    let _ = sql_exec_plain(db, "ALTER TABLE maf_commands ADD COLUMN IF NOT EXISTS request_hash TEXT NOT NULL DEFAULT ''")
+    let _ = sql_exec_plain(db, "ALTER TABLE maf_commands ADD COLUMN IF NOT EXISTS claim_token TEXT NOT NULL DEFAULT ''")
+    let _ = sql_exec_plain(db, "ALTER TABLE maf_commands ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMP")
+    let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_maf_commands_pending ON maf_commands (tenant_id, status, created_at)")
+    let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS maf_events (event_id TEXT PRIMARY KEY, sequence BIGSERIAL UNIQUE NOT NULL, tenant_id TEXT NOT NULL, event_type TEXT NOT NULL, event_version INT NOT NULL DEFAULT 1, call_id TEXT NOT NULL DEFAULT '', channel_id TEXT NOT NULL DEFAULT '', payload_json JSONB NOT NULL DEFAULT '{}'::jsonb, trace_id TEXT NOT NULL DEFAULT '', occurred_at TIMESTAMP DEFAULT NOW(), CONSTRAINT maf_event_payload_size CHECK (octet_length(payload_json::text) <= 65536))")
+    let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_maf_events_tenant_sequence ON maf_events (tenant_id, sequence)")
+    let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_maf_events_call_sequence ON maf_events (call_id, sequence)")
+    return 1
+}
+
+fn maf_api_receipt(db: SqlDB, ok: int, tenant: string, idempotency: string) -> string {
+    if ok == 0 { return "" }
+    return sql_query_str2(db, "SELECT json_build_object('schema','madis.maf.command-receipt.v1','command_id',command_id,'status',status,'resource_id',resource_id,'trace_id',trace_id,'error_code',error_code,'error_message',error_message)::text FROM maf_commands WHERE tenant_id = $1 AND idempotency_key = $2", tenant, idempotency)
+}
+
+// Idempotency is a replay of the same request, not a way to hide a changed
+// request behind an old successful receipt. Legacy rows without a hash are
+// rejected on reuse so an upgrade cannot silently weaken this invariant.
+fn maf_api_idempotency_state(db: SqlDB, ok: int, tenant: string, idempotency: string, body: string) -> int {
+    if ok == 0 { return -1 }
+    let hash = sql_query_str2(db, "SELECT request_hash FROM maf_commands WHERE tenant_id = $1 AND idempotency_key = $2", tenant, idempotency)
+    if len(hash) == 0 { return 0 }
+    if str_eq(hash, sha256(body)) { return 1 }
+    return -1
+}
+
+fn maf_api_call_resource(db: SqlDB, ok: int, tenant: string, call_id: string) -> string {
+    if ok == 0 { return "" }
+    return sql_query_str2(db, "SELECT json_build_object('schema','madis.maf.call.v1','call_id',call_id,'tenant_id',tenant_id,'state',state,'version',version::text,'channels',COALESCE((SELECT json_agg(json_build_object('channel_id',channel_id,'state',state,'direction',direction,'endpoint',endpoint) ORDER BY created_at) FROM maf_channels c WHERE c.call_id = maf_calls.call_id AND c.tenant_id = maf_calls.tenant_id),'[]'::json),'created_at',created_at,'updated_at',updated_at)::text FROM maf_calls WHERE tenant_id = $1 AND call_id = $2", tenant, call_id)
+}
+
+fn maf_api_emit_event(db: SqlDB, ok: int, tenant: string, event_type: string, call_id: string, channel_id: string, payload: string, trace: string) -> int {
+    if ok == 0 || len(event_type) == 0 || len(event_type) > 128 || len(payload) == 0 || len(payload) > 65536 { return -1 }
+    let event_id = sha256("madis.maf.event.v1|" + tenant + "|" + event_type + "|" + call_id + "|" + channel_id + "|" + trace + "|" + string(now_ms()))
+    let packed = "{\"event_id\":\"" + maf_api_json_escape(event_id) + "\",\"tenant_id\":\"" + maf_api_json_escape(tenant) + "\",\"event_type\":\"" + maf_api_json_escape(event_type) + "\",\"call_id\":\"" + maf_api_json_escape(call_id) + "\",\"channel_id\":\"" + maf_api_json_escape(channel_id) + "\",\"trace_id\":\"" + maf_api_json_escape(trace) + "\",\"payload\":" + payload + "}"
+    return sql_exec_str4(db, "INSERT INTO maf_events (event_id, tenant_id, event_type, event_version, call_id, channel_id, payload_json, trace_id) SELECT $4::jsonb->>'event_id', $4::jsonb->>'tenant_id', $4::jsonb->>'event_type', 1, $4::jsonb->>'call_id', $4::jsonb->>'channel_id', $4::jsonb->'payload', $4::jsonb->>'trace_id' ON CONFLICT (event_id) DO NOTHING", "", "", "", packed)
+}
+
+fn maf_api_insert_command(db: SqlDB, ok: int, tenant: string, command_id: string, idempotency: string, operation: string, call_id: string, body: string, resource_id: string, trace: string) -> int {
+    if ok == 0 || len(body) == 0 || len(body) > 65536 { return -1 }
+    let packed = "{\"command_id\":\"" + maf_api_json_escape(command_id) + "\",\"idempotency_key\":\"" + maf_api_json_escape(idempotency) + "\",\"tenant_id\":\"" + maf_api_json_escape(tenant) + "\",\"call_id\":\"" + maf_api_json_escape(call_id) + "\",\"operation\":\"" + maf_api_json_escape(operation) + "\",\"resource_id\":\"" + maf_api_json_escape(resource_id) + "\",\"trace_id\":\"" + maf_api_json_escape(trace) + "\",\"request_hash\":\"" + sha256(body) + "\",\"request\":" + body + "}"
+    return sql_exec_str4(db, "INSERT INTO maf_commands (command_id, idempotency_key, tenant_id, call_id, operation, request_json, request_hash, status, resource_id, trace_id) SELECT $4::jsonb->>'command_id', $4::jsonb->>'idempotency_key', $4::jsonb->>'tenant_id', $4::jsonb->>'call_id', $4::jsonb->>'operation', $4::jsonb->'request', $4::jsonb->>'request_hash', 'accepted', $4::jsonb->>'resource_id', $4::jsonb->>'trace_id'", "", "", "", packed)
+}
+
+fn maf_api_parse_cursor(q: string) -> int {
+    let raw = query_val(q, "cursor")
+    if len(raw) == 0 { return 0 }
+    match parse_int(raw) { Ok(v) => { if v < 0 { return -1 } return v } Err(_) => { return -1 } }
+    return -1
+}
+
+fn maf_api_limit(q: string) -> int {
+    let mut value = 100
+    let raw = query_val(q, "limit")
+    if len(raw) > 0 { match parse_int(raw) { Ok(v) => { value = v } Err(_) => {} } }
+    if value < 1 { value = 1 }
+    if value > 100 { value = 100 }
+    return value
+}
+
+fn maf_api_events(db: SqlDB, ok: int, tenant: string, q: string) -> string {
+    if ok == 0 { return "" }
+    let cursor = maf_api_parse_cursor(q)
+    let limit = maf_api_limit(q)
+    let event_type = query_val(q, "event_type")
+    let packed = "{\"tenant_id\":\"" + maf_api_json_escape(tenant) + "\",\"event_type\":\"" + maf_api_json_escape(event_type) + "\"}"
+    let mut base = "SELECT json_build_object('schema','madis.maf.event.v1','event_id',event_id,'event_type',event_type,'event_version',event_version,'tenant_id',tenant_id,'call_id',call_id,'channel_id',channel_id,'sequence',sequence,'occurred_at',occurred_at,'trace_id',trace_id,'payload',payload_json)::text FROM maf_events WHERE tenant_id = $1::jsonb->>'tenant_id' AND sequence > " + string(cursor)
+    if len(event_type) > 0 { base = base + " AND event_type = $1::jsonb->>'event_type'" }
+    base = base + " ORDER BY sequence ASC"
+    let rows = tbl_query_param(db, ok, base, packed, limit)
+    let mut out = "{\"schema\":\"madis.maf.event-page.v1\",\"events\":["
+    let mut i = 0
+    while i < len(rows) {
+        if len(out) + len(rows[i]) + 2 > 262144 { break }
+        if i > 0 { out = out + "," }
+        out = out + rows[i]
+        i = i + 1
+    }
+    let mut next = cursor
+    if len(rows) > 0 { next = json_get_int(rows[len(rows) - 1], "sequence") }
+    return out + "],\"next_cursor\":\"" + string(next) + "\",\"truncated\":" + if len(rows) >= limit { "true" } else { "false" } + "}\n"
+}
+
+// Bridge validation is performed against the tenant-scoped call before the
+// command is accepted. This rejects duplicates, foreign channels, non-arrays,
+// and channel lists outside the documented 2..8 bound.
+fn maf_api_bridge_ok(db: SqlDB, ok: int, tenant: string, call_id: string, body: string) -> int {
+    if ok == 0 || len(body) == 0 { return 0 }
+    let packed = "{\"tenant_id\":\"" + maf_api_json_escape(tenant) + "\",\"call_id\":\"" + maf_api_json_escape(call_id) + "\",\"request\":" + body + "}"
+    let total_raw = sql_query_str(db, "SELECT jsonb_array_length($1::jsonb->'request'->'channel_ids')::text", packed)
+    let mut total = -1
+    match parse_int(total_raw) { Ok(v) => { total = v } Err(_) => {} }
+    if total < 2 || total > 8 { return 0 }
+    let owned_raw = sql_query_str(db, "SELECT COUNT(*)::text FROM maf_channels WHERE tenant_id = $1::jsonb->>'tenant_id' AND call_id = $1::jsonb->>'call_id' AND channel_id IN (SELECT jsonb_array_elements_text($1::jsonb->'request'->'channel_ids'))", packed)
+    let mut owned = -1
+    match parse_int(owned_raw) { Ok(v) => { owned = v } Err(_) => {} }
+    return if owned == total { 1 } else { 0 }
+}
+
+fn maf_api_create_call(db: SqlDB, ok: int, raw: string, n: int) -> string {
+    if ok == 0 { return maf_api_error(503, "database unavailable") }
+    if maf_api_body_ok(raw, n, 1) == 0 { return maf_api_error(400, "application/json body required") }
+    let body = parse_body(raw, n)
+    let tenant = maf_api_tenant()
+    let requested_tenant = json_get_string(body, "tenant_id")
+    if len(requested_tenant) > 0 && not str_eq(requested_tenant, tenant) { return maf_api_error(403, "tenant policy denied the request") }
+    let from_uri = json_get_string(body, "from")
+    let to_uri = json_get_string(body, "to")
+    if len(from_uri) == 0 || len(to_uri) == 0 || len(from_uri) > 512 || len(to_uri) > 512 { return maf_api_error(400, "from and to are required") }
+    let idempotency = maf_api_command_id(raw, n, body)
+    if maf_api_identifier_ok(idempotency, 8, 128) == 0 { return maf_api_error(400, "Idempotency-Key is required") }
+    let mut command_id = str_trim_space(json_get_string(body, "command_id"))
+    if len(command_id) == 0 { command_id = idempotency }
+    if maf_api_identifier_ok(command_id, 8, 128) == 0 { return maf_api_error(400, "invalid command_id") }
+    let idem_state = maf_api_idempotency_state(db, ok, tenant, idempotency, body)
+    if idem_state < 0 { return maf_api_error(409, "Idempotency-Key was already used with a different request") }
+    if idem_state == 1 {
+        let existing = maf_api_receipt(db, ok, tenant, idempotency)
+        if len(existing) > 0 { return http_resp(200, "application/json", existing + "\n", "Cache-Control: no-store\r\n") }
+    }
+    let trace = sha256("madis.maf.trace|" + tenant + "|" + command_id + "|" + string(now_ms()))[0:32]
+    let command_owner = sql_query_str(db, "SELECT command_id FROM maf_commands WHERE command_id = $1", command_id)
+    if len(command_owner) > 0 { return maf_api_error(409, "command_id is already in use") }
+    let call_id = "call-" + sha256("madis.maf.call|" + tenant + "|" + idempotency)[0:32]
+    let from_channel = "chan-" + sha256(call_id + "|from")[0:32]
+    let to_channel = "chan-" + sha256(call_id + "|to")[0:32]
+    let call_rc = sql_exec_str4(db, "INSERT INTO maf_calls (call_id, tenant_id, state, version, from_uri, to_uri, application_data) SELECT $1, $2, 'created', 1, $4::jsonb->>'from', $4::jsonb->>'to', COALESCE($4::jsonb->'application_data','{}'::jsonb) ON CONFLICT (call_id) DO NOTHING", call_id, tenant, "", body)
+    if call_rc < 0 { return maf_api_error(500, "call could not be created") }
+    let _ = sql_exec_str4(db, "INSERT INTO maf_channels (channel_id, call_id, tenant_id, state, direction, endpoint) VALUES ($1, $2, $3, 'created', 'inbound', $4)", from_channel, call_id, tenant, from_uri)
+    let _ = sql_exec_str4(db, "INSERT INTO maf_channels (channel_id, call_id, tenant_id, state, direction, endpoint) VALUES ($1, $2, $3, 'created', 'outbound', $4)", to_channel, call_id, tenant, to_uri)
+    let command_rc = maf_api_insert_command(db, ok, tenant, command_id, idempotency, "calls.create", call_id, body, call_id, trace)
+    if command_rc < 0 {
+        let raced_state = maf_api_idempotency_state(db, ok, tenant, idempotency, body)
+        let raced = maf_api_receipt(db, ok, tenant, idempotency)
+        if raced_state == 1 && len(raced) > 0 { return http_resp(200, "application/json", raced + "\n", "Cache-Control: no-store\r\n") }
+        if raced_state < 0 { return maf_api_error(409, "Idempotency-Key was already used with a different request") }
+        return maf_api_error(409, "command idempotency conflict")
+    }
+    let event_payload = "{\"tenant_id\":\"" + maf_api_json_escape(tenant) + "\",\"call_id\":\"" + maf_api_json_escape(call_id) + "\",\"state\":\"created\"}"
+    let _ = maf_api_emit_event(db, ok, tenant, "call.created", call_id, "", event_payload, trace)
+    let receipt = maf_api_receipt(db, ok, tenant, idempotency)
+    if len(receipt) == 0 { return maf_api_error(500, "command receipt unavailable") }
+    return http_resp(202, "application/json", receipt + "\n", "Cache-Control: no-store\r\n")
+}
+
+fn maf_api_command(db: SqlDB, ok: int, kind: int, raw: string, n: int, call_id: string) -> string {
+    if ok == 0 { return maf_api_error(503, "database unavailable") }
+    let body_raw = parse_body(raw, n)
+    let mut body = body_raw
+    if len(body) == 0 { body = "{}" }
+    if maf_api_body_ok(raw, n, 0) == 0 { return maf_api_error(400, "application/json body required") }
+    let tenant = maf_api_tenant()
+    let current = sql_query_str2(db, "SELECT version::text FROM maf_calls WHERE tenant_id = $1 AND call_id = $2", tenant, call_id)
+    if len(current) == 0 { return maf_api_error(404, "call not found") }
+    let expected = json_get_string(body, "expected_version")
+    if len(expected) > 0 && not str_eq(expected, current) { return maf_api_error(409, "call version conflict") }
+    let mut operation = "calls.command"
+    let event_type = "command.accepted"
+    if kind == 3 { operation = "calls.answer" }
+    if kind == 4 { operation = "calls.reject" }
+    if kind == 5 { operation = "calls.hangup" }
+    if kind == 6 { operation = "calls.bridge" }
+    if kind == 7 { operation = "calls.media" }
+    if kind == 4 {
+        let code = json_get_int(body, "sip_code")
+        if code != 0 && (code < 300 || code > 699) { return maf_api_error(400, "invalid sip_code") }
+    }
+    if kind == 6 && maf_api_bridge_ok(db, ok, tenant, call_id, body) == 0 { return maf_api_error(400, "channel_ids must contain 2 to 8 owned unique channels") }
+    if kind == 7 {
+        let media_op = str_to_lower(str_trim_space(json_get_string(body, "operation")))
+        if not str_eq(media_op, "play") && not str_eq(media_op, "record") && not str_eq(media_op, "stop") && not str_eq(media_op, "pause") && not str_eq(media_op, "resume") { return maf_api_error(400, "invalid media operation") }
+    }
+    let idempotency = maf_api_command_id(raw, n, body)
+    if maf_api_identifier_ok(idempotency, 8, 128) == 0 { return maf_api_error(400, "Idempotency-Key is required") }
+    let mut command_id = str_trim_space(json_get_string(body, "command_id"))
+    if len(command_id) == 0 { command_id = idempotency }
+    if maf_api_identifier_ok(command_id, 8, 128) == 0 { return maf_api_error(400, "invalid command_id") }
+    let idem_state = maf_api_idempotency_state(db, ok, tenant, idempotency, body)
+    if idem_state < 0 { return maf_api_error(409, "Idempotency-Key was already used with a different request") }
+    if idem_state == 1 {
+        let existing = maf_api_receipt(db, ok, tenant, idempotency)
+        if len(existing) > 0 { return http_resp(200, "application/json", existing + "\n", "Cache-Control: no-store\r\n") }
+    }
+    let trace = sha256("madis.maf.trace|" + tenant + "|" + command_id + "|" + string(now_ms()))[0:32]
+    let rc = maf_api_insert_command(db, ok, tenant, command_id, idempotency, operation, call_id, body, call_id, trace)
+    if rc < 0 {
+        let raced_state = maf_api_idempotency_state(db, ok, tenant, idempotency, body)
+        let raced = maf_api_receipt(db, ok, tenant, idempotency)
+        if raced_state == 1 && len(raced) > 0 { return http_resp(200, "application/json", raced + "\n", "Cache-Control: no-store\r\n") }
+        if raced_state < 0 { return maf_api_error(409, "Idempotency-Key was already used with a different request") }
+        return maf_api_error(409, "command idempotency conflict")
+    }
+    let payload = "{\"tenant_id\":\"" + maf_api_json_escape(tenant) + "\",\"call_id\":\"" + maf_api_json_escape(call_id) + "\",\"operation\":\"" + maf_api_json_escape(operation) + "\",\"command_id\":\"" + maf_api_json_escape(command_id) + "\"}"
+    let _ = maf_api_emit_event(db, ok, tenant, event_type, call_id, "", payload, trace)
+    let receipt = maf_api_receipt(db, ok, tenant, idempotency)
+    if len(receipt) == 0 { return maf_api_error(500, "command receipt unavailable") }
+    return http_resp(202, "application/json", receipt + "\n", "Cache-Control: no-store\r\n")
+}
+
+fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string, n: int) -> string {
+    let kind = maf_api_route(method, path)
+    if kind == 1 { return maf_api_create_call(db, ok, raw, n) }
+    if kind == 2 {
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        let resource = maf_api_call_resource(db, ok, maf_api_tenant(), maf_api_call_id(path, ""))
+        if len(resource) == 0 { return maf_api_error(404, "call not found") }
+        return http_resp(200, "application/json", resource + "\n", "Cache-Control: no-store\r\n")
+    }
+    if kind >= 3 && kind <= 7 { return maf_api_command(db, ok, kind, raw, n, maf_api_call_id(path, if kind == 3 { "answer" } else if kind == 4 { "reject" } else if kind == 5 { "hangup" } else if kind == 6 { "bridges" } else { "media" })) }
+    if kind == 8 {
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        let q = parse_query(raw, n)
+        if maf_api_parse_cursor(q) < 0 { return maf_api_error(400, "invalid cursor") }
+        let event_type = query_val(q, "event_type")
+        if len(event_type) > 0 && maf_api_identifier_ok(event_type, 1, 128) == 0 { return maf_api_error(400, "invalid event_type") }
+        return http_resp(200, "application/json", maf_api_events(db, ok, maf_api_tenant(), q), "Cache-Control: no-store\r\n")
+    }
+    return maf_api_error(404, "not found")
+}
