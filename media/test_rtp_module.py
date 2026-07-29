@@ -149,6 +149,31 @@ class MediaModuleTests(unittest.TestCase):
         finally:
             relay.close()
 
+    def test_control_listener_restart_recovers(self) -> None:
+        def ping(relay: MediaRelay) -> None:
+            thread = threading.Thread(target=relay.serve, args=("127.0.0.1", 0), daemon=True)
+            thread.start()
+            deadline = time.monotonic() + 2.0
+            while relay.control_address is None and time.monotonic() < deadline:
+                time.sleep(0.001)
+            self.assertIsNotNone(relay.control_address)
+            client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                cookie = b"restart-cookie"
+                client.sendto(cookie + b" " + bencode_dict({"command": "ping"}), relay.control_address)
+                client.settimeout(2.0)
+                response, _ = client.recvfrom(4096)
+                self.assertEqual(response[: len(cookie)], cookie)
+                self.assertEqual(bdecode_dict(response[len(cookie) + 1 :])[b"result"], b"ok")
+            finally:
+                client.close()
+                relay.close()
+                thread.join(timeout=2.0)
+            self.assertFalse(thread.is_alive())
+
+        ping(MediaRelay(media_min=0xC200, media_max=0xC210))
+        ping(MediaRelay(media_min=0xC220, media_max=0xC230))
+
     def test_ng_udp_control_round_trip(self) -> None:
         thread = threading.Thread(target=self.relay.serve, args=("127.0.0.1", 0), daemon=True)
         thread.start()
