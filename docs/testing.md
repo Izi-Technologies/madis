@@ -1,6 +1,6 @@
 # Testing and release checks
 
-The opt-in worker-backed two-subscriber IMS smoke exercises a reliable `183 Session Progress`/PRACK exchange with downstream `200 OK` acknowledgement, followed by an in-dialog `UPDATE` offer/answer through the RTP sidecar, and authenticated INVITE cancellation with downstream `487 Request Terminated` handling.
+The opt-in worker-backed two-subscriber IMS smoke exercises a reliable `183 Session Progress`/PRACK exchange with downstream `200 OK` acknowledgement, followed by in-dialog `UPDATE` and re-INVITE offer/answer exchanges through the RTP sidecar, plus authenticated INVITE cancellation with downstream `487 Request Terminated` handling.
 
 Madis builds and tests with Mako **0.4.18** and a matching runtime directory. Do not mix a different compiler/runtime pair with generated C.
 
