@@ -554,6 +554,48 @@ class TwoSubscriberImsSmokeTests(unittest.TestCase):
         self.alice.send(auth_message, self.sip_port)
         return call_id, alice_tag, branch, sdp
 
+    def test_two_subscribers_cancel_call(self) -> None:
+        self._register(self.alice, "alice", b"xres-alice")
+        self._register(self.bob, "bob", b"xres-bob")
+        call_id, _, _, _ = self._invite()
+        invite = self.bob.receive(lambda message: message.startswith("INVITE "))
+        invite_headers = _headers(invite)
+        cancel = (
+            "CANCEL sip:bob@example.com SIP/2.0\r\n"
+            + _header_line(invite_headers, "via")
+            + "Max-Forwards: 70\r\n"
+            + f"{_header_line(invite_headers, 'from')}"
+            + "To: <sip:bob@example.com>\r\n"
+            + f"{_header_line(invite_headers, 'call-id')}"
+            + "CSeq: 2 CANCEL\r\n"
+            + "Content-Length: 0\r\n\r\n"
+        )
+        self.alice.send(cancel, self.sip_port)
+        cancelled = self.alice.receive(
+            lambda message: _status(message) == 200
+            and _headers(message).get("cseq", "").startswith("2 CANCEL")
+        )
+        self.assertEqual(_status(cancelled), 200)
+        forwarded_cancel = self.bob.receive(
+            lambda message: message.startswith("CANCEL ")
+        )
+        self.assertEqual(_headers(forwarded_cancel).get("cseq"), "2 CANCEL")
+        terminated = (
+            "SIP/2.0 487 Request Terminated\r\n"
+            + _header_lines(invite, "Via")
+            + f"{_header_line(invite_headers, 'from')}"
+            + "To: <sip:bob@example.com>;tag=bob-cancel\r\n"
+            + f"{_header_line(invite_headers, 'call-id')}"
+            + f"{_header_line(invite_headers, 'cseq')}"
+            + "Content-Length: 0\r\n\r\n"
+        )
+        self.bob.send(terminated, self.sip_port)
+        rejected = self.alice.receive(
+            lambda message: _status(message) == 487
+            and _headers(message).get("cseq", "").startswith("2 INVITE")
+        )
+        self.assertEqual(_status(rejected), 487)
+
     def test_two_subscribers_register_call_and_clear(self) -> None:
         self._register(self.alice, "alice", b"xres-alice")
         self._register(self.bob, "bob", b"xres-bob")
