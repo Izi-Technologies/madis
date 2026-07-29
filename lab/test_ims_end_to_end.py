@@ -749,6 +749,77 @@ class TwoSubscriberImsSmokeTests(unittest.TestCase):
             lambda message: _status(message) == 200 and "UPDATE" in message
         )
         self.assertNotEqual(_sdp_media_port(updated), self.bob_media.getsockname()[1])
+        reinvite_sdp = (
+            "v=0\r\n"
+            "o=- 5 5 IN IP4 127.0.0.1\r\n"
+            "s=-\r\n"
+            "c=IN IP4 127.0.0.1\r\n"
+            "t=0 0\r\n"
+            f"m=audio {self.alice_media.getsockname()[1]} RTP/AVP 0\r\n"
+        )
+        reinvite = (
+            "INVITE sip:bob@example.com SIP/2.0\r\n"
+            f"Via: SIP/2.0/UDP 127.0.0.1:{self.alice.address[1]};branch=z9hG4bK-{uuid.uuid4().hex}\r\n"
+            "Max-Forwards: 70\r\n"
+            f"From: <sip:alice@example.com>;tag={alice_tag}\r\n"
+            f"To: <sip:bob@example.com>;tag={bob_tag}\r\n"
+            f"Call-ID: {call_id}\r\n"
+            "CSeq: 4 INVITE\r\n"
+            f"Contact: <sip:alice@127.0.0.1:{self.alice.address[1]}>\r\n"
+            "Content-Type: application/sdp\r\n"
+            f"Content-Length: {len(reinvite_sdp.encode('ascii'))}\r\n\r\n"
+            + reinvite_sdp
+        )
+        self.alice.send(reinvite, self.sip_port)
+        forwarded_reinvite = self.bob.receive(
+            lambda message: message.startswith("INVITE ")
+        )
+        self.assertNotEqual(
+            _sdp_media_port(forwarded_reinvite), self.alice_media.getsockname()[1]
+        )
+        reinvite_headers = _headers(forwarded_reinvite)
+        reinvite_answer_sdp = (
+            "v=0\r\n"
+            "o=- 6 6 IN IP4 127.0.0.1\r\n"
+            "s=-\r\n"
+            "c=IN IP4 127.0.0.1\r\n"
+            "t=0 0\r\n"
+            f"m=audio {self.bob_media.getsockname()[1]} RTP/AVP 0\r\n"
+        )
+        reinvite_ok = (
+            "SIP/2.0 200 OK\r\n"
+            + _header_lines(forwarded_reinvite, "Via")
+            + f"{_header_line(reinvite_headers, 'from')}"
+            + f"To: <sip:bob@example.com>;tag={bob_tag}\r\n"
+            + f"{_header_line(reinvite_headers, 'call-id')}"
+            + f"{_header_line(reinvite_headers, 'cseq')}"
+            + "Content-Type: application/sdp\r\n"
+            + f"Content-Length: {len(reinvite_answer_sdp.encode('ascii'))}\r\n\r\n"
+            + reinvite_answer_sdp
+        )
+        self.bob.send(reinvite_ok, self.sip_port)
+        reinvite_accepted = self.alice.receive(
+            lambda message: _status(message) == 200
+            and _headers(message).get("cseq", "").startswith("4 INVITE")
+        )
+        self.assertNotEqual(
+            _sdp_media_port(reinvite_accepted), self.bob_media.getsockname()[1]
+        )
+        reinvite_ack = (
+            "ACK sip:bob@example.com SIP/2.0\r\n"
+            f"Via: SIP/2.0/UDP 127.0.0.1:{self.alice.address[1]};branch=z9hG4bK-{uuid.uuid4().hex}\r\n"
+            "Max-Forwards: 70\r\n"
+            f"From: <sip:alice@example.com>;tag={alice_tag}\r\n"
+            f"To: <sip:bob@example.com>;tag={bob_tag}\r\n"
+            f"Call-ID: {call_id}\r\n"
+            "CSeq: 4 ACK\r\n"
+            "Content-Length: 0\r\n\r\n"
+        )
+        self.alice.send(reinvite_ack, self.sip_port)
+        self.bob.receive(
+            lambda message: message.startswith("ACK ")
+            and _headers(message).get("cseq") == "4 ACK"
+        )
         bye = (
             "BYE sip:bob@example.com SIP/2.0\r\n"
             f"Via: SIP/2.0/UDP 127.0.0.1:{self.alice.address[1]};branch=z9hG4bK-{uuid.uuid4().hex}\r\n"
@@ -756,7 +827,7 @@ class TwoSubscriberImsSmokeTests(unittest.TestCase):
             f"From: <sip:alice@example.com>;tag={alice_tag}\r\n"
             f"To: <sip:bob@example.com>;tag={bob_tag}\r\n"
             f"Call-ID: {call_id}\r\n"
-            "CSeq: 2 BYE\r\n"
+            "CSeq: 5 BYE\r\n"
             "Content-Length: 0\r\n\r\n"
         )
         self.alice.send(bye, self.sip_port)
