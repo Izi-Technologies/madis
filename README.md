@@ -103,9 +103,12 @@ command and its initial event were durably accepted by PostgreSQL; it does not
 mean that the SIP dialog has already changed. Use the call resource or event
 cursor to observe progress. The current SIP worker executes outbound
 `calls.create`, early-dialog reject/hangup as `CANCEL`, and confirmed-dialog
-hangup as `BYE`. Answer, bridge, and media commands are accepted into the
-durable queue but return explicit failed receipts until their worker-owned
-executors are implemented. They are never reported as successful.
+hangup as `BYE`. Set `SIP_MAF_INBOUND_MODE=control` to publish authenticated
+initial INVITEs as ringing MAF calls; `calls.answer` then accepts a bounded
+`answer_sdp` and sends the validated `200 OK`. Bridge and media commands are
+accepted into the durable queue but return explicit failed receipts until
+their worker-owned executors are implemented. They are never reported as
+successful.
 
 MAF credentials are separate from admin, carrier, control, and SIP-worker
 credentials. Configure a write token, an optional read-only token, and the
@@ -115,6 +118,7 @@ process tenant in the admin environment:
 export SIP_MAF_API_TOKEN="$(openssl rand -hex 32)"
 export SIP_MAF_API_READ_TOKEN="$(openssl rand -hex 32)"
 export SIP_MAF_TENANT="default"
+export SIP_MAF_INBOUND_MODE="control"
 ```
 
 Put the admin listener behind HTTPS and, for production, a private mTLS edge.
@@ -221,10 +225,10 @@ func main() {
 ```
 
 MAF is a bounded command/event contract, not a generic code-execution or raw
-SIP injection API. The HTTP boundary is enabled now; public WebSocket/gRPC
-subscriptions, inbound-dialog answer execution, bridge/media ownership,
-maintained generated clients, and independent interoperability evidence remain
-follow-up work. Read the complete contract in [`api/maf.md`](api/maf.md), the
+SIP injection API. The HTTP boundary and opt-in inbound answer path are enabled
+now; public WebSocket/gRPC subscriptions, bridge/media ownership, maintained
+generated clients, and independent interoperability evidence remain follow-up
+work. Read the complete contract in [`api/maf.md`](api/maf.md), the
 machine-readable schema in [`api/maf.openapi.yaml`](api/maf.openapi.yaml), and
 deployment guidance in [`docs/integrations.md`](docs/integrations.md) and
 [`docs/configuration.md`](docs/configuration.md).

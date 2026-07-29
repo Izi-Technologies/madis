@@ -103,6 +103,172 @@ fn maf_worker_endpoint_ok(value: string) -> int {
     return 1
 }
 
+fn maf_worker_inbound_call_id(tenant: string, wire_call_id: string) -> string {
+    if len(tenant) == 0 || len(tenant) > 128 || len(wire_call_id) == 0 || len(wire_call_id) > 512 {
+        return ""
+    }
+    if maf_worker_text_safe(wire_call_id, 512) == 0 { return "" }
+    return "call-in-" + sha256("madis.maf.inbound|" + tenant + "|" + wire_call_id)[0:32]
+}
+
+fn maf_worker_answer_sdp_ok(sdp: string) -> int {
+    if len(sdp) < 8 || len(sdp) > 32768 { return 0 }
+    if not str_has_prefix(str_trim_space(sdp), "v=0") { return 0 }
+    if str_index(sdp, "m=") < 0 { return 0 }
+    let mut i = 0
+    while i < len(sdp) {
+        let c = int(sdp[i])
+        if c == 0 || c == 127 || (c < 32 && c != 9 && c != 10 && c != 13) { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn maf_worker_build_inbound_answer(invite: string, answer_sdp: string, contact_uri: string, to_tag: string) -> string {
+    if len(invite) == 0 || maf_worker_answer_sdp_ok(answer_sdp) == 0 || len(contact_uri) == 0 || len(to_tag) == 0 {
+        return ""
+    }
+    let extra = "Contact: <" + contact_uri + ">\r\nContent-Type: application/sdp\r\n"
+    let response = sip_reply_with_to_tag(invite, 200, "OK", extra, answer_sdp, to_tag)
+    if sip_validate_message(response, len(response)) == 0 { return "" }
+    return response
+}
+
+fn maf_worker_inbound_cache_value(invite: string, ip: string, port: int, transport: string) -> string {
+    return "{\"invite\":\"" + maf_worker_json_escape(invite) + "\",\"ip\":\"" +
+        maf_worker_json_escape(ip) + "\",\"port\":\"" + string(port) +
+        "\",\"transport\":\"" + maf_worker_json_escape(transport) + "\"}"
+}
+
+fn maf_worker_inbound_cache_put(cache: CMap, call_id: string, value: string) -> int {
+    if len(call_id) == 0 || len(value) == 0 || len(value) > 65536 { return 0 }
+    return bounded_cache_set(cache, "maf_inbound_seq", "maf_inbound_ring|", "maf_inbound|" + call_id, value, 4096)
+}
+
+fn maf_worker_inbound_cache_get(cache: CMap, call_id: string) -> string {
+    if len(call_id) == 0 { return "" }
+    return cmap_get(cache, "maf_inbound|" + call_id)
+}
+
+fn maf_worker_inbound_call_for_wire(cache: CMap, tenant: string, wire_call_id: string) -> string {
+    let call_id = maf_worker_inbound_call_id(tenant, wire_call_id)
+    if len(call_id) > 0 && len(maf_worker_inbound_cache_get(cache, call_id)) > 0 { return call_id }
+    return ""
+}
+
+fn maf_worker_ingress_invite(db: SqlDB, ok: int, tenant: string, msg: string, ip: string, port: int, transport: string, cache: CMap) -> string {
+    if ok == 0 || len(msg) == 0 || not str_eq(str_to_upper(str_trim_space(madis_method(msg))), "INVITE") { return "" }
+    let wire_call_id = sip_header(msg, "Call-ID")
+    let call_id = maf_worker_inbound_call_id(tenant, wire_call_id)
+    if len(call_id) == 0 { return "" }
+    let from_uri = sip_contact_addr(sip_header(msg, "From"))
+    let to_uri = sip_contact_addr(sip_header(msg, "To"))
+    if maf_worker_text_safe(from_uri, 512) == 0 || maf_worker_text_safe(to_uri, 512) == 0 { return "" }
+    let existing = sql_query_str2(db, "SELECT call_id FROM maf_calls WHERE tenant_id = $1 AND call_id = $2", tenant, call_id)
+    if len(existing) == 0 {
+        let app = "{\"sip_call_id\":\"" + maf_worker_json_escape(wire_call_id) + "\",\"direction\":\"inbound\",\"transport\":\"" + maf_worker_json_escape(transport) + "\"}"
+        let document = "{\"from\":\"" + maf_worker_json_escape(from_uri) + "\",\"to\":\"" + maf_worker_json_escape(to_uri) + "\",\"application_data\":" + app + "}"
+        let call_rc = sql_exec_str4(db, "INSERT INTO maf_calls (call_id, tenant_id, state, version, from_uri, to_uri, application_data) SELECT $1, $2, 'ringing', 1, $4::jsonb->>'from', $4::jsonb->>'to', $4::jsonb->'application_data' ON CONFLICT (call_id) DO NOTHING", call_id, tenant, "", document)
+        if call_rc < 0 { return "" }
+        let channel_id = "chan-" + sha256(call_id + "|inbound")[0:32]
+        let _ = sql_exec_str4(db, "INSERT INTO maf_channels (channel_id, call_id, tenant_id, state, direction, endpoint) VALUES ($1, $2, $3, 'ringing', 'inbound', $4) ON CONFLICT (channel_id) DO NOTHING", channel_id, call_id, tenant, from_uri)
+        let trace = sha256("madis.maf.inbound.trace|" + tenant + "|" + wire_call_id)[0:32]
+        let payload = "{\"call_id\":\"" + maf_worker_json_escape(call_id) + "\",\"direction\":\"inbound\",\"sip_call_id\":\"" + maf_worker_json_escape(wire_call_id) + "\"}"
+        let _ = maf_worker_emit_event(db, ok, tenant, "call.created", call_id, payload, trace)
+    }
+    let received = via_add_received(msg, len(msg), ip, port)
+    if len(received) == 0 { return "" }
+    if maf_worker_inbound_cache_put(cache, call_id, maf_worker_inbound_cache_value(received, ip, port, transport)) == 0 { return "" }
+    return call_id
+}
+
+fn maf_worker_inbound_contact_uri() -> string {
+    let configured = env_get_or("SIP_MAF_CONTACT_URI", "")
+    if len(configured) > 0 {
+        if maf_worker_endpoint_ok(configured) == 1 { return configured }
+        return ""
+    }
+    let host = env_get_or("SIP_PUBLIC_IP", env_get_or("SIP_NODE_ADDR", "127.0.0.1"))
+    if len(host) == 0 || maf_worker_text_safe(host, 128) == 0 { return "" }
+    let mut authority = host
+    if str_index(host, ":") >= 0 && not str_has_prefix(host, "[") { authority = "[" + host + "]" }
+    return "sip:madis@" + authority
+}
+
+fn maf_worker_inbound_answer(db: SqlDB, ok: int, tenant: string, call_id: string, request: string, trace: string, cache: CMap, out_fd: int) -> string {
+    let packed = maf_worker_inbound_cache_get(cache, call_id)
+    if len(packed) == 0 { return "inbound_dialog_unavailable|the worker does not own this inbound dialog" }
+    let current = sql_query_str2(db, "SELECT state FROM maf_calls WHERE tenant_id = $1 AND call_id = $2", tenant, call_id)
+    if not str_eq(current, "ringing") { return "answer_state_conflict|the inbound call is not ringing" }
+    let invite = json_get_string(packed, "invite")
+    let answer_sdp = json_get_string(request, "answer_sdp")
+    let contact_uri = maf_worker_inbound_contact_uri()
+    if len(invite) == 0 || maf_worker_answer_sdp_ok(answer_sdp) == 0 || len(contact_uri) == 0 {
+        return "invalid_answer|answer_sdp and a reachable contact URI are required"
+    }
+    let to_tag = "maf-in-" + sha256(call_id + "|answer")[0:20]
+    let response = maf_worker_build_inbound_answer(invite, answer_sdp, contact_uri, to_tag)
+    if len(response) == 0 { return "invalid_answer|the generated SIP response failed validation" }
+    let ip = json_get_string(packed, "ip")
+    let tr = json_get_string(packed, "transport")
+    let mut port = 5060
+    match parse_int(json_get_string(packed, "port")) { Ok(v) => { port = v } Err(_) => {} }
+    let _ = sip_server_txn_record(invite, response, ip, port, tr, out_fd, cache)
+    if sip_forward_reply(response, cache, out_fd) == 0 { return "answer_delivery_failed|the worker could not deliver the SIP response" }
+    let _ = maf_worker_inbound_cache_put(cache, call_id, maf_worker_inbound_cache_value(invite, ip, port, tr))
+    cmap_set(cache, "maf_inbound_answer|" + call_id, response)
+    if maf_worker_call_state(db, ok, tenant, call_id, "answered", trace) == 0 { return "answer_state_failed|the call state could not be updated" }
+    return "ok"
+}
+
+fn maf_worker_inbound_reject(db: SqlDB, ok: int, tenant: string, call_id: string, request: string, trace: string, cache: CMap, out_fd: int) -> string {
+    let packed = maf_worker_inbound_cache_get(cache, call_id)
+    if len(packed) == 0 { return "inbound_dialog_unavailable|the worker does not own this inbound dialog" }
+    let current = sql_query_str2(db, "SELECT state FROM maf_calls WHERE tenant_id = $1 AND call_id = $2", tenant, call_id)
+    if str_eq(current, "answered") { return "reject_state_conflict|answered calls must be hung up" }
+    let invite = json_get_string(packed, "invite")
+    let mut code = json_get_int(request, "sip_code")
+    if code < 300 || code > 699 { code = 486 }
+    let reason = if code == 487 { "Request Terminated" } else if code == 603 { "Decline" } else { "Busy Here" }
+    let to_tag = "maf-in-" + sha256(call_id + "|reject")[0:20]
+    let response = sip_reply_with_to_tag(invite, code, reason, "", "", to_tag)
+    if sip_validate_message(response, len(response)) == 0 { return "invalid_reject|the generated SIP response failed validation" }
+    let ip = json_get_string(packed, "ip")
+    let tr = json_get_string(packed, "transport")
+    let mut port = 5060
+    match parse_int(json_get_string(packed, "port")) { Ok(v) => { port = v } Err(_) => {} }
+    let _ = sip_server_txn_record(invite, response, ip, port, tr, out_fd, cache)
+    if sip_forward_reply(response, cache, out_fd) == 0 { return "reject_delivery_failed|the worker could not deliver the SIP response" }
+    let _ = maf_worker_call_state(db, ok, tenant, call_id, "ended", trace)
+    return "ok"
+}
+
+fn maf_worker_inbound_bye(db: SqlDB, ok: int, tenant: string, call_id: string, trace: string, cache: CMap, out_fd: int) -> string {
+    let packed = maf_worker_inbound_cache_get(cache, call_id)
+    let answer = cmap_get(cache, "maf_inbound_answer|" + call_id)
+    if len(packed) == 0 || len(answer) == 0 { return "dialog_unavailable|the inbound dialog is not confirmed" }
+    let target = sip_contact_addr(sip_header(json_get_string(packed, "invite"), "Contact"))
+    let from_header = sip_header(answer, "To")
+    let to_header = sip_header(answer, "From")
+    let wire_call_id = sip_header(answer, "Call-ID")
+    let node_addr = env_get_or("SIP_NODE_ADDR", "127.0.0.1")
+    let local_contact = maf_worker_inbound_contact_uri()
+    if len(target) == 0 || maf_worker_endpoint_ok(target) == 0 || len(from_header) == 0 || len(to_header) == 0 || len(wire_call_id) == 0 || len(local_contact) == 0 || maf_worker_text_safe(node_addr, 128) == 0 { return "dialog_unavailable|the inbound dialog has no safe remote target" }
+    let mut tr = str_to_lower(json_get_string(packed, "transport"))
+    if str_eq(tr, "sips") { tr = "tls" }
+    if len(tr) == 0 { tr = sip_transport_param(target, "udp") }
+    let branch = "z9hG4bK-maf-in-bye-" + sha256(call_id + "|bye|" + string(now_ms()))[0:24]
+    let bye = "BYE " + target + " SIP/2.0\r\n" +
+        "Via: SIP/2.0/" + str_to_upper(tr) + " " + node_addr + ";branch=" + branch + "\r\n" +
+        "Max-Forwards: 70\r\n" + "From: " + from_header + "\r\n" +
+        "To: " + to_header + "\r\n" + "Call-ID: " + wire_call_id + "\r\n" +
+    "CSeq: 1 BYE\r\n" + "Contact: <" + local_contact + ">\r\n" +
+        "Content-Length: 0\r\n\r\n"
+    if sip_validate_message(bye, len(bye)) == 0 { return "dialog_unavailable|the generated BYE failed validation" }
+    if sip_forward_target(target, bye, tr, cache, out_fd) == 0 { return "dialog_unavailable|the worker could not send BYE" }
+    return "ok"
+}
+
 fn maf_worker_invite(call_id: string, from_uri: string, to_uri: string, node_id: string, node_addr: string) -> string {
     let branch = "z9hG4bK-maf-" + sha256(call_id + "|branch")[0:24]
     let tag = "maf-" + sha256(call_id + "|from")[0:20]
@@ -179,10 +345,22 @@ fn maf_worker_execute(db: SqlDB, ok: int, tenant: string, operation: string, cal
         return if maf_worker_start_call(db, ok, tenant, call_id, request, trace, cache, out_fd, node_id) == 1 { "ok" } else { "transport_or_endpoint_rejected|outbound INVITE was not sent" }
     }
     if str_eq(operation, "calls.reject") {
+        if len(maf_worker_inbound_cache_get(cache, call_id)) > 0 {
+            return maf_worker_inbound_reject(db, ok, tenant, call_id, request, trace, cache, out_fd)
+        }
         return if maf_worker_cancel_call(db, ok, tenant, call_id, trace, cache, out_fd) == 1 { "ok" } else { "no_early_dialog|the worker has no cancellable early dialog" }
     }
     if str_eq(operation, "calls.hangup") {
         let current = sql_query_str2(db, "SELECT state FROM maf_calls WHERE tenant_id = $1 AND call_id = $2", tenant, call_id)
+        if len(maf_worker_inbound_cache_get(cache, call_id)) > 0 {
+            if str_eq(current, "ringing") {
+                let inbound_request = "{\"sip_code\":487}"
+                return maf_worker_inbound_reject(db, ok, tenant, call_id, inbound_request, trace, cache, out_fd)
+            }
+            if str_eq(current, "answered") {
+                return maf_worker_inbound_bye(db, ok, tenant, call_id, trace, cache, out_fd)
+            }
+        }
         if str_eq(current, "ringing") {
             return if maf_worker_cancel_call(db, ok, tenant, call_id, trace, cache, out_fd) == 1 { "ok" } else { "dialog_unavailable|the worker could not send CANCEL" }
         }
@@ -192,9 +370,12 @@ fn maf_worker_execute(db: SqlDB, ok: int, tenant: string, operation: string, cal
         return "dialog_executor_pending|BYE execution requires confirmed-dialog ownership"
     }
     if str_eq(operation, "calls.answer") {
+        if len(maf_worker_inbound_cache_get(cache, call_id)) > 0 {
+            return maf_worker_inbound_answer(db, ok, tenant, call_id, request, trace, cache, out_fd)
+        }
         let current = sql_query_str2(db, "SELECT state FROM maf_calls WHERE tenant_id = $1 AND call_id = $2", tenant, call_id)
         if str_eq(current, "answered") { return "ok" }
-        return "answer_executor_pending|answer requires an owned inbound dialog"
+        return "inbound_dialog_unavailable|answer requires an owned inbound dialog"
     }
     if str_eq(operation, "calls.bridge") { return "bridge_executor_pending|bridge execution requires worker dialog and media ownership" }
     if str_eq(operation, "calls.media") { return "media_executor_pending|media execution requires worker media ownership" }
@@ -237,6 +418,17 @@ fn maf_worker_sync_sip(db: SqlDB, ok: int, msg: string, cache: CMap) -> int {
     if ok == 0 { return 0 }
     let wire_call_id = sip_header(msg, "Call-ID")
     if len(wire_call_id) == 0 { return 0 }
+    let inbound_tenant = maf_worker_tenant()
+    let inbound_call_id = maf_worker_inbound_call_for_wire(cache, inbound_tenant, wire_call_id)
+    if len(inbound_call_id) > 0 {
+        let inbound_method = str_to_upper(str_trim_space(madis_method(msg)))
+        let inbound_cseq_parts = str_split(sip_header(msg, "CSeq"), " ")
+        let inbound_cseq_method = if len(inbound_cseq_parts) >= 2 { str_to_upper(str_trim_space(inbound_cseq_parts[1])) } else { inbound_method }
+        if str_eq(inbound_method, "BYE") || str_eq(inbound_method, "CANCEL") || str_eq(inbound_cseq_method, "BYE") || str_eq(inbound_cseq_method, "CANCEL") {
+            let inbound_trace = sha256("madis.maf.inbound.state|" + inbound_call_id + "|" + inbound_cseq_method)[0:32]
+            return if maf_worker_call_state(db, ok, inbound_tenant, inbound_call_id, "ended", inbound_trace) == 1 { 1 } else { 0 }
+        }
+    }
     let mut call_id = wire_call_id
     let at = str_index(call_id, "@")
     if at > 0 { call_id = call_id[0:at] }

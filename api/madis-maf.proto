@@ -41,6 +41,7 @@ message CallCommandRequest {
   CommandMetadata command = 1;
   string call_id = 2;
   string reason = 3;
+  string answer_sdp = 4;
 }
 
 message RejectCallRequest {

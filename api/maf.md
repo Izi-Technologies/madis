@@ -14,11 +14,14 @@ machine-readable contract is [`maf.openapi.yaml`](maf.openapi.yaml).
 Mutating requests are durable command-acceptance boundaries: `202` means that
 MADIS accepted the command for asynchronous worker processing, not that a SIP
 dialog has already changed. The SIP worker remains the owner of signaling
-state. The worker executor currently sends outbound `calls.create` INVITEs,
-handles early-dialog reject/hangup with CANCEL, sends confirmed-dialog BYE,
-and synchronizes SIP response states back to MAF. Answer, bridge, and media
-commands are accepted into the durable queue but finish with an explicit failed
-receipt until their worker-owned dialog/media executors are implemented.
+state. The worker executor sends outbound `calls.create` INVITEs, handles
+early-dialog reject/hangup with CANCEL, sends confirmed-dialog BYE, and
+synchronizes SIP response states back to MAF. With
+`SIP_MAF_INBOUND_MODE=control`, an authenticated initial INVITE becomes a
+tenant-scoped MAF call and `calls.answer` can send a validated `200 OK`
+containing `answer_sdp`. Bridge and media commands are accepted into the
+durable queue but finish with an explicit failed receipt until their
+worker-owned executors are implemented.
 
 Live WebSocket/gRPC subscriptions are separate follow-up surfaces;
 [`madis-maf.proto`](madis-maf.proto) describes that language-neutral target.
@@ -52,6 +55,13 @@ body `command_id`. The key is bound to a request hash; reusing it with a
 different body returns `409`. Commands are tenant-scoped by the
 `SIP_MAF_TENANT` process setting, bounded to 64 KiB JSON, and protected by
 optimistic call-version checks.
+
+Inbound call control is opt-in. Set `SIP_MAF_INBOUND_MODE=control` on the SIP
+worker to stop an authenticated initial INVITE at the MAF boundary and publish
+it as a ringing call. The answer command must include a bounded SDP offer or
+answer in `answer_sdp`; the worker validates the body, adds its own dialog tag,
+records the SIP server transaction, and sends the response. The default mode is
+`disabled`, which preserves normal proxy routing.
 
 The bridge route accepts only 2–8 unique channel IDs that belong to the
 tenant-scoped call. Media operations are limited to `play`, `record`, `stop`,
@@ -117,8 +127,11 @@ clients should call an application-owned backend, which then calls MAF.
 
 ## Remaining implementation work
 
-The enabled HTTP boundary still needs inbound-dialog answer execution,
-bridge/media ownership, live WebSocket/gRPC subscriptions, maintained
-generated clients, and sustained interoperability/failure-injection evidence.
+The enabled HTTP boundary still needs bridge/media ownership, live
+WebSocket/gRPC subscriptions, maintained generated clients, and sustained
+interoperability/failure-injection evidence. Inbound MAF control is currently
+limited to the SIP transports that the worker can route through its server
+transaction/reply path; deployments should validate TCP/TLS/WS/WSS behavior
+before enabling it broadly.
 Integrations must treat command receipts as asynchronous acceptance and
 observe the call or event resources for progress.

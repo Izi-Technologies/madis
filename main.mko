@@ -786,6 +786,12 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
         return sip_resp(501, "Not Implemented", data, dl, "b2bua-method")
     }
 
+    let maf_inbound_call = maf_worker_inbound_call_for_wire(cache, maf_worker_tenant(), cid)
+    if len(maf_inbound_call) > 0 {
+        if is_ack == 1 { return "" }
+        if is_bye == 1 || is_cancel == 1 { return sip_reply(data, 200, "OK", "", "") }
+    }
+
     // === REGISTER ===
     if is_register == 1 {
         let contact = sip_hdr(data, "Contact", dl)
@@ -991,6 +997,13 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
                 let _ = sec_auth_failure(db, db_ok, ip, auth_user, cache)
                 return sip_resp(403, "Bad Credentials", data, dl, "authbad")
             }
+        }
+
+        let maf_inbound_mode = str_to_lower(env_get_or("SIP_MAF_INBOUND_MODE", "disabled"))
+        if ims_initial_dialog_request(data, dl) == 1 && str_eq(maf_inbound_mode, "control") {
+            let maf_call_id = maf_worker_ingress_invite(db, db_ok, maf_worker_tenant(), data, ip, port, tr, cache)
+            if len(maf_call_id) == 0 { return sip_resp(503, "MAF Inbound Unavailable", data, dl, "maf-inbound") }
+            return sip_resp(100, "Trying", data, dl, "maf-inbound")
         }
 
         let dest_user = sip_user(ruri)
