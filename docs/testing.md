@@ -1,6 +1,6 @@
 # Testing and release checks
 
-The opt-in worker-backed two-subscriber IMS smoke exercises a reliable `183 Session Progress`/PRACK exchange and verifies the downstream `200 OK` acknowledgement.
+The opt-in worker-backed two-subscriber IMS smoke exercises a reliable `183 Session Progress`/PRACK exchange with downstream `200 OK` acknowledgement, followed by an in-dialog `UPDATE` offer/answer through the RTP sidecar.
 
 Madis builds and tests with Mako **0.4.18** and a matching runtime directory. Do not mix a different compiler/runtime pair with generated C.
 
