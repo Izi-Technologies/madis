@@ -563,6 +563,46 @@ class TwoSubscriberImsSmokeTests(unittest.TestCase):
         offer_media_port = _sdp_media_port(invite)
         self.assertNotEqual(offer_media_port, self.alice_media.getsockname()[1])
         bob_tag = "bob-call"
+        reliable = (
+            "SIP/2.0 183 Session Progress\r\n"
+            + _header_lines(invite, "Via")
+            + f"{_header_line(invite_headers, 'from')}"
+            + f"To: <sip:bob@example.com>;tag={bob_tag}\r\n"
+            + f"{_header_line(invite_headers, 'call-id')}"
+            + f"{_header_line(invite_headers, 'cseq')}"
+            + "Require: 100rel\r\n"
+            + "RSeq: 1\r\n"
+            + "Content-Length: 0\r\n\r\n"
+        )
+        self.bob.send(reliable, self.sip_port)
+        provisional = self.alice.receive(lambda message: _status(message) == 183)
+        self.assertEqual(_headers(provisional).get("require"), "100rel")
+        self.assertEqual(_headers(provisional).get("rseq"), "1")
+        prack = (
+            "PRACK sip:bob@example.com SIP/2.0\r\n"
+            f"Via: SIP/2.0/UDP 127.0.0.1:{self.alice.address[1]};branch=z9hG4bK-prack-{uuid.uuid4().hex}\r\n"
+            "Max-Forwards: 70\r\n"
+            + _header_line(invite_headers, "from")
+            + f"To: <sip:bob@example.com>;tag={bob_tag}\r\n"
+            + f"{_header_line(invite_headers, 'call-id')}"
+            + "CSeq: 2 PRACK\r\n"
+            + "RAck: 1 2 INVITE\r\n"
+            + "Content-Length: 0\r\n\r\n"
+        )
+        self.alice.send(prack, self.sip_port)
+        forwarded_prack = self.bob.receive(lambda message: message.startswith("PRACK "))
+        prack_headers = _headers(forwarded_prack)
+        prack_ok = (
+            "SIP/2.0 200 OK\r\n"
+            + _header_lines(forwarded_prack, "Via")
+            + f"{_header_line(prack_headers, 'from')}"
+            + f"To: <sip:bob@example.com>;tag={bob_tag}\r\n"
+            + f"{_header_line(prack_headers, 'call-id')}"
+            + f"{_header_line(prack_headers, 'cseq')}"
+            + "Content-Length: 0\r\n\r\n"
+        )
+        self.bob.send(prack_ok, self.sip_port)
+        self.alice.receive(lambda message: _status(message) == 200 and "PRACK" in message)
         ringing = (
         "SIP/2.0 180 Ringing\r\n"
         + _header_lines(invite, "Via")
