@@ -156,7 +156,7 @@ Acceptance evidence: packet and signaling captures showing negotiated media, anc
 - Implement full RFC 4028 session-refresh negotiation and endpoint refresher ownership, rather than request-side interval validation only.
 - Define trusted identity and privacy behavior for the selected access and interconnect model, including required RFC 3325/RFC 8224 interoperability.
 - Add standard iFC condition evaluation, third-party service triggering, TAS/MMTel supplementary services, and service-profile lifecycle handling.
-- Close remaining SIP interoperability gaps for reliable provisional responses, offer/answer edge cases, early dialogs, fork cleanup, and in-dialog routing. The opt-in worker-backed smoke now exercises reliable `183`/PRACK, in-dialog `UPDATE` and re-INVITE offer/answer, and authenticated INVITE cancellation exchanges; external UE interoperability and the remaining early-dialog/fork cases remain open.
+- Close remaining SIP interoperability gaps for reliable provisional responses, offer/answer edge cases, early dialogs, fork cleanup, and in-dialog routing. The opt-in worker-backed smoke now exercises reliable `183`/PRACK, in-dialog `UPDATE` and re-INVITE offer/answer, authenticated INVITE cancellation, and target-only iFC fork selection with losing-branch CANCEL cleanup; standard iFC/TAS behavior and external UE interoperability remain open.
 
 Acceptance evidence: standards-referenced positive, malformed, timeout, and failover tests for each selected feature. Unsupported features remain explicitly disabled or rejected.
 

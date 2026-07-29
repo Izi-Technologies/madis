@@ -5,6 +5,9 @@ Run with:
     IMS_END_TO_END=1 MADIS_BIN=./main \
       python3 -m unittest lab.test_ims_end_to_end -v
 
+    IMS_END_TO_END=1 IMS_END_TO_END_FORK=1 MADIS_BIN=./main \
+      python3 -m unittest lab.test_ims_end_to_end.TwoSubscriberImsSmokeTests.test_ifc_fork_selects_branch_and_cancels_loser -v
+
 The test starts the lab HSS adapter as a real TCP peer, starts Madis on
 loopback-only high ports, registers two users through Cx/AKA, and drives an
 originating INVITE through provisional response, answer, ACK, and BYE.  When
@@ -39,6 +42,7 @@ HSS_SCRIPT = ROOT / "lab" / "ims_hss.py"
 MADIS_BIN = Path(os.environ.get("MADIS_BIN", str(ROOT / "main"))).expanduser().resolve()
 RUN_E2E = os.environ.get("IMS_END_TO_END") == "1" and MADIS_BIN.is_file() and os.access(MADIS_BIN, os.X_OK)
 RUN_E2E_TLS = RUN_E2E and os.environ.get("IMS_END_TO_END_TLS") == "1"
+RUN_E2E_FORK = RUN_E2E and os.environ.get("IMS_END_TO_END_FORK") == "1"
 
 
 def _free_port(kind: int) -> int:
@@ -214,6 +218,9 @@ class TwoSubscriberImsSmokeTests(unittest.TestCase):
         self.media_max = 41127
         self.alice = SipClient()
         self.bob = SipClient()
+        self.fork_clients: list[SipClient] = []
+        if RUN_E2E_FORK:
+            self.fork_clients = [SipClient(), SipClient()]
         self.alice_media = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.alice_media.bind(("127.0.0.1", 0))
         self.alice_media.settimeout(2.0)
@@ -227,9 +234,16 @@ class TwoSubscriberImsSmokeTests(unittest.TestCase):
         self.diameter_cert: Path | None = None
         self.diameter_key: Path | None = None
         self.seed = Path(self.tempdir.name) / "subscribers.json"
+        alice_profile = ""
+        if RUN_E2E_FORK:
+            alice_profile = (
+                ",\"service_profile\":{\"initial_filter_criteria\":["
+                f"\"sip:fork-a@127.0.0.1:{self.fork_clients[0].address[1]}\","
+                f"\"sip:fork-b@127.0.0.1:{self.fork_clients[1].address[1]}\"]}}"
+            )
         self.seed.write_text(
             "{\"subscribers\":["
-            "{\"public_identity\":\"sip:alice@example.com\",\"private_identity\":\"alice@example.com\",\"assigned_server_name\":\"sip:scscf.example.com\",\"xres_base64\":\"" + base64.b64encode(b"xres-alice").decode("ascii") + "\"},"
+            "{\"public_identity\":\"sip:alice@example.com\",\"private_identity\":\"alice@example.com\",\"assigned_server_name\":\"sip:scscf.example.com\",\"xres_base64\":\"" + base64.b64encode(b"xres-alice").decode("ascii") + "\"" + alice_profile + "},"
             "{\"public_identity\":\"sip:bob@example.com\",\"private_identity\":\"bob@example.com\",\"assigned_server_name\":\"sip:scscf.example.com\",\"xres_base64\":\"" + base64.b64encode(b"xres-bob").decode("ascii") + "\"}"
             "]}",
         )
@@ -246,6 +260,8 @@ class TwoSubscriberImsSmokeTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.alice.close()
         self.bob.close()
+        for client in self.fork_clients:
+            client.close()
         for media_socket in (
             getattr(self, "alice_media", None),
             getattr(self, "bob_media", None),
@@ -566,6 +582,151 @@ class TwoSubscriberImsSmokeTests(unittest.TestCase):
         )
         self.alice.send(auth_message, self.sip_port)
         return call_id, alice_tag, branch, sdp
+
+    @unittest.skipUnless(RUN_E2E_FORK, "set IMS_END_TO_END_FORK=1 with IMS_END_TO_END=1")
+    def test_ifc_fork_selects_branch_and_cancels_loser(self) -> None:
+        self._register(self.alice, "alice", b"xres-alice")
+        self._register(self.bob, "bob", b"xres-bob")
+        call_id, alice_tag, _, _ = self._invite()
+        fork_a, fork_b = self.fork_clients
+        fork_a_invite = fork_a.receive(lambda message: message.startswith("INVITE "))
+        fork_b_invite = fork_b.receive(lambda message: message.startswith("INVITE "))
+        fork_a_headers = _headers(fork_a_invite)
+        fork_b_headers = _headers(fork_b_invite)
+        fork_a_tag = "fork-a-call"
+        fork_b_tag = "fork-b-call"
+
+        fork_a_provisional = (
+            "SIP/2.0 183 Session Progress\r\n"
+            + _header_lines(fork_a_invite, "Via")
+            + _header_line(fork_a_headers, "from")
+            + f"To: <sip:bob@example.com>;tag={fork_a_tag}\r\n"
+            + _header_line(fork_a_headers, "call-id")
+            + _header_line(fork_a_headers, "cseq")
+            + "Require: 100rel\r\n"
+            + "RSeq: 1\r\n"
+            + "Content-Length: 0\r\n\r\n"
+        )
+        fork_b_ringing = (
+            "SIP/2.0 180 Ringing\r\n"
+            + _header_lines(fork_b_invite, "Via")
+            + _header_line(fork_b_headers, "from")
+            + f"To: <sip:bob@example.com>;tag={fork_b_tag}\r\n"
+            + _header_line(fork_b_headers, "call-id")
+            + _header_line(fork_b_headers, "cseq")
+            + "Content-Length: 0\r\n\r\n"
+        )
+        fork_a.send(fork_a_provisional, self.sip_port)
+        fork_b.send(fork_b_ringing, self.sip_port)
+
+        provisional = self.alice.receive(lambda message: _status(message) == 183)
+        ringing = self.alice.receive(lambda message: _status(message) == 180)
+        self.assertEqual(_headers(provisional).get("to", "").split("tag=", 1)[-1], fork_a_tag)
+        self.assertEqual(_headers(ringing).get("to", "").split("tag=", 1)[-1], fork_b_tag)
+
+        prack = (
+            "PRACK sip:bob@example.com SIP/2.0\r\n"
+            f"Via: SIP/2.0/UDP 127.0.0.1:{self.alice.address[1]};branch=z9hG4bK-prack-{uuid.uuid4().hex}\r\n"
+            "Max-Forwards: 70\r\n"
+            + _header_line(fork_a_headers, "from")
+            + f"To: <sip:bob@example.com>;tag={fork_a_tag}\r\n"
+            + _header_line(fork_a_headers, "call-id")
+            + "CSeq: 3 PRACK\r\n"
+            + "RAck: 1 2 INVITE\r\n"
+            + "Content-Length: 0\r\n\r\n"
+        )
+        self.alice.send(prack, self.sip_port)
+        forwarded_prack = fork_a.receive(lambda message: message.startswith("PRACK "))
+        self.assertEqual(_headers(forwarded_prack).get("to", "").split("tag=", 1)[-1], fork_a_tag)
+        prack_headers = _headers(forwarded_prack)
+        fork_a.send(
+            "SIP/2.0 200 OK\r\n"
+            + _header_lines(forwarded_prack, "Via")
+            + _header_line(prack_headers, "from")
+            + f"To: <sip:bob@example.com>;tag={fork_a_tag}\r\n"
+            + _header_line(prack_headers, "call-id")
+            + _header_line(prack_headers, "cseq")
+            + "Content-Length: 0\r\n\r\n",
+            self.sip_port,
+        )
+        self.alice.receive(lambda message: _status(message) == 200 and "PRACK" in message)
+
+        answer_sdp = (
+            "v=0\r\n"
+            "o=- 2 2 IN IP4 127.0.0.1\r\n"
+            "s=-\r\n"
+            "c=IN IP4 127.0.0.1\r\n"
+            "t=0 0\r\n"
+            f"m=audio {self.bob_media.getsockname()[1]} RTP/AVP 0\r\n"
+        )
+        fork_a_ok = (
+            "SIP/2.0 200 OK\r\n"
+            + _header_lines(fork_a_invite, "Via")
+            + _header_line(fork_a_headers, "from")
+            + f"To: <sip:bob@example.com>;tag={fork_a_tag}\r\n"
+            + _header_line(fork_a_headers, "call-id")
+            + _header_line(fork_a_headers, "cseq")
+            + f"Contact: <sip:fork-a@127.0.0.1:{fork_a.address[1]}>\r\n"
+            + "Content-Type: application/sdp\r\n"
+            + f"Content-Length: {len(answer_sdp.encode('ascii'))}\r\n\r\n{answer_sdp}"
+        )
+        fork_a.send(fork_a_ok, self.sip_port)
+        accepted = self.alice.receive(
+            lambda message: _status(message) == 200 and _headers(message).get("cseq") == "2 INVITE"
+        )
+        self.assertEqual(_headers(accepted).get("to", "").split("tag=", 1)[-1], fork_a_tag)
+
+        forwarded_cancel = fork_b.receive(lambda message: message.startswith("CANCEL "))
+        cancel_headers = _headers(forwarded_cancel)
+        fork_b.send(
+            "SIP/2.0 200 OK\r\n"
+            + _header_lines(forwarded_cancel, "Via")
+            + _header_line(cancel_headers, "from")
+            + _header_line(cancel_headers, "to")
+            + _header_line(cancel_headers, "call-id")
+            + _header_line(cancel_headers, "cseq")
+            + "Content-Length: 0\r\n\r\n",
+            self.sip_port,
+        )
+        self.assertEqual(cancel_headers.get("cseq"), "2 CANCEL")
+
+        ack = (
+            "ACK sip:bob@example.com SIP/2.0\r\n"
+            f"Via: SIP/2.0/UDP 127.0.0.1:{self.alice.address[1]};branch=z9hG4bK-ack-{uuid.uuid4().hex}\r\n"
+            "Max-Forwards: 70\r\n"
+            f"From: <sip:alice@example.com>;tag={alice_tag}\r\n"
+            f"To: <sip:bob@example.com>;tag={fork_a_tag}\r\n"
+            f"Call-ID: {call_id}\r\n"
+            "CSeq: 1 ACK\r\n"
+            "Content-Length: 0\r\n\r\n"
+        )
+        self.alice.send(ack, self.sip_port)
+        fork_a.receive(lambda message: message.startswith("ACK "))
+
+        bye = (
+            "BYE sip:bob@example.com SIP/2.0\r\n"
+            f"Via: SIP/2.0/UDP 127.0.0.1:{self.alice.address[1]};branch=z9hG4bK-bye-{uuid.uuid4().hex}\r\n"
+            "Max-Forwards: 70\r\n"
+            f"From: <sip:alice@example.com>;tag={alice_tag}\r\n"
+            f"To: <sip:bob@example.com>;tag={fork_a_tag}\r\n"
+            f"Call-ID: {call_id}\r\n"
+            "CSeq: 3 BYE\r\n"
+            "Content-Length: 0\r\n\r\n"
+        )
+        self.alice.send(bye, self.sip_port)
+        forwarded_bye = fork_a.receive(lambda message: message.startswith("BYE "))
+        bye_headers = _headers(forwarded_bye)
+        fork_a.send(
+            "SIP/2.0 200 OK\r\n"
+            + _header_lines(forwarded_bye, "Via")
+            + _header_line(bye_headers, "from")
+            + _header_line(bye_headers, "to")
+            + _header_line(bye_headers, "call-id")
+            + _header_line(bye_headers, "cseq")
+            + "Content-Length: 0\r\n\r\n",
+            self.sip_port,
+        )
+        self.alice.receive(lambda message: _status(message) == 200 and "BYE" in message)
 
     def test_two_subscribers_cancel_call(self) -> None:
         self._register(self.alice, "alice", b"xres-alice")
