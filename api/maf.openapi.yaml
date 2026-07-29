@@ -48,6 +48,7 @@ paths:
     post:
       operationId: answerCall
       summary: Answer a call
+      description: Answer an owned inbound ringing call with bounded SDP. This route is asynchronous; the SIP worker validates the SDP and sends the tagged 200 OK when execution succeeds.
       security:
         - mafBearerAuth: []
       parameters:

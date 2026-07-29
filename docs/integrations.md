@@ -13,6 +13,22 @@ initial INVITEs as ringing MAF calls and let `calls.answer` send a validated
 receipts until their worker ownership paths exist. Live WebSocket/gRPC
 subscriptions remain separate follow-up surfaces.
 
+## Inbound call control
+
+Set `SIP_MAF_INBOUND_MODE=control` on the SIP worker to opt into MAF ownership
+of authenticated initial INVITEs. MADIS persists each accepted INVITE as a
+tenant-scoped `ringing` call and emits `call.created`; it does not intercept
+normal proxy traffic while the mode is `disabled`.
+
+An application answers with `POST /admin/api/v1/maf/calls/{call_id}/answer` and
+a bounded `answer_sdp`. The SIP worker validates the SDP, creates the local
+dialog tag, records the server transaction, sends `200 OK`, and emits the
+resulting state event. Rejecting while ringing sends a final SIP response;
+hangup sends `487` before answer or a worker-owned `BYE` after answer.
+Validate TCP, TLS, WS, and WSS behavior in the deployment before enabling this
+mode broadly. See the complete sequence and request example in
+[`../api/maf.md`](../api/maf.md).
+
 ## Choose the right interface
 
 | Requirement | Madis interface |

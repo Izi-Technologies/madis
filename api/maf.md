@@ -58,10 +58,40 @@ optimistic call-version checks.
 
 Inbound call control is opt-in. Set `SIP_MAF_INBOUND_MODE=control` on the SIP
 worker to stop an authenticated initial INVITE at the MAF boundary and publish
-it as a ringing call. The answer command must include a bounded SDP offer or
-answer in `answer_sdp`; the worker validates the body, adds its own dialog tag,
+it as a ringing call. The answer command must include a bounded SDP answer in
+`answer_sdp`; the worker validates the body, adds its own dialog tag,
 records the SIP server transaction, and sends the response. The default mode is
 `disabled`, which preserves normal proxy routing.
+
+### Inbound answer lifecycle
+
+Inbound control is owned by the SIP worker and is deliberately narrow:
+
+1. An authenticated initial INVITE is persisted as a tenant-scoped `ringing`
+   call and emits `call.created`.
+2. The application reads the call resource or event stream and submits
+   `POST /admin/api/v1/maf/calls/{call_id}/answer` with `answer_sdp`.
+3. The worker validates the bounded SDP, creates the local dialog tag, records
+   the server transaction, sends `200 OK`, and transitions the call to
+   `answered`.
+4. `calls.reject` sends a final response while the call is ringing;
+   `calls.hangup` sends `487` before answer or a worker-owned `BYE` after
+   answer. Remote `ACK`, `BYE`, and `CANCEL` messages remain SIP-worker state.
+
+Example answer request:
+
+```sh
+curl --fail-with-body -sS -X POST \
+  "$MAF_BASE_URL/api/v1/maf/calls/$CALL_ID/answer" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: answer-$CALL_ID" \
+  --data '{"answer_sdp":"v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=MAF\r\nt=0 0\r\nm=audio 4000 RTP/AVP 0\r\n"}'
+```
+
+This path currently relies on the worker's SIP server-transaction and reply
+routing support. Validate TCP, TLS, WS, and WSS behavior in the target
+deployment before enabling inbound control broadly.
 
 The bridge route accepts only 2–8 unique channel IDs that belong to the
 tenant-scoped call. Media operations are limited to `play`, `record`, `stop`,

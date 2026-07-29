@@ -154,6 +154,27 @@ curl --fail-with-body -sS \
   "$MAF_BASE_URL/api/v1/maf/events?cursor=0&limit=50"
 ```
 
+#### curl: answer an inbound call
+
+Enable inbound ownership on the SIP worker with `SIP_MAF_INBOUND_MODE=control`.
+After the authenticated INVITE appears as a `ringing` call, answer it with
+bounded SDP. The command is asynchronous; observe the call resource or event
+stream for the `answered` transition.
+
+```sh
+curl --fail-with-body -sS -X POST \
+  "$MAF_BASE_URL/api/v1/maf/calls/$CALL_ID/answer" \
+  -H "Authorization: Bearer $MAF_WRITE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: answer-$CALL_ID" \
+  --data '{"answer_sdp":"v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=MAF\r\nt=0 0\r\nm=audio 4000 RTP/AVP 0\r\n"}'
+```
+
+The SIP worker owns dialog tags, transaction recording, and SIP response
+delivery. `calls.reject` is available while ringing; `calls.hangup` sends
+`487` before answer and a worker-owned `BYE` after answer. The default inbound
+mode is `disabled`, preserving normal proxy routing.
+
 The receipt has schema `madis.maf.command-receipt.v1` and includes the
 `command_id`, `status`, `resource_id`, and `trace_id`. Persist the event cursor
 only after durable application processing, and deduplicate by event ID when a

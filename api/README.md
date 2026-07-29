@@ -24,6 +24,14 @@ HTTP routes are distinct from the carrier/control compatibility routes below.
 
 ## Authentication
 
+When `SIP_MAF_INBOUND_MODE=control` is set on the SIP worker, an authenticated
+initial INVITE is published as a tenant-scoped ringing MAF call. An application
+can answer it with `POST /maf/calls/{call_id}/answer` and a bounded
+`answer_sdp`; the SIP worker owns transaction delivery and sends the tagged
+`200 OK`. The default is `disabled`, which preserves normal proxy routing.
+Validate TCP/TLS/WS/WSS behavior in the target deployment before enabling
+inbound control broadly.
+
 Send a bearer token on every machine request:
 
 ```http
