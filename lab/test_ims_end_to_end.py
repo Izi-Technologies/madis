@@ -8,6 +8,9 @@ Run with:
     IMS_END_TO_END=1 IMS_END_TO_END_FORK=1 MADIS_BIN=./main \
       python3 -m unittest lab.test_ims_end_to_end.TwoSubscriberImsSmokeTests.test_ifc_fork_selects_branch_and_cancels_loser -v
 
+    IMS_END_TO_END=1 IMS_END_TO_END_TIMEOUT=1 MADIS_BIN=./main \
+      python3 -m unittest lab.test_ims_end_to_end.TwoSubscriberImsSmokeTests.test_unanswered_invite_times_out -v
+
 The test starts the lab HSS adapter as a real TCP peer, starts Madis on
 loopback-only high ports, registers two users through Cx/AKA, and drives an
 originating INVITE through provisional response, answer, ACK, and BYE.  When
@@ -43,6 +46,7 @@ MADIS_BIN = Path(os.environ.get("MADIS_BIN", str(ROOT / "main"))).expanduser().r
 RUN_E2E = os.environ.get("IMS_END_TO_END") == "1" and MADIS_BIN.is_file() and os.access(MADIS_BIN, os.X_OK)
 RUN_E2E_TLS = RUN_E2E and os.environ.get("IMS_END_TO_END_TLS") == "1"
 RUN_E2E_FORK = RUN_E2E and os.environ.get("IMS_END_TO_END_FORK") == "1"
+RUN_E2E_TIMEOUT = RUN_E2E and os.environ.get("IMS_END_TO_END_TIMEOUT") == "1"
 
 
 def _free_port(kind: int) -> int:
@@ -448,6 +452,9 @@ class TwoSubscriberImsSmokeTests(unittest.TestCase):
                 "SIP_IMS_SESSION": "1",
             }
         )
+        if RUN_E2E_TIMEOUT:
+            env["SIP_T1_MS"] = "100"
+            env["SIP_TIMER_C_MS"] = "6400"
         process = subprocess.Popen([str(MADIS_BIN)], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         self.processes.append(process)
         _wait_http("127.0.0.1", self.admin_port, "ims-e2e-admin-token-1234")
@@ -525,6 +532,18 @@ class TwoSubscriberImsSmokeTests(unittest.TestCase):
         replay_headers = _headers(replay)
         self.assertEqual(replay_headers.get("call-id"), auth_headers.get("call-id"))
         self.assertEqual(replay_headers.get("cseq"), "2 REGISTER")
+
+    @unittest.skipUnless(RUN_E2E_TIMEOUT, "set IMS_END_TO_END_TIMEOUT=1 with IMS_END_TO_END=1")
+    def test_unanswered_invite_times_out(self) -> None:
+        self._register(self.alice, "alice", b"xres-alice")
+        self._register(self.bob, "bob", b"xres-bob")
+        call_id, _, _, _ = self._invite()
+        self.bob.receive(lambda message: message.startswith("INVITE "))
+        timeout = self.alice.receive(
+            lambda message: _status(message) == 408 and _headers(message).get("cseq") == "2 INVITE",
+            timeout=10.0,
+        )
+        self.assertEqual(_headers(timeout).get("call-id"), call_id)
 
     def _invite(self) -> tuple[str, str, str, str]:
         call_id = "call-" + uuid.uuid4().hex[:12]

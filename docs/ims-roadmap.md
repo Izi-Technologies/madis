@@ -117,7 +117,8 @@ The phases below are ordered by dependency. A phase is complete only when its ac
 ### Phase 1 — External end-to-end lab interoperability (next)
 
 Local contract coverage now includes deterministic unknown/barred rejection,
-an explicitly expired AKA-vector rejection, malformed-request drop behavior,
+an explicitly expired AKA-vector rejection, client transaction timeout cleanup,
+malformed-request drop behavior,
 Cx malformed-answer guards, and an opt-in worker-backed HSS-unavailable `503`
 check. External HSS/UDM outage and
 malformed-answer interoperability evidence remains open.
@@ -129,7 +130,7 @@ Madis deployment and a selected IMS client profile, then collecting evidence.
 - Exercise live UAR/UAA, MAR/MAA, SAR/SAA, and LIR/LIA, including unknown subscriber, barred subscriber, expired vector, unavailable HSS, malformed answer, and serving-S-CSCF mismatch cases.
 - Validate a real HTTPS subscriber service with TLS trust, token rotation, provisioning, assigned S-CSCF state, profile retrieval, and fail-closed behavior.
 - Register two IMS-compatible clients using the selected AKA profile, then complete originating and terminating sessions.
-- Verify retransmission, INVITE/CANCEL separation, PRACK, provisional responses, timeout, BYE, dialog teardown, and node failure across the external systems.
+- Verify retransmission, INVITE/CANCEL separation, PRACK, provisional responses, unanswered-INVITE Timer C timeout, BYE, dialog teardown, and node failure across the external systems.
 
 Acceptance evidence: reproducible traces and test logs for two subscribers registering, authenticating, placing, and clearing calls through the selected topology, with deterministic negative responses and no stale registration state.
 
