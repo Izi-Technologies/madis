@@ -190,7 +190,7 @@ server rejection, opaque vector handling, malformed Diameter requests being
 dropped without an answer, and the rule that HTTP subscriber authorization
 never returns XRES. The media tests cover bounded ng control,
 SDP rewriting, offer/answer/delete lifecycle, malformed input rejection,
-capacity-exhaustion rejection, and
+capacity-exhaustion rejection, and control-listener restart recovery.
 localhost RTP forwarding. The worker-backed test additionally verifies that
 standalone `SIP_RTPENGINE_*` configuration reaches the call path, that both
 SDP legs are rewritten, and that RTP crosses the sidecar in both directions.

@@ -136,8 +136,8 @@ Acceptance evidence: reproducible traces and test logs for two subscribers regis
 ### Phase 2 — Real media-path interoperability
 
 Local RTPEngine control-path coverage now includes successful offer/answer/delete,
-malformed-response rejection, no-responder timeout failure, and media-session
-capacity-exhaustion rejection. Real RTPEngine,
+malformed-response rejection, no-responder timeout failure, media-session
+capacity-exhaustion rejection, and control-listener restart recovery. Real RTPEngine,
 capacity, restart, NAT, ICE, and DTLS-SRTP interoperability remain open.
 
 The control-compatible relay baseline is present; the remaining work is
