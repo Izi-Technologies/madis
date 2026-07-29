@@ -1,5 +1,7 @@
 # Testing and release checks
 
+The opt-in session-timer worker regression additionally verifies a `422 Min-SE` response for an undersized `Session-Expires` interval and forwarding of a valid interval. It does not prove endpoint refresh or external-stack interoperability.
+
 The opt-in worker-backed two-subscriber IMS smoke exercises authenticated REGISTER retransmission replay, a reliable `183 Session Progress`/PRACK exchange with downstream `200 OK` acknowledgement, followed by in-dialog `UPDATE` and re-INVITE offer/answer exchanges through the RTP sidecar, plus authenticated INVITE cancellation with downstream `487 Request Terminated` handling. Separate opt-in cases provision two target-only iFC application branches and verify To-tag routing, PRACK delivery, CANCEL cleanup after one branch answers, and a correlated `408 Request Timeout` when an INVITE receives no final response.
 
 Madis builds and tests with Mako **0.4.18** and a matching runtime directory. Do not mix a different compiler/runtime pair with generated C.
@@ -24,6 +26,13 @@ The CI script runs:
 The checks are deterministic contract and regression tests. They do not establish interoperability with every SIP, WebRTC, Diameter, IMS, or SS7 implementation.
 
 ## Focused tests
+
+Run the worker session-timer regression with:
+
+```sh
+IMS_END_TO_END=1 IMS_END_TO_END_SESSION_TIMERS=1 MADIS_BIN=/path/to/madis \
+  python3 -m unittest lab.test_ims_end_to_end.TwoSubscriberImsSmokeTests.test_session_timer_min_se_and_forwarding -v
+```
 
 `tests/ims_lab_test.mko` is a deterministic two-subscriber HSS/Cx test double. It exercises real MAR/MAA message construction, Cx correlation, AKA response verification, replay rejection, registration bindings, and the S-CSCF session gate. It is not a substitute for interoperability testing against an external HSS/UDM, UE, or media system.
 

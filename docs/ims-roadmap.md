@@ -56,6 +56,8 @@ deployment acceptance.
 
 ### Explicit boundaries
 
+The opt-in worker smoke now exercises the session-timer `422 Min-SE` rejection and valid request-forwarding path. Full refresher ownership negotiation and endpoint refresh generation remain outside this boundary.
+
 - Madis sends bounded RTPEngine control messages; it does not own RTP, ICE, DTLS-SRTP, codecs, recording, or media policy.
 - Only bounded `application/sdp` bodies with `v=0` and at least one media line are sent for media rewriting. Invalid or non-SDP bodies remain unmodified.
 - `SIP_IMS_SESSION_TIMERS=1` validates request-side `Session-Expires` and `Min-SE`; it does not negotiate refresher ownership or generate endpoint refreshes.
