@@ -115,6 +115,7 @@ Cluster INVITE fallback routes only through live `registration_bindings` rows wh
 | `SIP_MAF_API_TOKEN` | MAF write credential; also permits MAF reads. Keep separate from all admin, carrier, control, and worker credentials. |
 | `SIP_MAF_API_READ_TOKEN` | MAF read-only credential for call and event reads. |
 | `SIP_MAF_TENANT` | Tenant namespace bound to this admin process; defaults to `default`. |
+| `SIP_MAF_INBOUND_MODE` | Inbound MAF ownership mode. `disabled` preserves normal proxy routing; `control` publishes authenticated initial INVITEs as ringing MAF calls. |
 | `SIP_APP_URL`, `SIP_APP_TOKEN` | Optional signed live SIP application endpoint. Both must be configured to enable it. |
 | `SIP_APP_CA` | CA bundle for the application endpoint. |
 | `SIP_APP_TIMEOUT_MS` | Application decision timeout, clamped to 10–1000 ms. |

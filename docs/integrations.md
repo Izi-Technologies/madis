@@ -7,9 +7,11 @@ charging/integration boundaries. The eight-route MAF HTTP surface is served by
 the standalone admin process. Mutating calls are durable asynchronous command
 acceptance; use the call resource and event cursor to observe progress. The
 worker executes outbound originate and early-dialog cancellation; confirmed
-answer, bridge, and media operations report explicit failed receipts until
-their worker ownership paths exist. Live WebSocket/gRPC subscriptions remain
-separate follow-up surfaces.
+hangup sends BYE. Set `SIP_MAF_INBOUND_MODE=control` to publish authenticated
+initial INVITEs as ringing MAF calls and let `calls.answer` send a validated
+`answer_sdp` response. Bridge and media operations still report explicit failed
+receipts until their worker ownership paths exist. Live WebSocket/gRPC
+subscriptions remain separate follow-up surfaces.
 
 ## Choose the right interface
 
@@ -42,6 +44,7 @@ Use `Authorization: Bearer ...` on every machine API request. Keep the following
 - `SIP_MAF_API_TOKEN` for MAF writes; it also permits MAF reads.
 - `SIP_MAF_API_READ_TOKEN` for MAF read-only call and event access.
 - `SIP_MAF_TENANT` for the tenant namespace bound to this admin process; it defaults to `default`.
+- `SIP_MAF_INBOUND_MODE=control` to let MAF own authenticated initial INVITEs; the default `disabled` preserves normal proxy routing.
 
 Keep tokens in server-side configuration. Do not put them in browser bundles, SIP headers, routing-rule descriptions, logs, or application URLs. Put the admin service behind HTTPS and a private network or reverse proxy. The repository does not ship a public TLS termination or identity provider.
 

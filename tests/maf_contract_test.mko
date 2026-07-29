@@ -8,7 +8,13 @@ pull . "../maf_api.mko"
 // forwarding implementation pulled by the production main entry point.
 fn sip_forward_first(targets: string, msg: string, cache: CMap, cid: string, out_fd: int) string { return "" }
 fn sip_forward_target(target: string, msg: string, tr: string, cache: CMap, out_fd: int) int { return 0 }
+fn sip_transport_param(target: string, fallback: string) string { return fallback }
+fn sip_prepend_header(msg: string, name: string, value: string) string { return msg }
+fn sip_header_n(msg: string, name: string, index: int) string { return sip_header(msg, name) }
 fn bounded_cache_set(cache: CMap, seq_key: string, ring_prefix: string, key: string, value: string, capacity: int) int { return 0 }
+fn via_add_received(msg: string, n: int, ip: string, port: int) string { return msg }
+fn sip_server_txn_record(request: string, response: string, ip: string, port: int, transport: string, owner: int, cache: CMap) int { return 1 }
+fn sip_forward_reply(reply: string, cache: CMap, out_fd: int) int { return 1 }
 pull . "../maf_worker.mko"
 
 // The production admin imports this helper from admin/pages.mko. The contract
@@ -79,4 +85,43 @@ fn TestMafCursorAndBoundedQueryValues() {
     assert_eq(maf_api_limit("limit=0"), 1)
     assert_eq(maf_api_limit("limit=1000"), 100)
     assert_eq(maf_api_limit("limit=not-a-number"), 100)
+}
+
+fn TestMafInboundCallIdentifiers() {
+    let wire_id = maf_worker_inbound_call_id("default", "sip-call@example.net")
+    assert(str_has_prefix(wire_id, "call-in-"))
+    assert(str_eq(wire_id, maf_worker_inbound_call_id("default", "sip-call@example.net")))
+    assert(wire_id != maf_worker_inbound_call_id("other", "sip-call@example.net"))
+    assert(str_eq(maf_worker_inbound_call_id("default", "bad\r\nCall-ID"), ""))
+}
+
+fn TestMafInboundAnswerSdpBoundaries() {
+    let sdp = "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=MAF\r\nt=0 0\r\nm=audio 4000 RTP/AVP 0\r\n"
+    assert_eq(maf_worker_answer_sdp_ok(sdp), 1)
+}
+
+fn TestMafInboundAnswerSdpRequiresMedia() {
+    assert_eq(maf_worker_answer_sdp_ok("v=0\r\ns=missing-media\r\n"), 0)
+}
+
+fn TestMafInboundAnswerSdpRequiresSessionVersion() {
+    assert_eq(maf_worker_answer_sdp_ok("m=audio 4000 RTP/AVP 0\r\n"), 0)
+}
+
+fn TestMafInboundAnswerSdpRejectsControls() {
+    let b = str_builder()
+    builder_write(b, "v=0\r\nm=audio 4000 RTP/AVP 0\r\n")
+    builder_write_byte(b, byte(0))
+    assert_eq(maf_worker_answer_sdp_ok(builder_string(b)), 0)
+}
+
+fn TestMafInboundAnswerMessage() {
+    let sdp = "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=MAF\r\nt=0 0\r\nm=audio 4000 RTP/AVP 0\r\n"
+    let invite = maf_worker_invite("call-in-1234567890", "sip:alice@example.net", "sip:madis@example.net", "node1", "127.0.0.1")
+    let answer = maf_worker_build_inbound_answer(invite, sdp, "sip:madis@127.0.0.1", "maf-in-testtag")
+    assert_eq(sip_validate_message(answer, len(answer)), 1)
+    assert_eq(sip_status_code(answer), 200)
+    assert(str_contains(answer, "To: <sip:madis@example.net>;tag=maf-in-testtag"))
+    assert(str_contains(answer, "Content-Type: application/sdp"))
+    assert(str_contains(answer, "m=audio 4000 RTP/AVP 0"))
 }

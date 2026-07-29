@@ -54,9 +54,9 @@ paths:
         - {$ref: '#/components/parameters/CallId'}
         - {$ref: '#/components/parameters/IdempotencyKey'}
       requestBody:
-        required: false
+        required: true
         content:
-          application/json: {schema: {$ref: '#/components/schemas/CommandRequest'}}
+          application/json: {schema: {$ref: '#/components/schemas/AnswerRequest'}}
       responses:
         '202': {description: Command accepted, content: {application/json: {schema: {$ref: '#/components/schemas/CommandReceipt'}}}}
         '401': {description: Authentication failed}
@@ -184,9 +184,17 @@ components:
       type: object
       additionalProperties: false
       properties:
+      command_id: {type: string, minLength: 8, maxLength: 128}
+      expected_version: {type: string, maxLength: 64}
+      reason: {type: string, maxLength: 512}
+    AnswerRequest:
+      type: object
+      additionalProperties: false
+      required: [answer_sdp]
+      properties:
         command_id: {type: string, minLength: 8, maxLength: 128}
         expected_version: {type: string, maxLength: 64}
-        reason: {type: string, maxLength: 512}
+        answer_sdp: {type: string, minLength: 8, maxLength: 32768}
     CreateCallRequest:
       allOf:
         - {$ref: '#/components/schemas/CommandRequest'}
