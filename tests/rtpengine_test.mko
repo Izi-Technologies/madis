@@ -92,6 +92,20 @@ fn rtpengine_test_server(fd: int, state: CMap) -> int {
     return 0
 }
 
+fn rtpengine_malformed_server(fd: int, state: CMap) -> int {
+    let request = udp_recv(fd, 65535)
+    let separator = str_index(request, " ")
+    if len(request) < 3 || separator <= 0 || separator + 1 >= len(request) {
+        cmap_set(state, "operation", "malformed")
+        return 0
+    }
+    let cookie = request[0:separator]
+    let command = request[separator + 1:]
+    cmap_set(state, "operation", bencode_get(command, "command"))
+    let _ = udp_send_to(fd, udp_last_sender_host(), udp_last_sender_port(), cookie + " not-bencode")
+    return 0
+}
+
 fn TestRTPEngineLiveNgControlLoopback() {
     if not str_eq(env_get_or("SIP_RTPENGINE_TEST_NETWORK", "0"), "1") { return }
 
@@ -131,4 +145,18 @@ fn TestRTPEngineControlTimeoutFailsClosed() {
     let _ = udp_close(unused)
     let sdp = "v=0\r\no=- 1 1 IN IP4 192.0.2.10\r\ns=-\r\nc=IN IP4 192.0.2.10\r\nt=0 0\r\nm=audio 49170 RTP/AVP 0\r\n"
     assert_eq_str(rtp_offer("127.0.0.1", port, "call-timeout", "from-timeout", sdp), "")
+}
+
+fn TestRTPEngineMalformedResponseFailsClosed() {
+    if not str_eq(env_get_or("SIP_RTPENGINE_TEST_NETWORK", "0"), "1") { return }
+    let sdp = "v=0\r\no=- 1 1 IN IP4 192.0.2.10\r\ns=-\r\nc=IN IP4 192.0.2.10\r\nt=0 0\r\nm=audio 49170 RTP/AVP 0\r\n"
+    let server = udp_bind(0)
+    if server < 0 { return }
+    let port = udp_local_port(server)
+    let state = cmap_new()
+    detach rtpengine_malformed_server(server, state)
+    assert_eq_str(rtp_offer("127.0.0.1", port, "call-malformed", "from-malformed", sdp), "")
+    assert_eq_str(cmap_get(state, "operation"), "offer")
+    detached_join_all()
+    let _ = udp_close(server)
 }
