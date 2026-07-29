@@ -436,7 +436,7 @@ class TwoSubscriberImsSmokeTests(unittest.TestCase):
         self.processes.append(process)
         _wait_http("127.0.0.1", self.admin_port, "ims-e2e-admin-token-1234")
 
-    def _register(self, client: SipClient, user: str, xres: bytes) -> None:
+    def _register(self, client: SipClient, user: str, xres: bytes) -> str:
         call_id = f"register-{user}-{uuid.uuid4().hex[:12]}"
         from_header = f"<sip:{user}@example.com>;tag={user}-register"
         contact = f"<sip:{user}@127.0.0.1:{client.address[1]}>"
@@ -476,6 +476,7 @@ class TwoSubscriberImsSmokeTests(unittest.TestCase):
         client.send(make_register(2, "z9hG4bK-" + uuid.uuid4().hex, authorization), self.sip_port)
         accepted = client.receive(lambda message: _status(message) == 200)
         self.assertEqual(_status(accepted), 200)
+        return auth_message
 
     def test_hss_unavailable_fails_closed(self) -> None:
         """A live worker must reject a REGISTER when its Cx peer disappears."""
@@ -496,6 +497,18 @@ class TwoSubscriberImsSmokeTests(unittest.TestCase):
         self.alice.send(message, self.sip_port)
         rejected = self.alice.receive(lambda item: _status(item) in (500, 503))
         self.assertEqual(_status(rejected), 503)
+
+    def test_register_retransmission_replays_response(self) -> None:
+        auth_message = self._register(self.alice, "alice", b"xres-alice")
+        auth_headers = _headers(auth_message)
+        self.alice.send(auth_message, self.sip_port)
+        replay = self.alice.receive(
+            lambda message: _status(message) == 200
+            and _headers(message).get("cseq", "").startswith("2 REGISTER")
+        )
+        replay_headers = _headers(replay)
+        self.assertEqual(replay_headers.get("call-id"), auth_headers.get("call-id"))
+        self.assertEqual(replay_headers.get("cseq"), "2 REGISTER")
 
     def _invite(self) -> tuple[str, str, str, str]:
         call_id = "call-" + uuid.uuid4().hex[:12]
