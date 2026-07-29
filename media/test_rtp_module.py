@@ -125,6 +125,30 @@ class MediaModuleTests(unittest.TestCase):
         self.relay._expire_sessions()
         self.assertNotIn("call-expire", self.relay.sessions)
 
+    def test_session_capacity_fails_closed(self) -> None:
+        relay = MediaRelay(media_min=0xC100, media_max=0xC110, max_sessions=1)
+        try:
+            first = bdecode_dict(
+                relay.handle_payload(
+                    bencode_dict(
+                        {"command": "offer", "call-id": "capacity-1", "from-tag": "from-1", "sdp": SDP_A}
+                    )
+                )
+            )
+            second = bdecode_dict(
+                relay.handle_payload(
+                    bencode_dict(
+                        {"command": "offer", "call-id": "capacity-2", "from-tag": "from-2", "sdp": SDP_A}
+                    )
+                )
+            )
+            self.assertEqual(first[b"result"], b"ok")
+            self.assertEqual(second[b"result"], b"error")
+            self.assertEqual(second[b"error-reason"], b"capacity-exhausted")
+            self.assertEqual(len(relay.sessions), 1)
+        finally:
+            relay.close()
+
     def test_ng_udp_control_round_trip(self) -> None:
         thread = threading.Thread(target=self.relay.serve, args=("127.0.0.1", 0), daemon=True)
         thread.start()
