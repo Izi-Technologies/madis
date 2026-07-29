@@ -658,6 +658,55 @@ class TwoSubscriberImsSmokeTests(unittest.TestCase):
         )
         self.alice.send(ack, self.sip_port)
         self.bob.receive(lambda message: message.startswith("ACK "))
+        update_sdp = (
+            "v=0\r\n"
+            "o=- 3 3 IN IP4 127.0.0.1\r\n"
+            "s=-\r\n"
+            "c=IN IP4 127.0.0.1\r\n"
+            "t=0 0\r\n"
+            f"m=audio {self.alice_media.getsockname()[1]} RTP/AVP 0\r\n"
+        )
+        update = (
+            "UPDATE sip:bob@example.com SIP/2.0\r\n"
+            f"Via: SIP/2.0/UDP 127.0.0.1:{self.alice.address[1]};branch=z9hG4bK-{uuid.uuid4().hex}\r\n"
+            "Max-Forwards: 70\r\n"
+            f"From: <sip:alice@example.com>;tag={alice_tag}\r\n"
+            f"To: <sip:bob@example.com>;tag={bob_tag}\r\n"
+            f"Call-ID: {call_id}\r\n"
+            "CSeq: 3 UPDATE\r\n"
+            f"Contact: <sip:alice@127.0.0.1:{self.alice.address[1]}>\r\n"
+            "Content-Type: application/sdp\r\n"
+            f"Content-Length: {len(update_sdp.encode('ascii'))}\r\n\r\n"
+            + update_sdp
+        )
+        self.alice.send(update, self.sip_port)
+        forwarded_update = self.bob.receive(lambda message: message.startswith("UPDATE "))
+        self.assertNotEqual(_sdp_media_port(forwarded_update), self.alice_media.getsockname()[1])
+        update_headers = _headers(forwarded_update)
+        update_answer_sdp = (
+            "v=0\r\n"
+            "o=- 4 4 IN IP4 127.0.0.1\r\n"
+            "s=-\r\n"
+            "c=IN IP4 127.0.0.1\r\n"
+            "t=0 0\r\n"
+            f"m=audio {self.bob_media.getsockname()[1]} RTP/AVP 0\r\n"
+        )
+        update_ok = (
+            "SIP/2.0 200 OK\r\n"
+            + _header_lines(forwarded_update, "Via")
+            + f"{_header_line(update_headers, 'from')}"
+            + f"To: <sip:bob@example.com>;tag={bob_tag}\r\n"
+            + f"{_header_line(update_headers, 'call-id')}"
+            + f"{_header_line(update_headers, 'cseq')}"
+            + "Content-Type: application/sdp\r\n"
+            + f"Content-Length: {len(update_answer_sdp.encode('ascii'))}\r\n\r\n"
+            + update_answer_sdp
+        )
+        self.bob.send(update_ok, self.sip_port)
+        updated = self.alice.receive(
+            lambda message: _status(message) == 200 and "UPDATE" in message
+        )
+        self.assertNotEqual(_sdp_media_port(updated), self.bob_media.getsockname()[1])
         bye = (
             "BYE sip:bob@example.com SIP/2.0\r\n"
             f"Via: SIP/2.0/UDP 127.0.0.1:{self.alice.address[1]};branch=z9hG4bK-{uuid.uuid4().hex}\r\n"
