@@ -11,6 +11,9 @@ Run with:
     IMS_END_TO_END=1 IMS_END_TO_END_TIMEOUT=1 MADIS_BIN=./main \
       python3 -m unittest lab.test_ims_end_to_end.TwoSubscriberImsSmokeTests.test_unanswered_invite_times_out -v
 
+    IMS_END_TO_END=1 IMS_END_TO_END_SESSION_TIMERS=1 MADIS_BIN=./main \
+      python3 -m unittest lab.test_ims_end_to_end.TwoSubscriberImsSmokeTests.test_session_timer_min_se_and_forwarding -v
+
 The test starts the lab HSS adapter as a real TCP peer, starts Madis on
 loopback-only high ports, registers two users through Cx/AKA, and drives an
 originating INVITE through provisional response, answer, ACK, and BYE.  When
@@ -47,6 +50,7 @@ RUN_E2E = os.environ.get("IMS_END_TO_END") == "1" and MADIS_BIN.is_file() and os
 RUN_E2E_TLS = RUN_E2E and os.environ.get("IMS_END_TO_END_TLS") == "1"
 RUN_E2E_FORK = RUN_E2E and os.environ.get("IMS_END_TO_END_FORK") == "1"
 RUN_E2E_TIMEOUT = RUN_E2E and os.environ.get("IMS_END_TO_END_TIMEOUT") == "1"
+RUN_E2E_SESSION_TIMERS = RUN_E2E and os.environ.get("IMS_END_TO_END_SESSION_TIMERS") == "1"
 
 
 def _free_port(kind: int) -> int:
@@ -455,6 +459,10 @@ class TwoSubscriberImsSmokeTests(unittest.TestCase):
         if RUN_E2E_TIMEOUT:
             env["SIP_T1_MS"] = "100"
             env["SIP_TIMER_C_MS"] = "6400"
+        if RUN_E2E_SESSION_TIMERS:
+            env["SIP_IMS_SESSION_TIMERS"] = "1"
+            env["SIP_IMS_SESSION_MIN_SE"] = "90"
+            env["SIP_IMS_SESSION_MAX_SE"] = "3600"
         process = subprocess.Popen([str(MADIS_BIN)], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         self.processes.append(process)
         _wait_http("127.0.0.1", self.admin_port, "ims-e2e-admin-token-1234")
@@ -545,7 +553,48 @@ class TwoSubscriberImsSmokeTests(unittest.TestCase):
         )
         self.assertEqual(_headers(timeout).get("call-id"), call_id)
 
-    def _invite(self) -> tuple[str, str, str, str]:
+    @unittest.skipUnless(
+        RUN_E2E_SESSION_TIMERS,
+        "set IMS_END_TO_END_SESSION_TIMERS=1 with IMS_END_TO_END=1",
+    )
+    def test_session_timer_min_se_and_forwarding(self) -> None:
+        self._register(self.alice, "alice", b"xres-alice")
+        self._register(self.bob, "bob", b"xres-bob")
+
+        too_small_id, _, _, _ = self._invite(
+            "Session-Expires: 60;refresher=uac\r\n"
+        )
+        rejected = self.alice.receive(
+            lambda message: _status(message) == 422
+            and _headers(message).get("cseq") == "2 INVITE"
+        )
+        rejected_headers = _headers(rejected)
+        self.assertEqual(rejected_headers.get("call-id"), too_small_id)
+        self.assertEqual(rejected_headers.get("min-se"), "90")
+
+        call_id, _, _, _ = self._invite(
+            "Session-Expires: 90;refresher=uac\r\n"
+        )
+        forwarded = self.bob.receive(lambda message: message.startswith("INVITE "))
+        forwarded_headers = _headers(forwarded)
+        self.assertEqual(forwarded_headers.get("session-expires"), "90;refresher=uac")
+        busy = (
+            "SIP/2.0 486 Busy Here\r\n"
+            + _header_lines(forwarded, "Via")
+            + _header_line(forwarded_headers, "from")
+            + _header_line(forwarded_headers, "to")
+            + _header_line(forwarded_headers, "call-id")
+            + _header_line(forwarded_headers, "cseq")
+            + "Content-Length: 0\r\n\r\n"
+        )
+        self.bob.send(busy, self.sip_port)
+        self.alice.receive(
+            lambda message: _status(message) == 486
+            and _headers(message).get("call-id") == call_id
+        )
+        self.bob.receive(lambda message: message.startswith("ACK "))
+
+    def _invite(self, extra_headers: str = "") -> tuple[str, str, str, str]:
         call_id = "call-" + uuid.uuid4().hex[:12]
         alice_tag = "alice-call"
         branch = "z9hG4bK-" + uuid.uuid4().hex
@@ -566,7 +615,8 @@ class TwoSubscriberImsSmokeTests(unittest.TestCase):
             f"Call-ID: {call_id}\r\n"
             "CSeq: 1 INVITE\r\n"
             f"Contact: <sip:alice@127.0.0.1:{self.alice.address[1]}>\r\n"
-            "Content-Type: application/sdp\r\n"
+            + extra_headers
+            + "Content-Type: application/sdp\r\n"
             f"Content-Length: {len(sdp)}\r\n\r\n{sdp}"
     )
         self.alice.send(message, self.sip_port)
