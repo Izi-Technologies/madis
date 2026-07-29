@@ -49,7 +49,7 @@ if [ ! -x "$SIPP" ]; then
 fi
 
 if [ ! -f "$RUNTIME/mako_rt.h" ]; then
-    echo "Mako 0.4.18 runtime not found: $RUNTIME" >&2
+    echo "Mako 0.5.0 runtime not found: $RUNTIME" >&2
     exit 2
 fi
 

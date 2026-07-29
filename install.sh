@@ -27,7 +27,7 @@ MADIS_APP_TOKEN="${MADIS_APP_TOKEN:-}"
 MADIS_MODULE_TOKEN="${MADIS_MODULE_TOKEN:-}"
 MADIS_ADMIN_PASSWORD="${MADIS_ADMIN_PASSWORD:-}"
 MADIS_VERSION="${MADIS_VERSION:-}"
-MADIS_MAKO_VERSION="0.4.18"
+MADIS_MAKO_VERSION="0.5.0"
 MADIS_CLI_DIR="${MADIS_CLI_DIR:-/usr/local/bin}"
 
 # ── colors ───────────────────────────────────────────────────────────────────
@@ -661,7 +661,7 @@ if [ -f "$SCRIPT_DIR/scripts/madis" ]; then
 fi
 
 # If a pre-built binary exists, copy that too. Otherwise build the SIP worker
-# from emitted C so the external Mako 0.4.18 ownership bridge is linked.
+# from emitted C so the external Mako 0.5.0 ownership bridge is linked.
 if [ -f "$SCRIPT_DIR/main" ]; then
     cp "$SCRIPT_DIR/main" "$MADIS_INSTALL_DIR/madis"
     chmod +x "$MADIS_INSTALL_DIR/madis"
@@ -669,13 +669,13 @@ if [ -f "$SCRIPT_DIR/main" ]; then
 elif [ -f "$MADIS_INSTALL_DIR/main.mko" ]; then
     MADIS_MAKO_BIN="${MADIS_MAKO_BIN:-mako}"
     if ! command -v "$MADIS_MAKO_BIN" >/dev/null 2>&1; then
-        fail "Mako 0.4.18 is required to build the SIP worker; install it or provide MADIS_MAKO_BIN."
+        fail "Mako 0.5.0 is required to build the SIP worker; install it or provide MADIS_MAKO_BIN."
     fi
     MAKO_VERSION_TEXT=$($MADIS_MAKO_BIN --version 2>/dev/null || true)
-    [[ "$MAKO_VERSION_TEXT" == *"0.4.18"* ]] || fail "Mako 0.4.18 is required (found: ${MAKO_VERSION_TEXT:-unknown})."
+    [[ "$MAKO_VERSION_TEXT" == *"0.5.0"* ]] || fail "Mako 0.5.0 is required (found: ${MAKO_VERSION_TEXT:-unknown})."
     MADIS_MAKO_RUNTIME="${MAKO_RUNTIME:-/usr/local/share/mako/runtime}"
     [ -d "$MADIS_MAKO_RUNTIME" ] || fail "Mako runtime not found at $MADIS_MAKO_RUNTIME; set MAKO_RUNTIME."
-    info "Building Madis SIP worker with Mako 0.4.18..."
+    info "Building Madis SIP worker with Mako 0.5.0..."
     rm -f "$MADIS_INSTALL_DIR/main.c"
     emit_log="$MADIS_INSTALL_DIR/mako-build.log"
     if ! (cd "$MADIS_INSTALL_DIR" && MAKO_RUNTIME="$MADIS_MAKO_RUNTIME" "$MADIS_MAKO_BIN" \
@@ -702,8 +702,8 @@ elif [ -f "$MADIS_INSTALL_DIR/admin/main.mko" ]; then
     MADIS_MAKO_BIN="${MADIS_MAKO_BIN:-mako}"
     if command -v "$MADIS_MAKO_BIN" >/dev/null 2>&1; then
         MAKO_VERSION_TEXT=$("$MADIS_MAKO_BIN" --version 2>/dev/null || true)
-        if [[ "$MAKO_VERSION_TEXT" != *"0.4.18"* ]]; then
-            fail "Mako 0.4.18 is required to build the WebUI (found: ${MAKO_VERSION_TEXT:-unknown})."
+        if [[ "$MAKO_VERSION_TEXT" != *"0.5.0"* ]]; then
+            fail "Mako 0.5.0 is required to build the WebUI (found: ${MAKO_VERSION_TEXT:-unknown})."
         fi
         info "Building Mako SIP WebUI with ${MADIS_MAKO_BIN}..."
         if [ -n "${MAKO_RUNTIME:-}" ]; then
@@ -717,7 +717,7 @@ elif [ -f "$MADIS_INSTALL_DIR/admin/main.mko" ]; then
         info "Built WebUI binary."
     else
         warn "Mako compiler not found; WebUI source was installed but admin-bin was not built."
-        warn "Install Mako 0.4.18 or set MADIS_MAKO_BIN, then build admin/main.mko."
+        warn "Install Mako 0.5.0 or set MADIS_MAKO_BIN, then build admin/main.mko."
     fi
 fi
 
@@ -980,7 +980,7 @@ echo "    $MADIS_CONF_DIR/madis.env"
 echo ""
 echo "  ── Next steps ─────────────────────────"
 echo ""
-echo "  Build from source (requires Mako 0.4.18):"
+echo "  Build from source (requires Mako 0.5.0):"
 echo "    cd $MADIS_INSTALL_DIR"
 echo "    MAKO_BIN=mako MAKO_RUNTIME=/path/to/mako/runtime ./scripts/build-native.sh main.mko madis"
 echo ""

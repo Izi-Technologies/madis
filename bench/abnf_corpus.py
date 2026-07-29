@@ -55,11 +55,15 @@ def status(response: bytes) -> int:
         return 0
 
 
-def wait_ready(admin_port: int) -> None:
+def wait_ready(admin_port: int, admin_token: str) -> None:
     deadline = time.monotonic() + 8
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{admin_port}/readyz", timeout=0.4) as response:
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{admin_port}/readyz",
+                headers={"Authorization": f"Bearer {admin_token}"},
+            )
+            with urllib.request.urlopen(request, timeout=0.4) as response:
                 if response.status == 200:
                     return
         except Exception:
@@ -84,6 +88,7 @@ def main() -> int:
 
     udp_port = args.base_port
     admin_port = args.base_port + 20
+    admin_token = "abnf-matrix-admin-token"
     env = os.environ.copy()
     env.update(
         {
@@ -91,6 +96,7 @@ def main() -> int:
             "SIP_TLS_PORT": str(args.base_port + 1),
             "SIP_WSS_PORT": str(args.base_port + 2),
             "SIP_ADMIN_PORT": str(admin_port),
+            "SIP_ADMIN_TOKEN": admin_token,
             "SIP_UDP_WORKERS": "1",
             "SIP_TCP_WORKERS": "1",
         }
@@ -127,7 +133,7 @@ def main() -> int:
     ]
 
     try:
-        wait_ready(admin_port)
+        wait_ready(admin_port, admin_token)
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client:
             client.settimeout(1.5)
             for case_index, payload in enumerate(valid_cases):

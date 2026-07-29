@@ -284,11 +284,15 @@ class WssFixture:
             self.received.set()
 
 
-def wait_ready(admin_port: int) -> None:
+def wait_ready(admin_port: int, admin_token: str) -> None:
     deadline = time.monotonic() + 8.0
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{admin_port}/readyz", timeout=0.5) as response:
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{admin_port}/readyz",
+                headers={"Authorization": f"Bearer {admin_token}"},
+            )
+            with urllib.request.urlopen(request, timeout=0.5) as response:
                 if response.status == 200 and json.loads(response.read()).get("ready"):
                     return
         except Exception:
@@ -398,6 +402,7 @@ def main() -> int:
     udp_port = args.base_port
     proxy_wss_port = args.base_port + 2
     admin_port = args.base_port + 20
+    admin_token = "wss-matrix-admin-token"
     upstream_port = args.base_port + 10
     with tempfile.TemporaryDirectory(prefix="mako-wss-") as temp:
         ca_cert, server_cert, server_key = make_certificates(openssl, Path(temp))
@@ -410,6 +415,7 @@ def main() -> int:
                 "SIP_TLS_PORT": str(args.base_port + 1),
                 "SIP_WSS_PORT": str(proxy_wss_port),
                 "SIP_ADMIN_PORT": str(admin_port),
+                "SIP_ADMIN_TOKEN": admin_token,
                 "SIP_UDP_WORKERS": "1",
                 "SIP_TCP_WORKERS": "1",
                 "SIP_IPV6": "0",
@@ -428,7 +434,7 @@ def main() -> int:
             stderr=subprocess.STDOUT if proxy_log is not None else subprocess.DEVNULL,
         )
         try:
-            wait_ready(admin_port)
+            wait_ready(admin_port, admin_token)
             exercise_proxy(udp_port, upstream_port, fixture)
             print("WSS outbound matrix: CA validation, RFC 6455 framing, 180/200 polling, ACK/BYE reuse")
             return 0

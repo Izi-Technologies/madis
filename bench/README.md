@@ -16,7 +16,7 @@ RATE=100 CALLS=1000 CONCURRENCY=200 WORKERS=1 ./bench/benchmark.sh
 ```
 
 The harness expects `sipp` unless `SIPP=/path/to/sipp` is set. Build the
-proxy with Mako 0.4.18 first, and keep the UAS, database, route data, CPU
+proxy with Mako 0.5.0 first, and keep the UAS, database, route data, CPU
 affinity, and message mix identical across candidates.
 
 The scenario holds each dialog for one second. Change that pause in

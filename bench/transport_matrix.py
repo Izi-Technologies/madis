@@ -37,11 +37,15 @@ def require(condition: bool, message: str) -> None:
         raise RuntimeError(message)
 
 
-def wait_ready(admin_port: int, deadline: float) -> None:
+def wait_ready(admin_port: int, deadline: float, admin_token: str) -> None:
     url = f"http://127.0.0.1:{admin_port}/readyz"
+    request = urllib.request.Request(
+        url,
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(url, timeout=0.5) as response:
+            with urllib.request.urlopen(request, timeout=0.5) as response:
                 if response.status == 200 and json.loads(response.read()).get("ready"):
                     return
         except Exception:
@@ -70,6 +74,7 @@ def main() -> int:
     tls_port = args.base_port + 1
     wss_port = args.base_port + 2
     admin_port = args.base_port + 20
+    admin_token = "transport-matrix-admin-token"
     env = os.environ.copy()
     env.update(
         {
@@ -77,6 +82,7 @@ def main() -> int:
             "SIP_TLS_PORT": str(tls_port),
             "SIP_WSS_PORT": str(wss_port),
             "SIP_ADMIN_PORT": str(admin_port),
+            "SIP_ADMIN_TOKEN": admin_token,
             "SIP_UDP_WORKERS": "2",
             "SIP_TCP_WORKERS": "1",
         }
@@ -86,7 +92,7 @@ def main() -> int:
     log = open(log_path, "w", encoding="utf-8")
     process = subprocess.Popen([args.binary], env=env, stdout=log, stderr=subprocess.STDOUT)
     try:
-        wait_ready(admin_port, time.monotonic() + 8.0)
+        wait_ready(admin_port, time.monotonic() + 8.0, admin_token)
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
             udp.settimeout(3.0)
             udp.sendto(sip_options("UDP", "matrix-udp", "matrix-udp"), ("127.0.0.1", udp_port))
@@ -118,7 +124,11 @@ def main() -> int:
             response = read_socket(wss, b"101 Switching Protocols")
             require(b"101 Switching Protocols" in response, "WSS did not return 101")
 
-        with urllib.request.urlopen(f"http://127.0.0.1:{admin_port}/healthz", timeout=3) as health:
+        health_request = urllib.request.Request(
+            f"http://127.0.0.1:{admin_port}/healthz",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        with urllib.request.urlopen(health_request, timeout=3) as health:
             body = json.loads(health.read())
             require(health.status == 200 and body.get("ok") is True, "health check failed")
         print("transport matrix: UDP 200, TCP pipeline 2x200, TLS 200, WSS 101, admin ready/health")

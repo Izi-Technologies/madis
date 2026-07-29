@@ -24,7 +24,7 @@ if [ -z "$MADIS_VERSION" ] && [ -r "$(cd "$(dirname "$0")" && pwd)/../VERSION" ]
 fi
 MADIS_VERSION="${MADIS_VERSION:-dev}"
 MADIS_MAKO_VERSION="${MADIS_MAKO_VERSION:-$(read_config_value MADIS_MAKO_VERSION)}"
-MADIS_MAKO_VERSION="${MADIS_MAKO_VERSION:-0.4.18}"
+MADIS_MAKO_VERSION="${MADIS_MAKO_VERSION:-0.5.0}"
 
 have_unit() {
     systemctl cat "$1" >/dev/null 2>&1

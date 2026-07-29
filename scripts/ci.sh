@@ -5,8 +5,8 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 MAKO_BIN="${MAKO_BIN:-mako}"
 MAKO_VERSION_TEXT=$("$MAKO_BIN" --version 2>/dev/null || true)
 case "$MAKO_VERSION_TEXT" in
-  *0.4.18*) ;;
-  *) echo "Mako 0.4.18 is required (found: ${MAKO_VERSION_TEXT:-unknown})" >&2; exit 1 ;;
+  *0.5.0*) ;;
+  *) echo "Mako 0.5.0 is required (found: ${MAKO_VERSION_TEXT:-unknown})" >&2; exit 1 ;;
 esac
 
 run_mako() {
@@ -47,7 +47,7 @@ for include_dir in \
   if [[ -d "$include_dir" ]]; then NATIVE_CFLAGS+=("-I$include_dir"); fi
 done
 
-# Mako 0.4.18 release binaries do not expose --native-source on `mako test`.
+# Mako 0.5.0 is native-first by default; MADIS contract tests use the C bridge.
 # Compile the test bridge once and pass it through the supported linker
 # environment so local and GitHub Actions use the same test invocation.
 "$CC_BIN" -std=c11 -O2 -DNDEBUG -w "${NATIVE_CFLAGS[@]}" \
@@ -56,7 +56,7 @@ TEST_LDFLAGS="$BUILD_DIR/madis_memory.o"
 if [[ -n "${MAKO_LDFLAGS:-}" ]]; then
   TEST_LDFLAGS="$TEST_LDFLAGS $MAKO_LDFLAGS"
 fi
-MAKO_LDFLAGS="$TEST_LDFLAGS" run_mako test tests
+MAKO_LDFLAGS="$TEST_LDFLAGS" run_mako test tests --backend c
 
 build_native() {
   local source="$1"
@@ -81,4 +81,4 @@ python3 -m py_compile sdk/python/madis_carrier.py
 python3 -m unittest discover -s lab -p 'test_*.py'
 python3 -m unittest discover -s media -p 'test_*.py'
 
-echo "Madis CI checks passed with Mako 0.4.18"
+echo "Madis CI checks passed with Mako 0.5.0"

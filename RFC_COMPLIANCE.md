@@ -34,7 +34,7 @@ items are implemented and exercised against independent SIP stacks.
   branch-race suppression, and same-class 401/407 challenge aggregation.
 - RFC 3263 NAPTR service selection, RFC 2782 SRV priority/weight ordering,
   alternate-target failover, 60-second DNS caching, and direct A/AAAA fallback.
-  The NAPTR/SRV resolver hooks are built into pinned Mako 0.4.18.
+  The NAPTR/SRV resolver hooks are built into pinned Mako 0.5.0.
 - Bracketed IPv6 SIP target parsing and Digest MD5/SHA-256 verification with
   `auth`, `auth-int`, and `-sess` handling, stale nonce challenges, and
   qop-aware replay keys.
