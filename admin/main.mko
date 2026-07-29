@@ -5,6 +5,7 @@ import "./pages.mko"
 import "./http.mko"
 import "./handlers.mko"
 pull . "../carrier_api.mko"
+pull . "../maf_api.mko"
 pull . "../ims_subscriber_service.mko"
 pull . "../control_resources.mko"
 
@@ -20,6 +21,7 @@ fn main() {
         let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS admin_sessions (token TEXT PRIMARY KEY, username TEXT NOT NULL, role TEXT NOT NULL, created_at TIMESTAMP DEFAULT NOW())")
         let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS billing_events (event_id TEXT PRIMARY KEY, call_id TEXT NOT NULL DEFAULT '', event_type TEXT NOT NULL, payload_json JSONB NOT NULL, occurred_at TIMESTAMP DEFAULT NOW(), available_at TIMESTAMP DEFAULT NOW(), delivered_at TIMESTAMP, attempts INT NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '', CONSTRAINT billing_event_id_size CHECK (char_length(event_id) BETWEEN 16 AND 128), CONSTRAINT billing_event_payload_size CHECK (octet_length(payload_json::text) <= 65536))")
         let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_billing_events_pending ON billing_events (occurred_at, event_id) WHERE delivered_at IS NULL")
+        let _ = maf_api_bootstrap(db)
         let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS access_control (id SERIAL PRIMARY KEY, source_ip TEXT DEFAULT '*', sip_user TEXT DEFAULT '*', action TEXT DEFAULT 'allow', skip_auth BOOLEAN DEFAULT false, tenant TEXT DEFAULT 'default', max_channels INT DEFAULT 0, priority INT DEFAULT 10, enabled BOOLEAN DEFAULT true, description TEXT, created_at TIMESTAMP DEFAULT NOW())")
         let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS ani_groups (id SERIAL PRIMARY KEY, name TEXT UNIQUE NOT NULL, description TEXT DEFAULT '', enabled BOOLEAN DEFAULT true, created_at TIMESTAMP DEFAULT NOW())")
         let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS ani_ranges (id SERIAL PRIMARY KEY, group_id INT NOT NULL, range_start TEXT NOT NULL, range_end TEXT NOT NULL, enabled BOOLEAN DEFAULT true, created_at TIMESTAMP DEFAULT NOW())")
@@ -211,6 +213,15 @@ fn main() {
                         // Machine API: bearer token only, never a browser
                         // session. This keeps carrier integrations independent
                         // of HTML cookies and CSRF semantics.
+    let maf_kind = maf_api_route(method, path)
+    if len(resp) == 0 && maf_kind > 0 {
+        let maf_scope = maf_api_scope(raw, rl)
+        if maf_scope == 0 || (maf_api_write_required(maf_kind) == 1 && maf_scope < 2) {
+            resp = http_resp(401, "application/json", "{\"ok\":false,\"error\":\"MAF bearer token required\"}\n", "WWW-Authenticate: Bearer\r\nCache-Control: no-store\r\n")
+        } else {
+            resp = maf_api_handle(db, db_ok, method, path, raw, rl)
+        }
+    }
     let subscriber_service_resp = ims_subscriber_service_handle(db, db_ok, method, path, raw, rl)
     if len(resp) == 0 && len(subscriber_service_resp) > 0 { resp = subscriber_service_resp }
     let machine_kind = carrier_api_route(method, path)

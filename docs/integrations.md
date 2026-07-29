@@ -1,11 +1,21 @@
-# Application integration
+# MADIS Application Fabric integration
 
-Madis integrates with carrier applications over bounded HTTP/JSON contracts. The application owns business state and uses Madis for SIP state, routing policy, CDR delivery, and selected charging/integration boundaries.
+The MADIS Application Fabric (MAF) is the language-neutral boundary for
+external application services. Applications own their business state and use
+MADIS for SIP state, routing policy, CDR delivery, and selected
+charging/integration boundaries. The eight-route MAF HTTP surface is served by
+the standalone admin process. Mutating calls are durable asynchronous command
+acceptance; use the call resource and event cursor to observe progress. The
+worker executes outbound originate and early-dialog cancellation; confirmed
+answer, bridge, and media operations report explicit failed receipts until
+their worker ownership paths exist. Live WebSocket/gRPC subscriptions remain
+separate follow-up surfaces.
 
 ## Choose the right interface
 
 | Requirement | Madis interface |
 | --- | --- |
+| Build an external call application | MAF HTTP routes; see [`../api/maf.md`](../api/maf.md) and [`../api/maf.openapi.yaml`](../api/maf.openapi.yaml) |
 | Read enabled transports and integration contracts | `GET /admin/api/v1/capabilities` |
 | Consume CDR or application billing events | Carrier API with `SIP_CARRIER_API_TOKEN` |
 | Change routes, dialplans, gateways, or other SIP policy | Control API with `SIP_CONTROL_API_TOKEN` |
@@ -29,6 +39,9 @@ Use `Authorization: Bearer ...` on every machine API request. Keep the following
 - `SIP_CARRIER_API_TOKEN` for billing consumers and CDR/rating integrations.
 - `SIP_CONTROL_API_TOKEN` for the service that may change call behavior.
 - `SIP_CONTROL_API_READ_TOKEN` for observers and reconciliation jobs that must not mutate state.
+- `SIP_MAF_API_TOKEN` for MAF writes; it also permits MAF reads.
+- `SIP_MAF_API_READ_TOKEN` for MAF read-only call and event access.
+- `SIP_MAF_TENANT` for the tenant namespace bound to this admin process; it defaults to `default`.
 
 Keep tokens in server-side configuration. Do not put them in browser bundles, SIP headers, routing-rule descriptions, logs, or application URLs. Put the admin service behind HTTPS and a private network or reverse proxy. The repository does not ship a public TLS termination or identity provider.
 
