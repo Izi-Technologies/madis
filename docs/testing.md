@@ -1,6 +1,6 @@
 # Testing and release checks
 
-The opt-in worker-backed two-subscriber IMS smoke exercises authenticated REGISTER retransmission replay, a reliable `183 Session Progress`/PRACK exchange with downstream `200 OK` acknowledgement, followed by in-dialog `UPDATE` and re-INVITE offer/answer exchanges through the RTP sidecar, plus authenticated INVITE cancellation with downstream `487 Request Terminated` handling.
+The opt-in worker-backed two-subscriber IMS smoke exercises authenticated REGISTER retransmission replay, a reliable `183 Session Progress`/PRACK exchange with downstream `200 OK` acknowledgement, followed by in-dialog `UPDATE` and re-INVITE offer/answer exchanges through the RTP sidecar, plus authenticated INVITE cancellation with downstream `487 Request Terminated` handling. A separate opt-in case provisions two target-only iFC application branches and verifies To-tag routing, PRACK delivery, and CANCEL cleanup after one branch answers.
 
 Madis builds and tests with Mako **0.4.18** and a matching runtime directory. Do not mix a different compiler/runtime pair with generated C.
 
@@ -181,6 +181,10 @@ IMS_HSS_TEST_TLS=1 python3 -m unittest \
 # Full worker-backed two-subscriber IMS smoke with a local S-CSCF and external RTP sidecar
 IMS_END_TO_END=1 MADIS_BIN=/path/to/madis \
   python3 -m unittest lab.test_ims_end_to_end -v
+
+# Target-only iFC fork selection and losing-branch CANCEL cleanup
+IMS_END_TO_END=1 IMS_END_TO_END_FORK=1 MADIS_BIN=/path/to/madis \
+  python3 -m unittest lab.test_ims_end_to_end.TwoSubscriberImsSmokeTests.test_ifc_fork_selects_branch_and_cancels_loser -v
 
 # The same call with Diameter TLS and an ephemeral HSS certificate
 IMS_END_TO_END=1 IMS_END_TO_END_TLS=1 MADIS_BIN=/path/to/madis \
