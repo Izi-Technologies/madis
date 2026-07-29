@@ -19,7 +19,7 @@ The repository includes an opt-in lab that exercises the implemented IMS boundar
 
 - [`lab/ims_hss.py`](lab/README.md) is a bounded Cx/AKA HSS-compatible adapter with HTTP/HTTPS subscriber authorization. It uses configured opaque XRES test values; it is not an HSS/UDM, AKA secret store, or vector generator.
 - [`media/rtp_module.py`](media/README.md) is a separate RTPEngine-ng-compatible control sidecar with a bounded one-audio-stream RTP/RTCP relay. It is not a production media server.
-- [`docker-compose.ims-lab.yml`](docker-compose.ims-lab.yml) composes the adapters, separate Mako `v0.4.18` P-/I-/S-CSCF workers, and a deterministic two-subscriber client.
+- [`docker-compose.ims-lab.yml`](docker-compose.ims-lab.yml) composes the adapters, separate Mako `v0.5.0` P-/I-/S-CSCF workers, and a deterministic two-subscriber client.
 
 The Docker smoke path covers deterministic unknown/barred registration rejection, TLS Cx/AKA, HTTPS subscriber authorization, P-/I-/S-CSCF REGISTER and initial-INVITE forwarding, SDP offer/answer rewriting, bidirectional RTP, ACK, and BYE. It does not establish full 3GPP IMS, real UE/HSS/UDM interoperability, carrier capacity, ICE/DTLS-SRTP support, or production failover. See [`docs/ims-roadmap.md`](docs/ims-roadmap.md) for the remaining work and acceptance evidence.
 
@@ -93,7 +93,7 @@ The machine API is served by the standalone WebUI at `/admin/api/v1/`. Bearer-to
 
 ## Build and test
 
-The supported source entry point is [`main.mko`](main.mko). [`sipproxy_full.mko`](sipproxy_full.mko) is a legacy monolithic reference and is not the deployment target. Builds and CI require Mako `0.4.18` with its matching runtime; do not mix compiler/runtime versions when generating native C.
+The supported source entry point is [`main.mko`](main.mko). [`sipproxy_full.mko`](sipproxy_full.mko) is a legacy monolithic reference and is not the deployment target. Builds and CI require Mako `0.5.0` with its matching runtime; do not mix compiler/runtime versions when generating native C.
 
 ```sh
 MAKO_BIN=/path/to/mako \

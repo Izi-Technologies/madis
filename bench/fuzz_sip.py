@@ -57,6 +57,7 @@ def main() -> int:
 
     udp_port = args.base_port
     admin_port = args.base_port + 20
+    admin_token = "fuzz-admin-token"
     env = os.environ.copy()
     env.update(
         {
@@ -64,6 +65,7 @@ def main() -> int:
             "SIP_TLS_PORT": str(args.base_port + 1),
             "SIP_WSS_PORT": str(args.base_port + 2),
             "SIP_ADMIN_PORT": str(admin_port),
+            "SIP_ADMIN_TOKEN": admin_token,
             "SIP_UDP_WORKERS": os.environ.get("SIP_UDP_WORKERS", "2"),
             "SIP_TCP_WORKERS": os.environ.get("SIP_TCP_WORKERS", "1"),
         }
@@ -79,9 +81,13 @@ def main() -> int:
     rng = random.Random(args.seed)
     try:
         deadline = time.monotonic() + 8
+        ready_request = urllib.request.Request(
+            f"http://127.0.0.1:{admin_port}/readyz",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
         while time.monotonic() < deadline:
             try:
-                with urllib.request.urlopen(f"http://127.0.0.1:{admin_port}/readyz", timeout=0.3) as response:
+                with urllib.request.urlopen(ready_request, timeout=0.3) as response:
                     if response.status == 200:
                         break
             except Exception:

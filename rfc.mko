@@ -8,6 +8,7 @@ extern "C" fn madis_cmap_has3i(cache: CMap, prefix: string, middle: string, suff
 extern "C" fn madis_cmap_get3i(cache: CMap, prefix: string, middle: string, suffix: int) -> string;
 extern "C" fn madis_cmap_del3i(cache: CMap, prefix: string, middle: string, suffix: int) -> int;
 extern "C" fn madis_cmap_set_i64(cache: CMap, prefix: string, suffix: string, value: int);
+extern "C" fn madis_udp_bind_reuseport(port: int) -> int;
 
 // --- Max-Forwards (Section 16.6 step 3) ---
 fn sip_get_max_forwards(msg: string, n: int) -> int {

@@ -117,11 +117,15 @@ def request(method: bytes, call_id: bytes, branch: bytes, cseq: int = 1) -> byte
     )
 
 
-def wait_ready(port: int) -> None:
+def wait_ready(port: int, admin_token: str) -> None:
     deadline = time.monotonic() + 8
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{port}/readyz", timeout=0.3) as response:
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{port}/readyz",
+                headers={"Authorization": f"Bearer {admin_token}"},
+            )
+            with urllib.request.urlopen(request, timeout=0.3) as response:
                 if response.status == 200:
                     return
         except Exception:
@@ -152,6 +156,7 @@ def main() -> int:
     proxy_port = args.base_port
     uas_port = args.base_port + 10
     admin_port = args.base_port + 20
+    admin_token = "fault-matrix-admin-token"
     env = os.environ.copy()
     env.update(
         {
@@ -159,6 +164,7 @@ def main() -> int:
             "SIP_TLS_PORT": str(args.base_port + 1),
             "SIP_WSS_PORT": str(args.base_port + 2),
             "SIP_ADMIN_PORT": str(admin_port),
+            "SIP_ADMIN_TOKEN": admin_token,
             "SIP_UDP_WORKERS": "1",
             "SIP_TCP_WORKERS": "1",
         }
@@ -173,7 +179,7 @@ def main() -> int:
         stderr=subprocess.STDOUT,
     )
     try:
-        wait_ready(admin_port)
+        wait_ready(admin_port, admin_token)
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client:
             client.bind(("127.0.0.1", 5099))
             client.settimeout(3)

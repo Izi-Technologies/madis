@@ -4,7 +4,7 @@ The opt-in session-timer worker regression additionally verifies a `422 Min-SE` 
 
 The opt-in worker-backed two-subscriber IMS smoke exercises authenticated REGISTER retransmission replay, a reliable `183 Session Progress`/PRACK exchange with downstream `200 OK` acknowledgement, followed by in-dialog `UPDATE` and re-INVITE offer/answer exchanges through the RTP sidecar, plus authenticated INVITE cancellation with downstream `487 Request Terminated` handling. Separate opt-in cases provision two target-only iFC application branches and verify To-tag routing, PRACK delivery, CANCEL cleanup after one branch answers, and a correlated `408 Request Timeout` when an INVITE receives no final response.
 
-Madis builds and tests with Mako **0.4.18** and a matching runtime directory. Do not mix a different compiler/runtime pair with generated C.
+Madis builds and tests with Mako **0.5.0** and a matching runtime directory. Mako 0.5.0 is native-first, so the contract suite selects its C backend explicitly while production C emission remains exercised. MADIS supplies an explicit `SO_REUSEPORT` bridge for multi-worker UDP. Do not mix a different compiler/runtime pair with generated C.
 
 ## Local CI
 
@@ -114,7 +114,7 @@ This verifies the Madis UDP client against a test responder in the same process 
 ## Docker IMS integration lab
 
 The repository includes a containerized six-service smoke environment for the
-implemented IMS boundary. It builds separate Mako `v0.4.18` P-/I-/S-CSCF
+implemented IMS boundary. It builds separate Mako `v0.5.0` P-/I-/S-CSCF
 workers, starts TLS Cx/AKA and HTTPS subscriber-authority endpoints in the HSS
 adapter plus an RTPEngine-ng-compatible media relay, rejects unknown and
 disabled subscribers, then runs two test subscribers through role-chain
@@ -137,7 +137,7 @@ real UE compatibility, clustered state, or production capacity.
 
 ## Release checklist
 
-- [ ] `scripts/ci.sh` passes with Mako 0.4.18.
+- [ ] `scripts/ci.sh` passes with Mako 0.5.0.
 - [ ] API schemas and documentation match the deployed configuration and token scopes.
 - [ ] TLS certificates, CA bundles, bearer-token rotation, database permissions, firewall rules, and backups are reviewed.
 - [ ] A real OPTIONS/REGISTER and representative INVITE path work in staging.
@@ -150,7 +150,7 @@ real UE compatibility, clustered state, or production capacity.
 
 The HEP wire-format, queue clamp, and full-queue drop regressions are in
 `tests/hep_test.mko`. The native test bridge
-is linked explicitly with Mako 0.4.18:
+is linked explicitly with Mako 0.5.0:
 
 ```sh
 MAKO_RUNTIME=/path/to/mako/runtime \

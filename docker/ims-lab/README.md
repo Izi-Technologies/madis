@@ -3,7 +3,7 @@
 This profile runs a reproducible local IMS smoke environment:
 
 - `hss`: the bounded Cx/AKA HSS adapter with TLS-only Diameter and HTTPS subscriber-authorization listeners.
-- `pcscf`, `icscf`, and `scscf`: separate Mako 0.4.18 SIP workers in standalone in-memory mode. P-CSCF forwards REGISTER and initial INVITE to I-CSCF; I-CSCF uses Cx LIR to select S-CSCF; S-CSCF owns AKA, registrations, dialogs, and media control.
+- `pcscf`, `icscf`, and `scscf`: separate Mako 0.5.0 SIP workers in standalone in-memory mode. P-CSCF forwards REGISTER and initial INVITE to I-CSCF; I-CSCF uses Cx LIR to select S-CSCF; S-CSCF owns AKA, registrations, dialogs, and media control.
 - `media`: the bounded RTPEngine-ng-compatible RTP relay module.
 - `client`: two deterministic SIP user agents that register, authenticate, place a call, exchange RTP, and tear down the dialog.
 
@@ -43,4 +43,4 @@ docker volume rm sipproxy_ims-hss-certs
 
 The client checks deterministic `503` rejection for an unknown and a disabled subscriber before successful registration, TLS certificate validation from S-CSCF/I-CSCF to the HSS, HTTPS subscriber authorization, Cx/AKA challenge and response handling for two subscribers, P-/I-/S-CSCF REGISTER and initial-INVITE forwarding, SDP offer/answer rewrite to the relay, RTP in both directions, ACK, and BYE. It does not test real UE behavior, full 3GPP IMS procedures, ICE/DTLS-SRTP, codecs, recording, external RTPEngine interoperability, or clustered state.
 
-The Dockerfiles pin the Mako source to tag `v0.4.18` and build the worker inside the image with a matching runtime. The build requires Docker Desktop or a Linux Docker Engine with network access to the Mako repository and base-image registry.
+The Dockerfiles pin the Mako source to tag `v0.5.0` and build the worker inside the image with a matching runtime. The build requires Docker Desktop or a Linux Docker Engine with network access to the Mako repository and base-image registry.
