@@ -136,6 +136,11 @@ class MadisMaf:
         return self._command("POST", f"/api/v1/maf/calls/{quote(call_id, safe='')}/media",
                              body, idempotency_key)
 
+    def set_headers(self, call_id: str, headers: list[dict[str, object]],
+                    idempotency_key: str | None = None) -> object:
+        return self._command("POST", f"/api/v1/maf/calls/{quote(call_id, safe='')}/headers",
+                             {"headers": headers}, idempotency_key)
+
     def events(self, cursor: int = 0, event_type: str | None = None,
                limit: int = 100) -> object:
         query: dict[str, object] = {"cursor": max(cursor, 0),

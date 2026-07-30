@@ -3,15 +3,20 @@
 The MADIS Application Fabric (MAF) is the language-neutral boundary for
 external application services. Applications own their business state and use
 MADIS for SIP state, routing policy, CDR delivery, and selected
-charging/integration boundaries. The eight-route MAF HTTP surface is served by
+charging/integration boundaries. MAF HTTP and WebSocket surfaces are served by
 the standalone admin process. Mutating calls are durable asynchronous command
 acceptance; use the call resource and event cursor to observe progress. The
 worker executes outbound originate and early-dialog cancellation; confirmed
 hangup sends BYE. Set `SIP_MAF_INBOUND_MODE=control` to publish authenticated
 initial INVITEs as ringing MAF calls and let `calls.answer` send a validated
-`answer_sdp` response. Bridge and media operations still report explicit failed
-receipts until their worker ownership paths exist. Live WebSocket/gRPC
-subscriptions remain separate follow-up surfaces.
+`answer_sdp` response. Bridge operations create durable tenant-owned
+relationships after a call is answered. Media operations dispatch through the
+signed `media` or `recording` module configured with `SIP_MODULE_URL`,
+`SIP_MODULE_TOKEN`, and `SIP_MODULES`; they fail explicitly when no safe
+backend accepts the request. Live MAF event replay is available over HTTP and
+the bearer-authenticated `/api/v1/maf/events/ws` WebSocket route. The protobuf
+remains a shape description; the repository does not expose a separate
+built-in gRPC listener.
 
 ## Inbound call control
 

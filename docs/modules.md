@@ -6,12 +6,12 @@ Madis can call external HTTP(S) services for bounded SIP decisions and for selec
 
 ```sh
 SIP_APP_URL=https://app.example.net/madis/sip
-SIP_APP_TOKEN=long-random-application-secret
+: "${SIP_APP_TOKEN:?set via secret manager}"
 SIP_APP_TIMEOUT_MS=100
 SIP_APP_FAIL_MODE=open
 
 SIP_MODULE_URL=https://modules.example.net/madis/dispatch
-SIP_MODULE_TOKEN=long-random-module-secret
+: "${SIP_MODULE_TOKEN:?set via secret manager}"
 SIP_MODULES=tts,stt,llm,media,recording
 SIP_MODULE_TIMEOUT_MS=250
 SIP_MODULE_FAIL_MODE=closed

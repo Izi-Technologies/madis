@@ -35,14 +35,14 @@ the database.
 
 The control-plane UI is built from `admin/main.mko` with Mako 0.5.0 and runs
 as `madis-admin.service`, independently of the SIP worker.
-Use loopback binding and put nginx or another TLS reverse proxy in front of
-it:
+Use `localhost` or another private bind configuration and put nginx or
+another TLS reverse proxy in front of it:
 
 ```sh
-ADMIN_BIND=127.0.0.1
+ADMIN_BIND=<admin-bind-address>
 ADMIN_PORT=8080
 SIP_ADMIN_PORT=9090
-SIP_METRICS_HOST=127.0.0.1
+SIP_METRICS_HOST=<worker-host>
 SIP_METRICS_PORT=9090
 MAKO_RUNTIME=/path/to/mako/runtime \
   mako build --release --strip --no-incremental admin/main.mko -o admin-bin

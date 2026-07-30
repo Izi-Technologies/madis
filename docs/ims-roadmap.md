@@ -55,8 +55,9 @@ The checklists below use these labels:
 - PRACK/early-dialog bookkeeping, glare rejection, identity privacy, PAI,
   P-Charging-Vector propagation, Rx authorization hooks, and existing Ro
   charging boundaries.
-- Graceful drain, bounded caches, defensive SIP parsing, MAF, the management
-  API, and the separate WebUI/admin process.
+- Graceful drain, bounded caches, defensive SIP parsing, the management API,
+  the separate WebUI/admin process, and the implemented MAF HTTP/WebSocket
+  application boundary.
 
 ### Evidence currently available
 
@@ -164,25 +165,34 @@ The checklists below use these labels:
 
 ## MAF integration track
 
-The MADIS Application Fabric (MAF) is the language-neutral application
-boundary for JavaScript/TypeScript, Go, Python, and other clients. It uses
-versioned HTTP/JSON routes, bearer scopes, tenant isolation, idempotency keys,
-optimistic versions, durable command receipts, and replayable events. The
-canonical route and schema list lives in [`api/maf.md`](../api/maf.md) and
+### MAF status — 2026-07-30
+
+The repository implementation is complete for the documented HTTP/WebSocket
+boundary. “Complete” here means the routes, persistence, worker ownership,
+external-module dispatch, SDKs, and local contract coverage are present; it
+does not claim production interoperability evidence. The canonical route and
+schema list is [`api/maf.md`](../api/maf.md) and
 [`api/maf.openapi.yaml`](../api/maf.openapi.yaml).
 
-- [x] Read-only call/event access and asynchronous command receipts.
-- [x] Tenant-scoped create, answer, reject, hangup, bridge, and media command
-  boundaries.
-- [x] Separate read/write credentials and fail-closed bearer validation.
-- [x] Inbound MAF call ownership behind `SIP_MAF_INBOUND_MODE=control`.
-- [x] Node-side command polling and bounded SIP synchronization.
-- [x] Maintained Python, JavaScript, and Go MAF SDK examples with contract
-  tests and CI syntax/compile checks.
-- [ ] Production mTLS/reverse-proxy deployment evidence for the SDK clients.
-- [x] Opt-in staging MAF security matrix for token, tenant, idempotency,
-  replay, path, and asynchronous command boundaries.
-- [ ] Independent abuse testing and production traffic/ordering evidence.
+- [x] Call and replayable event reads, asynchronous command receipts, and
+  tenant-scoped authentication/idempotency boundaries.
+- [x] Outbound call create/answer/reject/hangup worker lifecycle, including
+  inbound control mode and SIP response-state synchronization.
+- [x] Durable bridge relationships after answer, with worker-owned bridge
+  state transitions.
+- [x] Media and recording operations through signed external `media` and
+  `recording` modules, with explicit failure when no safe backend responds.
+- [x] Per-call non-identity SIP header policy with worker-side validation and
+  protected framing, routing, authentication, and dialog headers.
+- [x] Bearer-authenticated replayable event WebSocket with cursor resume and
+  bounded connection lifetime.
+- [x] Maintained Python, JavaScript, and Go SDKs plus MAF contract/header tests.
+- [ ] Production mTLS/reverse-proxy deployment evidence and independent abuse,
+  ordering, traffic, and external media interoperability evidence.
+
+The protobuf file remains a language-neutral shape description. A separate
+built-in gRPC listener is outside the current repository boundary; integrations
+that need gRPC must translate to the HTTP contract beside MADIS.
 
 ## Interoperability and adversarial test matrix
 
@@ -234,12 +244,13 @@ The repository’s local gates cover the implemented deterministic boundaries:
   headers, glare state, and refresher ownership selection.
 - `tests/maf_contract_test.mko`: every enabled MAF route plus auth scopes,
   idempotency parsing, body bounds, inbound SDP, and SIP invite construction.
+- `tests/maf_headers_test.mko`: header-policy validation and protected-header
+  rejection.
 - `tests/ops_test.mko`: admin token comparison and runtime reload invalidation.
 
-These tests verify local contracts only. MAF bridge/media executors remain
-explicitly pending and return failed receipts until worker-owned media/dialog
-ownership exists. Kernel IPsec installation, live MAF subscriptions, and real
-peer/media/failure/scale evidence remain external acceptance work.
+These tests verify local contracts only. Kernel IPsec installation, live MAF
+subscriptions, and real peer/media/failure/scale evidence remain external
+acceptance work.
 
 ## Explicit non-claims
 

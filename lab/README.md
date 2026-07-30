@@ -37,7 +37,7 @@ python3 -m unittest lab.test_ims_hss.HssAdapterTests.test_mar_multi_vector_count
 Run two adapter instances on different ports and point Madis at both:
 
 ```text
-SIP_DIAMETER_HOSTS=127.0.0.1:3868,127.0.0.1:3869
+SIP_DIAMETER_HOSTS=<peer-a-host>:3868,<peer-b-host>:3869
 SIP_DIAMETER_TLS=0
 SIP_DIAMETER_ALLOW_PLAINTEXT=1
 ```
@@ -66,7 +66,7 @@ Madis wire boundaries and fail-closed policy.
 `mmtel_as.py` is a deterministic UDP SIP AS for iFC / 3pREG evidence:
 
 ```sh
-python3 lab/mmtel_as.py --seed-json lab/mmtel_seed.json --bind 0.0.0.0 --port 5090
+python3 lab/mmtel_as.py --seed-json lab/mmtel_seed.json --bind <bind-address> --port 5090
 ```
 
 | Seed flag | Behaviour |
@@ -94,9 +94,9 @@ the repository:
 ```sh
 python3 lab/ims_hss.py \
   --seed-json /path/to/ims-lab-subscribers.json \
-  --diameter-host 127.0.0.1 \
+  --diameter-host <diameter-host> \
   --diameter-port 3868 \
-  --http-host 127.0.0.1 \
+  --http-host <http-host> \
   --http-port 8444
 ```
 
@@ -106,7 +106,7 @@ managed certificate and key:
 ```sh
 python3 lab/ims_hss.py \
   --seed-json /path/to/ims-lab-subscribers.json \
-  --http-host 127.0.0.1 \
+  --http-host <http-host> \
   --http-port 8444 \
   --http-cert /path/to/subscriber.crt \
   --http-key /path/to/subscriber.key
@@ -115,7 +115,7 @@ python3 lab/ims_hss.py \
 For a local plaintext Diameter-only check, Madis must explicitly opt in:
 
 ```text
-SIP_DIAMETER_HOST=127.0.0.1
+SIP_DIAMETER_HOST=<diameter-host>
 SIP_DIAMETER_PORT=3868
 SIP_DIAMETER_TLS=0
 SIP_DIAMETER_ALLOW_PLAINTEXT=1

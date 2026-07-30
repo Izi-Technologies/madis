@@ -40,6 +40,7 @@ pull . "./ims_charging_vector.mko"
 pull . "./ims_drain.mko"
 pull . "./module_gateway.mko"
 pull . "./ops.mko"
+pull . "./maf_headers.mko"
 pull . "./maf_worker.mko"
 pull . "./hep.mko"
 

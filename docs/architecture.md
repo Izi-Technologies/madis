@@ -57,16 +57,20 @@ The machine API is intentionally allowlisted and bounded. It accepts routing and
 ## External application and module boundaries
 
 The MADIS Application Fabric (MAF) is the language-neutral boundary for
-external application services. Its eight HTTP routes persist tenant-scoped
-call resources, replayable events, and asynchronous commands in PostgreSQL.
+external application services. Its versioned HTTP routes and replayable event
+WebSocket persist tenant-scoped call resources, bridge relationships, media
+operations, header policy, replayable events, and asynchronous commands in
+PostgreSQL.
 The standalone admin process accepts and authenticates those commands; the SIP
 worker remains the owner of signaling state and processes outbound originate,
-early-dialog cancellation, and confirmed-dialog hangup commands through the
-MAF worker queue. With `SIP_MAF_INBOUND_MODE=control`, it can also publish an
+early-dialog cancellation, confirmed-dialog hangup, bridge state, and
+media-module dispatch through the MAF worker queue. With
+`SIP_MAF_INBOUND_MODE=control`, it can also publish an
 authenticated initial INVITE as a tenant-scoped ringing call and execute
 `calls.answer` by validating `answer_sdp` and sending the tagged `200 OK`.
-Bridge and media operations remain explicit failed receipts until their worker
-ownership paths are implemented. Its contract is documented in
+Bridge operations create durable relationships after answer. Media operations
+dispatch through signed external `media` or `recording` modules and fail
+explicitly without a safe backend. Its contract is documented in
 [`../api/maf.md`](../api/maf.md).
 
 The optional application gateway sends signed, bounded SIP event documents to an external HTTP(S) service and accepts only validated commands such as continue, route, reply, redirect, reject, B2BUA policy, and constrained header/body changes. The module dispatcher uses a separate signed contract for TTS, STT, LLM, media, recording, fraud, and billing operations.

@@ -9,10 +9,10 @@ Run it on a private media network:
 
 ```sh
 python3 media/rtp_module.py \
-  --control-host 127.0.0.1 \
+ --control-host <control-host> \
   --control-port 2223 \
-  --media-bind 0.0.0.0 \
-  --media-ip 192.0.2.20 \
+ --media-bind <media-bind-address> \
+ --media-ip <media-address> \
   --media-min 30000 \
   --media-max 39999 \
   --session-timeout 3600
@@ -22,7 +22,7 @@ Point Madis at the sidecar with its existing RTPEngine configuration:
 
 ```text
 rtpengine_enabled=true
-rtpengine_host=127.0.0.1
+rtpengine_host=<control-host>
 rtpengine_port=2223
 ```
 
@@ -31,7 +31,7 @@ provided through explicit environment overrides:
 
 ```text
 SIP_RTPENGINE_ENABLED=1
-SIP_RTPENGINE_HOST=127.0.0.1
+SIP_RTPENGINE_HOST=<control-host>
 SIP_RTPENGINE_PORT=2223
 ```
 

@@ -99,9 +99,10 @@ boundaries:
 - `tests/ops_test.mko` covers worker-admin secret comparison and reload
   invalidation of runtime overrides.
 
-These are local contract tests. They intentionally do not mark pending MAF
-bridge/media executors, kernel IPsec installation, live subscriptions, or
-external interoperability as complete.
+These are local contract tests. They cover the durable MAF bridge/media
+executor paths and HTTP/WebSocket boundary wiring, but do not establish
+external media-module interoperability, kernel IPsec installation, gRPC
+availability, or production SIP interoperability.
 
 | Test | Coverage |
 | --- | --- |

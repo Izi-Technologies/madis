@@ -92,7 +92,7 @@ When export is enabled, the loopback SIP worker admin plane exposes a
 token-protected retrieval contract for an external enforcer:
 
 ```sh
-curl -fsS -X POST http://127.0.0.1:9090/ims/ipsec/sa \
+curl -fsS -X POST http://localhost:9090/ims/ipsec/sa \
   -H "Authorization: Bearer $SIP_ADMIN_TOKEN" \
   -H 'Content-Type: application/json' \
   --data '{"private_identity":"alice@example.com"}'
@@ -121,7 +121,7 @@ python3 lab/mmtel_as.py --seed-json lab/mmtel_seed.json --port 5090
 ```
 
 Provision subscriber `initial_filter_criteria` with `as_uri` pointing at
-`sip:127.0.0.1:5090` (or the lab AS host) and set `SIP_IMS_3PREG=1` for
+`sip:<as-host>:5090` (or the lab AS host) and set `SIP_IMS_3PREG=1` for
 third-party REGISTER exercises. Barring returns 603; CFU returns 302.
 
 ## Out of scope for Madis CI

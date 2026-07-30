@@ -5,8 +5,9 @@ They do not bypass MAF authorization, inject SIP, or expose worker memory.
 
 ## MAF clients
 
-MAF clients cover the eight enabled routes: call creation and reads, answer,
-reject, hangup, bridge/media command submission, and replayable events.
+MAF clients cover the enabled call, bridge, media, header-policy, and
+replayable-event routes. All mutating calls remain asynchronous and return a
+durable command receipt.
 
 | Language | File |
 | --- | --- |
@@ -30,8 +31,9 @@ certificate is transport authentication, not application authorization.
 Keep tokens in server-side secret storage and never place them in browser
 bundles, URLs, SIP headers, logs, or user-controlled payloads.
 
-MAF bridge/media commands remain asynchronous and currently return an explicit
-failed receipt until the SIP worker owns the required dialog/media executor.
+MAF bridge commands create durable relationships after answer. Media commands
+dispatch through the configured signed `media` or `recording` module and
+return an explicit failed receipt when no safe backend accepts the operation.
 
 ## Existing carrier/control clients
 

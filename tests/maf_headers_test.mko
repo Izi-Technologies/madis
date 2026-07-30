@@ -1,0 +1,31 @@
+// MAF per-call header policy tests.
+pull . "../main.mko"
+
+fn TestMAFHeaderPolicyActions() {
+    let msg = "INVITE sip:bob@example.com SIP/2.0\r\nFrom: <sip:alice@example.com>\r\nTo: <sip:bob@example.com>\r\nX-Old: one\r\nContent-Length: 0\r\n\r\n"
+    let added = maf_headers_apply_action(msg, "add", "X-New", "two", "")
+    assert(str_eq(sip_header(added, "X-New"), "two"))
+    let set = maf_headers_apply_action(added, "set", "X-New", "three", "")
+    assert(str_eq(sip_header(set, "X-New"), "three"))
+    let copied = maf_headers_apply_action(set, "copy", "X-New", "", "X-Copy")
+    assert(str_eq(sip_header(copied, "X-Copy"), "three"))
+    let moved = maf_headers_apply_action(copied, "move", "X-Copy", "", "X-Moved")
+    assert_eq(len(sip_header(moved, "X-Copy")), 0)
+    assert(str_eq(sip_header(moved, "X-Moved"), "three"))
+    let removed = maf_headers_apply_action(moved, "remove", "X-Old", "", "")
+    assert_eq(len(sip_header(removed, "X-Old")), 0)
+}
+
+fn TestMAFHeaderPolicyGuards() {
+    let msg = "INVITE sip:bob@example.com SIP/2.0\r\nContent-Length: 0\r\n\r\n"
+    let protected = maf_headers_apply_action(msg, "set", "Content-Length", "999", "")
+    assert(str_eq(sip_header(protected, "Content-Length"), "0"))
+    let injected = maf_headers_apply_action(msg, "add", "X-Bad", "ok\r\nEvil: yes", "")
+    assert_eq(len(sip_header(injected, "Evil")), 0)
+    assert_eq(maf_headers_action_ok("rename"), 1)
+    assert_eq(maf_headers_action_ok("drop-all"), 0)
+    assert_eq(maf_headers_method_ok("INVITE"), 1)
+    assert_eq(maf_headers_method_ok("BOGUS"), 0)
+    assert_eq(maf_headers_direction_ok("both"), 1)
+    assert_eq(maf_headers_direction_ok("sideways"), 0)
+}

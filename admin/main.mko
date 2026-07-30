@@ -222,6 +222,35 @@ fn main() {
             resp = maf_api_handle(db, db_ok, method, path, raw, rl)
         }
     }
+    let maf_ws_kind = maf_api_ws_route(method, path)
+    if len(resp) == 0 && maf_ws_kind > 0 {
+        let maf_scope = maf_api_scope(raw, rl)
+        if maf_scope == 0 {
+            resp = "HTTP/1.1 401 Unauthorized\r\nContent-Type: text/plain\r\nContent-Length: 12\r\nConnection: close\r\n\r\nunauthorized"
+        } else {
+            let up = ws_upgrade_response(raw)
+            if len(up) == 0 {
+                resp = http_resp(400, "text/plain", "bad websocket upgrade\n", "Connection: close\r\n")
+            } else {
+                let query = parse_query(raw, rl)
+                let event_type = query_val(query, "event_type")
+                if maf_api_parse_cursor(query) < 0 || (len(event_type) > 0 && maf_api_identifier_ok(event_type, 1, 128) == 0) {
+                    resp = http_resp(400, "application/json", "{\"ok\":false,\"error\":\"invalid event subscription\"}\n", "Cache-Control: no-store\r\n")
+                } else {
+                    let _ = evloop_del(el, fd)
+                    let _ = io_set_nonblocking(fd, 0)
+                    let wr = tcp_write_all(fd, up)
+                    if wr < 0 {
+                        let _ = nb_close(fd)
+                    } else {
+                        let _ = ws_crew.kick(maf_api_ws_session(fd, db_url, maf_api_tenant(), query))
+                        ws_handed_off = 1
+                        slog("  ws MAF event session tenant=" + maf_api_tenant())
+                    }
+                }
+            }
+        }
+    }
     let subscriber_service_resp = ims_subscriber_service_handle(db, db_ok, method, path, raw, rl)
     if len(resp) == 0 && len(subscriber_service_resp) > 0 { resp = subscriber_service_resp }
     let machine_kind = carrier_api_route(method, path)
@@ -284,7 +313,7 @@ fn main() {
                             }
 
                             // Require non-empty authenticated identity
-                            if len(au) == 0 {
+                        if len(au) == 0 && ws_handed_off == 0 {
                                 // WebSocket upgrade without session → close (no HTML redirect body)
                                 if str_eq(path, "/admin/ws/live") {
                                     if ws_upgrade_request_ok(raw) == 1 {

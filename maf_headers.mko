@@ -1,0 +1,118 @@
+// MAF-owned per-call SIP header policy.
+//
+// Header policies are stored separately from global header_rules so an
+// application can safely control only its own call.  Framing, routing,
+// authentication, and dialog-identity headers remain worker-owned.
+
+fn maf_headers_json_escape(s: string) -> string {
+    let mut b = str_builder()
+    let mut i = 0
+    while i < len(s) {
+        let c = int(s[i])
+        if c == 34 { builder_write(b, "\\\"") }
+        else if c == 92 { builder_write(b, "\\\\") }
+        else if c == 10 { builder_write(b, "\\n") }
+        else if c == 13 { builder_write(b, "\\r") }
+        else if c == 9 { builder_write(b, "\\t") }
+        else if c < 32 || c == 127 { builder_write_byte(b, byte(32)) }
+        else { builder_write_byte(b, byte(c)) }
+        i = i + 1
+    }
+    return builder_string(b)
+}
+
+fn maf_headers_name_safe(value: string) -> int {
+    if len(value) == 0 || len(value) > 128 { return 0 }
+    let mut i = 0
+    while i < len(value) {
+        let c = int(value[i])
+        let token = (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 33 || c == 35 || c == 36 || c == 37 || c == 38 || c == 39 || c == 42 || c == 43 || c == 45 || c == 46 || c == 94 || c == 95 || c == 96 || c == 124 || c == 126
+        if not token { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn maf_headers_text_safe(value: string) -> int {
+    if len(value) > 4096 { return 0 }
+    let mut i = 0
+    while i < len(value) {
+        let c = int(value[i])
+        if c == 0 || c == 10 || c == 13 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn maf_headers_protected(name: string) -> int {
+    let n = str_to_lower(str_trim_space(name))
+    if str_eq(n, "via") || str_eq(n, "route") || str_eq(n, "record-route") || str_eq(n, "path") { return 1 }
+    if str_eq(n, "content-length") || str_eq(n, "content-type") || str_eq(n, "max-forwards") { return 1 }
+    if str_eq(n, "call-id") || str_eq(n, "cseq") || str_eq(n, "from") || str_eq(n, "to") || str_eq(n, "contact") { return 1 }
+    if str_eq(n, "authorization") || str_eq(n, "proxy-authorization") || str_eq(n, "www-authenticate") || str_eq(n, "proxy-authenticate") { return 1 }
+    return 0
+}
+
+fn maf_headers_action_ok(action: string) -> int {
+    let a = str_to_lower(str_trim_space(action))
+    return if str_eq(a, "add") || str_eq(a, "set") || str_eq(a, "remove") || str_eq(a, "rename") || str_eq(a, "copy") || str_eq(a, "move") { 1 } else { 0 }
+}
+
+fn maf_headers_method_ok(method: string) -> int {
+    let m = str_to_upper(str_trim_space(method))
+    if str_eq(m, "*") { return 1 }
+    if str_eq(m, "INVITE") || str_eq(m, "ACK") || str_eq(m, "BYE") || str_eq(m, "CANCEL") { return 1 }
+    if str_eq(m, "UPDATE") || str_eq(m, "PRACK") || str_eq(m, "REFER") || str_eq(m, "NOTIFY") { return 1 }
+    if str_eq(m, "INFO") || str_eq(m, "MESSAGE") || str_eq(m, "OPTIONS") || str_eq(m, "REGISTER") { return 1 }
+    return 0
+}
+
+fn maf_headers_direction_ok(direction: string) -> int {
+    let d = str_to_lower(str_trim_space(direction))
+    return if str_eq(d, "inbound") || str_eq(d, "outbound") || str_eq(d, "both") { 1 } else { 0 }
+}
+
+fn maf_headers_apply_action(msg: string, action: string, name: string, value: string, target: string) -> string {
+    let a = str_to_lower(str_trim_space(action))
+    if maf_headers_action_ok(a) == 0 || maf_headers_name_safe(name) == 0 || maf_headers_protected(name) == 1 { return msg }
+    if len(target) > 0 && (maf_headers_name_safe(target) == 0 || maf_headers_protected(target) == 1) { return msg }
+    if maf_headers_text_safe(value) == 0 { return msg }
+    if str_eq(a, "add") { return hdr_add(msg, name, value) }
+    if str_eq(a, "set") { return hdr_set(msg, name, value) }
+    if str_eq(a, "remove") { return hdr_remove(msg, name) }
+    if len(target) == 0 { return msg }
+    let old_value = sip_header(msg, name)
+    if len(old_value) == 0 || maf_headers_text_safe(old_value) == 0 { return msg }
+    if str_eq(a, "copy") { return hdr_add(msg, target, old_value) }
+    let moved = hdr_remove(msg, name)
+    return hdr_add(moved, target, old_value)
+}
+
+fn maf_headers_bootstrap(db: SqlDB) -> int {
+    let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS maf_call_headers (header_id BIGSERIAL PRIMARY KEY, tenant_id TEXT NOT NULL, call_id TEXT NOT NULL, method TEXT NOT NULL DEFAULT '*', direction TEXT NOT NULL DEFAULT 'both', action TEXT NOT NULL, header_name TEXT NOT NULL, header_value TEXT NOT NULL DEFAULT '', target_name TEXT NOT NULL DEFAULT '', priority INT NOT NULL DEFAULT 0, created_at TIMESTAMP DEFAULT NOW())")
+    let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_maf_call_headers_lookup ON maf_call_headers (tenant_id, call_id, direction, method, priority)")
+    return 1
+}
+
+fn maf_headers_store(db: SqlDB, ok: int, tenant: string, call_id: string, request: string) -> int {
+    if ok == 0 || len(tenant) == 0 || len(call_id) == 0 || len(request) == 0 { return 0 }
+    let invalid_raw = sql_query_str(db, "SELECT COUNT(*)::text FROM jsonb_array_elements(COALESCE($1::jsonb->'headers','[]'::jsonb)) item WHERE COALESCE(item->>'method','*') NOT IN ('*','INVITE','ACK','BYE','CANCEL','UPDATE','PRACK','REFER','NOTIFY','INFO','MESSAGE','OPTIONS','REGISTER') OR COALESCE(item->>'direction','both') NOT IN ('inbound','outbound','both') OR COALESCE(item->>'action','') NOT IN ('add','set','remove','rename','copy','move') OR length(COALESCE(item->>'name','')) < 1 OR length(COALESCE(item->>'name','')) > 128 OR length(COALESCE(item->>'value','')) > 4096 OR length(COALESCE(item->>'target','')) > 128 OR (COALESCE(item->>'action','') IN ('rename','copy','move') AND length(COALESCE(item->>'target','')) < 1) OR lower(COALESCE(item->>'name','')) IN ('via','route','record-route','path','content-length','content-type','max-forwards','call-id','cseq','from','to','contact','authorization','proxy-authorization','www-authenticate','proxy-authenticate') OR lower(COALESCE(item->>'target','')) IN ('via','route','record-route','path','content-length','content-type','max-forwards','call-id','cseq','from','to','contact','authorization','proxy-authorization','www-authenticate','proxy-authenticate')", request)
+    let mut invalid = -1
+    match parse_int(invalid_raw) { Ok(v) => { invalid = v } Err(_) => {} }
+    if invalid != 0 { return 0 }
+    let rc = sql_exec_str4(db, "WITH removed AS (DELETE FROM maf_call_headers WHERE tenant_id = $2 AND call_id = $1), items AS (SELECT value AS item, ord::int AS priority FROM jsonb_array_elements(COALESCE($4::jsonb->'headers','[]'::jsonb)) WITH ORDINALITY) INSERT INTO maf_call_headers (tenant_id, call_id, method, direction, action, header_name, header_value, target_name, priority) SELECT $2, $1, COALESCE(NULLIF(item->>'method',''), '*'), COALESCE(NULLIF(item->>'direction',''), 'both'), lower(COALESCE(item->>'action','')), item->>'name', COALESCE(item->>'value',''), COALESCE(item->>'target',''), priority FROM items", call_id, tenant, "", request)
+    return if rc >= 0 { 1 } else { 0 }
+}
+
+fn maf_headers_apply(db: SqlDB, ok: int, tenant: string, call_id: string, msg: string, method: string, direction: string) -> string {
+    if ok == 0 || len(msg) == 0 || len(call_id) == 0 || maf_headers_method_ok(method) == 0 || maf_headers_direction_ok(direction) == 0 { return msg }
+    let packed = "{\"tenant_id\":\"" + maf_headers_json_escape(tenant) + "\",\"call_id\":\"" + maf_headers_json_escape(call_id) + "\",\"method\":\"" + maf_headers_json_escape(str_to_upper(method)) + "\",\"direction\":\"" + maf_headers_json_escape(str_to_lower(direction)) + "\"}"
+    let rows = sql_query_rows_str(db, "SELECT json_build_object('action', action, 'name', header_name, 'value', header_value, 'target', target_name)::text FROM maf_call_headers WHERE tenant_id = $1::jsonb->>'tenant_id' AND call_id = $1::jsonb->>'call_id' AND (method = '*' OR method = $1::jsonb->>'method') AND (direction = 'both' OR direction = $1::jsonb->>'direction') ORDER BY priority ASC, header_id ASC LIMIT 32", packed)
+    let mut result = msg
+    while sql_rows_next(rows) == 1 {
+        let item = sql_rows_str(rows, 0)
+        result = maf_headers_apply_action(result, json_get_string(item, "action"), json_get_string(item, "name"), json_get_string(item, "value"), json_get_string(item, "target"))
+    }
+    let _ = sql_rows_close(rows)
+    return result
+}

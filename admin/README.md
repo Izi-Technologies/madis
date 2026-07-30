@@ -11,14 +11,18 @@ MAKO_RUNTIME=/path/to/mako/runtime \
   mako build --release --strip --no-incremental \
   admin/main.mko -o admin-bin
 
-SIP_DB_URL=postgres://madis:password@127.0.0.1:5432/madis \
-ADMIN_BIND=127.0.0.1 ADMIN_PORT=8080 \
+SIP_DB_URL='postgres://<db-user>:<db-password>@<db-host>:5432/<db-name>' \
+ADMIN_BIND=<admin-bind-address> ADMIN_PORT=8080 \
   ./admin-bin
 ```
 
-Open `/admin/login` through the configured reverse proxy. The installer normally runs this process as `madis-admin.service` with `ADMIN_BIND=127.0.0.1` and `ADMIN_PORT=8080`. Its live dashboard reaches the worker at `SIP_METRICS_HOST`/`SIP_METRICS_PORT`; the installer’s worker port is normally `SIP_ADMIN_PORT=9090`.
+Open `/admin/login` through the configured reverse proxy. The installer normally runs this process as `madis-admin.service` with the configured admin bind address and `ADMIN_PORT=8080`. Its live dashboard reaches the worker at `SIP_METRICS_HOST`/`SIP_METRICS_PORT`; the installer’s worker port is normally `SIP_ADMIN_PORT=9090`.
 
 Keep the admin listener private and terminate public HTTPS/WSS in nginx, Caddy, HAProxy, or an equivalent edge. Preserve `Host`, `Origin`, `Upgrade`, and `Connection` headers.
+
+Use secret-manager or environment-provided values for `SIP_DB_URL` and all
+bearer credentials. Do not commit passwords, private keys, tokens, database
+URLs, environment-specific IP addresses, or private hostnames.
 
 ## Relevant environment
 

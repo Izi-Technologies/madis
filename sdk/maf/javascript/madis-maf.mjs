@@ -63,6 +63,7 @@ export class MadisMaf {
   hangupCall(callId, reason, key) { return this.command(this.callPath(callId, "/hangup"), reason === undefined ? {} : { reason }, key); }
   bridgeCall(callId, channelIds, key) { return this.command(this.callPath(callId, "/bridges"), { channel_ids: channelIds }, key); }
   media(callId, operation, resource, key) { return this.command(this.callPath(callId, "/media"), { operation, ...(resource === undefined ? {} : { resource }) }, key); }
+  setHeaders(callId, headers, key) { return this.command(this.callPath(callId, "/headers"), { headers }, key); }
 
   events(cursor = 0, eventType, limit = 100) {
     const query = { cursor: Math.max(cursor, 0), limit: Math.min(Math.max(limit, 1), 100) };

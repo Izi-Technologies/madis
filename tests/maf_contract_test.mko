@@ -15,6 +15,11 @@ fn bounded_cache_set(cache: CMap, seq_key: string, ring_prefix: string, key: str
 fn via_add_received(msg: string, n: int, ip: string, port: int) string { return msg }
 fn sip_server_txn_record(request: string, response: string, ip: string, port: int, transport: string, owner: int, cache: CMap) int { return 1 }
 fn sip_forward_reply(reply: string, cache: CMap, out_fd: int) int { return 1 }
+fn module_gateway_call(msg: string, ip: string, port: int, tr: string, event: string, module: string, operation: string, payload: string) string { return "__MODULE_FAIL__" }
+fn module_gateway_command_valid(raw: string, msg: string, event: string, module: string, operation: string, payload: string, for_response: int) int { return 0 }
+fn module_gateway_action(raw: string, msg: string, event: string, module: string, operation: string, payload: string) string { return "fail" }
+pull . "../headers.mko"
+pull . "../maf_headers.mko"
 pull . "../maf_worker.mko"
 
 // The production admin imports this helper from admin/pages.mko. The contract
@@ -33,10 +38,14 @@ fn TestMafEveryHttpRouteIsAllowlisted() {
     assert_eq(maf_api_route("POST", "/admin/api/v1/maf/calls/call-12345678/bridges"), 6)
     assert_eq(maf_api_route("POST", "/admin/api/v1/maf/calls/call-12345678/media"), 7)
     assert_eq(maf_api_route("GET", "/admin/api/v1/maf/events"), 8)
+    assert_eq(maf_api_route("POST", "/admin/api/v1/maf/calls/call-12345678/headers"), 9)
+    assert_eq(maf_api_ws_route("GET", "/admin/api/v1/maf/events/ws"), 1)
+    assert_eq(maf_api_ws_route("POST", "/admin/api/v1/maf/events/ws"), 0)
     assert_eq(maf_api_write_required(1), 1)
     assert_eq(maf_api_write_required(2), 0)
     assert_eq(maf_api_write_required(3), 1)
     assert_eq(maf_api_write_required(7), 1)
+    assert_eq(maf_api_write_required(9), 1)
     assert_eq(maf_api_write_required(8), 0)
 }
 

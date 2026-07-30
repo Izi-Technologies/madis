@@ -29,11 +29,11 @@ Mako 0.5.0 is required. For an offline or prebuilt install, place `main` and `ad
 The compose file starts the SIP worker and PostgreSQL:
 
 ```sh
-MADIS_DB_PASS='use-a-random-password' \
-MADIS_ADMIN_TOKEN='worker-token' \
-MADIS_CARRIER_API_TOKEN='carrier-token' \
-MADIS_CONTROL_API_TOKEN='control-write-token' \
-MADIS_CONTROL_API_READ_TOKEN='control-read-token' \
+: "${MADIS_DB_PASS:?set via secret manager}" \
+: "${MADIS_ADMIN_TOKEN:?set via secret manager}" \
+: "${MADIS_CARRIER_API_TOKEN:?set via secret manager}" \
+: "${MADIS_CONTROL_API_TOKEN:?set via secret manager}" \
+: "${MADIS_CONTROL_API_READ_TOKEN:?set via secret manager}" \
 docker compose up -d --build
 ```
 
@@ -44,8 +44,8 @@ The container does not start `madis-admin.service`. Build and run `admin/main.mk
 Verify the worker:
 
 ```sh
-curl -fsS http://127.0.0.1:8080/readyz
-curl -fsS http://127.0.0.1:8080/healthz
+curl -fsS http://localhost:8080/readyz
+curl -fsS http://localhost:8080/healthz
 docker compose ps
 docker compose logs --tail=100 madis
 ```
@@ -83,7 +83,10 @@ Keep the admin process loopback-bound unless a private network and explicit iden
 4. For the worker’s watched configuration path, touch `SIP_CONFIG_FILE` or use the local reload endpoint according to the deployment policy.
 5. Check `/readyz`, recent logs, and an authenticated OPTIONS/REGISTER/representative INVITE flow.
 
-Do not put passwords, private keys, bearer tokens, or database URLs in Git. Use file permissions and a secret manager where available.
+Do not put passwords, private keys, bearer tokens, database URLs,
+environment-specific IP addresses, or private hostnames in Git. Use file
+permissions and a secret manager where available; documentation examples must
+use placeholders or environment-provided values.
 
 ## API operations
 

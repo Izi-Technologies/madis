@@ -7,8 +7,8 @@ The SIP worker and standalone WebUI are separate processes. `SIP_ADMIN_PORT` is 
 ## Minimal host configuration
 
 ```sh
-SIP_DB_URL=postgres://madis:password@127.0.0.1:5432/madis
-SIP_BIND_IP=0.0.0.0
+SIP_DB_URL='postgres://<db-user>:<db-password>@<db-host>:5432/<db-name>'
+SIP_BIND_IP=<signaling-bind-address>
 SIP_UDP_PORT=5060
 SIP_TLS_PORT=5061
 SIP_WSS_PORT=8443
@@ -17,18 +17,18 @@ SIP_NODE_ID=edge-1
 
 # Worker-local HTTP surface; do not publish this as the WebUI.
 SIP_ADMIN_PORT=9090
-SIP_METRICS_HOST=127.0.0.1
+SIP_METRICS_HOST=<worker-host>
 SIP_METRICS_PORT=9090
 
 # Standalone WebUI.
-ADMIN_BIND=127.0.0.1
+ADMIN_BIND=<admin-bind-address>
 ADMIN_PORT=8080
 ADMIN_SECURE_COOKIE=1
 
-SIP_ADMIN_TOKEN=worker-health-token
-SIP_CARRIER_API_TOKEN=carrier-machine-token
-SIP_CONTROL_API_TOKEN=control-write-token
-SIP_CONTROL_API_READ_TOKEN=control-read-token
+: "${SIP_ADMIN_TOKEN:?set via secret manager}"
+: "${SIP_CARRIER_API_TOKEN:?set via secret manager}"
+: "${SIP_CONTROL_API_TOKEN:?set via secret manager}"
+: "${SIP_CONTROL_API_READ_TOKEN:?set via secret manager}"
 ```
 
 Use long, random values for every token. The installer generates these credentials when they are not supplied and writes the result to the protected environment file.
@@ -37,7 +37,7 @@ Use long, random values for every token. The installer generates these credentia
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `SIP_BIND_IP` | `0.0.0.0` | Local IPv4 signaling bind address for the UDP/TCP/TLS/WSS listeners. Invalid values fall back to the wildcard; IPv6 listeners remain governed by `SIP_IPV6`. |
+| `SIP_BIND_IP` | wildcard bind (set explicitly) | Local IPv4 signaling bind address for the UDP/TCP/TLS/WSS listeners. Invalid values fall back to the wildcard; IPv6 listeners remain governed by `SIP_IPV6`. |
 | `SIP_PUBLIC_IP` | Empty/auto-detected by installer | Address advertised in SIP/SDP-facing values when the host is behind NAT. |
 | `SIP_PUBLIC_HOST` | Empty | Public host identity used by deployment-specific checks and generated signaling values. |
 | `SIP_UDP_PORT` | `5060` | UDP signaling listener. |
@@ -48,7 +48,7 @@ Use long, random values for every token. The installer generates these credentia
 | `SIP_REALM` | `madis.local` | Digest authentication realm. |
 | `SIP_DOMAIN` / `SIP_FQDN` | Empty | Domain identity fallbacks. |
 | `SIP_NODE_ID` | `node1` | Node identity used in registration and cluster metadata. |
-| `SIP_NODE_ADDR` | `127.0.0.1` | Node address metadata. |
+| `SIP_NODE_ADDR` | configured node address | Node address metadata. |
 | `SIP_REGION` | `default` | Optional region metadata. |
 | `SIP_DIGEST_ALGORITHM` | `md5` | Digest profile; SHA-256 profiles are supported by the authentication layer. |
 | `SIP_USER_RATE_LIMIT` | `100` | Bounded per-user security/rate policy value. |
@@ -63,9 +63,9 @@ The standalone WebUI serves `/admin/login`, browser pages, WebSocket live update
 | --- | --- | --- |
 | `SIP_ADMIN_PORT` | Installer `9090` | Worker-local HTTP port. Set to `0` only when the worker HTTP surface is intentionally disabled. |
 | `SIP_ADMIN_TOKEN` | Required | 16–512 character bearer token for worker HTTP requests and WebUI-to-worker probes. |
-| `SIP_METRICS_HOST` | `127.0.0.1` | Worker host targeted by the WebUI. |
+| `SIP_METRICS_HOST` | configured worker host | Worker host targeted by the WebUI. |
 | `SIP_METRICS_PORT` | `9090` in the installer layout | Worker port targeted by the WebUI. |
-| `ADMIN_BIND` | `127.0.0.1` | Standalone WebUI bind address. |
+| `ADMIN_BIND` | configured admin bind address | Standalone WebUI bind address. |
 | `ADMIN_PORT` | `8080` | Standalone WebUI port. |
 | `ADMIN_SECURE_COOKIE` | `1` | Mark WebUI session cookies secure in the normal HTTPS deployment. |
 | `ADMIN_SESSION_TTL_SECS` | `86400` | WebUI session lifetime, capped by the implementation. |
@@ -196,7 +196,7 @@ AKA multi-vector: `SIP_IMS_AKA_NUM_VECTORS` (default 1, max 5) requests multiple
 
 AKA AUTS resync: when the UE returns `auts=` against a nonce this node issued, Madis burns that vector (consume-once), sends Cx MAR with SIP-Authenticate=RAND and SIP-Authorization=AUTS, installs the new MAA vector pool, and issues a stale 401. Forged AUTS without an issued nonce does not trigger MAR.
 
-To advertise one local S-CSCF public identity in a successful REGISTER response, set `SIP_IMS_ASSOCIATED_URI=sip:alice@example.com` (or a validated `sips:` URI). The value is emitted as `P-Associated-URI: <...>` only by the local registrar path and is used as a fallback when an authorized subscriber response does not contain `service_profile.associated_uris`. Configured invalid, list-valued, control-character, or embedded name-addr values fail REGISTER with 500. The subscriber profile may instead provide up to eight unique SIP/SIPS identities in `associated_uris`; malformed profile data fails closed before registration state is written. iFC/TAS behavior is not implemented.
+ To advertise one local S-CSCF public identity in a successful REGISTER response, set `SIP_IMS_ASSOCIATED_URI=sip:alice@example.com` (or a validated `sips:` URI). The value is emitted as `P-Associated-URI: <...>` only by the local registrar path and is used as a fallback when an authorized subscriber response does not contain `service_profile.associated_uris`. Configured invalid, list-valued, control-character, or embedded name-addr values fail REGISTER with 500. The subscriber profile may instead provide up to eight unique SIP/SIPS identities in `associated_uris`; malformed profile data fails closed before registration state is written. Full TAS behavior and broader standard iFC feature coverage remain external; the bounded profile trigger behavior is documented below.
 
 An authorized subscriber may return `service_profile.initial_filter_criteria` as either (legacy) up to four unique SIP/SIPS target URI strings, or (structured) up to eight objects `{priority, as_uri, default_handling, spt:{method, session_case}}`. Originating/terminating matches are priority-ordered. `default_handling=1` fails closed (503) when no AS accepts the fork; `0` continues to contact routing. Opt-in third-party REGISTER: `SIP_IMS_3PREG=1` — after a successful REGISTER, the S-CSCF originates one best-effort REGISTER per iFC AS target (identity from `SIP_IMS_SERVER_NAME`/`SIP_REALM`) and consumes the responses locally; delivery failures are logged and never block the UE registration. Empty or absent criteria clears the prior trigger; final contact expiry or explicit deregistration also clears the in-memory trigger; malformed criteria rejects REGISTER before registration state is written. TAS/MMTel service logic remains external.
 
@@ -273,7 +273,11 @@ The implementation exposes configuration for the STIR/SHAKEN verification/signin
 
 Configuration changes generally require restarting the affected process. The watched `SIP_CONFIG_FILE` path is the supported trigger for a worker reload; verify `/readyz`, logs, and a representative OPTIONS/REGISTER/INVITE flow afterward.
 
-Do not commit database URLs, passwords, private keys, or bearer tokens. Restrict `/etc/madis/madis.env`, use a secret manager where available, and keep the worker and WebUI listeners on private interfaces unless an authenticated reverse proxy and firewall policy are in place.
+Do not commit database URLs, passwords, private keys, bearer tokens, or
+environment-specific IP addresses and private hostnames. Restrict
+`/etc/madis/madis.env`, use a secret manager where available, and keep the
+worker and WebUI listeners on private interfaces unless an authenticated
+reverse proxy and firewall policy are in place.
 ## HEPv3 capture
 
 HEP export is disabled by default. When enabled, each validated inbound SIP
@@ -286,7 +290,7 @@ responses or transaction handling.
 | `SIP_HEP_ENABLE` | `0` | Set to `1`, `true`, or `yes` to enable capture. |
 | `SIP_HEP_HOST` | Empty | HEP collector hostname or IP. Empty disables sending. |
 | `SIP_HEP_PORT` | `9060` | HEP UDP destination port, bounded to `1..65535`. |
-| `SIP_HEP_LOCAL_IP` | `SIP_PUBLIC_IP` or `127.0.0.1` | Local address encoded in HEP metadata. Current exporter requires IPv4 metadata. |
+| `SIP_HEP_LOCAL_IP` | `SIP_PUBLIC_IP` or configured local address | Local address encoded in HEP metadata. Current exporter requires IPv4 metadata. |
 | `SIP_HEP_CAPTURE_ID` | `1` | HEP capture-agent ID, bounded to `0..65535`. |
 | `SIP_HEP_MAX_PAYLOAD` | `60000` | Maximum SIP payload bytes exported per packet. |
 | `SIP_HEP_QUEUE_CAPACITY` | `8192` | Per-process bounded HEP wire-packet queue; clamped `256..65536`. Full queues drop HEP capture only. |

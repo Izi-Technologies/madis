@@ -25,7 +25,12 @@ A successful run ends with:
 P-/I-/S-CSCF Cx/AKA REGISTER, authenticated INVITE, SDP relay, bidirectional RTP, ACK, BYE
 ```
 
-The P-CSCF SIP and admin ports are published only on loopback as `15060/udp` and `18080/tcp` (override with `IMS_LAB_SIP_PORT`/`IMS_LAB_ADMIN_PORT` when they collide with a local process). The HSS and media control ports stay on the private Docker network. Only the S-CSCF (`172.30.0.6`) may send media control commands; loopback is allowed only for the media container healthcheck.
+The P-CSCF SIP and admin ports are published only on `localhost` as
+`15060/udp` and `18080/tcp` (override with `IMS_LAB_SIP_PORT`/`IMS_LAB_ADMIN_PORT`
+when they collide with a local process). The HSS and media control ports stay
+on the private Docker network. Only the configured S-CSCF container may send
+media control commands; local access is allowed only for the media container
+healthcheck.
 
 Stop the containers and network with:
 

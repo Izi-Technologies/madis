@@ -62,17 +62,21 @@ The installer provisions PostgreSQL state, systemd units, the SIP worker, standa
 For the local development Compose profile:
 
 ```sh
-export MADIS_DB_PASS='replace-with-a-random-database-password'
-export MADIS_ADMIN_TOKEN='replace-with-a-random-admin-token'
-export MADIS_CARRIER_API_TOKEN='replace-with-a-random-carrier-token'
-export MADIS_CONTROL_API_TOKEN='replace-with-a-random-control-write-token'
-export MADIS_CONTROL_API_READ_TOKEN='replace-with-a-random-control-read-token'
+: "${MADIS_DB_PASS:?set via secret manager}"
+: "${MADIS_ADMIN_TOKEN:?set via secret manager}"
+: "${MADIS_CARRIER_API_TOKEN:?set via secret manager}"
+: "${MADIS_CONTROL_API_TOKEN:?set via secret manager}"
+: "${MADIS_CONTROL_API_READ_TOKEN:?set via secret manager}"
 docker compose up -d --build
-curl -fsS http://127.0.0.1:8080/readyz
-curl -fsS http://127.0.0.1:8080/healthz
+curl -fsS http://localhost:8080/readyz
+curl -fsS http://localhost:8080/healthz
 ```
 
 That Compose file is a local SIP-worker profile, not the IMS lab and not a public deployment. The standalone WebUI is built and run separately; see [`admin/README.md`](admin/README.md).
+
+Documentation examples use placeholders, `localhost`, or environment-provided
+values only. Never commit real passwords, API keys, bearer tokens, private
+keys, database URLs, environment-specific IP addresses, or private hostnames.
 
 ## APIs and documentation
 
@@ -85,7 +89,8 @@ consume replayable events without writing Mako, SQL, SIP bytes, or worker
 memory. Madis remains the owner of SIP signaling state; the external
 application owns business logic and persistence.
 
-The standalone admin process currently exposes all eight MAF routes:
+The standalone admin process currently exposes the documented MAF HTTP routes
+and the bearer-authenticated event WebSocket:
 
 ```text
 POST /admin/api/v1/maf/calls
@@ -95,7 +100,9 @@ POST /admin/api/v1/maf/calls/{call_id}/reject
 POST /admin/api/v1/maf/calls/{call_id}/hangup
 POST /admin/api/v1/maf/calls/{call_id}/bridges
 POST /admin/api/v1/maf/calls/{call_id}/media
+POST /admin/api/v1/maf/calls/{call_id}/headers
 GET  /admin/api/v1/maf/events?cursor=...&event_type=...
+GET  /admin/api/v1/maf/events/ws?cursor=...&event_type=...
 ```
 
 MAF mutating requests are asynchronous. A `202` response means that the
@@ -106,9 +113,12 @@ cursor to observe progress. The current SIP worker executes outbound
 hangup as `BYE`. Set `SIP_MAF_INBOUND_MODE=control` to publish authenticated
 initial INVITEs as ringing MAF calls; `calls.answer` then accepts a bounded
 `answer_sdp` and sends the validated `200 OK`. Bridge and media commands are
-accepted into the durable queue but return explicit failed receipts until
-their worker-owned executors are implemented. They are never reported as
-successful.
+accepted into the durable queue. Bridge commands create durable tenant-owned
+relationships after answer. Media commands dispatch to the configured signed
+`media` or `recording` module and fail explicitly when no safe backend accepts
+them. Per-call header policy is bounded and cannot alter framing, routing,
+authentication, or dialog identity headers. Commands are never reported
+successful without worker or module evidence.
 
 MAF credentials are separate from admin, carrier, control, and SIP-worker
 credentials. Configure a write token, an optional read-only token, and the
@@ -167,7 +177,7 @@ curl --fail-with-body -sS -X POST \
   -H "Authorization: Bearer $MAF_WRITE_TOKEN" \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: answer-$CALL_ID" \
-  --data '{"answer_sdp":"v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=MAF\r\nt=0 0\r\nm=audio 4000 RTP/AVP 0\r\n"}'
+ --data '{"answer_sdp":"v=0\r\no=- 1 1 IN IP4 <media-address>\r\ns=MAF\r\nt=0 0\r\nm=audio 4000 RTP/AVP 0\r\n"}'
 ```
 
 The SIP worker owns dialog tags, transaction recording, and SIP response
@@ -247,9 +257,10 @@ func main() {
 
 MAF is a bounded command/event contract, not a generic code-execution or raw
 SIP injection API. The HTTP boundary and opt-in inbound answer path are enabled
-now; public WebSocket/gRPC subscriptions, bridge/media ownership, maintained
-generated clients, and independent interoperability evidence remain follow-up
-work. Read the complete contract in [`api/maf.md`](api/maf.md), the
+now; the bearer-authenticated MAF event WebSocket is available at
+`/api/v1/maf/events/ws`, and bridge/media ownership is wired through the
+documented worker and external-module boundaries. Independent production
+interoperability evidence remains follow-up work. Read the complete contract in [`api/maf.md`](api/maf.md), the
 machine-readable schema in [`api/maf.openapi.yaml`](api/maf.openapi.yaml), and
 deployment guidance in [`docs/integrations.md`](docs/integrations.md) and
 [`docs/configuration.md`](docs/configuration.md).

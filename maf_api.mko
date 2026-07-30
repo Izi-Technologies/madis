@@ -124,12 +124,17 @@ fn maf_api_route(method: string, path: string) -> int {
     if str_eq(method, "POST") && len(maf_api_call_id(path, "hangup")) > 0 { return 5 }
     if str_eq(method, "POST") && len(maf_api_call_id(path, "bridges")) > 0 { return 6 }
     if str_eq(method, "POST") && len(maf_api_call_id(path, "media")) > 0 { return 7 }
+    if str_eq(method, "POST") && len(maf_api_call_id(path, "headers")) > 0 { return 9 }
     if str_eq(method, "GET") && str_eq(path, "/admin/api/v1/maf/events") { return 8 }
     return 0
 }
 
+fn maf_api_ws_route(method: string, path: string) -> int {
+    return if str_eq(method, "GET") && str_eq(path, "/admin/api/v1/maf/events/ws") { 1 } else { 0 }
+}
+
 fn maf_api_write_required(kind: int) -> int {
-    return if kind == 1 || kind >= 3 && kind <= 7 { 1 } else { 0 }
+    return if kind == 1 || kind >= 3 && kind <= 7 || kind == 9 { 1 } else { 0 }
 }
 
 fn maf_api_bootstrap(db: SqlDB) -> int {
@@ -145,6 +150,10 @@ fn maf_api_bootstrap(db: SqlDB) -> int {
     let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS maf_events (event_id TEXT PRIMARY KEY, sequence BIGSERIAL UNIQUE NOT NULL, tenant_id TEXT NOT NULL, event_type TEXT NOT NULL, event_version INT NOT NULL DEFAULT 1, call_id TEXT NOT NULL DEFAULT '', channel_id TEXT NOT NULL DEFAULT '', payload_json JSONB NOT NULL DEFAULT '{}'::jsonb, trace_id TEXT NOT NULL DEFAULT '', occurred_at TIMESTAMP DEFAULT NOW(), CONSTRAINT maf_event_payload_size CHECK (octet_length(payload_json::text) <= 65536))")
     let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_maf_events_tenant_sequence ON maf_events (tenant_id, sequence)")
     let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_maf_events_call_sequence ON maf_events (call_id, sequence)")
+    let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS maf_bridges (bridge_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, call_id TEXT NOT NULL REFERENCES maf_calls(call_id) ON DELETE CASCADE, channel_ids JSONB NOT NULL, state TEXT NOT NULL DEFAULT 'active', created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW())")
+    let _ = sql_exec_plain(db, "CREATE UNIQUE INDEX IF NOT EXISTS idx_maf_bridges_call_channels ON maf_bridges (tenant_id, call_id, md5(channel_ids::text))")
+    let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS maf_media_operations (media_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, call_id TEXT NOT NULL REFERENCES maf_calls(call_id) ON DELETE CASCADE, operation TEXT NOT NULL, resource TEXT NOT NULL DEFAULT '', state TEXT NOT NULL DEFAULT 'accepted', error_code TEXT NOT NULL DEFAULT '', error_message TEXT NOT NULL DEFAULT '', created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW())")
+    let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_maf_media_call ON maf_media_operations (tenant_id, call_id, created_at)")
     return 1
 }
 
@@ -166,7 +175,7 @@ fn maf_api_idempotency_state(db: SqlDB, ok: int, tenant: string, idempotency: st
 
 fn maf_api_call_resource(db: SqlDB, ok: int, tenant: string, call_id: string) -> string {
     if ok == 0 { return "" }
-    return sql_query_str2(db, "SELECT json_build_object('schema','madis.maf.call.v1','call_id',call_id,'tenant_id',tenant_id,'state',state,'version',version::text,'channels',COALESCE((SELECT json_agg(json_build_object('channel_id',channel_id,'state',state,'direction',direction,'endpoint',endpoint) ORDER BY created_at) FROM maf_channels c WHERE c.call_id = maf_calls.call_id AND c.tenant_id = maf_calls.tenant_id),'[]'::json),'created_at',created_at,'updated_at',updated_at)::text FROM maf_calls WHERE tenant_id = $1 AND call_id = $2", tenant, call_id)
+    return sql_query_str2(db, "SELECT json_build_object('schema','madis.maf.call.v1','call_id',call_id,'tenant_id',tenant_id,'state',state,'version',version::text,'channels',COALESCE((SELECT json_agg(json_build_object('channel_id',channel_id,'state',state,'direction',direction,'endpoint',endpoint) ORDER BY created_at) FROM maf_channels c WHERE c.call_id = maf_calls.call_id AND c.tenant_id = maf_calls.tenant_id),'[]'::json),'bridges',COALESCE((SELECT json_agg(json_build_object('bridge_id',bridge_id,'channel_ids',channel_ids,'state',state,'created_at',created_at,'updated_at',updated_at) ORDER BY created_at) FROM maf_bridges b WHERE b.call_id = maf_calls.call_id AND b.tenant_id = maf_calls.tenant_id),'[]'::json),'media',COALESCE((SELECT json_agg(json_build_object('media_id',media_id,'operation',operation,'resource',resource,'state',state,'error_code',error_code,'error_message',error_message,'created_at',created_at,'updated_at',updated_at) ORDER BY created_at) FROM maf_media_operations m WHERE m.call_id = maf_calls.call_id AND m.tenant_id = maf_calls.tenant_id),'[]'::json),'created_at',created_at,'updated_at',updated_at)::text FROM maf_calls WHERE tenant_id = $1 AND call_id = $2", tenant, call_id)
 }
 
 fn maf_api_emit_event(db: SqlDB, ok: int, tenant: string, event_type: string, call_id: string, channel_id: string, payload: string, trace: string) -> int {
@@ -219,6 +228,43 @@ fn maf_api_events(db: SqlDB, ok: int, tenant: string, q: string) -> string {
     let mut next = cursor
     if len(rows) > 0 { next = json_get_int(rows[len(rows) - 1], "sequence") }
     return out + "],\"next_cursor\":\"" + string(next) + "\",\"truncated\":" + if len(rows) >= limit { "true" } else { "false" } + "}\n"
+}
+
+// MAF event subscriptions use the existing bounded WebSocket transport. The
+// connection is read-only and bearer-authenticated during the HTTP upgrade;
+// each frame is a replay page so a reconnect can safely resume from the last
+// committed numeric cursor.
+fn maf_api_ws_session(fd: int, db_url: string, tenant: string, initial_query: string) -> int {
+    let _ = io_set_nonblocking(fd, 0)
+    let _ = tcp_nodelay(fd)
+    let _ = tcp_set_timeout(fd, 5000)
+    let mut db_ok = 0
+    let mut db = sql_open_postgres("")
+    if len(db_url) > 0 {
+        db = sql_open_postgres(db_url)
+        db_ok = 1
+    }
+    let mut cursor = maf_api_parse_cursor(initial_query)
+    if cursor < 0 { cursor = 0 }
+    let event_type = query_val(initial_query, "event_type")
+    let mut alive = 1
+    let mut tick = 0
+    while alive == 1 && tick <= 3600 {
+        let mut q = "cursor=" + string(cursor) + "&limit=100"
+        if len(event_type) > 0 { q = q + "&event_type=" + event_type }
+        let page = maf_api_events(db, db_ok, tenant, q)
+        if len(page) == 0 || ws_send_text(fd, page) < 0 { alive = 0 }
+        if alive == 1 {
+            let next_raw = json_get_string(page, "next_cursor")
+            match parse_int(next_raw) { Ok(v) => { if v > cursor { cursor = v } } Err(_) => {} }
+            sleep_ms(1000)
+            tick = tick + 1
+        }
+    }
+    let _ = ws_send_close(fd, 1000, "")
+    let _ = ws_close(fd)
+    if db_ok == 1 { let _ = sql_close(db) }
+    return 0
 }
 
 // Bridge validation is performed against the tenant-scoped call before the
@@ -307,6 +353,7 @@ fn maf_api_command(db: SqlDB, ok: int, kind: int, raw: string, n: int, call_id: 
     if kind == 5 { operation = "calls.hangup" }
     if kind == 6 { operation = "calls.bridge" }
     if kind == 7 { operation = "calls.media" }
+    if kind == 9 { operation = "calls.headers" }
     if kind == 4 {
         let code = json_get_int(body, "sip_code")
         if code != 0 && (code < 300 || code > 699) { return maf_api_error(400, "invalid sip_code") }
@@ -315,6 +362,14 @@ fn maf_api_command(db: SqlDB, ok: int, kind: int, raw: string, n: int, call_id: 
     if kind == 7 {
         let media_op = str_to_lower(str_trim_space(json_get_string(body, "operation")))
         if not str_eq(media_op, "play") && not str_eq(media_op, "record") && not str_eq(media_op, "stop") && not str_eq(media_op, "pause") && not str_eq(media_op, "resume") { return maf_api_error(400, "invalid media operation") }
+        let resource = json_get_string(body, "resource")
+        if len(resource) > 2048 || maf_api_text_safe(resource, 2048) == 0 { return maf_api_error(400, "invalid media resource") }
+    }
+    if kind == 9 {
+        let header_count_raw = sql_query_str(db, "SELECT jsonb_array_length(COALESCE($1::jsonb->'headers','[]'::jsonb))::text", body)
+        let mut header_count = -1
+        match parse_int(header_count_raw) { Ok(v) => { header_count = v } Err(_) => {} }
+        if header_count < 1 || header_count > 32 { return maf_api_error(400, "headers must contain 1 to 32 operations") }
     }
     let idempotency = maf_api_command_id(raw, n, body)
     if maf_api_identifier_ok(idempotency, 8, 128) == 0 { return maf_api_error(400, "Idempotency-Key is required") }
@@ -352,7 +407,7 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         if len(resource) == 0 { return maf_api_error(404, "call not found") }
         return http_resp(200, "application/json", resource + "\n", "Cache-Control: no-store\r\n")
     }
-    if kind >= 3 && kind <= 7 { return maf_api_command(db, ok, kind, raw, n, maf_api_call_id(path, if kind == 3 { "answer" } else if kind == 4 { "reject" } else if kind == 5 { "hangup" } else if kind == 6 { "bridges" } else { "media" })) }
+    if kind >= 3 && kind <= 7 || kind == 9 { return maf_api_command(db, ok, kind, raw, n, maf_api_call_id(path, if kind == 3 { "answer" } else if kind == 4 { "reject" } else if kind == 5 { "hangup" } else if kind == 6 { "bridges" } else if kind == 7 { "media" } else { "headers" })) }
     if kind == 8 {
         if ok == 0 { return maf_api_error(503, "database unavailable") }
         let q = parse_query(raw, n)

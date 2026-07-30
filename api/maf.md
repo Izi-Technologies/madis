@@ -7,9 +7,10 @@ authenticated commands without writing Mako, SQL, SIP bytes, or worker memory.
 
 ## Contract status
 
-The first MAF HTTP surface is enabled in the standalone admin process. It
-persists calls, channels, commands, and replayable events in PostgreSQL. The
-machine-readable contract is [`maf.openapi.yaml`](maf.openapi.yaml).
+The MAF HTTP surface is enabled in the standalone admin process. It persists
+calls, channels, bridges, media operations, commands, per-call header policy,
+and replayable events in PostgreSQL. The machine-readable contract is
+[`maf.openapi.yaml`](maf.openapi.yaml).
 
 Mutating requests are durable command-acceptance boundaries: `202` means that
 MADIS accepted the command for asynchronous worker processing, not that a SIP
@@ -19,11 +20,20 @@ early-dialog reject/hangup with CANCEL, sends confirmed-dialog BYE, and
 synchronizes SIP response states back to MAF. With
 `SIP_MAF_INBOUND_MODE=control`, an authenticated initial INVITE becomes a
 tenant-scoped MAF call and `calls.answer` can send a validated `200 OK`
-containing `answer_sdp`. Bridge and media commands are accepted into the
-durable queue but finish with an explicit failed receipt until their
-worker-owned executors are implemented.
+containing `answer_sdp`. Bridge commands now create durable,
+tenant-owned relationships after the call is answered. Media commands are
+dispatched to the configured signed external `media` or `recording` module
+and complete only after a valid module response; without that backend they
+fail explicitly.
 
-Live WebSocket/gRPC subscriptions are separate follow-up surfaces;
+The optional per-call header policy route is also worker-owned. It can add,
+set, remove, copy, or move non-identity SIP headers on bounded outbound and
+inbound messages while framing, routing, authentication, and dialog identity
+headers remain protected.
+
+The WebSocket event subscription is available at
+`/admin/api/v1/maf/events/ws`; the protobuf file remains a language-neutral
+shape description and Madis does not expose a separate built-in gRPC listener.
 [`madis-maf.proto`](madis-maf.proto) describes that language-neutral target.
 
 Existing carrier/control APIs, signed live SIP application/module contracts,
@@ -41,7 +51,9 @@ POST /admin/api/v1/maf/calls/{call_id}/reject
 POST /admin/api/v1/maf/calls/{call_id}/hangup
 POST /admin/api/v1/maf/calls/{call_id}/bridges
 POST /admin/api/v1/maf/calls/{call_id}/media
+POST /admin/api/v1/maf/calls/{call_id}/headers
 GET  /admin/api/v1/maf/events?cursor=...&event_type=...
+GET  /admin/api/v1/maf/events/ws?cursor=...&event_type=...
 ```
 
 Read routes use `SIP_MAF_API_READ_TOKEN`. The write token also permits reads:
@@ -86,7 +98,7 @@ curl --fail-with-body -sS -X POST \
   -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: answer-$CALL_ID" \
-  --data '{"answer_sdp":"v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=MAF\r\nt=0 0\r\nm=audio 4000 RTP/AVP 0\r\n"}'
+ --data '{"answer_sdp":"v=0\r\no=- 1 1 IN IP4 <media-address>\r\ns=MAF\r\nt=0 0\r\nm=audio 4000 RTP/AVP 0\r\n"}'
 ```
 
 This path currently relies on the worker's SIP server-transaction and reply
@@ -94,9 +106,18 @@ routing support. Validate TCP, TLS, WS, and WSS behavior in the target
 deployment before enabling inbound control broadly.
 
 The bridge route accepts only 2–8 unique channel IDs that belong to the
-tenant-scoped call. Media operations are limited to `play`, `record`, `stop`,
-`pause`, and `resume`. Event cursors are numeric and event pages are capped at
-100 records.
+tenant-scoped call and exposes the resulting bridge in the call resource.
+Media operations are limited to `play`, `record`, `stop`, `pause`, and
+`resume`. `play`, `record`, and `stop` use the configured `media` module;
+`pause` and `resume` use the configured `recording` module. Configure the
+signed module dispatcher with `SIP_MODULE_URL`, `SIP_MODULE_TOKEN`, and the
+corresponding names in `SIP_MODULES`. Event cursors are numeric and event
+pages are capped at 100 records.
+
+The WebSocket route uses the same MAF bearer credentials as the HTTP event
+route. Each text frame is a replayable event page. Clients must persist the
+last successfully processed `next_cursor` and reconnect with that cursor;
+the stream is read-only and capped at one hour per connection.
 
 ## Application model
 
@@ -155,14 +176,16 @@ endpoint.
 MAF private keys and privileged tokens stay in server-side services. Browser
 clients should call an application-owned backend, which then calls MAF.
 
-## Remaining implementation work
+## Implementation boundary
 
-The repository now includes maintained Python, JavaScript, and Go reference
-clients in [`../sdk/maf/`](../sdk/maf/), but the enabled HTTP boundary still
-needs bridge/media ownership, live WebSocket/gRPC subscriptions, and sustained
-interoperability/failure-injection evidence. Inbound MAF control is currently
-limited to the SIP transports that the worker can route through its server
-transaction/reply path; deployments should validate TCP/TLS/WS/WSS behavior
-before enabling it broadly.
+The repository includes maintained Python, JavaScript, and Go reference
+clients in [`../sdk/maf/`](../sdk/maf/). The HTTP and WebSocket surfaces are
+implemented in the standalone admin process. The protobuf file remains a
+language-neutral shape description; integrations that require gRPC can place
+a translating service beside the HTTP API while preserving the same tenant,
+bearer-token, idempotency, cursor, and asynchronous receipt semantics.
+Inbound MAF control is currently limited to the SIP transports that the worker
+can route through its server transaction/reply path; deployments should
+validate TCP/TLS/WS/WSS behavior before enabling it broadly.
 Integrations must treat command receipts as asynchronous acceptance and
 observe the call or event resources for progress.

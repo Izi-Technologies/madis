@@ -15,6 +15,7 @@ service ApplicationFabric {
   rpc HangupCall(CallCommandRequest) returns (CommandReceipt);
   rpc BridgeCall(BridgeRequest) returns (CommandReceipt);
   rpc ControlMedia(MediaRequest) returns (CommandReceipt);
+  rpc SetCallHeaders(HeaderPolicyRequest) returns (CommandReceipt);
   rpc SubscribeEvents(SubscribeEventsRequest) returns (stream Event);
 }
 
@@ -63,6 +64,21 @@ message MediaRequest {
   string call_id = 2;
   string operation = 3;
   string resource = 4;
+}
+
+message HeaderPolicyRequest {
+  CommandMetadata command = 1;
+  string call_id = 2;
+  repeated HeaderPolicy headers = 3;
+}
+
+message HeaderPolicy {
+  string method = 1;
+  string direction = 2;
+  string action = 3;
+  string name = 4;
+  string value = 5;
+  string target = 6;
 }
 
 message CommandReceipt {

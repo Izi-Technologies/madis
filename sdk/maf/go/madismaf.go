@@ -148,6 +148,9 @@ func (c *Client) BridgeCall(ctx context.Context, callID string, channels []strin
 func (c *Client) Media(ctx context.Context, callID, operation, resource, idem string) (map[string]any, error) {
 	return c.command(ctx, callPath(callID, "/media"), map[string]any{"operation": operation, "resource": resource}, idem)
 }
+func (c *Client) SetHeaders(ctx context.Context, callID string, headers []map[string]any, idem string) (map[string]any, error) {
+	return c.command(ctx, callPath(callID, "/headers"), map[string]any{"headers": headers}, idem)
+}
 func (c *Client) Events(ctx context.Context, cursor, limit int, eventType string) (map[string]any, error) {
 	if cursor < 0 {
 		cursor = 0
