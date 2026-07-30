@@ -93,8 +93,10 @@ fn maf_api_body_ok(raw: string, n: int, required: int) -> int {
     let body = parse_body(raw, n)
     if len(body) == 0 { return if required == 1 { 0 } else { 1 } }
     if len(body) > 65536 || maf_api_text_safe(body, 65536) == 0 { return 0 }
-    let content_type = str_to_lower(parse_header(raw, n, "Content-Type"))
-    if not str_has_prefix(content_type, "application/json") { return 0 }
+    let content_type = str_to_lower(str_trim_space(parse_header(raw, n, "Content-Type")))
+    let separator = str_index(content_type, ";")
+    let media_type = if separator >= 0 { str_trim_space(content_type[0:separator]) } else { content_type }
+    if not str_eq(media_type, "application/json") { return 0 }
     return 1
 }
 

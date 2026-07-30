@@ -157,8 +157,9 @@ clients should call an application-owned backend, which then calls MAF.
 
 ## Remaining implementation work
 
-The enabled HTTP boundary still needs bridge/media ownership, live
-WebSocket/gRPC subscriptions, maintained generated clients, and sustained
+The repository now includes maintained Python, JavaScript, and Go reference
+clients in [`../sdk/maf/`](../sdk/maf/), but the enabled HTTP boundary still
+needs bridge/media ownership, live WebSocket/gRPC subscriptions, and sustained
 interoperability/failure-injection evidence. Inbound MAF control is currently
 limited to the SIP transports that the worker can route through its server
 transaction/reply path; deployments should validate TCP/TLS/WS/WSS behavior

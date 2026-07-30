@@ -109,3 +109,25 @@ fn TestIMSCxPushAnswerIsNotRequest() {
     assert_eq(ims_cx_push_request_kind(answer), 0)
     assert_eq_str(diameter_find_avp(answer, 263), diameter_find_avp(rtr, 263))
 }
+
+fn TestIMSCxPushClientCnPolicy() {
+    assert_eq(ims_cx_push_client_cn_allowed("hss.example.com", ""), 1)
+    assert_eq(ims_cx_push_client_cn_allowed(" hss.example.com ", "hss.example.com"), 1)
+    assert_eq(ims_cx_push_client_cn_allowed("other.example.com", "hss.example.com"), 0)
+    assert_eq(ims_cx_push_client_cn_allowed("HSS.example.com", "hss.example.com"), 0)
+    assert_eq(ims_cx_push_client_cn_allowed("hss.example.com\r\nX-Evil: 1", "hss.example.com"), 0)
+}
+
+fn TestIMSCxPushListenPortBounds() {
+    let _ = env_set("SIP_IMS_CX_PUSH", "1")
+    let _ = env_set("SIP_IMS_CX_PUSH_LISTEN", "1")
+    let _ = env_set("SIP_IMS_CX_PUSH_PORT", "3869")
+    assert_eq(ims_cx_push_listen_port(), 3869)
+    let _ = env_set("SIP_IMS_CX_PUSH_PORT", "0")
+    assert_eq(ims_cx_push_listen_port(), -1)
+    let _ = env_set("SIP_IMS_CX_PUSH_PORT", "65536")
+    assert_eq(ims_cx_push_listen_port(), -1)
+    let _ = env_set("SIP_IMS_CX_PUSH_PORT", "3868")
+    let _ = env_set("SIP_IMS_CX_PUSH_LISTEN", "0")
+    let _ = env_set("SIP_IMS_CX_PUSH", "0")
+}

@@ -1,0 +1,23 @@
+// SIP worker admin-plane pure boundary tests.
+pull . "../main.mko"
+
+fn TestProxyAdminSecretComparison() {
+    assert_eq(proxy_admin_secret_equal("0123456789abcdef", "0123456789abcdef"), 1)
+    assert_eq(proxy_admin_secret_equal("0123456789abcdee", "0123456789abcdef"), 0)
+    assert_eq(proxy_admin_secret_equal("short", "0123456789abcdef"), 0)
+    assert_eq(proxy_admin_secret_equal("", "0123456789abcdef"), 0)
+}
+
+fn TestProxyConfigReloadClearsRuntimeOverrides() {
+    let cache = cmap_new()
+    let _ = cmap_set(cache, "config_epoch", "4")
+    let _ = cmap_set(cache, "rtpengine_cfg", "stale")
+    let _ = cmap_set(cache, "shaken|v2", "stale")
+    let _ = cmap_set(cache, "sec_enabled", "stale")
+    assert_eq(proxy_config_reload(cache), 5)
+    assert_eq_str(cmap_get(cache, "config_epoch"), "5")
+    assert_eq(cmap_has(cache, "rtpengine_cfg"), 0)
+    assert_eq(cmap_has(cache, "shaken|v2"), 0)
+    assert_eq(cmap_has(cache, "sec_enabled"), 0)
+    assert_eq(if len(cmap_get(cache, "config_reloaded_at")) > 0 { 1 } else { 0 }, 1)
+}

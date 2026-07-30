@@ -125,3 +125,31 @@ fn TestMafInboundAnswerMessage() {
     assert(str_contains(answer, "Content-Type: application/sdp"))
     assert(str_contains(answer, "m=audio 4000 RTP/AVP 0"))
 }
+
+fn TestMafJsonEscapingAndCredentialScopes() {
+    assert_eq_str(maf_api_json_escape("quote=\" slash=\\"), "quote=\\\" slash=\\\\")
+    assert_eq_str(maf_api_json_escape("line\nnext"), "line\\nnext")
+
+    let _ = env_set("SIP_MAF_API_TOKEN", "0123456789abcdef")
+    let _ = env_set("SIP_MAF_API_READ_TOKEN", "fedcba9876543210")
+    let write_request = "GET /admin/api/v1/maf/events HTTP/1.1\r\nAuthorization: Bearer 0123456789abcdef\r\nContent-Length: 0\r\n\r\n"
+    let read_request = "GET /admin/api/v1/maf/events HTTP/1.1\r\nAuthorization: bearer fedcba9876543210\r\nContent-Length: 0\r\n\r\n"
+    let bad_request = "GET /admin/api/v1/maf/events HTTP/1.1\r\nAuthorization: Bearer 0123456789abcdee\r\nContent-Length: 0\r\n\r\n"
+    assert_eq(maf_api_scope(write_request, len(write_request)), 2)
+    assert_eq(maf_api_scope(read_request, len(read_request)), 1)
+    assert_eq(maf_api_scope(bad_request, len(bad_request)), 0)
+    let _ = env_set("SIP_MAF_API_TOKEN", "")
+    let _ = env_set("SIP_MAF_API_READ_TOKEN", "")
+}
+
+fn TestMafCommandIdentityAndBodyLimits() {
+    let body = "{\"command_id\":\"body-command-123\"}"
+    let with_header = "POST /admin/api/v1/maf/calls HTTP/1.1\r\nIdempotency-Key: header-command-123\r\nContent-Type: application/json\r\nContent-Length: " + string(len(body)) + "\r\n\r\n" + body
+    let without_header = "POST /admin/api/v1/maf/calls HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: " + string(len(body)) + "\r\n\r\n" + body
+    assert_eq_str(maf_api_command_id(with_header, len(with_header), body), "header-command-123")
+    assert_eq_str(maf_api_command_id(without_header, len(without_header), body), "body-command-123")
+    let with_parameter = "POST /admin/api/v1/maf/calls HTTP/1.1\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: 2\r\n\r\n{}"
+    assert_eq(maf_api_body_ok(with_parameter, len(with_parameter), 1), 1)
+    let wrong_content = "POST /admin/api/v1/maf/calls HTTP/1.1\r\nContent-Type: application/json-patch+json\r\nContent-Length: 2\r\n\r\n{}"
+    assert_eq(maf_api_body_ok(wrong_content, len(wrong_content), 1), 0)
+}

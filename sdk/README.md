@@ -1,10 +1,41 @@
-# Madis carrier SDK examples
+# MADIS SDKs
 
-These are small source-level clients for the Madis HTTP/JSON machine API. They are reference implementations, not published packages or complete application frameworks. Each caller remains responsible for durable storage, retries, schema validation, tenant authorization, observability, and secret management.
+The SDKs are small reference clients for the versioned HTTP/JSON surfaces.
+They do not bypass MAF authorization, inject SIP, or expose worker memory.
 
-The base URL should include `/admin`, for example `https://madis.example/admin`; the clients append `/api/v1/...`.
+## MAF clients
 
-| Client | Runtime | File |
+MAF clients cover the eight enabled routes: call creation and reads, answer,
+reject, hangup, bridge/media command submission, and replayable events.
+
+| Language | File |
+| --- | --- |
+| Python | [`maf/python/madis_maf.py`](maf/python/madis_maf.py) |
+| JavaScript/TypeScript | [`maf/javascript/madis-maf.mjs`](maf/javascript/madis-maf.mjs) |
+| Go | [`maf/go/madismaf.go`](maf/go/madismaf.go) |
+
+Example Python usage:
+
+```python
+from madis_maf import MadisMaf
+
+maf = MadisMaf("https://proxy.example.net/admin", token_from_secret_store)
+receipt = maf.create_call("sip:app@example.net", "sip:user@example.net")
+events = maf.events(cursor=0, event_type="call.answered")
+```
+
+Put the admin listener behind an HTTPS reverse proxy or service mesh with
+mTLS in production. The SDK still sends the MAF bearer token because a client
+certificate is transport authentication, not application authorization.
+Keep tokens in server-side secret storage and never place them in browser
+bundles, URLs, SIP headers, logs, or user-controlled payloads.
+
+MAF bridge/media commands remain asynchronous and currently return an explicit
+failed receipt until the SIP worker owns the required dialog/media executor.
+
+## Existing carrier/control clients
+
+| Language | Runtime | File |
 | --- | --- | --- |
 | Python | Standard library | [`python/madis_carrier.py`](python/madis_carrier.py) |
 | JavaScript | Server-side `fetch` | [`javascript/madis-carrier.mjs`](javascript/madis-carrier.mjs) |
@@ -12,34 +43,5 @@ The base URL should include `/admin`, for example `https://madis.example/admin`;
 | Lua | LuaSocket; caller supplies JSON | [`lua/madis_carrier.lua`](lua/madis_carrier.lua) |
 | Erlang | OTP `inets`; caller supplies JSON | [`erlang/madis_carrier.erl`](erlang/madis_carrier.erl) |
 
-## API methods covered
-
-The clients expose the carrier operations for capabilities, pending billing events, publication, acknowledgement, and CDR reads. They also expose control operations for status, routing rules, dialplans, validation, and the generic allowlisted SIP resources.
-
-Generic resource helpers cover:
-
-`gateways`, `routes`, `dispatch-sets`, `dispatch-members`, `dids`, `header-rules`, `access-control`, `security-bans`, `ani-groups`, `ani-ranges`, `registrations`, `registration-bindings`, `cluster-nodes`, and `security-events`. `security-bans` is currently a source-IP create/upsert and list surface; the generic numeric-ID update/delete/state helpers do not apply to it.
-
-The server still enforces the read/write scope. A client constructed with `SIP_CONTROL_API_READ_TOKEN` can list and validate but cannot mutate. Use `SIP_CONTROL_API_TOKEN` only in the service that is allowed to change SIP behavior.
-
-## Event delivery semantics
-
-The billing outbox is at least once. Applications should:
-
-1. Read pending events.
-2. Validate the envelope and authorize the tenant.
-3. Deduplicate on `event_id`.
-4. Commit the rating/ledger/workflow transaction.
-5. Call the acknowledgement endpoint.
-
-Do not acknowledge before the application transaction is durable. Retry connection failures and transient `503` responses with bounded backoff; fix invalid payloads and credentials instead of retrying `400`/`401` responses indefinitely.
-
-## Resource writes
-
-Mutable resource responses include a `revision`. When concurrent control writers are possible, send `expected_revision` on update/delete calls and reconcile a conflict by re-reading the resource. Unknown JSON fields are not persisted. Resource helpers do not expose SQL or arbitrary table names.
-
-## Server-side use only
-
-All clients accept bearer tokens and must remain server-side. Never ship a carrier or control token in browser JavaScript. Browser frontends should call an application-owned backend, which then applies user and tenant authorization before calling Madis.
-
-The HTTP/JSON contract is documented in [`../api/README.md`](../api/README.md), [`../api/openapi.yaml`](../api/openapi.yaml), and [`../docs/integrations.md`](../docs/integrations.md). [`../api/madis-carrier.proto`](../api/madis-carrier.proto) provides Protobuf message shapes; the repository’s service surface is HTTP/JSON rather than a separate built-in gRPC listener.
+The machine-readable contracts are [`../api/maf.openapi.yaml`](../api/maf.openapi.yaml)
+and [`../api/openapi.yaml`](../api/openapi.yaml).

@@ -91,3 +91,16 @@ fn TestIMSSessionTimerBindAndGlare() {
     assert_eq(if str_index(ims_session_timer_apply_response(cache, "cid-2", request, with_header), "Session-Expires: 1800;refresher=uac\r\nSession-Expires") >= 0 { 1 } else { 0 }, 0)
     let _ = env_set("SIP_IMS_SESSION_TIMERS", "0")
 }
+
+fn TestIMSSessionTimerRefresherOwnershipModes() {
+    let _ = env_set("SIP_IMS_SESSION_TIMERS", "1")
+    let _ = env_set("SIP_IMS_SESSION_REFRESHER", "proxy")
+    assert_eq_str(ims_session_timer_refresher_mode(), "proxy")
+    let cache = cmap_new()
+    assert_eq(ims_session_timer_bind(cache, "cid-proxy", 1800, ""), 1)
+    assert(str_contains(ims_session_timer_lookup(cache, "cid-proxy"), "|uas"))
+    let _ = env_set("SIP_IMS_SESSION_REFRESHER", "unexpected")
+    assert_eq_str(ims_session_timer_refresher_mode(), "endpoint")
+    let _ = env_set("SIP_IMS_SESSION_TIMERS", "0")
+    let _ = env_set("SIP_IMS_SESSION_REFRESHER", "endpoint")
+}

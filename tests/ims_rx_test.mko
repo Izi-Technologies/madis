@@ -44,3 +44,13 @@ fn TestIMSRxSessionIdCorrelation() {
     assert(str_contains(diameter_find_avp(other, 263), "rx-"))
     assert(not str_eq(diameter_find_avp(other, 263), aar_session))
 }
+
+fn TestIMSRxEnabledFailsClosedWithoutPeer() {
+    let _ = env_set("SIP_IMS_RX", "1")
+    let cache = cmap_new()
+    let lock = mutex_new()
+    assert_eq(ims_rx_authorize(cache, lock, "", "sip:alice@example.com", "audio"), 0)
+    assert_eq(ims_rx_terminate(cache, lock, ""), 0)
+    assert_eq(ims_rx_authorize(cache, lock, "call-no-peer", "sip:alice@example.com", "audio"), 0)
+    let _ = env_set("SIP_IMS_RX", "0")
+}

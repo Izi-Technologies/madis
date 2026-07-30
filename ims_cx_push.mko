@@ -37,6 +37,15 @@ fn ims_cx_push_user_data(msg: string) -> string {
     return value
 }
 
+// Optional client-certificate pinning is an exact, case-sensitive CN match.
+// An empty policy keeps the mTLS CA as the trust boundary; authorization is
+// still fail-closed when a configured CN does not match.
+fn ims_cx_push_client_cn_allowed(peer_cn: string, allowed_cn: string) -> int {
+    let allowed = str_trim_space(allowed_cn)
+    if len(allowed) == 0 { return 1 }
+    return if str_eq(str_trim_space(peer_cn), allowed) { 1 } else { 0 }
+}
+
 fn ims_cx_ppr(public_identity: string, server_name: string, user_data: string) -> string {
     if ims_text_ok(public_identity, 2048) == 0 || ims_text_ok(server_name, 2048) == 0 { return "" }
     if len(user_data) > 8192 { return "" }
@@ -236,8 +245,8 @@ fn ims_cx_push_server_worker(reg: CMap) -> int {
             let _ = tcp_close(c)
             continue
         }
-        let allowed_cn = str_trim_space(env_get_or("SIP_IMS_CX_PUSH_CLIENT_CN", ""))
-        if len(allowed_cn) > 0 && not str_eq(str_trim_space(tls_peer_cn(conn)), allowed_cn) {
+        let allowed_cn = env_get_or("SIP_IMS_CX_PUSH_CLIENT_CN", "")
+        if ims_cx_push_client_cn_allowed(tls_peer_cn(conn), allowed_cn) == 0 {
             let _ = tls_conn_close(conn)
             continue
         }

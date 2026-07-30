@@ -177,10 +177,12 @@ canonical route and schema list lives in [`api/maf.md`](../api/maf.md) and
 - [x] Separate read/write credentials and fail-closed bearer validation.
 - [x] Inbound MAF call ownership behind `SIP_MAF_INBOUND_MODE=control`.
 - [x] Node-side command polling and bounded SIP synchronization.
-- [ ] Production mTLS/reverse-proxy deployment evidence and SDK examples for
-  each supported language.
-- [ ] Independent abuse testing for token, tenant, idempotency, replay, and
-  command-ordering boundaries.
+- [x] Maintained Python, JavaScript, and Go MAF SDK examples with contract
+  tests and CI syntax/compile checks.
+- [ ] Production mTLS/reverse-proxy deployment evidence for the SDK clients.
+- [x] Opt-in staging MAF security matrix for token, tenant, idempotency,
+  replay, path, and asynchronous command boundaries.
+- [ ] Independent abuse testing and production traffic/ordering evidence.
 
 ## Interoperability and adversarial test matrix
 
@@ -215,6 +217,29 @@ Local contract tests are necessary but are not a substitute for this matrix.
    owning RTP.
 8. MAF, metrics, traces, CDR correlation, configuration, and recovery steps
    are documented and tested.
+
+## Local contract coverage
+
+The repository’s local gates cover the implemented deterministic boundaries:
+
+- `tests/ims_cx_push_test.mko`: RTR/PPR handling, mTLS client-CN policy, and
+  listener configuration bounds.
+- `tests/ims_flow_test.mko`: flow refresh/replacement, expiry cleanup, token
+  validation, and capacity/keepalive clamps.
+- `tests/ims_ipsec_test.mko`: CK/IK export gating, SA JSON/cache behavior, and
+  SPI/port/nonce validation.
+- `tests/ims_rx_test.mko`: AAR/STR wire contracts, session correlation, and
+  fail-closed authorization without a peer.
+- `tests/ims_session_timer_test.mko`: request validation, negotiated response
+  headers, glare state, and refresher ownership selection.
+- `tests/maf_contract_test.mko`: every enabled MAF route plus auth scopes,
+  idempotency parsing, body bounds, inbound SDP, and SIP invite construction.
+- `tests/ops_test.mko`: admin token comparison and runtime reload invalidation.
+
+These tests verify local contracts only. MAF bridge/media executors remain
+explicitly pending and return failed receipts until worker-owned media/dialog
+ownership exists. Kernel IPsec installation, live MAF subscriptions, and real
+peer/media/failure/scale evidence remain external acceptance work.
 
 ## Explicit non-claims
 

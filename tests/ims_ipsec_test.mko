@@ -27,3 +27,24 @@ fn TestIMSIPSecExportRequiresKeysAndProducesJson() {
     let _ = env_set("SIP_IMS_AKA_STORE_KEYS", "0")
     let _ = env_set("SIP_IMS_IPSEC_EXPORT", "0")
 }
+
+fn TestIMSIPSecConfigurationAndLookupBounds() {
+    let _ = env_set("SIP_IMS_AKA_STORE_KEYS", "1")
+    let _ = env_set("SIP_IMS_IPSEC_EXPORT", "1")
+    let _ = env_set("SIP_IMS_IPSEC_SPI_BASE", "1")
+    let _ = env_set("SIP_IMS_IPSEC_PORT_C", "0")
+    let _ = env_set("SIP_IMS_IPSEC_PORT_S", "65536")
+    assert_eq(ims_ipsec_spi_base(), 256)
+    assert_eq(ims_ipsec_port_c(), 5060)
+    assert_eq(ims_ipsec_port_s(), 5061)
+    assert_eq(ims_ipsec_nonce_ok("nonce-value-123456"), 1)
+    assert_eq(ims_ipsec_nonce_ok("bad\r\nnonce"), 0)
+    let cache = cmap_new()
+    assert_eq_str(ims_ipsec_get_sa(cache, "alice@example.com"), "")
+    assert_eq_str(ims_ipsec_sa_params(cache, "bad\r\nnonce", "alice@example.com", "192.0.2.10"), "")
+    let _ = env_set("SIP_IMS_IPSEC_SPI_BASE", "1000")
+    let _ = env_set("SIP_IMS_IPSEC_PORT_C", "5060")
+    let _ = env_set("SIP_IMS_IPSEC_PORT_S", "5061")
+    let _ = env_set("SIP_IMS_AKA_STORE_KEYS", "0")
+    let _ = env_set("SIP_IMS_IPSEC_EXPORT", "0")
+}

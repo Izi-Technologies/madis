@@ -33,6 +33,8 @@ The CI script runs:
 - All repository Mako test files.
 - Native SIP worker and WebUI links, including the `madis_memory.c` bridge.
 - JSON-schema parsing, shell syntax validation, and Python SDK compilation.
+- MAF Python SDK contract tests, JavaScript route/header tests when Node is
+  installed, and Go SDK route/header tests when Go is installed.
 - Default Python unit tests for the standalone `lab/` HSS adapter and `media/`
   RTPEngine-compatible sidecar.
 
@@ -76,6 +78,31 @@ The same suite covers the RTPEngine SDP boundary: content-type checks, required 
 
 `tests/https_client_test.mko` covers the Mako HTTPS client (`madis_https.mko`, built on the runtime TLS pool) envelope ("status|body") parsing and, with `MADIS_HTTPS_TEST_URL`/`MADIS_HTTPS_TEST_CA`/`MADIS_HTTPS_TEST_TOKEN` set, a live authenticated HTTPS POST including bearer delivery, DNS resolution, hostname verification, and fail-closed behavior with a wrong CA. TLS endpoints must use DNS names. It does not replace interoperability testing against the production subscriber/charging/application endpoints.
 
+The following focused contract tests cover the newer IMS and application
+boundaries:
+
+- `tests/ims_cx_push_test.mko` covers RTR/PPR parsing and application,
+  mTLS client-CN policy, answer construction, and listener-port bounds.
+- `tests/ims_flow_test.mko` covers dynamic flow refresh, connection-index
+  replacement, expiry cleanup, token validation, and configuration clamps.
+- `tests/ims_ipsec_test.mko` covers export gating, CK/IK-derived SA JSON,
+  bounded SPI/port configuration, nonce validation, and cache lookup.
+- `tests/ims_rx_test.mko` covers Rx AAR/STR construction, shared session
+  correlation, disabled no-op behavior, and fail-closed behavior without a
+  usable peer.
+- `tests/ims_session_timer_test.mko` covers negotiated response headers,
+  endpoint/proxy refresher ownership, glare state, and request validation.
+- `tests/maf_contract_test.mko` covers every enabled HTTP route, credential
+  scope separation, JSON escaping, command identity precedence, body limits,
+  tenant-safe identifiers, cursor bounds, inbound SDP, and SIP invite
+  construction.
+- `tests/ops_test.mko` covers worker-admin secret comparison and reload
+  invalidation of runtime overrides.
+
+These are local contract tests. They intentionally do not mark pending MAF
+bridge/media executors, kernel IPsec installation, live subscriptions, or
+external interoperability as complete.
+
 | Test | Coverage |
 | --- | --- |
 | `tests/admin_http_test.mko` | HTTP framing, cookie boundaries, form decoding, and Origin checks. |
@@ -94,6 +121,12 @@ The same suite covers the RTPEngine SDP boundary: content-type checks, required 
 | `tests/ims_registration_test.mko` | Optional Service-Route/P-Associated-URI configuration and REGISTER response header safety. |
 | `tests/ims_subscriber_test.mko` | Subscriber authorization envelope and bounded profile-associated identity extraction. |
 | `tests/ims_ifc_test.mko` | Target-only profile iFC target validation, bounded state, duplicate rejection, call-direction guards, and clearing. |
+| `tests/ims_cx_push_test.mko` | Cx RTR/PPR push handling, client-CN pinning, and listener configuration bounds. |
+| `tests/ims_flow_test.mko` | Dynamic flow refresh/replacement, expiry cleanup, token validation, and clamps. |
+| `tests/ims_ipsec_test.mko` | CK/IK SA export gating, JSON/cache boundaries, and configuration validation. |
+| `tests/ims_rx_test.mko` | Rx AAR/STR wire contracts, session correlation, and fail-closed authorization. |
+| `tests/maf_contract_test.mko` | All MAF routes, auth scopes, idempotency parsing, body limits, and inbound control boundaries. |
+| `tests/ops_test.mko` | Admin token comparison and runtime configuration reload invalidation. |
 | `tests/rfc3261_abnf_test.mko` | Compact headers, quoted values, continuation, Via grammar, and Proxy-Require. |
 | `tests/rfc3263_test.mko` | NAPTR/SRV ordering, transport selection, IPv6 targets, and port validation. |
 
@@ -130,6 +163,22 @@ SIP_RTPENGINE_TEST_NETWORK=1 \
 ```
 
 This verifies the Madis UDP client against a test responder in the same process boundary; it is not evidence of RTP, ICE, DTLS-SRTP, endpoint, or production RTPEngine interoperability.
+
+For an opt-in deployed MAF security matrix, point the test at an isolated
+staging tenant and use short-lived write/read credentials:
+
+```sh
+MAF_SECURITY_TEST_ENABLE=1 \
+MAF_BASE_URL=https://proxy.example.net/admin \
+MAF_WRITE_TOKEN="$SIP_MAF_API_TOKEN" \
+MAF_READ_TOKEN="$SIP_MAF_API_READ_TOKEN" \
+  python3 bench/maf_security_matrix.py
+```
+
+The matrix checks route authorization, read/write separation, idempotency
+replay and conflict handling, path confusion, event reads, and explicit
+asynchronous bridge/media command acceptance. It is disabled by default and
+must run against a disposable staging tenant because it creates a test call.
 
 ## Docker IMS integration lab
 
