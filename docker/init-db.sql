@@ -82,6 +82,30 @@ CREATE TABLE IF NOT EXISTS registration_bindings (
     UNIQUE(aor, contact)
 );
 
+-- Durable IMS registration lifecycle (IMPI/IMPU, Path, Service-Route, S-CSCF).
+CREATE TABLE IF NOT EXISTS ims_registrations (
+    aor                 TEXT PRIMARY KEY,
+    private_identity    TEXT NOT NULL DEFAULT '',
+    public_identity     TEXT NOT NULL DEFAULT '',
+    contact             TEXT NOT NULL DEFAULT '',
+    transport           TEXT NOT NULL DEFAULT '',
+    path                TEXT NOT NULL DEFAULT '',
+    service_route       TEXT NOT NULL DEFAULT '',
+    server_name         TEXT NOT NULL DEFAULT '',
+    associated_uris     TEXT NOT NULL DEFAULT '',
+    auth_state          TEXT NOT NULL DEFAULT 'registered',
+    node_id             TEXT NOT NULL DEFAULT '',
+    source_ip           TEXT NOT NULL DEFAULT '',
+    source_port         INT NOT NULL DEFAULT 0,
+    expires_at          TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMP NOT NULL DEFAULT NOW(),
+    created_at          TIMESTAMP NOT NULL DEFAULT NOW(),
+    CONSTRAINT ims_reg_aor_size CHECK (char_length(aor) BETWEEN 1 AND 512),
+    CONSTRAINT ims_reg_auth_state CHECK (auth_state IN ('registered', 'deregistered'))
+);
+CREATE INDEX IF NOT EXISTS idx_ims_registrations_expires ON ims_registrations (expires_at);
+CREATE INDEX IF NOT EXISTS idx_ims_registrations_private ON ims_registrations (private_identity);
+
 CREATE TABLE IF NOT EXISTS gateways (
     id              SERIAL PRIMARY KEY,
     name            TEXT UNIQUE NOT NULL,

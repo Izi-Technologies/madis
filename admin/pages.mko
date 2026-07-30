@@ -267,6 +267,12 @@ fn f_dashboard(db: SqlDB, ok: int) -> string {
         if len(realm) == 0 { realm = fqdn }
         if str_eq(realm, "mako.local") { realm = fqdn }
     }
+    // Display the configured listener identity, never hardcoded deployment values.
+    let udp_port = env_get_or("SIP_UDP_PORT", "5060")
+    let tls_port = env_get_or("SIP_TLS_PORT", "5061")
+    let wss_port = env_get_or("SIP_WSS_PORT", "8443")
+    let mut proxy_host = fqdn
+    if len(proxy_host) == 0 { proxy_host = pubip }
     if ok == 1 {
         // Online = not expired (honor expires_at). Do not use register_ok metric (cumulative 200s).
         let count_parts = str_split(dashboard_counts(db, ok), "|")
@@ -371,20 +377,20 @@ fn f_dashboard(db: SqlDB, ok: int) -> string {
         + "<div style=\"display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-top:20px\">"
         + "<div style=\"padding:12px 14px;border-radius:12px;background:rgba(2,6,23,.4);border:1px solid var(--border)\"><div style=\"font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:.08em\">Realm</div><div style=\"margin-top:4px\"><code>" + html_esc(realm) + "</code></div></div>"
         + "<div style=\"padding:12px 14px;border-radius:12px;background:rgba(2,6,23,.4);border:1px solid var(--border)\"><div style=\"font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:.08em\">Public IP</div><div style=\"margin-top:4px\"><code>" + html_esc(pubip) + "</code></div></div>"
-        + "<div style=\"padding:12px 14px;border-radius:12px;background:rgba(2,6,23,.4);border:1px solid var(--border)\"><div style=\"font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:.08em\">UDP / TCP</div><div style=\"margin-top:4px\"><code>:5060</code></div></div>"
-        + "<div style=\"padding:12px 14px;border-radius:12px;background:rgba(2,6,23,.4);border:1px solid var(--border)\"><div style=\"font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:.08em\">TLS / WSS</div><div style=\"margin-top:4px\"><code>:5061 · :8443</code></div></div>"
+        + "<div style=\"padding:12px 14px;border-radius:12px;background:rgba(2,6,23,.4);border:1px solid var(--border)\"><div style=\"font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:.08em\">UDP / TCP</div><div style=\"margin-top:4px\"><code>:" + html_esc(udp_port) + "</code></div></div>"
+        + "<div style=\"padding:12px 14px;border-radius:12px;background:rgba(2,6,23,.4);border:1px solid var(--border)\"><div style=\"font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:.08em\">TLS / WSS</div><div style=\"margin-top:4px\"><code>:" + html_esc(tls_port) + " · :" + html_esc(wss_port) + "</code></div></div>"
         + "</div></div>"
 
     let client_card = "<div class=\"card\"><h2>Client / softphone settings</h2>"
         + "<p style=\"color:var(--muted);font-size:13px;margin-bottom:12px\">Point any SIP UA (Linphone, MicroSIP, Zoiper, etc.) at this edge. No built-in softphone — external clients only.</p>"
         + "<table><tr><th>Setting</th><th>Value</th></tr>"
         + "<tr><td>Domain / realm</td><td><code>" + html_esc(realm) + "</code></td></tr>"
-        + "<tr><td>Proxy host</td><td><code>proxy.mako-lang.com</code> or <code>" + html_esc(pubip) + "</code></td></tr>"
-        + "<tr><td>UDP / TCP</td><td><code>5060</code></td></tr>"
-        + "<tr><td>TLS (SIPS)</td><td><code>5061</code></td></tr>"
-        + "<tr><td>WSS (behind leba TLS)</td><td><code>8443</code> internal · public WSS via HTTPS reverse proxy</td></tr>"
+        + "<tr><td>Proxy host</td><td><code>" + html_esc(proxy_host) + "</code></td></tr>"
+        + "<tr><td>UDP / TCP</td><td><code>" + html_esc(udp_port) + "</code></td></tr>"
+        + "<tr><td>TLS (SIPS)</td><td><code>" + html_esc(tls_port) + "</code></td></tr>"
+        + "<tr><td>WSS (behind TLS)</td><td><code>" + html_esc(wss_port) + "</code> internal · public WSS via HTTPS reverse proxy</td></tr>"
         + "<tr><td>Auth</td><td>Digest · users from <a hx-get=\"/admin/users\" hx-target=\"#c\">SIP Users</a></td></tr>"
-        + "<tr><td>Media</td><td>rtpengine ports <code>30000–40000/udp</code> (SDP rewritten to public IP)</td></tr>"
+        + "<tr><td>Media</td><td>RTP/RTCP owned by the external RTPEngine (SDP rewritten to public IP)</td></tr>"
         + "<tr><td>DTMF</td><td>RFC 4733 <code>telephone-event</code> in RTP (via rtpengine) · SIP INFO <code>application/dtmf-relay</code> mid-dialog (proxy transparent)</td></tr>"
         + "</table>"
         + "<p style=\"color:var(--faint);font-size:12px;margin-top:12px\">Prometheus: session cookie <code>GET /admin/api/prom</code> or <code>Authorization: Bearer ADMIN_METRICS_TOKEN</code></p>"

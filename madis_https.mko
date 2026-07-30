@@ -1,0 +1,106 @@
+// Bounded HTTPS client for Madis's own outbound contracts (subscriber
+// authorize, application/module gateways, charging adapter). Implemented on
+// the runtime TLS pool (the same primitives as the Diameter client) so the
+// data path carries no Madis-owned C: DNS resolution, CA verification, and
+// socket timeouts come from the runtime; HTTP framing lives here.
+//
+// Returns "NNN|body" (3-digit status, first '|' separator), or an empty
+// string on transport/TLS/verification failure. Callers must treat any
+// non-2xx status as denial.
+//
+// Hostname verification requires a DNS name (or "localhost"); IP literals do
+// not match iPAddress SANs through the runtime verifier. Deployments must use
+// DNS names for TLS endpoints, as with the Diameter client.
+
+fn https_post_text_ok(value: string, max: int, allow_colon: int) -> int {
+    if len(value) < 1 || len(value) > max { return 0 }
+    let mut i = 0
+    while i < len(value) {
+        let c = int(value[i])
+        if c < 32 || c == 127 { return 0 }
+        if allow_colon == 0 && c == 58 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+// Read until the peer closes (Connection: close is sent) or the configured
+// body+header cap is reached. tls_pool_recv honors the I/O timeout applied to
+// the handle, so a peer that stalls fails the exchange instead of hanging a
+// SIP worker.
+fn https_post_read_all(handle: int) -> string {
+    let mut raw = ""
+    let mut total = 0
+    while total < 73728 {
+        let chunk = tls_pool_recv(handle, 8192)
+        if len(chunk) == 0 { break }
+        raw = raw + chunk
+        total = total + len(chunk)
+    }
+    return raw
+}
+
+fn https_post_status_line(raw: string) -> int {
+    if len(raw) < 12 || not str_has_prefix(raw, "HTTP/") { return 0 }
+    let sp = str_index(raw, " ")
+    if sp < 5 || sp > 12 || sp + 4 > len(raw) { return 0 }
+    match parse_int(raw[sp + 1:sp + 4]) {
+        Ok(v) => { return v }
+        Err(_) => { return 0 }
+    }
+    return 0
+}
+
+fn madis_https_post(host: string, port: int, path: string, token: string, body: string, ca: string, timeout_ms: int) -> string {
+    if port < 1 || port > 65535 || timeout_ms < 1 { return "" }
+    if https_post_text_ok(host, 253, 1) == 0 { return "" }
+    if len(token) > 0 && https_post_text_ok(token, 512, 1) == 0 { return "" }
+    if len(body) < 1 || len(body) > 65536 { return "" }
+    if len(path) < 1 || len(path) > 1024 || int(path[0]) != 47 { return "" }
+    if https_post_text_ok(path, 1024, 1) == 0 { return "" }
+    if tls_client_available() != 1 { return "" }
+
+    let handle = tls_pool_open_timeout(host, port, ca, timeout_ms)
+    if handle < 1 || tls_pool_fd(handle) < 0 { return "" }
+    let _ = tls_pool_set_timeout(handle, timeout_ms)
+
+    let mut auth = ""
+    if len(token) > 0 { auth = "Authorization: Bearer " + token + "\r\n" }
+    let request = "POST " + path + " HTTP/1.1\r\n"
+        + "Host: " + host + "\r\n"
+        + auth
+        + "Accept: application/json\r\n"
+        + "Content-Type: application/json\r\n"
+        + "Content-Length: " + string(len(body)) + "\r\n"
+        + "Connection: close\r\n\r\n" + body
+    let sent = tls_pool_send(handle, request)
+    if sent != len(request) {
+        let _ = tls_pool_close(handle)
+        return ""
+    }
+    let raw = https_post_read_all(handle)
+    let _ = tls_pool_close(handle)
+    if len(raw) < 12 { return "" }
+    let status = https_post_status_line(raw)
+    if status < 100 || status > 999 { return "" }
+    let head_end = str_index(raw, "\r\n\r\n")
+    if head_end < 0 { return "" }
+    let body_out = raw[head_end + 4:]
+    return string(status) + "|" + body_out
+}
+
+// madis_https_post returns "NNN|body"; empty means transport/TLS failure.
+// These two helpers are the only sanctioned way to read that envelope.
+fn https_post_status(response: string) -> int {
+    if len(response) < 4 || int(response[3]) != 124 { return 0 }
+    match parse_int(response[0:3]) {
+        Ok(v) => { return v }
+        Err(_) => { return 0 }
+    }
+    return 0
+}
+
+fn https_post_body(response: string) -> string {
+    if len(response) < 4 || int(response[3]) != 124 { return "" }
+    return response[4:]
+}

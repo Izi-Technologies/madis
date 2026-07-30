@@ -160,3 +160,27 @@ fn TestRTPEngineMalformedResponseFailsClosed() {
     detached_join_all()
     let _ = udp_close(server)
 }
+
+fn TestRTPNodeListParsing() {
+    let _ = env_set("SIP_RTPENGINE_NODES", "media1.example.com:2223, media2.example.com:2224")
+    assert_eq(rtp_node_count(), 2)
+    assert_eq_str(rtp_node_host(rtp_node_at(0)), "media1.example.com")
+    assert_eq(rtp_node_port(rtp_node_at(0)), 2223)
+    assert_eq_str(rtp_node_host(rtp_node_at(1)), "media2.example.com")
+    assert_eq(rtp_node_port(rtp_node_at(1)), 2224)
+    let idx = rtp_node_index_for("call-id-abc")
+    assert_eq(if idx == 0 || idx == 1 { 1 } else { 0 }, 1)
+    let _ = env_set("SIP_RTPENGINE_NODES", "")
+}
+
+fn TestRTPProfileFlags() {
+    let _ = env_set("SIP_RTPENGINE_FLAGS", "")
+    let _ = env_set("SIP_RTPENGINE_PROFILE", "ice-srtp")
+    assert_eq_str(rtp_policy_flags(), "ICE,SRTP,DTLS")
+    let _ = env_set("SIP_RTPENGINE_PROFILE", "srtp")
+    assert_eq_str(rtp_policy_flags(), "SRTP")
+    let _ = env_set("SIP_RTPENGINE_FLAGS", "custom-flag")
+    assert_eq_str(rtp_policy_flags(), "custom-flag")
+    let _ = env_set("SIP_RTPENGINE_FLAGS", "")
+    let _ = env_set("SIP_RTPENGINE_PROFILE", "")
+}

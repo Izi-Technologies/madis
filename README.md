@@ -11,7 +11,7 @@ This README is an orientation guide, not a complete feature matrix. The linked d
 - A standalone authenticated WebUI and versioned machine API under `/admin/api/v1/`.
 - Optional RTPEngine-ng control messages for bounded SDP offer/answer/delete operations. The SIP worker does not own RTP, RTCP, ICE, DTLS-SRTP, codecs, recording, or media policy.
 - Selected Diameter RFC 6733/RFC 8506, IMS Cx/Sh, HEPv3, STIR/SHAKEN, charging, and signed external-application contracts. These are bounded integration surfaces, not complete relay, policy, media, or carrier platforms.
-- A bounded IMS voice profile: role-aware P-/I-/S-CSCF REGISTER and initial-INVITE handling, selected Cx/AKA authorization, HTTPS subscriber authorization, request-side session-timer validation, trusted identity/privacy filtering, configured Path and Service-Route boundaries, P-Associated-URI handling, and target-only subscriber iFC application targets.
+- A bounded IMS voice profile: role-aware P-/I-/S-CSCF REGISTER and initial-INVITE handling, selected Cx/AKA authorization, HTTPS subscriber authorization, durable IMS registration lifecycle (IMPI/IMPU, Path, Service-Route, S-CSCF binding, restart hydration, and Path-aware MT routing), dynamic flow-token refresh/cleanup when enabled, session-timer validation plus negotiated response headers, trusted identity/privacy filtering, P-Associated-URI handling, target-only subscriber iFC application targets, and terminating P-Charging-Vector validation.
 
 ## IMS lab profile
 

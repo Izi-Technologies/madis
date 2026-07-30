@@ -1,0 +1,48 @@
+// Map Cx/Diameter result codes to SIP status + reason tag (fail closed).
+
+fn ims_diameter_result_sip_code(result: int) -> int {
+    if result == 2001 || result == 2002 || result == 2003 || result == 2004 { return 200 }
+    if result == 5001 { return 403 }   // DIAMETER_ERROR_USER_UNKNOWN
+    if result == 5004 { return 403 }   // DIAMETER_INVALID_AVP_VALUE
+    if result == 5005 { return 403 }   // DIAMETER_MISSING_AVP
+    if result == 5002 { return 480 }   // DIAMETER_UNKNOWN_SESSION_ID
+    if result == 5012 { return 503 }   // DIAMETER_UNABLE_TO_COMPLY
+    if result == 3002 { return 503 }   // DIAMETER_UNABLE_TO_DELIVER
+    if result == 3004 { return 503 }   // DIAMETER_TOO_BUSY
+    if result == 4181 { return 403 }   // DIAMETER_ERROR_IDENTITY_NOT_REGISTERED (3GPP)
+    if result == 5003 { return 403 }   // DIAMETER_AUTHORIZATION_REJECTED
+    if result < 0 { return 503 }
+    if result >= 3000 && result < 4000 { return 503 }
+    if result >= 5000 { return 403 }
+    return 503
+}
+
+fn ims_diameter_result_sip_reason(result: int) -> string {
+    if result == 2001 || result == 2002 || result == 2003 || result == 2004 { return "OK" }
+    if result == 5001 { return "Forbidden" }
+    if result == 5004 || result == 5005 { return "Forbidden" }
+    if result == 5002 { return "Temporarily Unavailable" }
+    if result == 5012 || result == 3002 || result == 3004 { return "Service Unavailable" }
+    if result == 4181 { return "Forbidden" }
+    if result == 5003 { return "Forbidden" }
+    if result < 0 { return "Service Unavailable" }
+    return "Service Unavailable"
+}
+
+fn ims_diameter_result_tag(result: int) -> string {
+    if result == 5001 { return "ims-cx-user-unknown" }
+    if result == 5004 { return "ims-cx-invalid-avp" }
+    if result == 5012 { return "ims-cx-unable" }
+    if result == 3004 { return "ims-cx-busy" }
+    if result == 4181 { return "ims-cx-not-registered" }
+    if result < 0 { return "ims-cx-unavailable" }
+    return "ims-cx-error"
+}
+
+fn ims_diameter_sip_reply(msg: string, n: int, result: int) -> string {
+    let code = ims_diameter_result_sip_code(result)
+    let reason = ims_diameter_result_sip_reason(result)
+    let tag = ims_diameter_result_tag(result)
+    if code == 200 { return "" }
+    return sip_resp(code, reason, msg, n, tag)
+}

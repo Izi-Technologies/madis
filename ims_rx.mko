@@ -1,0 +1,141 @@
+// 3GPP Rx (TS 29.214) Diameter contract — builders + answer validation only.
+// PCRF/PCF decisioning and dedicated-bearer control remain external.
+
+pull . "./diameter.mko"
+
+fn ims_rx_application() -> int { return 16777236 }
+fn ims_rx_aar_command() -> int { return 265 }
+fn ims_rx_str_command() -> int { return 275 }
+fn ims_rx_asr_command() -> int { return 274 }
+fn ims_rx_rar_command() -> int { return 258 }
+
+fn ims_rx_enabled() -> int {
+    let v = str_to_lower(str_trim_space(env_get_or("SIP_IMS_RX", "0")))
+    return if str_eq(v, "1") || str_eq(v, "true") || str_eq(v, "yes") { 1 } else { 0 }
+}
+
+fn ims_rx_text_ok(value: string, maximum: int) -> int {
+    if len(value) < 1 || len(value) > maximum { return 0 }
+    let mut i = 0
+    while i < len(value) {
+        let c = int(value[i])
+        if c < 32 || c == 127 || c == 34 || c == 92 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn ims_rx_session_id(seed: string) -> string {
+    if ims_rx_text_ok(seed, 1024) == 0 { return "" }
+    return diameter_origin_host() + ";rx-" + sha256("madis.rx.session|" + seed)[0:32]
+}
+
+// One AF session per SIP call: AAR and STR must carry the same Session-Id or
+// the PCRF cannot correlate termination with the authorized session.
+fn ims_rx_call_session_id(call_id: string) -> string {
+    return ims_rx_session_id("call|" + call_id)
+}
+
+fn ims_rx_base_body(session_id: string) -> string {
+    let origin_host = diameter_origin_host()
+    let origin_realm = diameter_origin_realm()
+    let destination_realm = diameter_destination_realm()
+    if len(session_id) == 0 || diameter_identity_ok(origin_host) == 0 || diameter_identity_ok(origin_realm) == 0 || diameter_identity_ok(destination_realm) == 0 {
+        return ""
+    }
+    let vsa_children = madis_diameter_avp_u32(266, 10415) + madis_diameter_avp_u32(258, ims_rx_application())
+    let vsa = diameter_grouped(260, vsa_children)
+    if len(vsa) == 0 { return "" }
+    let mut body = diameter_avp_string(263, session_id)
+        + vsa
+        + madis_diameter_avp_u32(277, 1)
+        + diameter_avp_string(264, origin_host)
+        + diameter_avp_string(296, origin_realm)
+        + diameter_avp_string(283, destination_realm)
+    let dest_host = str_trim_space(env_get_or("SIP_IMS_RX_DEST_HOST", env_get_or("SIP_IMS_DEST_HOST", "")))
+    if len(dest_host) > 0 {
+        if diameter_identity_ok(dest_host) == 0 { return "" }
+        body = body + diameter_avp_string(293, dest_host)
+    }
+    return body
+}
+
+// AA-Request: AF session establishment (bounded media component description).
+// media_component is an opaque string (max 2048) — not SDP parsing in-process.
+fn ims_rx_aar(call_id: string, af_app_id: string, subscription_id: string, media_component: string) -> string {
+    if ims_rx_text_ok(call_id, 256) == 0 || ims_rx_text_ok(af_app_id, 256) == 0 || ims_rx_text_ok(subscription_id, 1024) == 0 { return "" }
+    if len(media_component) > 2048 { return "" }
+    if len(media_component) > 0 {
+        let mut i = 0
+        while i < len(media_component) {
+            let c = int(media_component[i])
+            if c == 0 || c == 10 || c == 13 { return "" }
+            i = i + 1
+        }
+    }
+    let session_id = ims_rx_call_session_id(call_id)
+    let mut body = ims_rx_base_body(session_id)
+    if len(body) == 0 { return "" }
+    // AF-Application-Identifier (504), Subscription-Id (443) as string forms.
+    body = body + diameter_avp_vendor_string(504, 10415, af_app_id)
+    body = body + diameter_avp_string(443, subscription_id)
+    if len(media_component) > 0 {
+        body = body + diameter_avp_vendor_string(517, 10415, media_component)
+    }
+    let hop = diameter_id("rx-hop|" + session_id)
+    let end = diameter_id("rx-end|" + session_id)
+    let message = diameter_header(192, ims_rx_aar_command(), ims_rx_application(), hop, end, body)
+    return if diameter_message_valid(message) == 1 { message } else { "" }
+}
+
+// Session-Termination-Request for AF session end. The Session-Id matches the
+// AAR for the same call so the PCRF terminates the session it authorized.
+fn ims_rx_str(call_id: string, cause: int) -> string {
+    if ims_rx_text_ok(call_id, 256) == 0 { return "" }
+    if cause < 0 || cause > 8 { return "" }
+    let session_id = ims_rx_call_session_id(call_id)
+    let mut body = ims_rx_base_body(session_id)
+    if len(body) == 0 { return "" }
+    body = body + madis_diameter_avp_u32(295, cause)
+    let hop = diameter_id("rx-str-hop|" + session_id)
+    let end = diameter_id("rx-str-end|" + session_id)
+    let message = diameter_header(192, ims_rx_str_command(), ims_rx_application(), hop, end, body)
+    return if diameter_message_valid(message) == 1 { message } else { "" }
+}
+
+fn ims_rx_answer_success(request: string, response: string, command: int) -> int {
+    if diameter_peer_answer_matches(request, response, ims_rx_application(), command) == 0 { return 0 }
+    let result = diameter_find_u32(response, 268)
+    if result == 2001 || result == 2002 { return 1 }
+    return 0
+}
+
+fn ims_rx_exchange(cache: CMap, peer_lock: Mutex, request: string, command: int) -> string {
+    if ims_rx_enabled() == 0 { return "" }
+    if len(request) == 0 { return "" }
+    return diameter_peer_exchange(cache, peer_lock, request, ims_rx_application(), command)
+}
+
+// Authorize media for a call. Fail closed when Rx enabled and PCRF denies.
+// When Rx disabled, returns 1 (no-op).
+fn ims_rx_authorize(cache: CMap, peer_lock: Mutex, call_id: string, subscription_id: string, media_desc: string) -> int {
+    if ims_rx_enabled() == 0 { return 1 }
+    if ims_rx_text_ok(call_id, 256) == 0 || ims_rx_text_ok(subscription_id, 1024) == 0 { return 0 }
+    let af_id = str_trim_space(env_get_or("SIP_IMS_RX_AF_APP_ID", "madis.voice"))
+    if ims_rx_text_ok(af_id, 256) == 0 { return 0 }
+    let request = ims_rx_aar(call_id, af_id, subscription_id, media_desc)
+    if len(request) == 0 { return 0 }
+    let response = ims_rx_exchange(cache, peer_lock, request, ims_rx_aar_command())
+    if len(response) == 0 { return 0 }
+    return ims_rx_answer_success(request, response, ims_rx_aar_command())
+}
+
+fn ims_rx_terminate(cache: CMap, peer_lock: Mutex, call_id: string) -> int {
+    if ims_rx_enabled() == 0 { return 1 }
+    if ims_rx_text_ok(call_id, 256) == 0 { return 0 }
+    let request = ims_rx_str(call_id, 1)
+    if len(request) == 0 { return 0 }
+    let response = ims_rx_exchange(cache, peer_lock, request, ims_rx_str_command())
+    if len(response) == 0 { return 0 }
+    return ims_rx_answer_success(request, response, ims_rx_str_command())
+}

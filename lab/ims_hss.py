@@ -325,6 +325,10 @@ class HssApplication:
         self.origin_host = origin_host
         self.origin_realm = origin_realm
         self.debug = os.environ.get("IMS_HSS_DEBUG") == "1"
+        # Last issued RAND (first 16 octets of SIP-Authenticate) per private id.
+        # Lab AUTS resync requires the UE/S-CSCF to present a RAND we issued.
+        self._last_rand: dict[str, bytes] = {}
+        self._rand_lock = threading.RLock()
 
     def _common_body(self, request: DiameterMessage, result: int) -> bytes:
         session_id = request.find(263)
@@ -368,18 +372,88 @@ class HssApplication:
         return public, private, server
 
     @staticmethod
-    def _mar_scheme(request: DiameterMessage) -> str:
+    def _mar_item_fields(request: DiameterMessage) -> tuple[str, bytes | None, bytes | None]:
+        """Return (scheme, sip_authenticate/RAND, sip_authorization/AUTS-or-empty)."""
         item = request.find(612, THREEGPP_VENDOR)
         if item is None:
-            return ""
+            return "", None, None
         try:
             nested = _parse_avps(item)
         except DiameterError:
-            return ""
+            return "", None, None
+        scheme = ""
+        authenticate: bytes | None = None
+        authorization: bytes | None = None
         for avp in nested:
-            if avp.code == 608 and avp.vendor == THREEGPP_VENDOR:
-                return _safe_ascii(avp.value, 128)
-        return ""
+            if avp.vendor != THREEGPP_VENDOR:
+                continue
+            if avp.code == 608:
+                scheme = _safe_ascii(avp.value, 128)
+            elif avp.code == 609:
+                authenticate = avp.value
+            elif avp.code == 610:
+                authorization = avp.value
+        return scheme, authenticate, authorization
+
+    @staticmethod
+    def _mar_number_of_items(request: DiameterMessage) -> int:
+        raw = request.find(607, THREEGPP_VENDOR)
+        if raw is None or len(raw) != 4:
+            return 1
+        value = struct.unpack("!I", raw)[0]
+        if value < 1:
+            return 1
+        if value > 5:
+            return 5
+        return value
+
+    def _issue_vectors(self, private: str, xres: bytes, count: int) -> bytes:
+        """Build one or more SIP-Auth-Data-Item groups; remember first RAND."""
+        body = b""
+        first_rand: bytes | None = None
+        for index in range(count):
+            # Lab vector: 16-byte RAND || 16-byte opaque AUTN-like tag.
+            rand = secrets.token_bytes(16)
+            autn = secrets.token_bytes(16)
+            authenticate = rand + autn
+            if first_rand is None:
+                first_rand = rand
+            children = _avp_u32(613, index, vendor=THREEGPP_VENDOR)
+            children += _vendor_text(608, "Digest-AKAv1-MD5")
+            children += _vendor_bytes(609, authenticate)
+            children += _vendor_bytes(610, xres)
+            body += _vendor_grouped(612, children)
+        if first_rand is not None and private:
+            with self._rand_lock:
+                self._last_rand[private] = first_rand
+        return body
+
+    def _handle_mar(self, request: DiameterMessage, item: Subscriber, private: str) -> bytes:
+        scheme, authenticate, authorization = self._mar_item_fields(request)
+        if scheme != "Digest-AKAv1-MD5":
+            return self._answer(request, RESULT_UNSUPPORTED)
+        count = self._mar_number_of_items(request)
+
+        # AUTS resync: SIP-Authorization carries AUTS; SIP-Authenticate is RAND.
+        if authorization is not None and len(authorization) > 0:
+            if not 8 <= len(authorization) <= 32:
+                return self._answer(request, RESULT_UNSUPPORTED)
+            if authenticate is None or not 8 <= len(authenticate) <= 64:
+                return self._answer(request, RESULT_UNSUPPORTED)
+            rand = authenticate[:16] if len(authenticate) >= 16 else authenticate
+            with self._rand_lock:
+                expected = self._last_rand.get(private)
+            # Fail closed: AUTS must reference a RAND this lab HSS issued.
+            if expected is None or expected != rand:
+                if self.debug:
+                    print("diameter MAR AUTS rejected: RAND not issued", flush=True)
+                return self._answer(request, RESULT_UNKNOWN_USER)
+            if self.debug:
+                print(f"diameter MAR AUTS resync private={private} vectors={count}", flush=True)
+            return self._answer(request, RESULT_SUCCESS, self._issue_vectors(private, item.xres, count))
+
+        # Normal vector fetch.
+        return self._answer(request, RESULT_SUCCESS, self._issue_vectors(private, item.xres, count))
 
     def handle(self, raw: bytes) -> bytes:
         try:
@@ -407,14 +481,7 @@ class HssApplication:
         if request.command == 302:
             return self._answer(request, RESULT_SUCCESS, _vendor_text(602, item.assigned_server_name))
         if request.command == 303:
-            if self._mar_scheme(request) != "Digest-AKAv1-MD5":
-                return self._answer(request, RESULT_UNSUPPORTED)
-            auth = secrets.token_bytes(16)
-            children = _avp_u32(613, 0, vendor=THREEGPP_VENDOR)
-            children += _vendor_text(608, "Digest-AKAv1-MD5")
-            children += _vendor_bytes(609, auth)
-            children += _vendor_bytes(610, item.xres)
-            return self._answer(request, RESULT_SUCCESS, _vendor_grouped(612, children))
+            return self._handle_mar(request, item, private)
         return self._answer(request, RESULT_UNSUPPORTED)
 
 

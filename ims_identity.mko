@@ -54,3 +54,28 @@ fn ims_identity_apply_privacy(msg: string) -> string {
     result = hdr_remove(result, "P-Preferred-Identity")
     return result
 }
+
+// Optional PAI generation for trusted egress (SIP_IMS_ASSERT_IDENTITY=1).
+// Uses a validated public identity URI only; never invents from untrusted From.
+fn ims_identity_assert_enabled() -> int {
+    let v = str_to_lower(str_trim_space(env_get_or("SIP_IMS_ASSERT_IDENTITY", "0")))
+    return if str_eq(v, "1") || str_eq(v, "true") || str_eq(v, "yes") { 1 } else { 0 }
+}
+
+fn ims_identity_assert_apply(msg: string, public_identity: string) -> string {
+    if ims_identity_assert_enabled() == 0 { return msg }
+    if len(public_identity) < 1 || len(public_identity) > 2048 { return msg }
+    if str_index(public_identity, "\r") >= 0 || str_index(public_identity, "\n") >= 0 || str_index(public_identity, ",") >= 0 {
+        return msg
+    }
+    let mut value = public_identity
+    if not str_has_prefix(str_to_lower(value), "sip:") && not str_has_prefix(str_to_lower(value), "sips:") {
+        value = "sip:" + value
+    }
+    if sip_name_addr_valid("<" + value + ">") == 0 { return msg }
+    // Do not assert when Privacy: id is present.
+    if ims_identity_privacy_id(msg) == 1 { return msg }
+    let mut result = hdr_remove(msg, "P-Asserted-Identity")
+    result = hdr_add(result, "P-Asserted-Identity", "<" + value + ">")
+    return result
+}

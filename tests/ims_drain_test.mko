@@ -1,0 +1,13 @@
+// Drain mode contract tests.
+pull . "../main.mko"
+
+fn TestIMSDrainEnabled() {
+    let _ = env_set("SIP_DRAIN", "0")
+    assert_eq(ims_drain_reject_new(), 0)
+    let _ = env_set("SIP_DRAIN", "1")
+    assert_eq(ims_drain_reject_new(), 1)
+    let msg = "INVITE sip:b@example.com SIP/2.0\r\nVia: SIP/2.0/UDP a:5060;branch=z9hG4bK-d\r\nFrom: <sip:a@example.com>;tag=t\r\nTo: <sip:b@example.com>\r\nCall-ID: d@example.com\r\nCSeq: 1 INVITE\r\nContent-Length: 0\r\n\r\n"
+    let reply = ims_drain_reply(msg, len(msg))
+    assert_eq(if str_index(reply, "503") >= 0 { 1 } else { 0 }, 1)
+    let _ = env_set("SIP_DRAIN", "0")
+}

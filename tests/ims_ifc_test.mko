@@ -58,3 +58,51 @@ fn TestIMSIFCStateBoundedAndCleared() {
     assert_eq(ims_ifc_reconcile_registration(expired_reg, "alice@example.com", "sip:tas.example.com"), 1)
     assert_eq_str(ims_ifc_targets(expired_reg, "alice@example.com"), "")
 }
+
+fn TestIMSIFCStructuredCriteria() {
+    let response = "{\"schema\":\"" + ims_subscriber_schema() + "\",\"operation\":\"authorize-register\",\"service_profile\":{\"initial_filter_criteria\":[{\"priority\":10,\"as_uri\":\"sip:tas1.example.com\",\"default_handling\":0,\"spt\":{\"method\":\"INVITE\",\"session_case\":\"originating\"}},{\"priority\":20,\"as_uri\":\"sip:tas2.example.com\",\"default_handling\":1,\"spt\":{\"method\":\"INVITE\",\"session_case\":\"terminating\"}}]}}"
+    let rules = ims_ifc_profile_targets(response)
+    assert_eq(if str_index(rules, "sip:tas1.example.com") >= 0 { 1 } else { 0 }, 1)
+    assert_eq(if str_index(rules, "sip:tas2.example.com") >= 0 { 1 } else { 0 }, 1)
+    let reg = cmap_new()
+    assert_eq(registration_store(reg, "alice@example.com", "sip:alice@192.0.2.10", "udp", 300, "192.0.2.10", 5060), 1)
+    assert_eq(ims_ifc_set(reg, "alice@example.com", rules), 1)
+    assert_eq_str(ims_ifc_originating_targets(reg, "alice@example.com", 1, 1), "sip:tas1.example.com")
+    assert_eq_str(ims_ifc_terminating_targets(reg, "alice@example.com", 1, 1), "sip:tas2.example.com")
+    assert_eq(ims_ifc_first_default_handling(reg, "alice@example.com", 1, "INVITE"), 1)
+}
+
+fn TestIMSIFC3pRegBuild() {
+    let _ = env_set("SIP_IMS_SERVER_NAME", "sip:scscf.example.com")
+    let msg = ims_ifc_3preg_build("sip:alice@example.com", "sip:tas.example.com", 3600, "cid1")
+    assert_eq(if str_has_prefix(msg, "REGISTER sip:tas.example.com") { 1 } else { 0 }, 1)
+    assert_eq(if str_index(msg, "Expires: 3600") >= 0 { 1 } else { 0 }, 1)
+    // Identity comes from configuration, never a hardcoded host.
+    assert_eq(if str_index(msg, "Via: SIP/2.0/UDP scscf.example.com;") >= 0 { 1 } else { 0 }, 1)
+    assert_eq(if str_index(msg, "Contact: <sip:scscf@scscf.example.com>") >= 0 { 1 } else { 0 }, 1)
+    assert_eq(if str_index(msg, "madis.local") >= 0 { 1 } else { 0 }, 0)
+    assert_eq_str(ims_ifc_3preg_build("sip:alice@example.com", "udp://bad", 3600, "cid1"), "")
+    // Realm fallback when no server name is configured.
+    let _ = env_set("SIP_IMS_SERVER_NAME", "")
+    let _ = env_set("SIP_REALM", "fallback.example.com")
+    let fb = ims_ifc_3preg_build("sip:alice@example.com", "sip:tas.example.com", 3600, "cid1")
+    assert_eq(if str_index(fb, "Via: SIP/2.0/UDP fallback.example.com;") >= 0 { 1 } else { 0 }, 1)
+    // No identity configured at all: builder refuses instead of inventing one.
+    let _ = env_set("SIP_REALM", "")
+    assert_eq_str(ims_ifc_3preg_build("sip:alice@example.com", "sip:tas.example.com", 3600, "cid1"), "")
+    let _ = env_set("SIP_REALM", "mako.local")
+}
+
+// The worker consumes responses to its own 3pREG transactions by Via branch
+// prefix; ordinary branches must pass through untouched.
+fn TestIMSIFC3pRegBranchGuard() {
+    assert_eq(ims_ifc_3preg_branch("z9hG4bK-3preg-abcdef012345"), 1)
+    assert_eq(ims_ifc_3preg_branch("z9hG4bK-3preg-"), 1)
+    assert_eq(ims_ifc_3preg_branch("z9hG4bK-client-branch"), 0)
+    assert_eq(ims_ifc_3preg_branch(""), 0)
+    assert_eq(ims_ifc_3preg_branch("z9hG4bK-3PREG-case"), 0)
+    // The builder stamps the guarded prefix.
+    let _ = env_set("SIP_IMS_SERVER_NAME", "sip:scscf.example.com")
+    let msg = ims_ifc_3preg_build("sip:alice@example.com", "sip:tas.example.com", 3600, "cid-guard")
+    assert_eq(ims_ifc_3preg_branch(sip_via_branch(sip_header(msg, "Via"))), 1)
+}

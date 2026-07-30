@@ -2,7 +2,7 @@
 
 The opt-in session-timer worker regression additionally verifies a `422 Min-SE` response for an undersized `Session-Expires` interval and forwarding of a valid interval. It does not prove endpoint refresh or external-stack interoperability.
 
-The opt-in worker-backed two-subscriber IMS smoke exercises authenticated REGISTER retransmission replay, a reliable `183 Session Progress`/PRACK exchange with downstream `200 OK` acknowledgement, followed by in-dialog `UPDATE` and re-INVITE offer/answer exchanges through the RTP sidecar, plus authenticated INVITE cancellation with downstream `487 Request Terminated` handling. Separate opt-in cases provision two target-only iFC application branches and verify To-tag routing, PRACK delivery, CANCEL cleanup after one branch answers, and a correlated `408 Request Timeout` when an INVITE receives no final response.
+The opt-in worker-backed two-subscriber IMS smoke runs the worker against the lab HSS with TLS Cx/AKA **and** the fail-closed HTTPS subscriber-authorization boundary (ephemeral certificates, bearer token), then exercises authenticated REGISTER retransmission replay, initial-INVITE forwarding, in-dialog `UPDATE` and re-INVITE offer/answer exchanges through the RTP sidecar, and authenticated INVITE cancellation with downstream `487 Request Terminated` handling. Separate opt-in cases provision two target-only iFC application branches and verify a reliable `183 Session Progress`/PRACK exchange with To-tag routing, downstream `200 OK` acknowledgement, CANCEL cleanup after one branch answers, and a correlated `408 Request Timeout` when an INVITE receives no final response.
 
 Madis builds and tests with Mako **0.5.0** and a matching runtime directory. Mako 0.5.0 is native-first, so the contract suite selects its C backend explicitly while production C emission remains exercised. MADIS supplies an explicit `SO_REUSEPORT` bridge for multi-worker UDP. Do not mix a different compiler/runtime pair with generated C.
 
@@ -13,6 +13,19 @@ MAKO_BIN=/path/to/mako \
 MAKO_RUNTIME=/path/to/mako/runtime \
   ./scripts/ci.sh
 ```
+
+## Contract tests (with native bridge)
+
+`tests/proxy_state_test.mko` and any suite pulling `rfc.mko` transaction ticks
+need `madis_memory.c` linked. Prefer:
+
+```sh
+./scripts/test.sh tests
+# or one file:
+./scripts/test.sh tests/proxy_state_test.mko
+```
+
+Plain `mako test tests` without `MAKO_LDFLAGS` will fail to link `madis_cmap_*`.
 
 The CI script runs:
 
@@ -37,7 +50,9 @@ IMS_END_TO_END=1 IMS_END_TO_END_SESSION_TIMERS=1 MADIS_BIN=/path/to/madis \
 `tests/ims_lab_test.mko` is a deterministic two-subscriber HSS/Cx test double. It exercises real MAR/MAA message construction, Cx correlation, AKA response verification, replay rejection, registration bindings, and the S-CSCF session gate. It is not a substitute for interoperability testing against an external HSS/UDM, UE, or media system.
 
 `tests/ims_aka_test.mko` explicitly covers missing vectors, malformed AKA
-credentials, replay rejection, and an expired cached vector. The expiration
+credentials, replay rejection, an expired cached vector, and the cluster
+contract that a sibling node holding no local vector re-challenges instead of
+accepting or hard-failing (vectors remain node-local secrets). The expiration
 check validates the worker-side bounded XRES cache; vector generation and
 lifetime policy remain HSS/UDM responsibilities.
 
@@ -55,7 +70,11 @@ The same suite covers the RTPEngine SDP boundary: content-type checks, required 
 
 `tests/ims_subscriber_test.mko` covers the versioned authorization envelope, fail-closed identity/assignment checks, and bounded `service_profile.associated_uris` extraction. It does not prove external HSS/UDM interoperability or iFC/TAS execution.
 
-`tests/ims_ifc_test.mko` covers target-only `service_profile.initial_filter_criteria` extraction, four-target and uniqueness limits, SIP/SIPS target validation, unsafe delimiter rejection, malformed array elements, originating/terminating live-registration guards, final-binding expiry reconciliation, outbound `Privacy: id` filtering for AS forks, and clearing of stored triggers. It does not prove standard iFC condition evaluation or TAS behavior.
+`tests/ims_ifc_test.mko` covers target-only `service_profile.initial_filter_criteria` extraction, four-target and uniqueness limits, SIP/SIPS target validation, unsafe delimiter rejection, malformed array elements, structured criteria (priority, method, session_case, default_handling), originating/terminating live-registration guards, final-binding expiry reconciliation, outbound `Privacy: id` filtering for AS forks, clearing of stored triggers, third-party REGISTER builder identity derivation (`SIP_IMS_SERVER_NAME`/`SIP_REALM`, never hardcoded), and the Via-branch guard that keeps worker-originated 3pREG responses local. It does not prove standard iFC condition evaluation or TAS behavior. Worker-originated 3pREG delivery to AS targets, local response consumption, and the authenticated-fork session are covered by the opt-in worker smoke (`IMS_END_TO_END_FORK=1`).
+
+`tests/bind_config_test.mko` covers `SIP_BIND_IP` parsing: wildcard default, configured IPv4 literals, trimming, and fail-back-to-wildcard on invalid values. It does not prove interface binding on a multi-homed host.
+
+`tests/https_client_test.mko` covers the Mako HTTPS client (`madis_https.mko`, built on the runtime TLS pool) envelope ("status|body") parsing and, with `MADIS_HTTPS_TEST_URL`/`MADIS_HTTPS_TEST_CA`/`MADIS_HTTPS_TEST_TOKEN` set, a live authenticated HTTPS POST including bearer delivery, DNS resolution, hostname verification, and fail-closed behavior with a wrong CA. TLS endpoints must use DNS names. It does not replace interoperability testing against the production subscriber/charging/application endpoints.
 
 | Test | Coverage |
 | --- | --- |
@@ -66,6 +85,7 @@ The same suite covers the RTPEngine SDP boundary: content-type checks, required 
 | `tests/b2bua_test.mko` | Independent B2BUA legs, dialog translation, cleanup, and header safety. |
 | `tests/carrier_contract_test.mko` | Billing identity/escaping, control API routes, validation, and resource allowlists. |
 | `tests/diameter_codec_test.mko` | Diameter headers, AVPs, grouping, malformed input, Cx/Sh correlation, and credit-control fields. |
+| `tests/diameter_failover_test.mko` | Multi-peer list parsing, failover rotation, backoff/inflight bounds, and realm-pinned peer selection (`realm@host:port`) with Destination-Realm extraction from the request. |
 | `tests/proxy_state_test.mko` | Registration, transaction replay, INVITE/CANCEL isolation, dialog phase classification/teardown, forks, ACK/CANCEL/BYE, routes, and state limits. |
 | `tests/ims_roles_test.mko` | IMS role boundaries, initial versus in-dialog classification, To-tag-specific PRACK/UPDATE target selection, and bounded RSeq/RAck validation. |
 | `tests/ims_session_timer_test.mko` | Opt-in `Session-Expires`/`Min-SE` validation, bounds, duplicate-header rejection, and parser hardening. |
@@ -178,6 +198,9 @@ an executable worker:
 ```sh
 python3 -m unittest discover -s lab -p 'test_*.py'
 python3 -m unittest discover -s media -p 'test_*.py'
+# Cx MAR multi-vector + AUTS lab evidence (included in discover above):
+# python3 -m unittest lab.test_ims_hss.HssAdapterTests.test_mar_multi_vector_count \
+#   lab.test_ims_hss.HssAdapterTests.test_mar_auts_resync_requires_issued_rand -v
 
 # Listener tests: Diameter TCP and HTTP authorization/provisioning
 IMS_HSS_TEST_NETWORK=1 python3 -m unittest discover -s lab -p 'test_*.py'

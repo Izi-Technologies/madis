@@ -1,0 +1,77 @@
+// P-Charging-Vector (3GPP TS 24.229) generation and propagation.
+// Online/offline charging decisions remain in charging.mko / Diameter Ro.
+
+fn ims_pcv_enabled() -> int {
+    let v = str_to_lower(str_trim_space(env_get_or("SIP_IMS_CHARGING_VECTOR", "0")))
+    return if str_eq(v, "1") || str_eq(v, "true") || str_eq(v, "yes") { 1 } else { 0 }
+}
+
+fn ims_pcv_host() -> string {
+    let mut host = str_trim_space(env_get_or("SIP_IMS_ICID_GEN_ADDR", ""))
+    if len(host) == 0 {
+        host = str_trim_space(env_get_or("SIP_DIAMETER_ORIGIN_HOST", ""))
+    }
+    if len(host) == 0 {
+        host = str_trim_space(env_get_or("SIP_PUBLIC_IP", "madis.local"))
+    }
+    if len(host) < 1 || len(host) > 256 { return "madis.local" }
+    if str_index(host, "\r") >= 0 || str_index(host, "\n") >= 0 || str_index(host, "\"") >= 0 { return "madis.local" }
+    return host
+}
+
+fn ims_pcv_icid_ok(icid: string) -> int {
+    if len(icid) < 8 || len(icid) > 128 { return 0 }
+    let mut i = 0
+    while i < len(icid) {
+        let c = int(icid[i])
+        if (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 45 || c == 46 || c == 95 {
+            i = i + 1
+            continue
+        }
+        return 0
+    }
+    return 1
+}
+
+fn ims_pcv_mint(call_id: string) -> string {
+    let seed = call_id + "|" + string(mono_ms()) + "|" + base64_encode(random_bytes(6))
+    let icid = sha256("madis.pcv|" + seed)[0:32]
+    if ims_pcv_icid_ok(icid) == 0 { return "" }
+    return "icid-value=\"" + icid + "\";icid-generated-at=\"" + ims_pcv_host() + "\""
+}
+
+fn ims_pcv_header_ok(value: string) -> int {
+    if len(value) < 12 || len(value) > 512 { return 0 }
+    if str_index(value, "\r") >= 0 || str_index(value, "\n") >= 0 { return 0 }
+    if str_index(str_to_lower(value), "icid-value") < 0 { return 0 }
+    return 1
+}
+
+// Originating: ensure P-Charging-Vector exists (generate if missing).
+// Terminating/transit: pass through a valid inbound vector; never invent over one.
+fn ims_pcv_apply_originating(msg: string, call_id: string) -> string {
+    if ims_pcv_enabled() == 0 { return msg }
+    if madis_header_count(msg, "P-Charging-Vector") > 1 { return msg }
+    if madis_header_count(msg, "P-Charging-Vector") == 1 {
+        let existing = sip_header(msg, "P-Charging-Vector")
+        if ims_pcv_header_ok(existing) == 1 { return msg }
+        // Malformed inbound: strip and regenerate on originating.
+        let cleaned = hdr_remove(msg, "P-Charging-Vector")
+        let vector = ims_pcv_mint(call_id)
+        if len(vector) == 0 { return cleaned }
+        return hdr_add(cleaned, "P-Charging-Vector", vector)
+    }
+    let vector = ims_pcv_mint(call_id)
+    if len(vector) == 0 { return msg }
+    return hdr_add(msg, "P-Charging-Vector", vector)
+}
+
+fn ims_pcv_apply_terminating(msg: string) -> string {
+    if ims_pcv_enabled() == 0 { return msg }
+    if madis_header_count(msg, "P-Charging-Vector") != 1 { return msg }
+    let existing = sip_header(msg, "P-Charging-Vector")
+    if ims_pcv_header_ok(existing) == 0 {
+        return hdr_remove(msg, "P-Charging-Vector")
+    }
+    return msg
+}

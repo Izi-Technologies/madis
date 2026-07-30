@@ -1,0 +1,15 @@
+// Graceful drain: reject new sessions while allowing in-dialog traffic.
+
+fn ims_drain_enabled() -> int {
+    let v = str_to_lower(str_trim_space(env_get_or("SIP_DRAIN", "0")))
+    return if str_eq(v, "1") || str_eq(v, "true") || str_eq(v, "yes") { 1 } else { 0 }
+}
+
+// Return 1 if new REGISTER/initial INVITE must be refused.
+fn ims_drain_reject_new() -> int {
+    return ims_drain_enabled()
+}
+
+fn ims_drain_reply(msg: string, n: int) -> string {
+    return sip_resp(503, "Service Unavailable", msg, n, "drain")
+}

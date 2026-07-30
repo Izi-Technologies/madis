@@ -3,6 +3,7 @@
 // SIP data-path: platform sip_* / sdp_* builtins (no local shadowing).
 pull . "./log.mko"
 pull . "./parser.mko"
+pull . "./madis_https.mko"
 pull . "./nat.mko"
 pull . "./auth.mko"
 pull . "./db.mko"
@@ -10,6 +11,9 @@ pull . "./routing.mko"
 pull . "./billing.mko"
 pull . "./charging.mko"
 pull . "./ims_diameter.mko"
+pull . "./ims_diameter_errors.mko"
+pull . "./ims_rx.mko"
+pull . "./ims_ipsec.mko"
 pull . "./ims_aka.mko"
 pull . "./dialplan.mko"
 pull . "./headers.mko"
@@ -27,8 +31,13 @@ pull . "./ims_ifc.mko"
 pull . "./ims_roles.mko"
 pull . "./ims_identity.mko"
 pull . "./ims_path.mko"
+pull . "./ims_flow.mko"
 pull . "./ims_registration.mko"
+pull . "./ims_lifecycle.mko"
+pull . "./ims_cx_push.mko"
 pull . "./ims_session_timer.mko"
+pull . "./ims_charging_vector.mko"
+pull . "./ims_drain.mko"
 pull . "./module_gateway.mko"
 pull . "./ops.mko"
 pull . "./maf_worker.mko"
@@ -293,6 +302,13 @@ fn sip_client_txn_tick(cache: CMap, out_fd: int) -> int {
                         }
                         let via = sip_header(req, "Via")
                         let branch = sip_via_branch(via)
+                        // 3pREG transactions belong to the worker; expire them
+                        // without generating an upstream 408.
+                        if ims_ifc_3preg_branch(branch) == 1 {
+                            let _ = sip_client_txn_cleanup(key, cache)
+                            scanned = scanned + 1
+                            continue
+                        }
                         let timeout_resp = sip_reply(req, 408, "Request Timeout", "", "")
                         let mut selected_timeout = timeout_resp
                         if len(branch) > 0 && madis_cmap_has2(cache, "fork_branch|", branch) == 1 {
@@ -360,12 +376,19 @@ fn app_command_apply(msg: string, raw: string) -> string {
     return updated
 }
 
-fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, port: int, tr: string, forward_fd: int, db: SqlDB, db_ok: int, cache: CMap, realm: string, node_id: string, diameter_lock: Mutex) -> string {
+fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, port: int, source_port: int, tr: string, forward_fd: int, db: SqlDB, db_ok: int, cache: CMap, realm: string, node_id: string, diameter_lock: Mutex) -> string {
     // Get public IP for NAT (from config or env)
     let public_ip = env_get_or("SIP_PUBLIC_IP", ip)
 
     // --- Response processing (Section 16.7) ---
     if sip_is_response(data) == 1 {
+        // Worker-originated third-party REGISTERs own their transactions; a
+        // response must be consumed here, never proxied toward the Via the
+        // builder stamped with our configured identity.
+        if ims_ifc_3preg_branch(sip_via_branch(sip_header(data, "Via"))) == 1 {
+            let _ = sip_client_txn_finish(data, cache)
+            return ""
+        }
         // A stateful proxy does not forward a downstream 100 Trying; it has
         // already generated the transaction-level 100 when appropriate.
         let response_txn = sip_transaction_key(data, len(data))
@@ -444,16 +467,24 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
         if len(downstream_request) > 0 && response_code >= 200 && response_code < 700 {
             let _ = sip_relprov_close(response_input, cache)
         }
-        if response_code >= 180 && response_code < 300 && cmap_has(cache, "fork_branch|" + response_branch) == 1 {
-            // Early-dialog PRACK must return to the fork that produced the
-            // provisional response. The To-tag is the stable branch key on
-            // the request leg; do not collapse multiple early dialogs into
-            // one Call-ID-only destination.
-            let early_cid = cmap_get(cache, "fork_branch|" + response_branch)
-            let early_target = cmap_get(cache, "fork_target|" + early_cid + "|" + response_branch)
+        // Early-dialog PRACK must return to the UAS that produced the
+        // provisional response. Bind by Call-ID + To-tag. Forked legs use the
+        // fork target map; non-fork legs reuse the existing dialog_dst.
+        if response_code >= 180 && response_code < 300 {
             let early_to_tag = sip_addr_tag(sip_header(response_input, "To"))
-            if len(early_target) > 0 && len(early_to_tag) > 0 {
-                let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_dst|" + early_cid + "|" + early_to_tag, early_target, 65536)
+            let early_cid = sip_header(response_input, "Call-ID")
+            if len(early_to_tag) > 0 && len(early_cid) > 0 {
+                let mut early_target = ""
+                if cmap_has(cache, "fork_branch|" + response_branch) == 1 {
+                    let fork_cid = cmap_get(cache, "fork_branch|" + response_branch)
+                    early_target = cmap_get(cache, "fork_target|" + fork_cid + "|" + response_branch)
+                }
+                if len(early_target) == 0 && cmap_has(cache, "dialog_dst|" + early_cid) == 1 {
+                    early_target = cmap_get(cache, "dialog_dst|" + early_cid)
+                }
+                if len(early_target) > 0 {
+                    let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_dst|" + early_cid + "|" + early_to_tag, early_target, 65536)
+                }
             }
         }
         if response_code >= 200 && response_code < 300 {
@@ -489,6 +520,7 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
                 }
             }
         }
+        response_data = ims_session_timer_apply_response(cache, sip_header(response_input, "Call-ID"), downstream_request, response_data)
         let mut resp = sip_strip_top_via(response_data)
         if len(sip_header(resp, "Via")) == 0 { return "" }
         resp = nat_fix_sdp(resp, len(resp), public_ip)
@@ -704,6 +736,7 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
             next_hop = sip_route_target(route)
         }
     }
+    let _ = ims_flow_refresh_request(cache, data, ip, source_port, tr)
 
     // P-Asserted-Identity and P-Preferred-Identity are trusted-network
     // headers. When enabled, strip them from untrusted ingress and validate
@@ -794,6 +827,9 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
 
     // === REGISTER ===
     if is_register == 1 {
+        if ims_drain_reject_new() == 1 {
+            return ims_drain_reply(data, dl)
+        }
         let contact = sip_hdr(data, "Contact", dl)
         let aor = sip_user(to) + "@" + sip_domain(to)
         let ims_private_identity = from_user + "@" + from_domain
@@ -813,9 +849,20 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
             if len(role_target) == 0 {
                 return sip_resp(503, "IMS Role Unavailable", data, dl, "ims-role")
             }
+            // RFC 5626 outbound: reject Require: outbound when flow tokens off.
+            let outbound_st = ims_flow_outbound_check(data)
+            if outbound_st == 0 {
+                return sip_resp(420, "Bad Extension", data, dl, "outbound")
+            }
             let mut role_msg = msg
             if str_eq(ims_role, "pcscf") {
-                role_msg = ims_path_apply(msg)
+                // Dynamic Path with flow token when enabled; else static Path.
+                let dyn_path = ims_flow_register_path(cache, data, ip, source_port, tr, 3600)
+                if len(dyn_path) > 0 {
+                    role_msg = ims_path_apply_value(msg, dyn_path)
+                } else {
+                    role_msg = ims_path_apply(msg)
+                }
                 if str_eq(role_msg, "__IMS_PATH_INVALID__") {
                     return sip_resp(500, "IMS Path Misconfigured", data, dl, "ims-path")
                 }
@@ -829,7 +876,8 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
 
         // IMS AKA is an HSS-backed alternative to local SIP digest auth.
         // Evaluate it before IP trust so a trusted source cannot bypass it.
-        let aka_reply = ims_aka_register_gate(realm, data, dl, cache, diameter_lock, ims_public_identity, ims_private_identity, ims_server_name)
+        // Source IP feeds optional external IPsec SA export after success.
+        let aka_reply = ims_aka_register_gate_src(realm, data, dl, cache, diameter_lock, ims_public_identity, ims_private_identity, ims_server_name, ip)
         if len(aka_reply) > 0 {
             return aka_reply
         }
@@ -863,6 +911,10 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
         if len(ims_subscriber_response) == 0 && not str_eq(ims_subscriber_response, "__IMS_SUBSCRIBER_DISABLED__") {
             return sip_resp(403, "IMS Subscriber Not Authorized", data, dl, "ims-subscriber")
         }
+        let subscriber_associated_list = ims_subscriber_profile_associated_list(ims_subscriber_response)
+        if str_eq(subscriber_associated_list, "__IMS_PROFILE_INVALID__") {
+            return sip_resp(503, "IMS Subscriber Profile Invalid", data, dl, "ims-subscriber-profile")
+        }
         let subscriber_profile_associated = ims_subscriber_profile_associated_header(ims_subscriber_response)
         if str_eq(subscriber_profile_associated, "__IMS_PROFILE_INVALID__") {
             return sip_resp(503, "IMS Subscriber Profile Invalid", data, dl, "ims-subscriber-profile")
@@ -880,8 +932,16 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
             return sip_resp(500, "IMS P-Associated-URI Misconfigured", data, dl, "ims-associated-uri")
         }
         let ims_assignment_type = registration_cx_assignment_type(reg, aor, contact, data, dl)
-        if ims_cx_register_gate(cache, diameter_lock, ims_public_identity, ims_private_identity, ims_visited_network, ims_server_name, ims_assignment_type) == 0 {
-            return sip_resp(403, "IMS Registration Not Authorized", data, dl, "ims-cx")
+        // S-CSCF reassignment: if prior binding used a different server name, claim via SAR.
+        if ims_lifecycle_server_mismatch(reg, aor, ims_server_name) == 1 {
+            if ims_lifecycle_reassign(cache, diameter_lock, reg, aor, ims_private_identity, ims_public_identity, ims_server_name, db, db_ok) == 0 {
+                return sip_resp(403, "IMS S-CSCF Reassignment Denied", data, dl, "ims-cx-reassign")
+            }
+        }
+        let cx_result = ims_cx_register_result(cache, diameter_lock, ims_public_identity, ims_private_identity, ims_visited_network, ims_server_name, ims_assignment_type)
+        let cx_reply = ims_diameter_sip_reply(data, dl, cx_result)
+        if len(cx_reply) > 0 {
+            return cx_reply
         }
         let mut reg_app_raw = app_gateway_call(msg, ip, port, tr, "request")
         let mut reg_app_id = app_gateway_request_id_for(msg, "request")
@@ -921,6 +981,14 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
                 if app_gateway_fail_closed() == 1 { return sip_resp(400, "Bad Request", data, dl, "app-message") }
             } else { msg = changed }
         }
+        // Path is edge-owned. Untrusted sources cannot inject a Path that
+        // would divert terminating sessions; invalid Path fails closed.
+        let register_path = ims_lifecycle_path_from_register_trusted(data, dl, db, db_ok, ip, cache)
+        if str_eq(register_path, "__IMS_PATH_INVALID__") {
+            return sip_resp(400, "Bad Request", data, dl, "ims-register-path")
+        }
+        let mut life_contact = ""
+        let mut life_expires = 0
         let contact_items = sip_split_contact_values(contact)
         let mut ci = 0
         while ci < len(contact_items) {
@@ -939,6 +1007,8 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
                     }
                     let _ = registration_remove(reg, aor, "*")
                     let _ = registration_db_remove(db, db_ok, aor, "*")
+                    life_contact = ""
+                    life_expires = 0
                 } else {
                     let addr = sip_contact_addr(item)
                     let addr_low = str_to_lower(addr)
@@ -952,12 +1022,70 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
                         let stored = registration_store(reg, aor, addr, tr, item_exp, ip, port)
                         if stored < 0 { return sip_resp(400, "Bad Request", data, dl, "registration-size") }
                         let _ = registration_db_upsert(db, db_ok, aor, addr, tr, node_id, item_exp, ip, port)
+                        life_contact = addr
+                        life_expires = item_exp
                     }
                 }
             }
             ci = ci + 1
         }
+        // Durable IMS lifecycle: bind IMPI/IMPU, Path, Service-Route, and
+        // S-CSCF name to the contact so terminating sessions and restart
+        // recovery have more than a generic AOR binding. Recompute from the
+        // remaining live registration so a multi-Contact update that ends
+        // with expires=0 does not wipe Path while other bindings remain.
+        let mut life_tr = tr
+        let mut life_ip = ip
+        let mut life_port = port
+        let remaining_binding = registration_find(reg, aor)
+        if len(remaining_binding) > 0 {
+            let rem_parts = str_split(remaining_binding, "|")
+            if len(rem_parts) >= 1 && len(rem_parts[0]) > 0 { life_contact = rem_parts[0] }
+            if len(rem_parts) >= 2 && len(rem_parts[1]) > 0 { life_tr = rem_parts[1] }
+            if len(rem_parts) >= 3 {
+                let mut exp_at = 0
+                match parse_int(rem_parts[2]) {
+                    Ok(v) => { exp_at = v }
+                    Err(_) => { exp_at = 0 }
+                }
+                let mut rem_s = (exp_at - now_ms()) / 1000
+                if rem_s < 1 { rem_s = 1 }
+                life_expires = rem_s
+            }
+            if len(rem_parts) >= 5 {
+                life_ip = rem_parts[3]
+                match parse_int(rem_parts[4]) {
+                    Ok(v) => { life_port = v }
+                    Err(_) => {}
+                }
+            }
+        } else {
+            life_contact = ""
+            life_expires = 0
+        }
+        if ims_lifecycle_reconcile(reg, aor, ims_private_identity, ims_public_identity, life_contact, life_tr, life_expires, life_ip, life_port, register_path, configured_service_route, ims_server_name, subscriber_associated_list, db, db_ok, node_id) == 0 {
+            return sip_resp(500, "IMS Lifecycle Store Failed", data, dl, "ims-lifecycle")
+        }
         let _ = ims_ifc_reconcile_registration(reg, aor, subscriber_profile_ifc)
+        // Third-party REGISTER to AS targets (opt-in, best-effort, no secrets).
+        // The worker originates one REGISTER per iFC AS target; responses are
+        // consumed locally by the 3preg branch guard in the response path.
+        if ims_ifc_3preg_enabled() == 1 && life_expires > 0 {
+            let as_list = ims_ifc_3preg_targets(reg, aor)
+            if len(as_list) > 0 {
+                let as_items = str_split(as_list, ",")
+                let mut ai = 0
+                while ai < len(as_items) {
+                    let as_uri = str_trim_space(as_items[ai])
+                    let msg_3p = ims_ifc_3preg_build(ims_public_identity, as_uri, life_expires, cid)
+                    if len(msg_3p) > 0 {
+                        let sent_3p = sip_forward_target(as_uri, msg_3p, sip_transport_param(as_uri, "udp"), cache, forward_fd)
+                        if sent_3p == 0 { slog("  3pREG:  delivery failed to " + as_uri) }
+                    }
+                    ai = ai + 1
+                }
+            }
+        }
         let _ = db_sip_tx(db, db_ok, cid, "recv", "REGISTER", 0, ip, "proxy")
         let _ = db_sip_tx(db, db_ok, cid, "send", "OK", 200, "proxy", ip)
         let mut extra = ""
@@ -978,6 +1106,16 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
     } else {
     // === INVITE ===
     if is_invite == 1 {
+        // Drain rejects new initial INVITEs; in-dialog continues below.
+        if ims_initial_dialog_request(data, dl) == 1 && ims_drain_reject_new() == 1 {
+            return ims_drain_reply(data, dl)
+        }
+        // Glare: concurrent re-INVITE/offer on same dialog → 491.
+        if ims_initial_dialog_request(data, dl) == 0 {
+            if ims_session_glare_begin(cache, cid) == 0 {
+                return sip_resp(491, "Request Pending", data, dl, "glare")
+            }
+        }
         // IP auth: skip digest if source IP is trusted
         let ip_trusted = db_ip_auth(db, db_ok, ip, cache)
         if ip_trusted == 0 {
@@ -1018,9 +1156,14 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
         if initial_dialog == 0 {
             let dialog_msg = rtp_process_offer(msg, len(msg), cid, from_tag, db, db_ok, cache)
             let sent = sip_forward_dialog_request(dialog_msg, cid, "INVITE", next_hop, ip, port, tr, cache, forward_fd)
+            let _ = ims_session_glare_end(cache, cid)
             if sent == 1 { return "" }
             return sip_resp(481, "Call/Transaction Does Not Exist", data, dl, "ims-dialog")
         }
+        // P-Charging-Vector on originating initial INVITE + optional PAI.
+        msg = ims_pcv_apply_originating(msg, cid)
+        msg = ims_identity_assert_apply(msg, "sip:" + from_user + "@" + from_domain)
+        let _ = ims_session_timer_bind_from_request(cache, cid, msg)
 
         // P-/I-CSCF roles route the initial terminating session toward the
         // next IMS role before dialplan, application, charging, or local
@@ -1068,11 +1211,15 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
             let _ = db_cdr(db, db_ok, cid, caller_id, translated, "CHARGE_DENIED")
             return sip_resp(402, "Payment Required", data, dl, "charge")
         }
+        // Optional Rx/PCRF AF session authorize (fail closed when SIP_IMS_RX=1).
+        if ims_rx_authorize(cache, diameter_lock, cid, caller_id, "audio") == 0 {
+            let _ = db_cdr(db, db_ok, cid, caller_id, translated, "RX_DENIED")
+            return sip_resp(503, "Service Unavailable", data, dl, "ims-rx")
+        }
 
-        // Target-only profile iFC trigger. It applies only to an originating
-        // initial INVITE at the local S-CSCF and only while the source AOR has
-        // a live registration. The configured AS fork is terminal for this
-        // transaction; full iFC conditions and TAS behavior are not implied.
+        // Structured/target iFC trigger: originating initial INVITE at local
+        // S-CSCF while source AOR is live. Sequential priority order via fork
+        // list; default_handling 1 fails closed if no AS accepts.
         if initial_dialog == 1 && ims_role_local_register(session_role) == 1 {
             let origin_aor = from_user + "@" + from_domain
             let ifc_targets = ims_ifc_originating_targets(reg, origin_aor, initial_dialog, 1)
@@ -1080,10 +1227,14 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
                 let ifc_msg = ims_ifc_prepare_outbound(msg)
                 let ifc_primary = sip_forward_fork(ifc_targets, ifc_msg, ip, port, tr, public_ip, cache, cid, forward_fd)
                 if len(ifc_primary) == 0 {
-                    return sip_resp(503, "IMS Application Unavailable", data, dl, "ims-ifc")
+                    if ims_ifc_first_default_handling(reg, origin_aor, 0, "INVITE") == 1 {
+                        return sip_resp(503, "IMS Application Unavailable", data, dl, "ims-ifc")
+                    }
+                    // default_handling=0: continue to contact routing.
+                } else {
+                    let _ = db_cdr(db, db_ok, cid, caller_id, translated, "IMS_IFC:" + ifc_primary)
+                    return sip_resp(100, "Trying", data, dl, "ims-ifc")
                 }
-                let _ = db_cdr(db, db_ok, cid, caller_id, translated, "IMS_IFC:" + ifc_primary)
-                return sip_resp(100, "Trying", data, dl, "ims-ifc")
             }
         }
 
@@ -1195,10 +1346,30 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
                 let contact_uri = contact_parts[0]
                 let mut contact_tr = "udp"
                 if len(contact_parts) >= 2 { contact_tr = contact_parts[1] }
-                // Forward to registered contact
-                let fwd = nat_fix_sdp(proxy_hop(inv_msg, ip, port, tr), inv_dl, public_ip)
-                let _ = sip_forward_target(contact_uri, fwd, contact_tr, cache, forward_fd)
-                let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_dst|" + cid, contact_uri, 65536)
+                let mut term_msg = inv_msg
+                let mut term_target = contact_uri
+                let mut term_tr = contact_tr
+                // Prefer durable IMS Path so MT returns through the access edge.
+                let life_target = ims_lifecycle_mt_target_resolved(reg, did_aor)
+                if len(life_target) > 0 {
+                    let life_parts = str_split(life_target, "|")
+                    if len(life_parts) >= 1 && len(life_parts[0]) > 0 {
+                        let life_path = ims_lifecycle_path(ims_lifecycle_find_resolved(reg, did_aor))
+                        if len(life_path) > 0 {
+                            let routed = ims_lifecycle_apply_path_route(term_msg, life_path)
+                            if str_eq(routed, "__IMS_PATH_INVALID__") {
+                                return sip_resp(500, "IMS Path Invalid", data, dl, "ims-lifecycle-path")
+                            }
+                            term_msg = routed
+                        }
+                        term_target = life_parts[0]
+                        if len(life_parts) >= 2 && len(life_parts[1]) > 0 { term_tr = life_parts[1] }
+                    }
+                }
+                term_msg = ims_pcv_apply_terminating(term_msg)
+                let fwd = nat_fix_sdp(proxy_hop(term_msg, ip, port, tr), len(term_msg), public_ip)
+                let _ = sip_forward_target(term_target, fwd, term_tr, cache, forward_fd)
+                let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_dst|" + cid, term_target, 65536)
                 return sip_resp(100, "Trying", data, dl, "")
             }
         }
@@ -1220,9 +1391,29 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
             let contact_uri = contact_parts[0]
             let mut contact_tr = "udp"
             if len(contact_parts) >= 2 { contact_tr = contact_parts[1] }
-            let fwd = nat_fix_sdp(proxy_hop(inv_msg, ip, port, tr), inv_dl, public_ip)
-            let _ = sip_forward_target(contact_uri, fwd, contact_tr, cache, forward_fd)
-            let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_dst|" + cid, contact_uri, 65536)
+            let mut term_msg = inv_msg
+            let mut term_target = contact_uri
+            let mut term_tr = contact_tr
+            let life_target = ims_lifecycle_mt_target_resolved(reg, aor)
+            if len(life_target) > 0 {
+                let life_parts = str_split(life_target, "|")
+                if len(life_parts) >= 1 && len(life_parts[0]) > 0 {
+                    let life_path = ims_lifecycle_path(ims_lifecycle_find_resolved(reg, aor))
+                    if len(life_path) > 0 {
+                        let routed = ims_lifecycle_apply_path_route(term_msg, life_path)
+                        if str_eq(routed, "__IMS_PATH_INVALID__") {
+                            return sip_resp(500, "IMS Path Invalid", data, dl, "ims-lifecycle-path")
+                        }
+                        term_msg = routed
+                    }
+                    term_target = life_parts[0]
+                    if len(life_parts) >= 2 && len(life_parts[1]) > 0 { term_tr = life_parts[1] }
+                }
+            }
+            term_msg = ims_pcv_apply_terminating(term_msg)
+            let fwd = nat_fix_sdp(proxy_hop(term_msg, ip, port, tr), len(term_msg), public_ip)
+            let _ = sip_forward_target(term_target, fwd, term_tr, cache, forward_fd)
+            let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_dst|" + cid, term_target, 65536)
             return sip_resp(100, "Trying", data, dl, "")
         }
 
@@ -1400,6 +1591,7 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
             let _ = db_sip_tx(db, db_ok, cid, "recv", "BYE", 0, ip, "proxy")
             let _ = db_sip_tx(db, db_ok, cid, "send", "OK", 200, "proxy", ip)
             let _ = rtp_process_delete(cid, db, db_ok, cache)
+            let _ = ims_rx_terminate(cache, diameter_lock, cid)
             let _ = cmap_del(calls, cid)
         }
         let sent = sip_forward_dialog_request(msg, cid, "BYE", next_hop, ip, port, tr, cache, forward_fd)
@@ -1417,6 +1609,7 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
             let _ = db_cdr(db, db_ok, cid, from_user, "", "CANCELLED")
             let _ = charging_session_event(cid, from_user, "", "termination", 1, 0, cache, diameter_lock)
             let _ = rtp_process_delete(cid, db, db_ok, cache)
+            let _ = ims_rx_terminate(cache, diameter_lock, cid)
             let _ = cmap_del(calls, cid)
         }
         return sip_resp(200, "OK", data, dl, "")
@@ -1433,13 +1626,13 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
 
 // Single ingress wrapper keeps tracing, metrics, transaction replay, and
 // dialog bookkeeping consistent across UDP/TCP/TLS/WSS workers.
-fn process_sip(data: string, dl: int, reg: CMap, calls: CMap, ip: string, port: int, tr: string, forward_fd: int, db: SqlDB, db_ok: int, cache: CMap, outbox: chan[string], realm: string, node_id: string, diameter_lock: Mutex) -> string {
+fn process_sip(data: string, dl: int, reg: CMap, calls: CMap, ip: string, port: int, source_port: int, tr: string, forward_fd: int, db: SqlDB, db_ok: int, cache: CMap, outbox: chan[string], realm: string, node_id: string, diameter_lock: Mutex) -> string {
     if sip_validate_message(data, dl) == 0 {
         metric_add(6, 1)
         return "SIP/2.0 400 Bad Request\r\nContent-Length: 0\r\n\r\n"
     }
     let hep_local_ip = env_get_or("SIP_HEP_LOCAL_IP", env_get_or("SIP_PUBLIC_IP", "127.0.0.1"))
-    let _ = hep_capture(outbox, cache, data, ip, port, hep_local_ip, port, tr)
+    let _ = hep_capture(outbox, cache, data, ip, source_port, hep_local_ip, port, tr)
     let started = mono_ms()
     let tid = trace_id()
     let _ = trace_begin("sip_request")
@@ -1457,7 +1650,7 @@ fn process_sip(data: string, dl: int, reg: CMap, calls: CMap, ip: string, port: 
     let core_tr = tr[0:len(tr)]
     let core_realm = realm[0:len(realm)]
     let core_node_id = node_id[0:len(node_id)]
-    let reply = process_sip_core(core_data, dl, reg, calls, core_ip, port, core_tr, forward_fd, db, db_ok, cache, core_realm, core_node_id, diameter_lock)
+    let reply = process_sip_core(core_data, dl, reg, calls, core_ip, port, source_port, core_tr, forward_fd, db, db_ok, cache, core_realm, core_node_id, diameter_lock)
     let elapsed = mono_ms() - started
     let _ = sip_txn_finish(data, reply, cache)
     if sip_is_response(data) == 1 {
@@ -1527,7 +1720,7 @@ fn sip_tls_stream_poll(owner: int, reg: CMap, calls: CMap, db: SqlDB, db_ok: int
                                 let msg = parts[0]
                                 buf = parts[1]
                                 if len(msg) == 0 { break }
-                                let reply = process_sip(msg, len(msg), reg, calls, peer_host(fd), peer_port(fd), "TLS", owner, db, db_ok, cache, outbox, realm, node_id, diameter_lock)
+ let reply = process_sip(msg, len(msg), reg, calls, peer_host(fd), peer_port(fd), peer_port(fd), "TLS", owner, db, db_ok, cache, outbox, realm, node_id, diameter_lock)
                                 if len(reply) > 0 { let _ = sip_forward_reply(reply, cache, owner) }
                                 acted = acted + 1
                             }
@@ -1609,7 +1802,7 @@ fn sip_wss_stream_poll(owner: int, reg: CMap, calls: CMap, db: SqlDB, db_ok: int
                                 let msg = parts[0]
                                 buf = parts[1]
                                 if len(msg) == 0 { break }
-                                let reply = process_sip(msg, len(msg), reg, calls, peer_host(fd), peer_port(fd), "WSS", owner, db, db_ok, cache, outbox, realm, node_id, diameter_lock)
+ let reply = process_sip(msg, len(msg), reg, calls, peer_host(fd), peer_port(fd), peer_port(fd), "WSS", owner, db, db_ok, cache, outbox, realm, node_id, diameter_lock)
                                 if len(reply) > 0 { let _ = sip_forward_reply(reply, cache, owner) }
                                 acted = acted + 1
                             }
@@ -1668,7 +1861,7 @@ fn sip_stream_poll(owner: int, reg: CMap, calls: CMap, db: SqlDB, db_ok: int, ca
                                 let msg = parts[0]
                                 buf = parts[1]
                                 if len(msg) == 0 { break }
-                                let reply = process_sip(msg, len(msg), reg, calls, peer_host(fd), peer_port(fd), "TCP", owner, db, db_ok, cache, outbox, realm, node_id, diameter_lock)
+ let reply = process_sip(msg, len(msg), reg, calls, peer_host(fd), peer_port(fd), peer_port(fd), "TCP", owner, db, db_ok, cache, outbox, realm, node_id, diameter_lock)
                                 if len(reply) > 0 { let _ = sip_forward_reply(reply, cache, owner) }
                                 acted = acted + 1
                             }
@@ -1771,7 +1964,7 @@ fn udp_worker(id: int, fd: int, port: int, reg: CMap, calls: CMap, cache: CMap, 
                     peer_port = sip_via_port(via)
                     if peer_port <= 0 { peer_port = 5060 }
                 }
-                let reply = process_sip(data, dl, reg, calls, peer_ip, port, "UDP", fd, db, db_ok, cache, outbox, realm, nid, diameter_lock)
+ let reply = process_sip(data, dl, reg, calls, peer_ip, port, peer_port, "UDP", fd, db, db_ok, cache, outbox, realm, nid, diameter_lock)
                 if len(reply) > 0 {
                     if sip_is_response(data) == 1 {
                         if sip_forward_reply(reply, cache, fd) == 1 {
@@ -1827,6 +2020,7 @@ fn tcp_cleanup_multiplexed(c: int, el: EvLoop, buffers: map[string]string, peers
         }
         let _ = cmap_del(cache, conn_list_key)
     }
+    let _ = ims_flow_clear_conn(cache, peer_host(c), peer_port(c), "TCP")
     delete(buffers, string(c))
     delete(peers, string(c))
     let _ = tcp_close(c)
@@ -1899,7 +2093,7 @@ fn tcp_worker_multiplexed(fd: int, reg: CMap, calls: CMap, port: int, cache: CMa
                             if len(tcp_txn) > 2 {
                                 let _ = sip_server_conn_track(cache, tcp_txn, event_fd)
                             }
-                            let reply = process_sip(msg, len(msg), reg, calls, peers[fd_key], port, "TCP", forward_fd, db, db_ok, cache, outbox, realm, nid, diameter_lock)
+ let reply = process_sip(msg, len(msg), reg, calls, peers[fd_key], port, peer_port(event_fd), "TCP", forward_fd, db, db_ok, cache, outbox, realm, nid, diameter_lock)
                             if len(reply) > 0 {
                                 if sip_is_response(msg) == 1 {
                                     let _ = sip_forward_reply(reply, cache, forward_fd)
@@ -1953,7 +2147,7 @@ fn tls_apply_sni(srv: TlsServer, spec: string) -> int {
     return 0
 }
 
-fn tls_worker(port: int, reg: CMap, calls: CMap, cache: CMap, outbox: chan[string], diameter_lock: Mutex) -> int {
+fn tls_worker(port: int, bind_ip: string, reg: CMap, calls: CMap, cache: CMap, outbox: chan[string], diameter_lock: Mutex) -> int {
     if tls_server_available() == 0 {
         slog("  TLS:     skipped (OpenSSL not available)")
         return 1
@@ -1984,7 +2178,12 @@ fn tls_worker(port: int, reg: CMap, calls: CMap, cache: CMap, outbox: chan[strin
     let sni = env_get_or("SIP_TLS_SNI", "")
     let _ = tls_apply_sni(srv, sni)
 
-    let fd = tcp_listen(port)
+    let mut fd = -1
+    if str_eq(bind_ip, "0.0.0.0") {
+        fd = tcp_listen(port)
+    } else {
+        fd = tcp_listen_addr(bind_ip, port)
+    }
     if fd < 0 {
         slog("  TLS:     bind failed on :" + string(port))
         let _ = tls_server_free(srv)
@@ -2071,7 +2270,7 @@ fn tls_worker(port: int, reg: CMap, calls: CMap, cache: CMap, outbox: chan[strin
                             buf = parts[1]
                             if len(msg) == 0 { break }
                             if sip_ingress_header_safe(msg, len(msg)) == 0 || sip_ok(msg) == 0 { continue }
-                            let reply = process_sip(msg, len(msg), reg, calls, peer_ip, port, "TLS", forward_fd, db, db_ok, cache, outbox, realm, nid, diameter_lock)
+ let reply = process_sip(msg, len(msg), reg, calls, peer_ip, port, peer_port(c), "TLS", forward_fd, db, db_ok, cache, outbox, realm, nid, diameter_lock)
                             if len(reply) > 0 {
                                 if sip_is_response(msg) == 1 {
                                     let _ = sip_forward_reply(reply, cache, forward_fd)
@@ -2100,14 +2299,20 @@ fn tls_worker(port: int, reg: CMap, calls: CMap, cache: CMap, outbox: chan[strin
                 let _ = sip_server_txn_tick(cache, forward_fd)
             }
         }
+        let _ = ims_flow_clear_conn(cache, peer_ip, peer_port(c), "TLS")
         let _ = tls_conn_close(conn)
         let _ = evloop_close(tls_el)
     }
     return 0
 }
 
-fn wss_worker(port: int, reg: CMap, calls: CMap, cache: CMap, outbox: chan[string], diameter_lock: Mutex) -> int {
-    let fd = tcp_listen(port)
+fn wss_worker(port: int, bind_ip: string, reg: CMap, calls: CMap, cache: CMap, outbox: chan[string], diameter_lock: Mutex) -> int {
+    let mut fd = -1
+    if str_eq(bind_ip, "0.0.0.0") {
+        fd = tcp_listen(port)
+    } else {
+        fd = tcp_listen_addr(bind_ip, port)
+    }
     if fd < 0 { return 1 }
     let _ = register_listener(fd)
     let _ = io_set_nonblocking(fd, 1)
@@ -2163,7 +2368,7 @@ fn wss_worker(port: int, reg: CMap, calls: CMap, cache: CMap, outbox: chan[strin
                 // Prefer complete SIP frames; also reassemble if client splits across WS messages
                 if sip_msg_complete(chunk) == 1 {
                     if sip_ingress_header_safe(chunk, len(chunk)) == 1 && sip_ok(chunk) == 1 {
-                        let reply = process_sip(chunk, len(chunk), reg, calls, peer_ip, port, "WS", forward_fd, db, db_ok, cache, outbox, realm, nid, diameter_lock)
+ let reply = process_sip(chunk, len(chunk), reg, calls, peer_ip, port, peer_port(c), "WS", forward_fd, db, db_ok, cache, outbox, realm, nid, diameter_lock)
                         if len(reply) > 0 {
                             if sip_is_response(chunk) == 1 {
                                 let _ = sip_forward_reply(reply, cache, forward_fd)
@@ -2183,7 +2388,7 @@ fn wss_worker(port: int, reg: CMap, calls: CMap, cache: CMap, outbox: chan[strin
                             buf = parts[1]
                             if len(msg) == 0 { break }
                             if sip_ingress_header_safe(msg, len(msg)) == 0 || sip_ok(msg) == 0 { continue }
-                            let reply = process_sip(msg, len(msg), reg, calls, peer_ip, port, "WS", forward_fd, db, db_ok, cache, outbox, realm, nid, diameter_lock)
+ let reply = process_sip(msg, len(msg), reg, calls, peer_ip, port, peer_port(c), "WS", forward_fd, db, db_ok, cache, outbox, realm, nid, diameter_lock)
                             if len(reply) > 0 {
                                 if sip_is_response(msg) == 1 {
                                     let _ = sip_forward_reply(reply, cache, forward_fd)
@@ -2196,6 +2401,7 @@ fn wss_worker(port: int, reg: CMap, calls: CMap, cache: CMap, outbox: chan[strin
                 }
             }
         }
+        let _ = ims_flow_clear_conn(cache, peer_ip, peer_port(c), "WS")
         let _ = ws_close(ws)
     }
     return 0
@@ -2208,6 +2414,42 @@ fn sip_config_port(name: string, default_port: int) -> int {
         Err(_) => {}
     }
     return port
+}
+
+// Strict dotted-quad check: four decimal octets 0-255, nothing else.
+fn sip_bind_ip_valid(ip: string) -> int {
+    if len(ip) < 7 || len(ip) > 15 { return 0 }
+    let parts = str_split(ip, ".")
+    if len(parts) != 4 { return 0 }
+    let mut i = 0
+    while i < 4 {
+        let octet = parts[i]
+        if len(octet) < 1 || len(octet) > 3 { return 0 }
+        let mut j = 0
+        while j < len(octet) {
+            let c = int(octet[j])
+            if c < 48 || c > 57 { return 0 }
+            j = j + 1
+        }
+        match parse_int(octet) {
+            Ok(v) => { if v > 255 { return 0 } }
+            Err(_) => { return 0 }
+        }
+        i = i + 1
+    }
+    return 1
+}
+
+// SIP_BIND_IP selects the local IPv4 signaling bind address for the
+// UDP/TCP/TLS/WSS listeners. Empty or "0.0.0.0" keeps the wildcard; IPv6
+// listeners remain governed by SIP_IPV6. An invalid value falls back to the
+// wildcard so a typo cannot silently move signaling to another interface.
+fn sip_bind_ip() -> string {
+    let raw = str_trim_space(env_get_or("SIP_BIND_IP", ""))
+    if len(raw) == 0 { return "0.0.0.0" }
+    if sip_bind_ip_valid(raw) == 1 { return raw }
+    slog("  Bind:    SIP_BIND_IP invalid, using 0.0.0.0")
+    return "0.0.0.0"
 }
 
 fn sip_scheduler_workers(udp_workers: int, tcp_workers: int, ipv6_enabled: int) -> int {
@@ -2234,6 +2476,8 @@ fn main() {
     let report_path = env_get_or("SIP_CRASH_REPORT", "")
     if len(report_path) > 0 { let _ = crash_report_install(report_path) }
     let udp_port = sip_config_port("SIP_UDP_PORT", 5060)
+    // TCP shares the UDP port unless SIP_TCP_PORT overrides it.
+    let tcp_port = sip_config_port("SIP_TCP_PORT", udp_port)
     let tls_port = sip_config_port("SIP_TLS_PORT", 5061)
     let wss_port = sip_config_port("SIP_WSS_PORT", 8443)
     let db_url = env_get_or("SIP_DB_URL", "")
@@ -2264,7 +2508,15 @@ fn main() {
         let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS registration_bindings (id SERIAL PRIMARY KEY, aor TEXT NOT NULL, contact TEXT NOT NULL, transport TEXT DEFAULT 'UDP', node_id TEXT DEFAULT '', source_ip TEXT DEFAULT '', source_port INT DEFAULT 0, expires_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW(), created_at TIMESTAMP DEFAULT NOW(), UNIQUE(aor, contact))")
         let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_reg_bindings_aor_exp ON registration_bindings (aor, expires_at)")
 
-        let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS gateways (id SERIAL PRIMARY KEY, name TEXT UNIQUE NOT NULL, address TEXT NOT NULL, port INT DEFAULT 5060, transport TEXT DEFAULT 'UDP', auth_user TEXT, auth_pass TEXT, caller_id TEXT, max_channels INT DEFAULT 100, enabled BOOLEAN DEFAULT true, created_at TIMESTAMP DEFAULT NOW())")
+        let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS gateways (id SERIAL PRIMARY KEY, name TEXT UNIQUE NOT NULL, address TEXT NOT NULL, port INT DEFAULT 5060, transport TEXT DEFAULT 'UDP', auth_user TEXT, auth_pass TEXT, caller_id TEXT, max_channels INT DEFAULT 100, number_format TEXT DEFAULT 'e164', tech_prefix TEXT DEFAULT '', caller_id_override TEXT DEFAULT '', health_status TEXT DEFAULT 'unknown', last_health_code INT DEFAULT 0, last_health_check TIMESTAMP, enabled BOOLEAN DEFAULT true, created_at TIMESTAMP DEFAULT NOW())")
+        // Worker-created databases predate the policy/health columns; the admin
+        // handlers and control API write them, so migrate in place.
+        let _ = sql_exec_plain(db, "ALTER TABLE gateways ADD COLUMN IF NOT EXISTS number_format TEXT DEFAULT 'e164'")
+        let _ = sql_exec_plain(db, "ALTER TABLE gateways ADD COLUMN IF NOT EXISTS tech_prefix TEXT DEFAULT ''")
+        let _ = sql_exec_plain(db, "ALTER TABLE gateways ADD COLUMN IF NOT EXISTS caller_id_override TEXT DEFAULT ''")
+        let _ = sql_exec_plain(db, "ALTER TABLE gateways ADD COLUMN IF NOT EXISTS health_status TEXT DEFAULT 'unknown'")
+        let _ = sql_exec_plain(db, "ALTER TABLE gateways ADD COLUMN IF NOT EXISTS last_health_code INT DEFAULT 0")
+        let _ = sql_exec_plain(db, "ALTER TABLE gateways ADD COLUMN IF NOT EXISTS last_health_check TIMESTAMP")
 
         let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS dispatch_sets (id SERIAL PRIMARY KEY, name TEXT UNIQUE NOT NULL, algorithm TEXT DEFAULT 'round-robin', description TEXT, enabled BOOLEAN DEFAULT true, created_at TIMESTAMP DEFAULT NOW())")
 
@@ -2353,9 +2605,12 @@ fn main() {
         // Index for routing rules
         let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_routing_rules_pri ON routing_rules (priority) WHERE enabled = true")
 
+        let _ = ims_lifecycle_bootstrap(db)
         let hydrated = registration_load_db(db, 1, reg)
+        let ims_hydrated = ims_lifecycle_load_db(db, 1, reg)
+        let ims_hss_dropped = ims_lifecycle_hss_reconcile(cache, diameter_lock, reg, db, 1)
 
-        slog("  DB:      PostgreSQL (15 tables; hydrated " + string(hydrated) + " registrations)")
+        slog("  DB:      PostgreSQL (hydrated " + string(hydrated) + " registrations, " + string(ims_hydrated) + " IMS lifecycles, HSS reconcile dropped " + string(ims_hss_dropped) + ")")
         slog("  Cluster: node=" + node_id + " region=" + node_region)
     } else {
         slog("  DB:      in-memory (standalone)")
@@ -2388,13 +2643,16 @@ fn main() {
     }
     let scheduler_workers = sip_scheduler_workers(requested_udp_workers, tcp_workers, ipv6_enabled)
     sched_set_workers(scheduler_workers)
+    let bind_ip = sip_bind_ip()
+    let bind_wildcard = if str_eq(bind_ip, "0.0.0.0") { 1 } else { 0 }
 
     slog("")
     slog("Mako SIP Proxy")
     slog("  Node:    " + node_id + " (" + node_addr + ")")
     slog("  Realm:   " + realm)
+    slog("  Bind:    " + bind_ip)
     slog("  UDP:     :" + string(udp_port) + " (" + string(requested_udp_workers) + " worker(s), SO_REUSEPORT when requested)")
-    slog("  TCP:     :" + string(udp_port) + " (" + string(tcp_workers) + " worker(s), Content-Length framing)")
+    slog("  TCP:     :" + string(tcp_port) + " (" + string(tcp_workers) + " worker(s), Content-Length framing)")
     slog("  TLS:     :" + string(tls_port) + " (SIPS; set SIP_TLS_CERT/KEY or auto)")
     slog("  WSS:     :" + string(wss_port))
     slog("  Crew:    " + string(scheduler_workers) + " scheduler workers (0=one pthread per kick)")
@@ -2411,9 +2669,17 @@ fn main() {
         while udp_i < requested_udp_workers {
             let mut udp_fd = -1
             if requested_udp_workers > 1 {
-                udp_fd = madis_udp_bind_reuseport(udp_port)
+                if bind_wildcard == 1 {
+                    udp_fd = madis_udp_bind_reuseport(udp_port)
+                } else {
+                    udp_fd = madis_udp_bind_reuseport_addr(bind_ip, udp_port)
+                }
             } else {
-                udp_fd = nb_udp_bind(udp_port)
+                if bind_wildcard == 1 {
+                    udp_fd = nb_udp_bind(udp_port)
+                } else {
+                    udp_fd = udp_bind_addr(bind_ip, udp_port)
+                }
             }
             if udp_fd < 0 {
                 slog("  UDP:     listener " + string(udp_i + 1) + " bind failed on :" + string(udp_port))
@@ -2441,9 +2707,13 @@ fn main() {
         while tcp_i < tcp_workers {
             let mut tcp_fd = -1
             if tcp_workers == 1 {
-                tcp_fd = tcp_listen(udp_port)
+                if bind_wildcard == 1 {
+                    tcp_fd = tcp_listen(tcp_port)
+                } else {
+                    tcp_fd = tcp_listen_addr(bind_ip, tcp_port)
+                }
             } else {
-                tcp_fd = tcp_listen_reuseport("0.0.0.0", udp_port, 256)
+                tcp_fd = tcp_listen_reuseport(bind_ip, tcp_port, 256)
             }
             if tcp_fd < 0 {
                 slog("  TCP:     listener " + string(tcp_i + 1) + " failed")
@@ -2451,11 +2721,12 @@ fn main() {
             }
             let _ = register_listener(tcp_fd)
             let _ = io_set_nonblocking(tcp_fd, 1)
-        let _ = t.kick(tcp_worker_multiplexed(tcp_fd, reg, calls, udp_port, cache, hep_outbox, diameter_lock))
+        let _ = t.kick(tcp_worker_multiplexed(tcp_fd, reg, calls, tcp_port, cache, hep_outbox, diameter_lock))
             tcp_i = tcp_i + 1
         }
-    let _ = t.kick(tls_worker(tls_port, reg, calls, cache, hep_outbox, diameter_lock))
-    let _ = t.kick(wss_worker(wss_port, reg, calls, cache, hep_outbox, diameter_lock))
+    let _ = t.kick(tls_worker(tls_port, bind_ip, reg, calls, cache, hep_outbox, diameter_lock))
+    let _ = t.kick(wss_worker(wss_port, bind_ip, reg, calls, cache, hep_outbox, diameter_lock))
+    let _ = t.kick(ims_cx_push_server_worker(reg))
         let _ = t.kick(proxy_admin_worker(reg, calls, cache))
 
         // Heartbeat + stats loop
@@ -2490,7 +2761,10 @@ fn main() {
                 let _ = sql_exec_plain(hb_db, "UPDATE cluster_nodes SET status = 'stale' WHERE last_heartbeat < NOW() - INTERVAL '30 seconds' AND status = 'active'")
 
                 let _ = registration_cleanup_db(hb_db, hb_db_ok)
+                let _ = ims_lifecycle_cleanup_db(hb_db, hb_db_ok)
             }
+            // Unsolicited Cx RTR/PPR on the persistent Diameter peer (db optional).
+            let _ = ims_cx_push_poll(cache, diameter_lock, reg, hb_db, hb_db_ok)
 
             slog("[" + hb_node_id + "] regs=" + string(cmap_len(reg)) + " calls=" + string(cmap_len(calls)) + " cache=" + string(cmap_len(cache)))
         }

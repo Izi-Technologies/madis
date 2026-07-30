@@ -1,0 +1,37 @@
+pull . "../main.mko"
+
+fn TestHttpsPostEnvelopeParsing() {
+    assert_eq(https_post_status("200|{\"ok\":true}"), 200)
+    assert_eq_str(https_post_body("200|{\"ok\":true}"), "{\"ok\":true}")
+    assert_eq(https_post_status("401|{\"ok\":false}"), 401)
+    assert_eq(https_post_status(""), 0)
+    assert_eq_str(https_post_body(""), "")
+    assert_eq(https_post_status("20|x"), 0)
+    assert_eq(https_post_status("200x"), 0)
+    assert_eq_str(https_post_body("204|"), "")
+    // Body may itself contain '|'; only the first separator splits.
+    assert_eq_str(https_post_body("200|a|b"), "a|b")
+}
+
+// Opt-in live check against a real HTTPS endpoint:
+//   MADIS_HTTPS_TEST_URL=https://host:port/path \
+//   MADIS_HTTPS_TEST_CA=/path/ca.pem \
+//   MADIS_HTTPS_TEST_TOKEN=bearer-token \
+//   MADIS_HTTPS_TEST_EXPECT='"decision":"allow"' \
+//     ./scripts/test.sh tests/https_client_test.mko
+fn TestHttpsPostLiveEndpoint() {
+    let url = env_get_or("MADIS_HTTPS_TEST_URL", "")
+    if len(url) == 0 { return }
+    let token = env_get_or("MADIS_HTTPS_TEST_TOKEN", "")
+    let ca = env_get_or("MADIS_HTTPS_TEST_CA", "")
+    let expect = env_get_or("MADIS_HTTPS_TEST_EXPECT", "\"ok\":true")
+    let body = env_get_or("MADIS_HTTPS_TEST_BODY", "{\"probe\":true}")
+    assert_eq(app_url_is_https(url), 1)
+    let raw = madis_https_post(app_url_host(url), app_url_port(url), app_url_path(url), token, body, ca, 2000)
+    let status = https_post_status(raw)
+    assert(status >= 200 && status < 300)
+    assert(str_contains(https_post_body(raw), expect))
+    // Wrong CA must fail closed.
+    let bad = madis_https_post(app_url_host(url), app_url_port(url), app_url_path(url), token, body, "/dev/null", 2000)
+    assert_eq_str(bad, "")
+}

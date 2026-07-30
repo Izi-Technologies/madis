@@ -1,0 +1,44 @@
+// P-CSCF flow token / outbound tests.
+pull . "../main.mko"
+
+fn TestIMSFlowMintAndLookup() {
+    let _ = env_set("SIP_IMS_PATH_DYNAMIC", "1")
+    let _ = env_set("SIP_IMS_FLOW_CAPACITY", "1024")
+    let cache = cmap_new()
+    let token = ims_flow_mint(cache, "UDP|192.0.2.10|5060", "UDP", "sip:alice@192.0.2.10", "sip:pcscf.example.com;lr", 300)
+    assert_eq(if len(token) >= 8 { 1 } else { 0 }, 1)
+    let value = ims_flow_get(cache, token)
+    assert_eq(if len(value) > 0 { 1 } else { 0 }, 1)
+    assert_eq_str(ims_flow_conn(value), "UDP|192.0.2.10|5060")
+    assert_eq(ims_flow_touch(cache, token), 1)
+    assert_eq_str(ims_flow_by_conn(cache, "UDP|192.0.2.10|5060"), token)
+    assert_eq_str(ims_flow_token_from_uri("<sip:pcscf.example.com;lr;ob;ft=" + token + ">"), token)
+    let route_msg = "OPTIONS sip:pcscf.example.com SIP/2.0\r\nRoute: <sip:pcscf.example.com;lr;ob;ft=" + token + ">\r\nContent-Length: 0\r\n\r\n"
+    assert_eq(ims_flow_refresh_request(cache, route_msg, "192.0.2.10", 5060, "UDP"), 1)
+    sleep_ms(2)
+    let replacement = ims_flow_mint(cache, "UDP|192.0.2.10|5060", "UDP", "sip:alice@192.0.2.10", "sip:pcscf.example.com;lr", 300)
+    assert_eq(if len(replacement) >= 8 { 1 } else { 0 }, 1)
+    assert_eq_str(ims_flow_get(cache, token), "")
+    assert_eq_str(ims_flow_by_conn(cache, "UDP|192.0.2.10|5060"), replacement)
+    assert_eq(ims_flow_clear(cache, replacement), 1)
+    assert_eq_str(ims_flow_get(cache, replacement), "")
+    let _ = env_set("SIP_IMS_PATH_DYNAMIC", "0")
+}
+
+fn TestIMSFlowPathWithToken() {
+    let path = ims_flow_path_with_token("sip:pcscf.example.com;lr", "abcdef0123456789abcdef01")
+    assert_eq(if str_index(path, ";ft=") >= 0 { 1 } else { 0 }, 1)
+    assert_eq(if str_index(path, ";ob") >= 0 { 1 } else { 0 }, 1)
+    assert_eq_str(ims_flow_path_with_token("sip:x\r\nY:1", "abcdef0123456789abcdef01"), "")
+}
+
+fn TestIMSFlowOutboundRequire() {
+    let _ = env_set("SIP_IMS_PATH_DYNAMIC", "0")
+    let req = "REGISTER sip:example.com SIP/2.0\r\nRequire: outbound\r\nContent-Length: 0\r\n\r\n"
+    assert_eq(ims_flow_outbound_check(req), 0)
+    let _ = env_set("SIP_IMS_PATH_DYNAMIC", "1")
+    assert_eq(ims_flow_outbound_check(req), 2)
+    let plain = "REGISTER sip:example.com SIP/2.0\r\nContent-Length: 0\r\n\r\n"
+    assert_eq(ims_flow_outbound_check(plain), 1)
+    let _ = env_set("SIP_IMS_PATH_DYNAMIC", "0")
+}

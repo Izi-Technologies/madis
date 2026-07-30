@@ -57,8 +57,10 @@ fn proxy_admin_authorized(c: int) -> int {
 }
 
 fn proxy_admin_worker(reg: CMap, calls: CMap, cache: CMap) -> int {
-    let raw_port = env_get_or("SIP_ADMIN_PORT", "8080")
-    let mut port = 8080
+    // Default matches the documented installer layout (9090); 8080 is the
+    // standalone WebUI port and must stay free on shared hosts.
+    let raw_port = env_get_or("SIP_ADMIN_PORT", "9090")
+    let mut port = 9090
     match parse_int(raw_port) { Ok(v) => { port = v } Err(_) => {} }
     if port <= 0 { return 0 }
     let fd = http_bind(port)
@@ -94,6 +96,22 @@ fn proxy_admin_worker(reg: CMap, calls: CMap, cache: CMap) -> int {
             }
         } else if str_eq(path, "/metrics") {
             let _ = http_respond_ct(c, 200, "text/plain; version=0.0.4", metrics_export_prom())
+        } else if str_eq(path, "/ims/ipsec/sa") {
+            if not str_eq(http_method(c), "POST") {
+                let _ = http_respond_json(c, 405, "{\"ok\":false,\"error\":\"POST required\"}\n")
+            } else {
+                let private_identity = json_get_string(http_body(c), "private_identity")
+                if ims_aka_identity_ok(private_identity, 1024) == 0 {
+                    let _ = http_respond_json(c, 400, "{\"ok\":false,\"error\":\"invalid private_identity\"}\n")
+                } else {
+                    let sa = ims_ipsec_get_sa(cache, private_identity)
+                    if len(sa) == 0 {
+                        let _ = http_respond_json(c, 404, "{\"ok\":false,\"error\":\"SA not found\"}\n")
+                    } else {
+                        let _ = http_respond_json(c, 200, sa + "\n")
+                    }
+                }
+            }
         } else if str_eq(path, "/reload") {
             if str_eq(http_method(c), "POST") {
                 let epoch = proxy_config_reload(cache)

@@ -183,3 +183,134 @@ fn ims_session_timer_request_check(msg: string) -> int {
     if seconds < ims_session_timer_effective_min(msg) { return 2 }
     return 1
 }
+
+// Refresher ownership: endpoint (default) or proxy when SIP_IMS_SESSION_REFRESHER=proxy.
+fn ims_session_timer_refresher_mode() -> string {
+    let v = str_to_lower(str_trim_space(env_get_or("SIP_IMS_SESSION_REFRESHER", "endpoint")))
+    if str_eq(v, "proxy") || str_eq(v, "uas") { return "proxy" }
+    return "endpoint"
+}
+
+fn ims_session_timer_refresher_from_header(value: string) -> string {
+    let low = str_to_lower(value)
+    let idx = str_index(low, "refresher=")
+    if idx < 0 { return "" }
+    let rest = str_trim_space(value[idx + 10:])
+    let mut end = len(rest)
+    let mut i = 0
+    while i < len(rest) {
+        let c = int(rest[i])
+        if c == 59 || c == 32 || c == 9 { end = i; break }
+        i = i + 1
+    }
+    let token = str_to_lower(str_trim_space(rest[0:end]))
+    if str_eq(token, "uac") || str_eq(token, "uas") { return token }
+    return ""
+}
+
+// Store negotiated SE on dialog key: se|expires_at|refresher
+fn ims_session_timer_dialog_key(call_id: string) -> string {
+    return "ims-se|" + call_id
+}
+
+fn ims_session_timer_bind(cache: CMap, call_id: string, seconds: int, refresher: string) -> int {
+    if ims_session_timer_enabled() == 0 { return 1 }
+    if len(call_id) < 1 || len(call_id) > 256 { return 0 }
+    if seconds < 90 || seconds > ims_session_timer_max_se() { return 0 }
+    let mut r = str_to_lower(str_trim_space(refresher))
+    if not str_eq(r, "uac") && not str_eq(r, "uas") {
+        if str_eq(ims_session_timer_refresher_mode(), "proxy") { r = "uas" } else { r = "uac" }
+    }
+    let expires_at = mono_ms() + seconds * 1000
+    let value = string(seconds) + "|" + string(expires_at) + "|" + r
+    let _ = bounded_cache_set(cache, "ims_se_seq", "ims_se_ring|", ims_session_timer_dialog_key(call_id), value, 65536)
+    return 1
+}
+
+fn ims_session_timer_lookup(cache: CMap, call_id: string) -> string {
+    let key = ims_session_timer_dialog_key(call_id)
+    if cmap_has(cache, key) == 0 { return "" }
+    return cmap_get(cache, key)
+}
+
+fn ims_session_timer_clear(cache: CMap, call_id: string) -> int {
+    let _ = cmap_del(cache, ims_session_timer_dialog_key(call_id))
+    return 1
+}
+
+// Bind from request Session-Expires if present and valid.
+fn ims_session_timer_bind_from_request(cache: CMap, call_id: string, msg: string) -> int {
+    if ims_session_timer_enabled() == 0 { return 1 }
+    if madis_header_count(msg, "Session-Expires") != 1 { return 1 }
+    let raw = sip_header(msg, "Session-Expires")
+    let seconds = ims_session_timer_session_expires(raw)
+    if seconds < 0 { return 0 }
+    let refresher = ims_session_timer_refresher_from_header(raw)
+    return ims_session_timer_bind(cache, call_id, seconds, refresher)
+}
+
+// Proxy is refresher when mode=proxy and stored refresher is uas.
+fn ims_session_timer_proxy_is_refresher(cache: CMap, call_id: string) -> int {
+    if not str_eq(ims_session_timer_refresher_mode(), "proxy") { return 0 }
+    let value = ims_session_timer_lookup(cache, call_id)
+    if len(value) == 0 { return 0 }
+    let parts = str_split(value, "|")
+    if len(parts) < 3 { return 0 }
+    return if str_eq(parts[2], "uas") { 1 } else { 0 }
+}
+
+// Build Session-Expires response header with negotiated refresher.
+fn ims_session_timer_response_header(msg: string, refresher: string) -> string {
+    let mut seconds = ims_session_timer_min_se()
+    if madis_header_count(msg, "Session-Expires") == 1 {
+        let s = ims_session_timer_session_expires(sip_header(msg, "Session-Expires"))
+        if s >= seconds { seconds = s }
+    }
+    let mut r = str_to_lower(str_trim_space(refresher))
+    if not str_eq(r, "uac") && not str_eq(r, "uas") { r = "uac" }
+    return "Session-Expires: " + string(seconds) + ";refresher=" + r + "\r\n"
+}
+
+// Glare: concurrent re-INVITE/UPDATE on same dialog → 491.
+// Add the negotiated response header for an opted-in initial INVITE/UPDATE.
+// This is header negotiation only; endpoint refresher traffic remains owned
+// by the dialog endpoints or a dedicated session service.
+fn ims_session_timer_apply_response(cache: CMap, call_id: string, request: string, response: string) -> string {
+    if ims_session_timer_enabled() == 0 { return response }
+    if sip_status_code(response) < 200 || sip_status_code(response) >= 300 { return response }
+    if madis_header_count(response, "Session-Expires") != 0 { return response }
+    if madis_header_count(request, "Session-Expires") != 1 { return response }
+    if len(ims_session_timer_lookup(cache, call_id)) == 0 { return response }
+    let cseq_parts = str_split(str_trim_space(sip_header(request, "CSeq")), " ")
+    if len(cseq_parts) < 2 { return response }
+    let cseq_method = str_to_upper(str_trim_space(cseq_parts[1]))
+    if not str_eq(cseq_method, "INVITE") && not str_eq(cseq_method, "UPDATE") { return response }
+    let value = ims_session_timer_lookup(cache, call_id)
+    let value_parts = str_split(value, "|")
+    let mut refresher = "uac"
+    if len(value_parts) >= 3 && (str_eq(value_parts[2], "uac") || str_eq(value_parts[2], "uas")) {
+        refresher = value_parts[2]
+    }
+    let header = ims_session_timer_response_header(request, refresher)
+    let colon = str_index(header, ":")
+    if colon < 0 { return response }
+    return hdr_add(response, "Session-Expires", str_trim_space(header[colon + 1:]))
+}
+
+// Tracks in-flight offer by call-id; second concurrent offer fails closed.
+fn ims_session_glare_key(call_id: string) -> string {
+    return "ims-glare|" + call_id
+}
+
+fn ims_session_glare_begin(cache: CMap, call_id: string) -> int {
+    if len(call_id) < 1 || len(call_id) > 256 { return 0 }
+    let key = ims_session_glare_key(call_id)
+    if cmap_has(cache, key) == 1 { return 0 }
+    cmap_set(cache, key, string(mono_ms()))
+    return 1
+}
+
+fn ims_session_glare_end(cache: CMap, call_id: string) -> int {
+    let _ = cmap_del(cache, ims_session_glare_key(call_id))
+    return 1
+}

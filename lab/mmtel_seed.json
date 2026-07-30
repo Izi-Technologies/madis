@@ -1,0 +1,26 @@
+{
+  "sip:alice@example.com": {
+    "barring_mo": false,
+    "cfu": "",
+    "cfb": "",
+    "privacy": false
+  },
+  "sip:bob@example.com": {
+    "barring_mo": false,
+    "cfu": "",
+    "cfb": "",
+    "privacy": false
+  },
+  "sip:barred@example.com": {
+    "barring_mo": true,
+    "cfu": "",
+    "cfb": "",
+    "privacy": false
+  },
+  "sip:forward@example.com": {
+    "barring_mo": false,
+    "cfu": "sip:voicemail@example.com",
+    "cfb": "",
+    "privacy": false
+  }
+}

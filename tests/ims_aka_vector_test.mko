@@ -48,3 +48,20 @@ fn TestIMS_CxMaaVectorCorrelationAndPayloadGuards() {
         + diameter_avp_vendor_string(608, ims_3gpp_vendor(), "Digest-AKAv1-MD5"))
     assert_eq_str(ims_cx_mar_vector_from_answer(request, ims_aka_test_answer(request, empty_item), 0), "")
 }
+
+fn TestIMS_CxMarAutsWireShape() {
+    let rand = "0123456789abcdef"
+    let auts = "AUTSpayload!!!!" // 14 bytes
+    let request = ims_cx_mar_auts("sip:alice@example.com", "alice@example.com", "sip:scscf.example.com", "Digest-AKAv1-MD5", rand, auts, 1)
+    assert_eq(diameter_message_valid(request), 1)
+    assert_eq(diameter_header_command(request), ims_cx_mar_command())
+    let item = diameter_find_vendor_avp(request, 612, ims_3gpp_vendor())
+    assert_eq(if len(item) > 0 { 1 } else { 0 }, 1)
+    assert_eq_str(diameter_find_grouped_vendor_avp(item, 608, ims_3gpp_vendor()), "Digest-AKAv1-MD5")
+    assert_eq_str(diameter_find_grouped_vendor_avp(item, 609, ims_3gpp_vendor()), rand)
+    assert_eq_str(diameter_find_grouped_vendor_avp(item, 610, ims_3gpp_vendor()), auts)
+    // Fail closed on empty/oversized AUTS or RAND.
+    assert_eq_str(ims_cx_mar_auts("sip:alice@example.com", "alice@example.com", "sip:scscf.example.com", "Digest-AKAv1-MD5", "", auts, 1), "")
+    assert_eq_str(ims_cx_mar_auts("sip:alice@example.com", "alice@example.com", "sip:scscf.example.com", "Digest-AKAv1-MD5", rand, "short", 1), "")
+    assert_eq_str(ims_cx_mar_auts("sip:alice@example.com", "alice\r@example.com", "sip:scscf.example.com", "Digest-AKAv1-MD5", rand, auts, 1), "")
+}

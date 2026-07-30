@@ -188,19 +188,80 @@ fn diameter_find_avp(msg: string, code: int) -> string {
 }
 
 fn diameter_find_vendor_avp(msg: string, code: int, vendor_id: int) -> string {
-    if diameter_message_valid(msg) == 0 || len(msg) < 20 || vendor_id <= 0 { return "" }
+    return diameter_find_vendor_avp_n(msg, code, vendor_id, 0)
+}
+
+// Return the Nth (0-based) vendor AVP with the given code. Used for multi-item
+// SIP-Auth-Data-Item lists in Cx MAA.
+fn diameter_find_vendor_avp_n(msg: string, code: int, vendor_id: int, index: int) -> string {
+    if diameter_message_valid(msg) == 0 || len(msg) < 20 || vendor_id <= 0 || index < 0 || index > 32 { return "" }
     let mut at = 20
+    let mut seen = 0
     while at < len(msg) {
         let avp_code = diameter_read_u32(msg, at)
         let avp_len = diameter_read_u24(msg, at + 5)
         let flags = int(msg[at + 4])
         let vendor = (flags / 128) % 2
         if avp_code == code && vendor == 1 && avp_len >= 12 && diameter_read_u32(msg, at + 8) == vendor_id {
-            return msg[at + 12:at + avp_len]
+            if seen == index { return msg[at + 12:at + avp_len] }
+            seen = seen + 1
         }
         at = at + avp_len + diameter_pad_len(avp_len)
     }
     return ""
+}
+
+// CEA answer for an inbound CER (Diameter server role).
+fn diameter_cea_for_cer(cer: string, application: int) -> string {
+    if diameter_message_valid(cer) == 0 { return "" }
+    if diameter_header_command(cer) != 257 { return "" }
+    let flags = diameter_header_flags(cer)
+    if flags < 0 || (flags / 128) % 2 != 1 { return "" }
+    let host = diameter_origin_host()
+    let realm = diameter_origin_realm()
+    if diameter_identity_ok(host) == 0 || diameter_identity_ok(realm) == 0 { return "" }
+    let hop = diameter_read_u32(cer, 12)
+    let end = diameter_read_u32(cer, 16)
+    let mut body = madis_diameter_avp_u32(268, 2001)
+        + diameter_avp_string(264, host)
+        + diameter_avp_string(296, realm)
+        + diameter_host_ip_avp()
+        + diameter_avp_string(269, "Madis")
+    let vendor = diameter_app_vendor(application)
+    if vendor > 0 {
+        body = body + madis_diameter_avp_u32(265, vendor) + diameter_vendor_application_id(application)
+    } else if application > 0 {
+        body = body + madis_diameter_avp_u32(258, application)
+    }
+    let message = diameter_header(0, 257, 0, hop, end, body)
+    return if diameter_message_valid(message) == 1 { message } else { "" }
+}
+
+// Read one framed Diameter message from a TlsConn (server or client path).
+fn diameter_tls_conn_read_message(conn: TlsConn) -> string {
+    if tls_conn_fd(conn) < 0 { return "" }
+    let mut header = ""
+    while len(header) < 20 {
+        let chunk = tls_read(conn, 20 - len(header))
+        if len(chunk) == 0 { return "" }
+        header = header + chunk
+    }
+    if int(header[0]) != 1 { return "" }
+    let total = diameter_read_u24(header, 1)
+    if total < 20 || total > 1048576 { return "" }
+    let mut rest = ""
+    while len(rest) < total - 20 {
+        let chunk = tls_read(conn, total - 20 - len(rest))
+        if len(chunk) == 0 { return "" }
+        rest = rest + chunk
+    }
+    let message = header + rest
+    return if diameter_message_valid(message) == 1 { message } else { "" }
+}
+
+fn diameter_tls_conn_write(conn: TlsConn, message: string) -> int {
+    if tls_conn_fd(conn) < 0 || len(message) == 0 { return 0 }
+    return if tls_write(conn, message) == len(message) { 1 } else { 0 }
 }
 
 fn diameter_find_vendor_u32(msg: string, code: int, vendor_id: int) -> int {
@@ -760,6 +821,236 @@ fn diameter_peer_host() -> string {
     return host
 }
 
+// Comma-separated peer list: "hss1.example.com,hss2.example.com:3868".
+// Falls back to SIP_DIAMETER_HOST when HOSTS is unset. No hardcoded peers.
+fn diameter_peer_hosts_csv() -> string {
+    let hosts = str_trim_space(env_get_or("SIP_DIAMETER_HOSTS", ""))
+    if len(hosts) > 0 && len(hosts) <= 4096 { return hosts }
+    return diameter_peer_host()
+}
+
+fn diameter_peer_entry_count() -> int {
+    let csv = diameter_peer_hosts_csv()
+    if len(csv) == 0 { return 0 }
+    let items = str_split(csv, ",")
+    let mut n = 0
+    let mut i = 0
+    while i < len(items) {
+        if len(str_trim_space(items[i])) > 0 { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+fn diameter_peer_entry_at(index: int) -> string {
+    if index < 0 { return "" }
+    let csv = diameter_peer_hosts_csv()
+    if len(csv) == 0 { return "" }
+    let items = str_split(csv, ",")
+    let mut n = 0
+    let mut i = 0
+    while i < len(items) {
+        let item = str_trim_space(items[i])
+        if len(item) > 0 {
+            if n == index { return item }
+            n = n + 1
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// Parse "host", "host:port", or bare IPv4:port. IPv6 bracket form not required
+// for the first multi-peer slice (use hostnames).
+// Optional realm prefix: "example.com@hss1:3868" pins the entry to requests
+// whose Destination-Realm matches; entries without a prefix are wildcard.
+fn diameter_peer_entry_realm(entry: string) -> string {
+    let e = str_trim_space(entry)
+    let at = str_index(e, "@")
+    if at < 1 { return "" }
+    let realm = str_to_lower(e[0:at])
+    if len(realm) < 1 || len(realm) > 255 { return "" }
+    return realm
+}
+
+fn diameter_peer_entry_hostport(entry: string) -> string {
+    let e = str_trim_space(entry)
+    let at = str_index(e, "@")
+    if at < 1 { return e }
+    if at + 1 >= len(e) { return "" }
+    return e[at + 1:]
+}
+
+fn diameter_peer_entry_host(entry: string) -> string {
+    let e = diameter_peer_entry_hostport(entry)
+    if len(e) == 0 || len(e) > 512 { return "" }
+    let colon = str_index(e, ":")
+    if colon <= 0 { return e }
+    // If more than one colon, treat as hostname without port split (avoid IPv6).
+    if str_index(e[colon + 1:], ":") >= 0 { return e }
+    let host = e[0:colon]
+    if len(host) == 0 || len(host) > 512 { return "" }
+    return host
+}
+
+fn diameter_peer_entry_port(entry: string) -> int {
+    let e = diameter_peer_entry_hostport(entry)
+    let colon = str_index(e, ":")
+    if colon <= 0 { return diameter_peer_port() }
+    if str_index(e[colon + 1:], ":") >= 0 { return diameter_peer_port() }
+    let port_s = e[colon + 1:]
+    let mut port = -1
+    match parse_int(port_s) {
+        Ok(v) => { port = v }
+        Err(_) => { return -1 }
+    }
+    if port < 1 || port > 65535 { return -1 }
+    return port
+}
+
+// Destination-Realm (AVP 283) of the outgoing request, lowercase. Realm-based
+// peer selection reads the realm from the built message, never from a side
+// channel that could drift from the actual AVP.
+fn diameter_request_realm(request: string) -> string {
+    if diameter_message_valid(request) == 0 { return "" }
+    return str_to_lower(diameter_find_avp(request, 283))
+}
+
+// Comma-separated global entry indexes eligible for a request realm.
+// Exact realm-pinned entries win; wildcard entries serve any realm; a request
+// without a Destination-Realm keeps the legacy all-entries behavior.
+fn diameter_peer_candidate_indexes(realm: string) -> string {
+    let count = diameter_peer_entry_count()
+    let mut exact = ""
+    let mut wild = ""
+    let mut all = ""
+    let mut i = 0
+    while i < count {
+        if i > 0 { all = all + "," }
+        all = all + string(i)
+        let er = diameter_peer_entry_realm(diameter_peer_entry_at(i))
+        if len(er) == 0 {
+            if len(wild) > 0 { wild = wild + "," }
+            wild = wild + string(i)
+        } else {
+            if len(realm) > 0 && str_eq(er, realm) {
+                if len(exact) > 0 { exact = exact + "," }
+                exact = exact + string(i)
+            }
+        }
+        i = i + 1
+    }
+    if len(exact) > 0 { return exact }
+    if len(realm) == 0 { return all }
+    return wild
+}
+
+fn diameter_peer_preferred_index(cache: CMap) -> int {
+    if cmap_has(cache, "diameter.peer.host_index") == 0 { return 0 }
+    match parse_int(cmap_get(cache, "diameter.peer.host_index")) {
+        Ok(v) => {
+            if v < 0 { return 0 }
+            return v
+        }
+        Err(_) => { return 0 }
+    }
+    return 0
+}
+
+// Skip dead peers for N ms after consecutive failures (env-driven, no hardcode).
+fn diameter_peer_backoff_ms() -> int {
+    let mut ms = 5000
+    match parse_int(env_get_or("SIP_DIAMETER_PEER_BACKOFF_MS", "5000")) {
+        Ok(v) => { ms = v }
+        Err(_) => {}
+    }
+    if ms < 0 { ms = 0 }
+    if ms > 300000 { ms = 300000 }
+    return ms
+}
+
+fn diameter_max_inflight() -> int {
+    let mut n = 64
+    match parse_int(env_get_or("SIP_DIAMETER_MAX_INFLIGHT", "64")) {
+        Ok(v) => { n = v }
+        Err(_) => {}
+    }
+    if n < 1 { n = 1 }
+    if n > 4096 { n = 4096 }
+    return n
+}
+
+fn diameter_peer_backoff_key(index: int) -> string {
+    return "diameter.peer.backoff_until|" + string(index)
+}
+
+fn diameter_peer_fail_key(index: int) -> string {
+    return "diameter.peer.fail_count|" + string(index)
+}
+
+fn diameter_peer_is_backed_off(cache: CMap, index: int) -> int {
+    let key = diameter_peer_backoff_key(index)
+    if cmap_has(cache, key) == 0 { return 0 }
+    let mut until = 0
+    match parse_int(cmap_get(cache, key)) {
+        Ok(v) => { until = v }
+        Err(_) => { return 0 }
+    }
+    if mono_ms() < until { return 1 }
+    let _ = cmap_del(cache, key)
+    let _ = cmap_del(cache, diameter_peer_fail_key(index))
+    return 0
+}
+
+fn diameter_peer_mark_failure(cache: CMap, index: int) -> int {
+    let fkey = diameter_peer_fail_key(index)
+    let mut fails = 0
+    if cmap_has(cache, fkey) == 1 {
+        match parse_int(cmap_get(cache, fkey)) {
+            Ok(v) => { fails = v }
+            Err(_) => {}
+        }
+    }
+    fails = fails + 1
+    cmap_set(cache, fkey, string(fails))
+    let backoff = diameter_peer_backoff_ms()
+    if backoff > 0 && fails >= 2 {
+        cmap_set(cache, diameter_peer_backoff_key(index), string(mono_ms() + backoff))
+    }
+    return fails
+}
+
+fn diameter_peer_mark_success(cache: CMap, index: int) -> int {
+    let _ = cmap_del(cache, diameter_peer_fail_key(index))
+    let _ = cmap_del(cache, diameter_peer_backoff_key(index))
+    return 1
+}
+
+fn diameter_inflight_begin(cache: CMap) -> int {
+    let mut n = 0
+    if cmap_has(cache, "diameter.inflight") == 1 {
+        match parse_int(cmap_get(cache, "diameter.inflight")) {
+            Ok(v) => { n = v }
+            Err(_) => {}
+        }
+    }
+    if n >= diameter_max_inflight() { return 0 }
+    cmap_set(cache, "diameter.inflight", string(n + 1))
+    return 1
+}
+
+fn diameter_inflight_end(cache: CMap) -> int {
+    let mut n = 0
+    if cmap_has(cache, "diameter.inflight") == 1 {
+        match parse_int(cmap_get(cache, "diameter.inflight")) {
+            Ok(v) => { n = v }
+            Err(_) => {}
+        }
+    }
+    if n > 0 { cmap_set(cache, "diameter.inflight", string(n - 1)) }
+    return 1
+}
+
 fn diameter_peer_read_pool_message(handle: int) -> string {
     if handle < 1 { return "" }
     let mut header = ""
@@ -795,27 +1086,18 @@ fn diameter_peer_close_locked(cache: CMap) -> int {
     if handle > 0 { let _ = tls_pool_close(handle) }
     let _ = cmap_del(cache, "diameter.peer.handle")
     let _ = cmap_del(cache, "diameter.peer.application")
+    let _ = cmap_del(cache, "diameter.peer.realm")
     cmap_set(cache, "diameter.peer.state", "CLOSED")
     return 0
 }
 
-fn diameter_peer_open_locked(cache: CMap, application: int) -> int {
-    let existing = diameter_peer_handle(cache)
-    if existing > 0 && tls_pool_fd(existing) >= 0 {
-        let active_app = cmap_get(cache, "diameter.peer.application")
-        if str_eq(active_app, string(application)) { return existing }
-        let _ = diameter_peer_close_locked(cache)
-    } else if existing > 0 {
-        let _ = diameter_peer_close_locked(cache)
-    }
+fn diameter_peer_open_one(cache: CMap, application: int, host: string, port: int) -> int {
+    if len(host) == 0 || port < 1 || tls_client_available() != 1 { return -1 }
     let use_tls = str_to_lower(str_trim_space(env_get_or("SIP_DIAMETER_TLS", "1")))
     if not (str_eq(use_tls, "1") || str_eq(use_tls, "true") || str_eq(use_tls, "yes")) { return -1 }
     let client_cert = env_get_or("SIP_DIAMETER_CLIENT_CERT", "")
     let client_key = env_get_or("SIP_DIAMETER_CLIENT_KEY", "")
     if (len(client_cert) > 0 && len(client_key) == 0) || (len(client_cert) == 0 && len(client_key) > 0) { return -1 }
-    let host = diameter_peer_host()
-    let port = diameter_peer_port()
-    if len(host) == 0 || port < 1 || tls_client_available() != 1 { return -1 }
     let ca = env_get_or("SIP_DIAMETER_CA", "")
     let timeout_ms = diameter_timeout_ms()
     let handle = if len(client_cert) > 0 {
@@ -843,8 +1125,87 @@ fn diameter_peer_open_locked(cache: CMap, application: int) -> int {
     }
     cmap_set(cache, "diameter.peer.handle", string(handle))
     cmap_set(cache, "diameter.peer.application", string(application))
+    cmap_set(cache, "diameter.peer.host", host)
+    cmap_set(cache, "diameter.peer.port", string(port))
     cmap_set(cache, "diameter.peer.state", "OPEN")
     return handle
+}
+
+// Open a peer, rotating through SIP_DIAMETER_HOSTS (or SIP_DIAMETER_HOST).
+// Remembers the last successful index so subsequent opens prefer that peer.
+// Skips peers under open-circuit backoff after consecutive failures. When the
+// request carries a Destination-Realm, only realm-pinned (exact) or wildcard
+// entries are candidates, and an open peer for a different realm is replaced.
+fn diameter_peer_open_locked(cache: CMap, application: int, realm: string) -> int {
+    let existing = diameter_peer_handle(cache)
+    if existing > 0 && tls_pool_fd(existing) >= 0 {
+        let active_app = cmap_get(cache, "diameter.peer.application")
+        let active_realm = cmap_get(cache, "diameter.peer.realm")
+        if str_eq(active_app, string(application)) && str_eq(active_realm, realm) { return existing }
+        let _ = diameter_peer_close_locked(cache)
+    } else if existing > 0 {
+        let _ = diameter_peer_close_locked(cache)
+    }
+    let candidates = diameter_peer_candidate_indexes(realm)
+    if len(candidates) == 0 { return -1 }
+    let items = str_split(candidates, ",")
+    let count = len(items)
+    let preferred = diameter_peer_preferred_index(cache)
+    let mut start = 0
+    let mut si = 0
+    while si < count {
+        if str_eq(str_trim_space(items[si]), string(preferred)) { start = si }
+        si = si + 1
+    }
+    let mut attempt = 0
+    while attempt < count {
+        let mut use_pos = start + attempt
+        while use_pos >= count { use_pos = use_pos - count }
+        let mut use = -1
+        match parse_int(str_trim_space(items[use_pos])) {
+            Ok(v) => { use = v }
+            Err(_) => {}
+        }
+        if use >= 0 && diameter_peer_is_backed_off(cache, use) == 0 {
+            let entry = diameter_peer_entry_at(use)
+            let host = diameter_peer_entry_host(entry)
+            let port = diameter_peer_entry_port(entry)
+            if len(host) > 0 && port > 0 {
+                let handle = diameter_peer_open_one(cache, application, host, port)
+                if handle > 0 {
+                    cmap_set(cache, "diameter.peer.host_index", string(use))
+                    cmap_set(cache, "diameter.peer.realm", realm)
+                    let _ = diameter_peer_mark_success(cache, use)
+                    return handle
+                }
+                let _ = diameter_peer_mark_failure(cache, use)
+            }
+        }
+        attempt = attempt + 1
+    }
+    cmap_set(cache, "diameter.peer.state", "CLOSED")
+    return -1
+}
+
+fn diameter_peer_failover_advance(cache: CMap, realm: string) -> int {
+    let candidates = diameter_peer_candidate_indexes(realm)
+    if len(candidates) == 0 { return 0 }
+    let items = str_split(candidates, ",")
+    let count = len(items)
+    if count < 2 { return 0 }
+    let preferred = diameter_peer_preferred_index(cache)
+    let mut pos = 0
+    let mut i = 0
+    while i < count {
+        if str_eq(str_trim_space(items[i]), string(preferred)) { pos = i }
+        i = i + 1
+    }
+    let next_pos = if pos + 1 >= count { 0 } else { pos + 1 }
+    match parse_int(str_trim_space(items[next_pos])) {
+        Ok(v) => { cmap_set(cache, "diameter.peer.host_index", string(v)) }
+        Err(_) => { return 0 }
+    }
+    return 1
 }
 
 fn diameter_peer_answer_matches(request: string, response: string, application: int, command: int) -> int {
@@ -964,7 +1325,12 @@ fn diameter_peer_exchange(cache: CMap, peer_lock: Mutex, request: string, applic
     if request_flags < 0 || (request_flags / 128) % 2 != 1 { return "" }
     if str_eq(diameter_transport(), "sctp") {
         mutex_lock(peer_lock)
+        if diameter_inflight_begin(cache) == 0 {
+            mutex_unlock(peer_lock)
+            return ""
+        }
         let response = diameter_sctp_exchange_once(request, application, command)
+        let _ = diameter_inflight_end(cache)
         mutex_unlock(peer_lock)
         return response
     }
@@ -972,28 +1338,66 @@ fn diameter_peer_exchange(cache: CMap, peer_lock: Mutex, request: string, applic
     let plaintext = str_eq(use_tls, "0") || str_eq(use_tls, "false") || str_eq(use_tls, "no")
     if plaintext && str_eq(env_get_or("SIP_DIAMETER_ALLOW_PLAINTEXT", "0"), "1") {
         mutex_lock(peer_lock)
+        if diameter_inflight_begin(cache) == 0 {
+            mutex_unlock(peer_lock)
+            return ""
+        }
         let response = diameter_plain_peer_exchange(request, application, command)
+        let _ = diameter_inflight_end(cache)
         mutex_unlock(peer_lock)
         return response
     }
     mutex_lock(peer_lock)
-    let mut handle = diameter_peer_open_locked(cache, application)
+    if diameter_inflight_begin(cache) == 0 {
+        mutex_unlock(peer_lock)
+        return ""
+    }
+    let request_realm = diameter_request_realm(request)
+    let mut handle = diameter_peer_open_locked(cache, application, request_realm)
     if handle < 1 {
+        let _ = diameter_inflight_end(cache)
         mutex_unlock(peer_lock)
         return ""
     }
     let sent = tls_pool_send(handle, request)
     if sent != len(request) {
+        let idx = diameter_peer_preferred_index(cache)
+        let _ = diameter_peer_mark_failure(cache, idx)
         let _ = diameter_peer_close_locked(cache)
-        handle = diameter_peer_open_locked(cache, application)
+        let _ = diameter_peer_failover_advance(cache, request_realm)
+        handle = diameter_peer_open_locked(cache, application, request_realm)
         if handle < 1 || tls_pool_send(handle, request) != len(request) {
             let _ = diameter_peer_close_locked(cache)
+            let _ = diameter_peer_failover_advance(cache, request_realm)
+            let _ = diameter_inflight_end(cache)
             mutex_unlock(peer_lock)
             return ""
         }
     }
-    let response = diameter_peer_receive_answer(cache, handle, request, application, command)
-    if len(response) == 0 { let _ = diameter_peer_close_locked(cache) }
+    let mut response = diameter_peer_receive_answer(cache, handle, request, application, command)
+    if len(response) == 0 {
+        let idx = diameter_peer_preferred_index(cache)
+        let _ = diameter_peer_mark_failure(cache, idx)
+        let _ = diameter_peer_close_locked(cache)
+        let _ = diameter_peer_failover_advance(cache, request_realm)
+        // One automatic retry on the next peer in the configured list.
+        handle = diameter_peer_open_locked(cache, application, request_realm)
+        if handle > 0 {
+            if tls_pool_send(handle, request) == len(request) {
+                response = diameter_peer_receive_answer(cache, handle, request, application, command)
+            }
+            if len(response) == 0 {
+                let _ = diameter_peer_mark_failure(cache, diameter_peer_preferred_index(cache))
+                let _ = diameter_peer_close_locked(cache)
+                let _ = diameter_peer_failover_advance(cache, request_realm)
+            } else {
+                let _ = diameter_peer_mark_success(cache, diameter_peer_preferred_index(cache))
+            }
+        }
+    } else {
+        let _ = diameter_peer_mark_success(cache, diameter_peer_preferred_index(cache))
+    }
+    let _ = diameter_inflight_end(cache)
     mutex_unlock(peer_lock)
     return response
 }

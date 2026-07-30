@@ -1,0 +1,19 @@
+// Diameter→SIP error map contract tests.
+pull . "../main.mko"
+
+fn TestIMSDiameterErrorMap() {
+    assert_eq(ims_diameter_result_sip_code(2001), 200)
+    assert_eq(ims_diameter_result_sip_code(5001), 403)
+    assert_eq(ims_diameter_result_sip_code(5012), 503)
+    assert_eq(ims_diameter_result_sip_code(3004), 503)
+    assert_eq(ims_diameter_result_sip_code(4181), 403)
+    assert_eq(ims_diameter_result_sip_code(-1), 503)
+    assert_eq_str(ims_diameter_result_tag(5001), "ims-cx-user-unknown")
+    assert_eq_str(ims_diameter_result_tag(3004), "ims-cx-busy")
+    let msg = "REGISTER sip:example.com SIP/2.0\r\nVia: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-e\r\nFrom: <sip:a@example.com>;tag=t\r\nTo: <sip:a@example.com>\r\nCall-ID: e@example.com\r\nCSeq: 1 REGISTER\r\nContent-Length: 0\r\n\r\n"
+    assert_eq_str(ims_diameter_sip_reply(msg, len(msg), 2001), "")
+    let deny = ims_diameter_sip_reply(msg, len(msg), 5001)
+    assert_eq(if str_index(deny, "403") >= 0 { 1 } else { 0 }, 1)
+    let busy = ims_diameter_sip_reply(msg, len(msg), 3004)
+    assert_eq(if str_index(busy, "503") >= 0 { 1 } else { 0 }, 1)
+}

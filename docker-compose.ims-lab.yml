@@ -47,6 +47,7 @@ services:
       retries: 20
 
   scscf:
+    image: madis-ims-lab:0.5.0
     build:
       context: .
       dockerfile: docker/ims-lab/Dockerfile.madis
@@ -84,13 +85,26 @@ services:
       SIP_IMS_VISITED_NETWORK: example.com
       SIP_IMS_SERVER_NAME: sip:scscf:5060
       SIP_IMS_DEST_HOST: hss
+      # Exact Path pin (must match P-CSCF SIP_IMS_PATH). Lab hop is not
+      # ip_auth, so ALLOW_UNTRUSTED_PATH is explicit; destination is still pinned.
+      SIP_IMS_PATH: sip:pcscf:5060;lr
+      SIP_IMS_ALLOW_UNTRUSTED_PATH: "1"
       SIP_IMS_SESSION: "1"
+      SIP_IMS_SESSION_TIMERS: "1"
+      SIP_IMS_CHARGING_VECTOR: "1"
+      SIP_IMS_ICID_GEN_ADDR: scscf.docker
+      SIP_IMS_IDENTITY_POLICY: "1"
+      SIP_DIAMETER_PEER_BACKOFF_MS: "3000"
+      SIP_DIAMETER_MAX_INFLIGHT: "32"
+      SIP_IMS_AKA_NUM_VECTORS: "2"
       SIP_IMS_SUBSCRIBER_URL: https://hss:8080/ims/authorize
       SIP_IMS_SUBSCRIBER_TOKEN: ims-docker-hss-http-token-123456
       SIP_IMS_SUBSCRIBER_CA: /certs/hss.crt
       SIP_RTPENGINE_ENABLED: "1"
       SIP_RTPENGINE_HOST: media
       SIP_RTPENGINE_PORT: "2223"
+      SIP_RTPENGINE_NODES: "media:2223"
+      SIP_RTPENGINE_PROFILE: plain
     networks:
       ims-lab:
         ipv4_address: 172.30.0.6
@@ -101,6 +115,7 @@ services:
       retries: 30
 
   icscf:
+    image: madis-ims-lab:0.5.0
     build:
       context: .
       dockerfile: docker/ims-lab/Dockerfile.madis
@@ -147,6 +162,7 @@ services:
       retries: 30
 
   pcscf:
+    image: madis-ims-lab:0.5.0
     build:
       context: .
       dockerfile: docker/ims-lab/Dockerfile.madis
@@ -168,13 +184,15 @@ services:
       SIP_IMS_ROLE: pcscf
       SIP_IMS_PCSCF_NEXT_HOP: sip:icscf:5060
       SIP_IMS_PATH: sip:pcscf:5060;lr
+      SIP_IMS_PATH_DYNAMIC: "1"
+      SIP_IMS_FLOW_KEEPALIVE_S: "120"
       SIP_IMS_SESSION: "0"
     networks:
       ims-lab:
         ipv4_address: 172.30.0.4
     ports:
-      - "127.0.0.1:15060:5060/udp"
-      - "127.0.0.1:18080:8080/tcp"
+      - "127.0.0.1:${IMS_LAB_SIP_PORT:-15060}:5060/udp"
+      - "127.0.0.1:${IMS_LAB_ADMIN_PORT:-18080}:8080/tcp"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS -H 'Authorization: Bearer ims-docker-admin-token-123456' http://127.0.0.1:8080/healthz >/dev/null"]
       interval: 2s

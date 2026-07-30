@@ -1,6 +1,14 @@
 FROM rust:1.94-bookworm AS mako-build
 
 ARG MAKO_VERSION=0.5.0
+# Low-memory build: Docker Desktop often OOMs default release+LTO on aarch64.
+ENV CARGO_BUILD_JOBS=1 \
+    CARGO_INCREMENTAL=0 \
+    CARGO_PROFILE_RELEASE_LTO=false \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 \
+    CARGO_PROFILE_RELEASE_DEBUG=0 \
+    CARGO_PROFILE_RELEASE_OPT_LEVEL=1 \
+    CARGO_PROFILE_RELEASE_STRIP=true
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/* \

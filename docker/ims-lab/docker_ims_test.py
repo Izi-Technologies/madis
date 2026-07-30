@@ -71,9 +71,21 @@ class SipClient:
         self.socket.bind(("0.0.0.0", 0))
         self.socket.settimeout(5.0)
         self.address = self.socket.getsockname()
+        self.last_peer: tuple[str, int] | None = None
 
     def send(self, message: str) -> None:
         self.socket.sendto(message.encode("ascii"), (MADIS_HOST, MADIS_SIP_PORT))
+
+    def respond(self, message: str) -> None:
+        """Send a response to the actual source of the last request.
+
+        RFC 3581 rport semantics: a UAS answers from where the request
+        arrived, not at a fixed proxy address, so every hop in the chain
+        (including the S-CSCF that anchors media) sees the response.
+        """
+        if self.last_peer is None:
+            raise AssertionError("respond() before any request was received")
+        self.socket.sendto(message.encode("ascii"), self.last_peer)
 
     def receive(self, predicate) -> str:
         deadline = time.monotonic() + 8.0
@@ -81,11 +93,13 @@ class SipClient:
         while time.monotonic() < deadline:
             self.socket.settimeout(max(0.1, deadline - time.monotonic()))
             try:
-                raw, _ = self.socket.recvfrom(65535)
+                raw, peer = self.socket.recvfrom(65535)
             except socket.timeout:
                 break
             message = raw.decode("ascii", "replace")
             if predicate(message):
+                if not message.startswith("SIP/2.0"):
+                    self.last_peer = peer
                 return message
             seen.append(" | ".join(message.split("\r\n")[:5]))
         raise AssertionError(f"SIP response did not arrive; saw {seen}")
@@ -227,7 +241,7 @@ def run_call(alice: SipClient, bob: SipClient) -> None:
         + header_line(invite_headers, "cseq")
         + "Content-Length: 0\r\n\r\n"
     )
-    bob.send(ringing)
+    bob.respond(ringing)
     alice.receive(lambda message: status(message) == 180)
 
     answer_sdp = (
@@ -249,7 +263,7 @@ def run_call(alice: SipClient, bob: SipClient) -> None:
         + "Content-Type: application/sdp\r\n"
         + f"Content-Length: {len(answer_sdp)}\r\n\r\n{answer_sdp}"
     )
-    bob.send(ok)
+    bob.respond(ok)
     accepted = alice.receive(lambda message: status(message) == 200)
     forwarded_answer_port = sdp_media_port(accepted)
     if forwarded_answer_port == bob_media_port or "c=IN IP4 172.30.0.3" not in accepted:
@@ -300,7 +314,7 @@ def run_call(alice: SipClient, bob: SipClient) -> None:
         + header_line(bye_headers, "cseq")
         + "Content-Length: 0\r\n\r\n"
     )
-    bob.send(bye_ok)
+    bob.respond(bye_ok)
     alice.receive(lambda message: status(message) == 200 and headers(message).get("cseq", "").startswith("2 BYE"))
 
 

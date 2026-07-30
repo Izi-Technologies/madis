@@ -1,0 +1,807 @@
+// Durable IMS registration lifecycle (first vertical slice).
+//
+// Generic registration_bindings store Contact reachability. This module stores
+// the IMS fields that make that binding usable after restart and for
+// terminating sessions: IMPI/IMPU, Path, Service-Route, assigned S-CSCF, and
+// auth state.
+//
+// Security posture: fail closed. Path is operator/edge-owned routing state and
+// is never accepted from an untrusted REGISTER source. All field sizes and
+// capacities are env-clamped; nothing in the data path hardcodes deployment
+// hosts, realms, or peer addresses.
+
+fn ims_lifecycle_key(aor: string) -> string {
+    return "ims-life|" + aor
+}
+
+fn ims_lifecycle_capacity() -> int {
+    let mut value = 16384
+    match parse_int(env_get_or("SIP_IMS_LIFECYCLE_CAPACITY", "16384")) {
+        Ok(v) => { value = v }
+        Err(_) => {}
+    }
+    if value < 16 { value = 16 }
+    if value > 262144 { value = 262144 }
+    return value
+}
+
+fn ims_lifecycle_load_limit() -> int {
+    let mut value = 10000
+    match parse_int(env_get_or("SIP_IMS_LIFECYCLE_LOAD_LIMIT", "10000")) {
+        Ok(v) => { value = v }
+        Err(_) => {}
+    }
+    if value < 1 { value = 1 }
+    if value > 100000 { value = 100000 }
+    return value
+}
+
+fn ims_lifecycle_field_ok(value: string, max: int) -> int {
+    if max < 0 || len(value) > max { return 0 }
+    let mut i = 0
+    while i < len(value) {
+        let c = int(value[i])
+        // NUL, CR/LF (header injection), and '|' (encoding delimiter).
+        if c == 0 || c == 10 || c == 13 || c == 124 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn ims_lifecycle_aor_ok(aor: string) -> int {
+    if len(aor) < 1 || len(aor) > 512 { return 0 }
+    let mut i = 0
+    while i < len(aor) {
+        let c = int(aor[i])
+        if c == 0 || c == 10 || c == 13 || c == 124 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn ims_lifecycle_uri_ok(value: string) -> int {
+    if ims_lifecycle_field_ok(value, 2048) == 0 || len(value) < 1 { return 0 }
+    let low = str_to_lower(value)
+    if not str_has_prefix(low, "sip:") && not str_has_prefix(low, "sips:") { return 0 }
+    // Angle-bracket form must validate; bare URI is wrapped for the checker.
+    return sip_name_addr_valid("<" + value + ">")
+}
+
+// Path may be empty when the S-CSCF receives REGISTER without a P-CSCF Path.
+fn ims_lifecycle_path_ok(value: string) -> int {
+    if len(value) == 0 { return 1 }
+    return ims_lifecycle_uri_ok(value)
+}
+
+fn ims_lifecycle_auth_ok(value: string) -> int {
+    return if str_eq(value, "registered") || str_eq(value, "deregistered") { 1 } else { 0 }
+}
+
+fn ims_lifecycle_transport_ok(value: string) -> int {
+    if ims_lifecycle_field_ok(value, 16) == 0 || len(value) < 1 { return 0 }
+    let low = str_to_lower(value)
+    return if str_eq(low, "udp") || str_eq(low, "tcp") || str_eq(low, "tls") || str_eq(low, "ws") || str_eq(low, "wss") || str_eq(low, "sctp") { 1 } else { 0 }
+}
+
+// True only when ;lr appears as a complete SIP URI parameter, not as a prefix
+// of another parameter name (e.g. ";lroute").
+fn ims_lifecycle_has_lr_param(uri: string) -> int {
+    let low = str_to_lower(uri) + ";"
+    if str_index(low, ";lr;") >= 0 { return 1 }
+    return 0
+}
+
+// Env SIP_IMS_PATH_HOSTS is an optional comma-separated list of allowed Path
+// hostnames (exact, case-insensitive). Empty means no host allowlist.
+fn ims_lifecycle_path_host(uri: string) -> string {
+    if ims_lifecycle_uri_ok(uri) == 0 { return "" }
+    let mut t = uri
+    let low = str_to_lower(t)
+    if str_has_prefix(low, "sips:") { t = t[5:] }
+    else if str_has_prefix(low, "sip:") { t = t[4:] }
+    else { return "" }
+    // Strip userinfo.
+    let at = str_index(t, "@")
+    if at >= 0 { t = t[at + 1:] }
+    // Host ends at port, parameters, headers, or path.
+    let mut end = len(t)
+    let mut i = 0
+    while i < len(t) {
+        let c = int(t[i])
+        if c == 58 || c == 59 || c == 63 || c == 47 { end = i; break }
+        i = i + 1
+    }
+    if end < 1 { return "" }
+    return str_to_lower(t[0:end])
+}
+
+fn ims_lifecycle_path_host_allowed(uri: string, hosts_csv: string) -> int {
+    let host = ims_lifecycle_path_host(uri)
+    if len(host) == 0 { return 0 }
+    let items = str_split(hosts_csv, ",")
+    let mut i = 0
+    while i < len(items) {
+        let item = str_to_lower(str_trim_space(items[i]))
+        if len(item) > 0 && len(item) <= 253 && str_eq(item, host) { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+// Exact operator Path pin from SIP_IMS_PATH (same value P-CSCF inserts).
+fn ims_lifecycle_path_exact_configured(path: string) -> int {
+    let configured = str_trim_space(env_get_or("SIP_IMS_PATH", ""))
+    if len(configured) == 0 || str_eq(configured, "__IMS_PATH_INVALID__") { return 0 }
+    if ims_lifecycle_uri_ok(configured) == 0 { return 0 }
+    return if str_eq(path, configured) { 1 } else { 0 }
+}
+
+// Destination pin: Path must match configured SIP_IMS_PATH exactly, or its
+// host must appear on SIP_IMS_PATH_HOSTS. Arbitrary destinations are never
+// accepted solely because the REGISTER source IP is trusted.
+fn ims_lifecycle_path_destination_pinned(path: string) -> int {
+    if len(path) == 0 { return 1 }
+    if ims_lifecycle_path_exact_configured(path) == 1 { return 1 }
+    let hosts = str_trim_space(env_get_or("SIP_IMS_PATH_HOSTS", ""))
+    if len(hosts) > 0 && ims_lifecycle_path_host_allowed(path, hosts) == 1 { return 1 }
+    return 0
+}
+
+// Path is edge-owned routing state. Accept only when ALL hold:
+//   1) URI shape is valid
+//   2) destination is operator-pinned (SIP_IMS_PATH exact or PATH_HOSTS)
+//   3) source is trusted (db_ip_auth) OR lab override SIP_IMS_ALLOW_UNTRUSTED_PATH
+// Default fail closed: no pin + no trust ⇒ strip Path.
+fn ims_lifecycle_path_trusted(db: SqlDB, db_ok: int, ip: string, cache: CMap, path: string) -> int {
+    if len(path) == 0 { return 1 }
+    if ims_lifecycle_path_ok(path) == 0 { return 0 }
+    if ims_lifecycle_path_destination_pinned(path) == 0 { return 0 }
+    if db_ip_auth(db, db_ok, ip, cache) == 1 { return 1 }
+    let allow = str_to_lower(str_trim_space(env_get_or("SIP_IMS_ALLOW_UNTRUSTED_PATH", "0")))
+    if str_eq(allow, "1") || str_eq(allow, "true") || str_eq(allow, "yes") { return 1 }
+    return 0
+}
+
+// Hydration / restart: no REGISTER source IP. Require destination pin only;
+// never re-install an unpinned Path from the database.
+fn ims_lifecycle_path_trusted_at_rest(path: string) -> int {
+    if len(path) == 0 { return 1 }
+    if ims_lifecycle_path_ok(path) == 0 { return 0 }
+    return ims_lifecycle_path_destination_pinned(path)
+}
+
+// Normalize Path from REGISTER: invalid → sentinel; untrusted → empty (strip).
+fn ims_lifecycle_path_from_register_trusted(msg: string, n: int, db: SqlDB, db_ok: int, ip: string, cache: CMap) -> string {
+    let path = str_trim_space(sip_hdr(msg, "Path", n))
+    if len(path) == 0 { return "" }
+    let uri = sip_route_target(path)
+    if ims_lifecycle_path_ok(uri) == 0 || len(uri) == 0 { return "__IMS_PATH_INVALID__" }
+    if ims_lifecycle_path_trusted(db, db_ok, ip, cache, uri) == 0 { return "" }
+    return uri
+}
+
+// v1|private|public|contact|transport|expires_at|ip|port|path|service_route|server_name|auth_state
+fn ims_lifecycle_encode(private_identity: string, public_identity: string, contact: string, transport: string, expires_at: int, ip: string, port: int, path: string, service_route: string, server_name: string, auth_state: string) -> string {
+    if ims_lifecycle_field_ok(private_identity, 1024) == 0 || len(private_identity) < 1 { return "" }
+    if ims_lifecycle_field_ok(public_identity, 2048) == 0 || len(public_identity) < 1 { return "" }
+    if ims_lifecycle_uri_ok(contact) == 0 || ims_lifecycle_transport_ok(transport) == 0 { return "" }
+    if ims_lifecycle_field_ok(ip, 128) == 0 || port < 0 || port > 65535 { return "" }
+    if ims_lifecycle_path_ok(path) == 0 || ims_lifecycle_path_ok(service_route) == 0 { return "" }
+    if ims_lifecycle_field_ok(server_name, 2048) == 0 || ims_lifecycle_auth_ok(auth_state) == 0 { return "" }
+    if expires_at < 0 { return "" }
+    return "v1|" + private_identity + "|" + public_identity + "|" + contact + "|" + transport + "|" + string(expires_at) + "|" + ip + "|" + string(port) + "|" + path + "|" + service_route + "|" + server_name + "|" + auth_state
+}
+
+fn ims_lifecycle_parts(value: string) -> []string {
+    return str_split(value, "|")
+}
+
+fn ims_lifecycle_decode_ok(value: string) -> int {
+    let parts = ims_lifecycle_parts(value)
+    if len(parts) != 12 { return 0 }
+    if not str_eq(parts[0], "v1") { return 0 }
+    if ims_lifecycle_field_ok(parts[1], 1024) == 0 || len(parts[1]) < 1 { return 0 }
+    if ims_lifecycle_field_ok(parts[2], 2048) == 0 || len(parts[2]) < 1 { return 0 }
+    if ims_lifecycle_uri_ok(parts[3]) == 0 { return 0 }
+    if ims_lifecycle_transport_ok(parts[4]) == 0 { return 0 }
+    let mut expires_at = 0
+    match parse_int(parts[5]) {
+        Ok(v) => { expires_at = v }
+        Err(_) => { return 0 }
+    }
+    if expires_at < 0 { return 0 }
+    if ims_lifecycle_field_ok(parts[6], 128) == 0 { return 0 }
+    let mut port = 0
+    match parse_int(parts[7]) {
+        Ok(v) => { port = v }
+        Err(_) => { return 0 }
+    }
+    if port < 0 || port > 65535 { return 0 }
+    if ims_lifecycle_path_ok(parts[8]) == 0 || ims_lifecycle_path_ok(parts[9]) == 0 { return 0 }
+    if ims_lifecycle_field_ok(parts[10], 2048) == 0 { return 0 }
+    if ims_lifecycle_auth_ok(parts[11]) == 0 { return 0 }
+    return 1
+}
+
+fn ims_lifecycle_live(value: string) -> int {
+    if ims_lifecycle_decode_ok(value) == 0 { return 0 }
+    let parts = ims_lifecycle_parts(value)
+    if not str_eq(parts[11], "registered") { return 0 }
+    let mut expires_at = 0
+    match parse_int(parts[5]) {
+        Ok(v) => { expires_at = v }
+        Err(_) => { return 0 }
+    }
+    if expires_at <= now_ms() { return 0 }
+    return 1
+}
+
+fn ims_lifecycle_find(reg: CMap, aor: string) -> string {
+    if ims_lifecycle_aor_ok(aor) == 0 { return "" }
+    let key = ims_lifecycle_key(aor)
+    if cmap_has(reg, key) == 0 { return "" }
+    let value = cmap_get(reg, key)
+    if ims_lifecycle_live(value) == 0 {
+        let _ = cmap_del(reg, key)
+        return ""
+    }
+    return value
+}
+
+fn ims_lifecycle_private(value: string) -> string {
+    if ims_lifecycle_decode_ok(value) == 0 { return "" }
+    return ims_lifecycle_parts(value)[1]
+}
+
+fn ims_lifecycle_public(value: string) -> string {
+    if ims_lifecycle_decode_ok(value) == 0 { return "" }
+    return ims_lifecycle_parts(value)[2]
+}
+
+fn ims_lifecycle_contact(value: string) -> string {
+    if ims_lifecycle_decode_ok(value) == 0 { return "" }
+    return ims_lifecycle_parts(value)[3]
+}
+
+fn ims_lifecycle_transport(value: string) -> string {
+    if ims_lifecycle_decode_ok(value) == 0 { return "" }
+    return ims_lifecycle_parts(value)[4]
+}
+
+fn ims_lifecycle_path(value: string) -> string {
+    if ims_lifecycle_decode_ok(value) == 0 { return "" }
+    return ims_lifecycle_parts(value)[8]
+}
+
+fn ims_lifecycle_service_route(value: string) -> string {
+    if ims_lifecycle_decode_ok(value) == 0 { return "" }
+    return ims_lifecycle_parts(value)[9]
+}
+
+fn ims_lifecycle_server_name(value: string) -> string {
+    if ims_lifecycle_decode_ok(value) == 0 { return "" }
+    return ims_lifecycle_parts(value)[10]
+}
+
+// Map a public identity (sip:/sips: URI or bare user@host) to AOR user@host.
+fn ims_lifecycle_aor_from_public(public_identity: string) -> string {
+    if ims_lifecycle_field_ok(public_identity, 2048) == 0 || len(public_identity) < 1 { return "" }
+    let mut t = public_identity
+    let low = str_to_lower(t)
+    if str_has_prefix(low, "sips:") { t = t[5:] }
+    else if str_has_prefix(low, "sip:") { t = t[4:] }
+    else if str_index(low, ":") >= 0 && str_index(t, "@") < 0 {
+        // Reject non-SIP schemes (udp:, http:, …) without inventing an AOR.
+        return ""
+    }
+    // Strip URI params / headers / path for AOR form: user@host only.
+    let mut end = len(t)
+    let mut i = 0
+    while i < len(t) {
+        let c = int(t[i])
+        if c == 59 || c == 63 || c == 47 { end = i; break }
+        i = i + 1
+    }
+    t = t[0:end]
+    // Require user@host; bare hosts are not IMPUs.
+    let at = str_index(t, "@")
+    if at < 1 { return "" }
+    let user = t[0:at]
+    let mut host = t[at + 1:]
+    if len(host) < 1 { return "" }
+    let colon = str_index(host, ":")
+    if colon >= 0 { host = host[0:colon] }
+    if len(host) < 1 { return "" }
+    t = user + "@" + host
+    if ims_lifecycle_aor_ok(t) == 0 { return "" }
+    return str_to_lower(t)
+}
+
+fn ims_lifecycle_impus_key(aor: string) -> string {
+    return "ims-life-impus|" + aor
+}
+
+fn ims_lifecycle_alias_key(alias_aor: string) -> string {
+    return "ims-life-alias|" + alias_aor
+}
+
+// Stable IRS id from private identity (all public IDs of one IMPI share a set).
+fn ims_lifecycle_irs_id(private_identity: string) -> string {
+    if ims_lifecycle_field_ok(private_identity, 1024) == 0 || len(private_identity) < 1 { return "" }
+    return sha256("madis.ims.irs|" + private_identity)[0:16]
+}
+
+fn ims_lifecycle_irs_key(irs_id: string) -> string {
+    return "ims-life-irs|" + irs_id
+}
+
+// SIP_IMS_IRS_DEREG_MODE=all (default) clears the whole IRS; single clears one AOR.
+fn ims_lifecycle_irs_dereg_all() -> int {
+    let mode = str_to_lower(str_trim_space(env_get_or("SIP_IMS_IRS_DEREG_MODE", "all")))
+    if str_eq(mode, "single") { return 0 }
+    return 1
+}
+
+fn ims_lifecycle_irs_add(reg: CMap, private_identity: string, aor: string) -> int {
+    let irs = ims_lifecycle_irs_id(private_identity)
+    if len(irs) == 0 || ims_lifecycle_aor_ok(aor) == 0 { return 0 }
+    let key = ims_lifecycle_irs_key(irs)
+    let mut list = ""
+    if cmap_has(reg, key) == 1 { list = cmap_get(reg, key) }
+    let marker = "|" + aor + "|"
+    if str_index("|" + list + "|", marker) >= 0 {
+        cmap_set(reg, "ims-life-aor-irs|" + aor, irs)
+        return 1
+    }
+    if len(list) == 0 { list = aor } else { list = list + "," + aor }
+    if len(list) > 8192 { return 0 }
+    cmap_set(reg, key, list)
+    cmap_set(reg, "ims-life-aor-irs|" + aor, irs)
+    return 1
+}
+
+fn ims_lifecycle_irs_remove_aor(reg: CMap, aor: string) -> int {
+    if ims_lifecycle_aor_ok(aor) == 0 { return 0 }
+    let ik = "ims-life-aor-irs|" + aor
+    if cmap_has(reg, ik) == 0 { return 1 }
+    let irs = cmap_get(reg, ik)
+    let _ = cmap_del(reg, ik)
+    let key = ims_lifecycle_irs_key(irs)
+    if cmap_has(reg, key) == 0 { return 1 }
+    let items = str_split(cmap_get(reg, key), ",")
+    let mut out = ""
+    let mut i = 0
+    while i < len(items) {
+        let item = str_trim_space(items[i])
+        if len(item) > 0 && not str_eq(item, aor) {
+            if len(out) > 0 { out = out + "," }
+            out = out + item
+        }
+        i = i + 1
+    }
+    if len(out) == 0 { let _ = cmap_del(reg, key) } else { cmap_set(reg, key, out) }
+    return 1
+}
+
+fn ims_lifecycle_irs_members(reg: CMap, private_identity: string) -> string {
+    let irs = ims_lifecycle_irs_id(private_identity)
+    if len(irs) == 0 { return "" }
+    let key = ims_lifecycle_irs_key(irs)
+    if cmap_has(reg, key) == 0 { return "" }
+    return cmap_get(reg, key)
+}
+
+// associated_csv is comma-separated public identities (max 8). Empty clears.
+// Aliases map alias AOR → primary AOR so MT can resolve associated IMPUs.
+fn ims_lifecycle_associated_set(reg: CMap, primary_aor: string, associated_csv: string) -> int {
+    if ims_lifecycle_aor_ok(primary_aor) == 0 { return 0 }
+    let _ = ims_lifecycle_associated_clear(reg, primary_aor)
+    if len(associated_csv) == 0 { return 1 }
+    if len(associated_csv) > 8192 { return 0 }
+    let items = str_split(associated_csv, ",")
+    if len(items) < 1 || len(items) > 8 { return 0 }
+    let mut stored = ""
+    let mut i = 0
+    while i < len(items) {
+        let uri = str_trim_space(items[i])
+        if ims_lifecycle_uri_ok(uri) == 0 { return 0 }
+        let alias_aor = ims_lifecycle_aor_from_public(uri)
+        if len(alias_aor) == 0 { return 0 }
+        // Do not allow an alias AOR already owned by a different primary.
+        let akey = ims_lifecycle_alias_key(alias_aor)
+        if cmap_has(reg, akey) == 1 {
+            let owner = cmap_get(reg, akey)
+            if not str_eq(owner, primary_aor) { return 0 }
+        }
+        cmap_set(reg, akey, primary_aor)
+        if i > 0 { stored = stored + "," }
+        stored = stored + uri
+        i = i + 1
+    }
+    cmap_set(reg, ims_lifecycle_impus_key(primary_aor), stored)
+    return 1
+}
+
+fn ims_lifecycle_associated_clear(reg: CMap, primary_aor: string) -> int {
+    if ims_lifecycle_aor_ok(primary_aor) == 0 { return 0 }
+    let ikey = ims_lifecycle_impus_key(primary_aor)
+    if cmap_has(reg, ikey) == 1 {
+        let prev = cmap_get(reg, ikey)
+        let items = str_split(prev, ",")
+        let mut i = 0
+        while i < len(items) {
+            let alias_aor = ims_lifecycle_aor_from_public(str_trim_space(items[i]))
+            if len(alias_aor) > 0 {
+                let akey = ims_lifecycle_alias_key(alias_aor)
+                if cmap_has(reg, akey) == 1 && str_eq(cmap_get(reg, akey), primary_aor) {
+                    let _ = cmap_del(reg, akey)
+                }
+            }
+            i = i + 1
+        }
+        let _ = cmap_del(reg, ikey)
+    }
+    return 1
+}
+
+fn ims_lifecycle_associated_list(reg: CMap, primary_aor: string) -> string {
+    if ims_lifecycle_aor_ok(primary_aor) == 0 { return "" }
+    let ikey = ims_lifecycle_impus_key(primary_aor)
+    if cmap_has(reg, ikey) == 0 { return "" }
+    return cmap_get(reg, ikey)
+}
+
+// Resolve an AOR that may be a primary or an associated IMPU alias.
+fn ims_lifecycle_resolve_aor(reg: CMap, aor: string) -> string {
+    if ims_lifecycle_aor_ok(aor) == 0 { return "" }
+    let low = str_to_lower(aor)
+    if len(ims_lifecycle_find(reg, low)) > 0 { return low }
+    // Also try as public URI form.
+    let from_uri = ims_lifecycle_aor_from_public(aor)
+    if len(from_uri) > 0 && len(ims_lifecycle_find(reg, from_uri)) > 0 { return from_uri }
+    let akey = ims_lifecycle_alias_key(low)
+    if cmap_has(reg, akey) == 1 {
+        let primary = cmap_get(reg, akey)
+        if ims_lifecycle_aor_ok(primary) == 1 && len(ims_lifecycle_find(reg, primary)) > 0 { return primary }
+    }
+    if len(from_uri) > 0 {
+        let akey2 = ims_lifecycle_alias_key(from_uri)
+        if cmap_has(reg, akey2) == 1 {
+            let primary2 = cmap_get(reg, akey2)
+            if ims_lifecycle_aor_ok(primary2) == 1 && len(ims_lifecycle_find(reg, primary2)) > 0 { return primary2 }
+        }
+    }
+    return ""
+}
+
+fn ims_lifecycle_find_resolved(reg: CMap, aor: string) -> string {
+    let primary = ims_lifecycle_resolve_aor(reg, aor)
+    if len(primary) == 0 { return "" }
+    return ims_lifecycle_find(reg, primary)
+}
+
+fn ims_lifecycle_mt_target_resolved(reg: CMap, aor: string) -> string {
+    let primary = ims_lifecycle_resolve_aor(reg, aor)
+    if len(primary) == 0 { return "" }
+    return ims_lifecycle_mt_target(reg, primary)
+}
+
+fn ims_lifecycle_clear(reg: CMap, aor: string) -> int {
+    if ims_lifecycle_aor_ok(aor) == 0 { return 0 }
+    let _ = ims_lifecycle_associated_clear(reg, aor)
+    // Explicit deregistration and failed stores must not leave the AOR in an
+    // implicit registration set; network dereg would otherwise re-clear it.
+    let _ = ims_lifecycle_irs_remove_aor(reg, aor)
+    let key = ims_lifecycle_key(aor)
+    let had = cmap_has(reg, key)
+    let _ = cmap_del(reg, key)
+    let _ = ims_lifecycle_release_aor_count(reg, aor, had)
+    return 1
+}
+
+// Network-initiated deregistration: drop durable IMS state, associated IMPUs,
+// iFC triggers, and generic contact bindings for this AOR.
+fn ims_lifecycle_clear_one(reg: CMap, aor: string, db: SqlDB, db_ok: int) -> int {
+    let _ = ims_lifecycle_irs_remove_aor(reg, aor)
+    let _ = ims_lifecycle_clear(reg, aor)
+    let _ = ims_lifecycle_db_remove(db, db_ok, aor)
+    let _ = ims_ifc_clear(reg, aor)
+    let _ = registration_remove(reg, aor, "*")
+    let _ = registration_db_remove(db, db_ok, aor, "*")
+    return 1
+}
+
+fn ims_lifecycle_network_deregister(reg: CMap, aor: string, db: SqlDB, db_ok: int) -> int {
+    if ims_lifecycle_aor_ok(aor) == 0 { return 0 }
+    let primary = ims_lifecycle_resolve_aor(reg, aor)
+    let mut target = aor
+    if len(primary) > 0 { target = primary }
+    let life = ims_lifecycle_find(reg, target)
+    let private_identity = if len(life) > 0 { ims_lifecycle_private(life) } else { "" }
+    if ims_lifecycle_irs_dereg_all() == 1 && len(private_identity) > 0 {
+        let members = ims_lifecycle_irs_members(reg, private_identity)
+        if len(members) > 0 {
+            let items = str_split(members, ",")
+            let mut i = 0
+            while i < len(items) {
+                let m = str_trim_space(items[i])
+                if len(m) > 0 { let _ = ims_lifecycle_clear_one(reg, m, db, db_ok) }
+                i = i + 1
+            }
+            return 1
+        }
+    }
+    return ims_lifecycle_clear_one(reg, target, db, db_ok)
+}
+
+// Fail closed at capacity: refuse new AORs instead of silently evicting
+// victims (which desynced memory from durable Path rows).
+fn ims_lifecycle_admit_aor(reg: CMap, aor: string) -> int {
+    let key = ims_lifecycle_key(aor)
+    if cmap_has(reg, key) == 1 { return 1 }
+    let mut count = 0
+    if cmap_has(reg, "ims_life_count") == 1 {
+        match parse_int(cmap_get(reg, "ims_life_count")) {
+            Ok(v) => { count = v }
+            Err(_) => { count = 0 }
+        }
+    }
+    if count >= ims_lifecycle_capacity() { return 0 }
+    cmap_set(reg, "ims_life_count", string(count + 1))
+    return 1
+}
+
+fn ims_lifecycle_release_aor_count(reg: CMap, aor: string, had_key: int) -> int {
+    if had_key == 0 { return 1 }
+    let mut count = 0
+    if cmap_has(reg, "ims_life_count") == 1 {
+        match parse_int(cmap_get(reg, "ims_life_count")) {
+            Ok(v) => { count = v }
+            Err(_) => { count = 0 }
+        }
+    }
+    if count > 0 { cmap_set(reg, "ims_life_count", string(count - 1)) }
+    let _ = aor
+    return 1
+}
+
+fn ims_lifecycle_store(reg: CMap, aor: string, private_identity: string, public_identity: string, contact: string, transport: string, expires_s: int, ip: string, port: int, path: string, service_route: string, server_name: string) -> int {
+    if ims_lifecycle_aor_ok(aor) == 0 { return 0 }
+    if expires_s < 1 { return 0 }
+    // Malformed Path fails closed (reject store). Well-formed but unpinned
+    // Path is stripped so restart/DB rows cannot reintroduce attacker next-hops.
+    let mut safe_path = path
+    if len(path) > 0 {
+        if ims_lifecycle_path_ok(path) == 0 { return 0 }
+        if ims_lifecycle_path_trusted_at_rest(path) == 0 { safe_path = "" }
+    }
+    let expires_at = now_ms() + expires_s * 1000
+    let value = ims_lifecycle_encode(private_identity, public_identity, contact, transport, expires_at, ip, port, safe_path, service_route, server_name, "registered")
+    if len(value) == 0 { return 0 }
+    if ims_lifecycle_admit_aor(reg, aor) == 0 { return 0 }
+    cmap_set(reg, ims_lifecycle_key(aor), value)
+    return 1
+}
+
+// Prepend Route so the terminating request walks the stored Path (P-CSCF)
+// before the UE Contact. Only valid Path URIs are applied.
+fn ims_lifecycle_apply_path_route(msg: string, path: string) -> string {
+    if len(path) == 0 { return msg }
+    if ims_lifecycle_uri_ok(path) == 0 { return "__IMS_PATH_INVALID__" }
+    let mut route_uri = path
+    if ims_lifecycle_has_lr_param(path) == 0 { route_uri = path + ";lr" }
+    let cleaned = hdr_remove(msg, "Route")
+    return sip_prepend_header(cleaned, "Route", "<" + route_uri + ">")
+}
+
+// Resolve next hop for a terminating session. Prefer Path when present so the
+// call returns through the access edge that owns the UE flow; otherwise use
+// the registered Contact. Path is re-validated on every use.
+fn ims_lifecycle_mt_target(reg: CMap, aor: string) -> string {
+    let value = ims_lifecycle_find(reg, aor)
+    if len(value) == 0 { return "" }
+    let path = ims_lifecycle_path(value)
+    let contact = ims_lifecycle_contact(value)
+    let transport = ims_lifecycle_transport(value)
+    if len(path) > 0 {
+        if ims_lifecycle_uri_ok(path) == 0 { return "" }
+        return path + "|" + sip_transport_param(path, transport)
+    }
+    if len(contact) == 0 || ims_lifecycle_uri_ok(contact) == 0 { return "" }
+    return contact + "|" + transport
+}
+
+fn ims_lifecycle_bootstrap(db: SqlDB) -> int {
+    let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS ims_registrations (aor TEXT PRIMARY KEY, private_identity TEXT NOT NULL DEFAULT '', public_identity TEXT NOT NULL DEFAULT '', contact TEXT NOT NULL DEFAULT '', transport TEXT NOT NULL DEFAULT '', path TEXT NOT NULL DEFAULT '', service_route TEXT NOT NULL DEFAULT '', server_name TEXT NOT NULL DEFAULT '', associated_uris TEXT NOT NULL DEFAULT '', auth_state TEXT NOT NULL DEFAULT 'registered', node_id TEXT NOT NULL DEFAULT '', source_ip TEXT NOT NULL DEFAULT '', source_port INT NOT NULL DEFAULT 0, expires_at TIMESTAMP NOT NULL DEFAULT NOW(), updated_at TIMESTAMP NOT NULL DEFAULT NOW(), created_at TIMESTAMP NOT NULL DEFAULT NOW(), CONSTRAINT ims_reg_aor_size CHECK (char_length(aor) BETWEEN 1 AND 512), CONSTRAINT ims_reg_auth_state CHECK (auth_state IN ('registered', 'deregistered')))")
+    let _ = sql_exec_plain(db, "ALTER TABLE ims_registrations ADD COLUMN IF NOT EXISTS associated_uris TEXT NOT NULL DEFAULT ''")
+    let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_ims_registrations_expires ON ims_registrations (expires_at)")
+    let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_ims_registrations_private ON ims_registrations (private_identity)")
+    return 1
+}
+
+fn ims_lifecycle_associated_csv_ok(associated_csv: string) -> int {
+    if len(associated_csv) == 0 { return 1 }
+    if len(associated_csv) > 8192 { return 0 }
+    let items = str_split(associated_csv, ",")
+    if len(items) < 1 || len(items) > 8 { return 0 }
+    let mut i = 0
+    while i < len(items) {
+        if ims_lifecycle_uri_ok(str_trim_space(items[i])) == 0 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn ims_lifecycle_db_upsert(db: SqlDB, db_ok: int, aor: string, private_identity: string, public_identity: string, contact: string, transport: string, path: string, service_route: string, server_name: string, associated_csv: string, expires_s: int, ip: string, port: int, node_id: string) -> int {
+    if db_ok == 0 { return 0 }
+    if ims_lifecycle_aor_ok(aor) == 0 || expires_s < 1 { return 0 }
+    if ims_lifecycle_transport_ok(transport) == 0 { return 0 }
+    if ims_lifecycle_uri_ok(contact) == 0 || ims_lifecycle_path_ok(path) == 0 || ims_lifecycle_path_ok(service_route) == 0 { return 0 }
+    if ims_lifecycle_field_ok(private_identity, 1024) == 0 || ims_lifecycle_field_ok(public_identity, 2048) == 0 { return 0 }
+    if ims_lifecycle_field_ok(server_name, 2048) == 0 || ims_lifecycle_field_ok(ip, 128) == 0 || ims_lifecycle_field_ok(node_id, 256) == 0 { return 0 }
+    if ims_lifecycle_associated_csv_ok(associated_csv) == 0 { return 0 }
+    if port < 0 || port > 65535 { return 0 }
+    let body = "{\"aor\":\"" + app_json_escape(aor)
+        + "\",\"private_identity\":\"" + app_json_escape(private_identity)
+        + "\",\"public_identity\":\"" + app_json_escape(public_identity)
+        + "\",\"contact\":\"" + app_json_escape(contact)
+        + "\",\"transport\":\"" + app_json_escape(transport)
+        + "\",\"path\":\"" + app_json_escape(path)
+        + "\",\"service_route\":\"" + app_json_escape(service_route)
+        + "\",\"server_name\":\"" + app_json_escape(server_name)
+        + "\",\"associated_uris\":\"" + app_json_escape(associated_csv)
+        + "\",\"node_id\":\"" + app_json_escape(node_id)
+        + "\",\"source_ip\":\"" + app_json_escape(ip)
+        + "\",\"source_port\":" + string(port)
+        + ",\"expires_s\":" + string(expires_s) + "}"
+    let rc = sql_exec_str4(db, "INSERT INTO ims_registrations (aor, private_identity, public_identity, contact, transport, path, service_route, server_name, associated_uris, auth_state, node_id, source_ip, source_port, expires_at, updated_at) SELECT $4::jsonb->>'aor', $4::jsonb->>'private_identity', $4::jsonb->>'public_identity', $4::jsonb->>'contact', $4::jsonb->>'transport', COALESCE($4::jsonb->>'path',''), COALESCE($4::jsonb->>'service_route',''), COALESCE($4::jsonb->>'server_name',''), COALESCE($4::jsonb->>'associated_uris',''), 'registered', COALESCE($4::jsonb->>'node_id',''), COALESCE($4::jsonb->>'source_ip',''), COALESCE(($4::jsonb->>'source_port')::int,0), NOW() + ((($4::jsonb->>'expires_s')::int)::text || ' seconds')::interval, NOW() ON CONFLICT (aor) DO UPDATE SET private_identity = EXCLUDED.private_identity, public_identity = EXCLUDED.public_identity, contact = EXCLUDED.contact, transport = EXCLUDED.transport, path = EXCLUDED.path, service_route = EXCLUDED.service_route, server_name = EXCLUDED.server_name, associated_uris = EXCLUDED.associated_uris, auth_state = 'registered', node_id = EXCLUDED.node_id, source_ip = EXCLUDED.source_ip, source_port = EXCLUDED.source_port, expires_at = EXCLUDED.expires_at, updated_at = NOW()", "", "", "", body)
+    return if rc < 0 { 0 } else { 1 }
+}
+
+fn ims_lifecycle_db_remove(db: SqlDB, db_ok: int, aor: string) -> int {
+    if db_ok == 0 { return 0 }
+    if ims_lifecycle_aor_ok(aor) == 0 { return 0 }
+    let _ = sql_exec_str4(db, "DELETE FROM ims_registrations WHERE aor = $1", aor, "", "", "")
+    return 1
+}
+
+fn ims_lifecycle_cleanup_db(db: SqlDB, db_ok: int) -> int {
+    if db_ok == 0 { return 0 }
+    let _ = sql_exec_plain(db, "DELETE FROM ims_registrations WHERE expires_at < NOW() OR auth_state = 'deregistered'")
+    return 1
+}
+
+fn ims_lifecycle_load_db(db: SqlDB, db_ok: int, reg: CMap) -> int {
+    if db_ok == 0 { return 0 }
+    let _ = ims_lifecycle_cleanup_db(db, db_ok)
+    let limit = string(ims_lifecycle_load_limit())
+    let rows = sql_query_rows_str(db, "SELECT aor, private_identity, public_identity, contact, transport, path, service_route, server_name, COALESCE(associated_uris,''), EXTRACT(EPOCH FROM (expires_at - NOW()))::INT, source_ip, source_port FROM ims_registrations WHERE auth_state = 'registered' AND expires_at > NOW() ORDER BY updated_at DESC LIMIT " + limit, "")
+    if rows <= 0 { return 0 }
+    let mut loaded = 0
+    while sql_rows_next(rows) == 1 {
+        let aor = sql_rows_str(rows, 0)
+        let private_identity = sql_rows_str(rows, 1)
+        let public_identity = sql_rows_str(rows, 2)
+        let contact = sql_rows_str(rows, 3)
+        let transport = sql_rows_str(rows, 4)
+        let path = sql_rows_str(rows, 5)
+        let service_route = sql_rows_str(rows, 6)
+        let server_name = sql_rows_str(rows, 7)
+        let associated_csv = sql_rows_str(rows, 8)
+        let expires_s = sql_rows_int(rows, 9)
+        let ip = sql_rows_str(rows, 10)
+        let port = sql_rows_int(rows, 11)
+        if expires_s > 0 && ims_lifecycle_store(reg, aor, private_identity, public_identity, contact, transport, expires_s, ip, port, path, service_route, server_name) == 1 {
+            // Associated set fails closed: drop the whole lifecycle row if aliases are poison.
+            if ims_lifecycle_associated_set(reg, aor, associated_csv) == 0 {
+                let _ = ims_lifecycle_clear(reg, aor)
+            } else {
+                let _ = ims_lifecycle_irs_add(reg, private_identity, aor)
+                loaded = loaded + 1
+            }
+        }
+    }
+    let _ = sql_rows_close(rows)
+    return loaded
+}
+
+// Opt-in Cx re-SAR after restart. When enabled, each hydrated registration is
+// reaffirmed with the HSS (assignment type 2 = re-registration). Fail closed:
+// SAR denial or exchange failure drops local lifecycle for that AOR.
+fn ims_lifecycle_hss_reconcile_enabled() -> int {
+    if ims_cx_registration_enabled() == 0 { return 0 }
+    let value = str_to_lower(str_trim_space(env_get_or("SIP_IMS_LIFECYCLE_HSS_RECONCILE", "0")))
+    return if str_eq(value, "1") || str_eq(value, "true") || str_eq(value, "yes") { 1 } else { 0 }
+}
+
+fn ims_lifecycle_hss_reconcile(cache: CMap, peer_lock: Mutex, reg: CMap, db: SqlDB, db_ok: int) -> int {
+    if ims_lifecycle_hss_reconcile_enabled() == 0 { return 0 }
+    // Walk a bounded snapshot of known lifecycle keys via DB reload list size.
+    // In-memory only: scan associated_uris / primary keys is not free; use
+    // registration AOR ring style via stored lifecycle keys from a temporary
+    // list built during load. Here we re-query live rows so restart path is
+    // authoritative and bounded.
+    if db_ok == 0 { return 0 }
+    let limit = string(ims_lifecycle_load_limit())
+    let rows = sql_query_rows_str(db, "SELECT aor, private_identity, public_identity, server_name FROM ims_registrations WHERE auth_state = 'registered' AND expires_at > NOW() ORDER BY updated_at DESC LIMIT " + limit, "")
+    if rows <= 0 { return 0 }
+    let mut dropped = 0
+    while sql_rows_next(rows) == 1 {
+        let aor = sql_rows_str(rows, 0)
+        let private_identity = sql_rows_str(rows, 1)
+        let public_identity = sql_rows_str(rows, 2)
+        let server_name = sql_rows_str(rows, 3)
+        if ims_lifecycle_aor_ok(aor) == 0 || ims_lifecycle_field_ok(private_identity, 1024) == 0 || ims_lifecycle_field_ok(public_identity, 2048) == 0 || ims_lifecycle_field_ok(server_name, 2048) == 0 {
+            let _ = ims_lifecycle_network_deregister(reg, aor, db, db_ok)
+            dropped = dropped + 1
+            continue
+        }
+        // Assignment type 2 = re-registration (TS 29.228).
+        if ims_cx_sar_accepted(cache, peer_lock, public_identity, private_identity, server_name, 2, 0) == 0 {
+            let _ = ims_lifecycle_network_deregister(reg, aor, db, db_ok)
+            dropped = dropped + 1
+        }
+    }
+    let _ = sql_rows_close(rows)
+    return dropped
+}
+
+// When stored S-CSCF differs from this node, claim via SAR reassignment
+// (assignment type 1 = REGISTRATION). Fail closed: clear local half-state.
+fn ims_lifecycle_server_mismatch(reg: CMap, aor: string, server_name: string) -> int {
+    if ims_lifecycle_aor_ok(aor) == 0 || ims_lifecycle_field_ok(server_name, 2048) == 0 { return 0 }
+    let life = ims_lifecycle_find(reg, aor)
+    if len(life) == 0 { return 0 }
+    let prior = ims_lifecycle_server_name(life)
+    if len(prior) == 0 || str_eq(prior, server_name) { return 0 }
+    return 1
+}
+
+fn ims_lifecycle_reassign(cache: CMap, peer_lock: Mutex, reg: CMap, aor: string, private_identity: string, public_identity: string, server_name: string, db: SqlDB, db_ok: int) -> int {
+    if ims_lifecycle_aor_ok(aor) == 0 { return 0 }
+    if ims_lifecycle_server_mismatch(reg, aor, server_name) == 0 { return 1 }
+    // Assignment type 1 = REGISTRATION (claim). HSS denial → clear half-state.
+    if ims_cx_sar_accepted(cache, peer_lock, public_identity, private_identity, server_name, 1, 0) == 0 {
+        let _ = ims_lifecycle_network_deregister(reg, aor, db, db_ok)
+        return 0
+    }
+    return 1
+}
+
+// Write or clear lifecycle state after a successful registrar contact update.
+// contact empty with expires_s 0 means full AOR deregistration.
+// associated_csv is optional comma-separated public identities (max 8).
+fn ims_lifecycle_reconcile(reg: CMap, aor: string, private_identity: string, public_identity: string, contact: string, transport: string, expires_s: int, ip: string, port: int, path: string, service_route: string, server_name: string, associated_csv: string, db: SqlDB, db_ok: int, node_id: string) -> int {
+    if ims_lifecycle_aor_ok(aor) == 0 { return 0 }
+    if expires_s <= 0 || len(contact) == 0 {
+        let _ = ims_lifecycle_clear(reg, aor)
+        let _ = ims_lifecycle_db_remove(db, db_ok, aor)
+        return 1
+    }
+    if len(registration_find(reg, aor)) == 0 {
+        let _ = ims_lifecycle_clear(reg, aor)
+        let _ = ims_lifecycle_db_remove(db, db_ok, aor)
+        return 1
+    }
+    if ims_lifecycle_associated_csv_ok(associated_csv) == 0 { return 0 }
+    let mut safe_path = path
+    if ims_lifecycle_path_trusted_at_rest(safe_path) == 0 { safe_path = "" }
+    if ims_lifecycle_store(reg, aor, private_identity, public_identity, contact, transport, expires_s, ip, port, safe_path, service_route, server_name) == 0 {
+        return 0
+    }
+    if ims_lifecycle_associated_set(reg, aor, associated_csv) == 0 {
+        let _ = ims_lifecycle_clear(reg, aor)
+        return 0
+    }
+    if ims_lifecycle_irs_add(reg, private_identity, aor) == 0 {
+        let _ = ims_lifecycle_clear(reg, aor)
+        return 0
+    }
+    if db_ok == 1 {
+        if ims_lifecycle_db_upsert(db, db_ok, aor, private_identity, public_identity, contact, transport, safe_path, service_route, server_name, associated_csv, expires_s, ip, port, node_id) == 0 {
+            let _ = ims_lifecycle_clear(reg, aor)
+            return 0
+        }
+    }
+    return 1
+}

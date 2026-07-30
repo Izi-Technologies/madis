@@ -19,6 +19,8 @@ Enable preauthorization explicitly:
 SIP_BILLING_MODE=preauth
 SIP_CHARGING_PROTOCOL=diameter
 SIP_DIAMETER_HOST=cc.example.net
+# Or multi-peer failover (preferred host remembered after success):
+# SIP_DIAMETER_HOSTS=hss1.example.com,hss2.example.com:3868
 SIP_DIAMETER_PORT=5658
 SIP_DIAMETER_TLS=1
 SIP_DIAMETER_CA=/etc/ssl/certs/carrier-ca.pem
@@ -32,13 +34,21 @@ The worker sends the initial authorization before routing an INVITE and can send
 
 TLS is the normal transport. Configure `SIP_DIAMETER_CLIENT_CERT` and `SIP_DIAMETER_CLIENT_KEY` for mTLS. SCTP or plaintext TCP requires explicit platform and deployment protection; `SIP_DIAMETER_ALLOW_PLAINTEXT=1` is an override, not a secure default.
 
+### Multi-peer client failover
+
+Set `SIP_DIAMETER_HOSTS` to a comma-separated list of peers (`host` or `host:port`). On open or exchange failure the client advances the preferred index and retries the next peer once. `SIP_DIAMETER_HOST` remains the single-peer fallback when `HOSTS` is empty.
+
+### Cx push server listen
+
+With `SIP_IMS_CX=1`, `SIP_IMS_CX_PUSH=1`, and `SIP_IMS_CX_PUSH_LISTEN=1`, the worker also listens for HSS-initiated TLS mTLS connections on `SIP_IMS_CX_PUSH_PORT` (default 3868). Requires `SIP_DIAMETER_SERVER_CERT`/`SIP_DIAMETER_SERVER_KEY` (or SIP TLS certs) and `SIP_DIAMETER_SERVER_CLIENT_CA` (or `SIP_DIAMETER_CA`). The server answers CER with CEA advertising Cx, then handles RTR/PPR/DWR.
+
 ## Deliberate limitations
 
 The current integration does not provide:
 
-- Diameter redirect/relay routing, peer failover, or an autonomous peer scheduler;
+- Diameter redirect/relay agents or a full autonomous peer state machine;
+- multi-connection client pools or weighted load balancing;
 - autonomous reauthorization/quota timers or media-policy enforcement;
-- inbound push-request handling for all application messages;
 - RFC 4006 as a separate implementation target;
 - carrier-specific 3GPP release profiles or vendor interoperability certification;
 - other Diameter applications such as NASREQ, QoS, Rx, Gx, Ro, Rf, or Sy as complete services.

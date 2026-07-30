@@ -1,0 +1,136 @@
+// Diameter multi-peer parsing and CEA server-role builders (no sockets).
+pull . "../main.mko"
+
+fn diameter_failover_test_reset() {
+    let _ = env_set("SIP_DIAMETER_HOST", "")
+    let _ = env_set("SIP_DIAMETER_HOSTS", "")
+    let _ = env_set("SIP_DIAMETER_PORT", "3868")
+    let _ = env_set("SIP_DIAMETER_ORIGIN_HOST", "scscf.example.com")
+    let _ = env_set("SIP_DIAMETER_ORIGIN_REALM", "example.com")
+    let _ = env_set("SIP_DIAMETER_HOST_IP", "192.0.2.10")
+}
+
+fn TestDiameterPeerHostListParsing() {
+    diameter_failover_test_reset()
+    let _ = env_set("SIP_DIAMETER_HOSTS", "hss1.example.com, hss2.example.com:5658 ,hss3.example.com")
+    assert_eq(diameter_peer_entry_count(), 3)
+    assert_eq_str(diameter_peer_entry_host(diameter_peer_entry_at(0)), "hss1.example.com")
+    assert_eq(diameter_peer_entry_port(diameter_peer_entry_at(0)), 3868)
+    assert_eq_str(diameter_peer_entry_host(diameter_peer_entry_at(1)), "hss2.example.com")
+    assert_eq(diameter_peer_entry_port(diameter_peer_entry_at(1)), 5658)
+    assert_eq_str(diameter_peer_entry_host(diameter_peer_entry_at(2)), "hss3.example.com")
+    // Fallback to single host when HOSTS empty.
+    let _ = env_set("SIP_DIAMETER_HOSTS", "")
+    let _ = env_set("SIP_DIAMETER_HOST", "solo.example.com")
+    assert_eq(diameter_peer_entry_count(), 1)
+    assert_eq_str(diameter_peer_entry_host(diameter_peer_entry_at(0)), "solo.example.com")
+    // Reject empty / oversized.
+    let _ = env_set("SIP_DIAMETER_HOST", "")
+    assert_eq(diameter_peer_entry_count(), 0)
+    assert_eq(diameter_peer_entry_port("bad:port"), -1)
+    diameter_failover_test_reset()
+}
+
+fn TestDiameterPeerFailoverAdvance() {
+    diameter_failover_test_reset()
+    let cache = cmap_new()
+    let _ = env_set("SIP_DIAMETER_HOSTS", "a.example.com,b.example.com,c.example.com")
+    assert_eq(diameter_peer_preferred_index(cache), 0)
+    assert_eq(diameter_peer_failover_advance(cache, ""), 1)
+    assert_eq(diameter_peer_preferred_index(cache), 1)
+    assert_eq(diameter_peer_failover_advance(cache, ""), 1)
+    assert_eq(diameter_peer_preferred_index(cache), 2)
+    assert_eq(diameter_peer_failover_advance(cache, ""), 1)
+    assert_eq(diameter_peer_preferred_index(cache), 0)
+    // Single peer: no rotation.
+    let _ = env_set("SIP_DIAMETER_HOSTS", "only.example.com")
+    let solo = cmap_new()
+    assert_eq(diameter_peer_failover_advance(solo, ""), 0)
+    diameter_failover_test_reset()
+}
+
+fn TestDiameterPeerRealmSelection() {
+    diameter_failover_test_reset()
+    let _ = env_set("SIP_DIAMETER_HOSTS", "example.com@hss1.example.com:3868,example.com@hss2.example.com,other.net@hss3.example.com,hss-wild.example.com")
+    // Entry parsing: realm prefix, host, port.
+    assert_eq_str(diameter_peer_entry_realm(diameter_peer_entry_at(0)), "example.com")
+    assert_eq_str(diameter_peer_entry_host(diameter_peer_entry_at(0)), "hss1.example.com")
+    assert_eq(diameter_peer_entry_port(diameter_peer_entry_at(0)), 3868)
+    assert_eq_str(diameter_peer_entry_realm(diameter_peer_entry_at(3)), "")
+    assert_eq_str(diameter_peer_entry_host(diameter_peer_entry_at(3)), "hss-wild.example.com")
+    // Exact realm match wins over wildcard; other realms fall back to wildcard.
+    assert_eq_str(diameter_peer_candidate_indexes("example.com"), "0,1")
+    assert_eq_str(diameter_peer_candidate_indexes("other.net"), "2")
+    assert_eq_str(diameter_peer_candidate_indexes("unknown.org"), "3")
+    // No realm on the request: legacy all-entries behavior.
+    assert_eq_str(diameter_peer_candidate_indexes(""), "0,1,2,3")
+    // Realm-pinned failover rotates within the pinned candidates only.
+    let cache = cmap_new()
+    assert_eq(diameter_peer_failover_advance(cache, "example.com"), 1)
+    assert_eq(diameter_peer_preferred_index(cache), 1)
+    assert_eq(diameter_peer_failover_advance(cache, "example.com"), 1)
+    assert_eq(diameter_peer_preferred_index(cache), 0)
+    diameter_failover_test_reset()
+}
+
+fn TestDiameterRequestRealmExtraction() {
+    diameter_failover_test_reset()
+    let body = diameter_avp_string(263, "s1")
+        + diameter_avp_string(264, "scscf.example.com")
+        + diameter_avp_string(296, "example.com")
+        + diameter_avp_string(283, "Example.COM")
+    let request = diameter_header(128, 300, 16777216, 1, 1, body)
+    assert_eq_str(diameter_request_realm(request), "example.com")
+    assert_eq_str(diameter_request_realm(""), "")
+    diameter_failover_test_reset()
+}
+
+fn TestDiameterCeaForCer() {
+    diameter_failover_test_reset()
+    let cer = diameter_cer_message_for(16777216)
+    assert_eq(diameter_message_valid(cer), 1)
+    let cea = diameter_cea_for_cer(cer, 16777216)
+    assert_eq(diameter_message_valid(cea), 1)
+    assert_eq(diameter_header_command(cea), 257)
+    assert_eq((diameter_header_flags(cea) / 128) % 2, 0)
+    assert_eq(diameter_find_u32(cea, 268), 2001)
+    assert_eq_str(diameter_find_avp(cea, 264), "scscf.example.com")
+    assert_eq(diameter_read_u32(cea, 12), diameter_read_u32(cer, 12))
+    // Reject answers used as CER input.
+    assert_eq_str(diameter_cea_for_cer(cea, 16777216), "")
+    diameter_failover_test_reset()
+}
+
+fn TestDiameterFindVendorAvpN() {
+    diameter_failover_test_reset()
+    // Two vendor AVPs with same code in one message.
+    let a = diameter_avp_vendor_u32(612, 10415, 0)
+    let b = diameter_avp_vendor_u32(612, 10415, 1)
+    let msg = diameter_header(0, 303, 16777216, 1, 1, a + b)
+    assert_eq(diameter_message_valid(msg), 1)
+    assert_eq(diameter_find_vendor_u32(msg, 612, 10415), 0)
+    let second = diameter_find_vendor_avp_n(msg, 612, 10415, 1)
+    assert_eq(len(second), 4)
+    assert_eq(diameter_read_u32(second, 0), 1)
+    assert_eq_str(diameter_find_vendor_avp_n(msg, 612, 10415, 2), "")
+    diameter_failover_test_reset()
+}
+
+fn TestDiameterPeerBackoffAndInflight() {
+    diameter_failover_test_reset()
+    let _ = env_set("SIP_DIAMETER_PEER_BACKOFF_MS", "60000")
+    let _ = env_set("SIP_DIAMETER_MAX_INFLIGHT", "2")
+    let cache = cmap_new()
+    assert_eq(diameter_peer_is_backed_off(cache, 0), 0)
+    let _ = diameter_peer_mark_failure(cache, 0)
+    let _ = diameter_peer_mark_failure(cache, 0)
+    assert_eq(diameter_peer_is_backed_off(cache, 0), 1)
+    let _ = diameter_peer_mark_success(cache, 0)
+    assert_eq(diameter_peer_is_backed_off(cache, 0), 0)
+    assert_eq(diameter_inflight_begin(cache), 1)
+    assert_eq(diameter_inflight_begin(cache), 1)
+    assert_eq(diameter_inflight_begin(cache), 0)
+    let _ = diameter_inflight_end(cache)
+    assert_eq(diameter_inflight_begin(cache), 1)
+    diameter_failover_test_reset()
+}

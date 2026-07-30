@@ -1,4 +1,5 @@
 // Contract tests stay local: no database, sockets, or charging service.
+pull . "../madis_https.mko"
 pull . "../billing.mko"
 pull . "../charging.mko"
 pull . "../admin/http.mko"

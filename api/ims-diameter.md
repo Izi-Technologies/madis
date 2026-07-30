@@ -46,8 +46,21 @@ Madis also exposes an optional fail-closed HTTPS subscriber authorization adapte
 
 Set `SIP_IMS_AKA=1` together with `SIP_IMS_CX=1` to enable that gate. The current profile accepts only `SIP_IMS_AKA_SCHEME=Digest-AKAv1-MD5`; the HSS remains responsible for Milenage/TUAK generation and key custody. Madis caches only XRES briefly in worker memory, derives the [RFC 3310](https://www.rfc-editor.org/rfc/rfc3310) Digest response from it, rejects stale/replayed responses, and does not persist AKA secrets or use the confidentiality/integrity keys for media security.
 
+On SQN synchronization failure the UE includes `auts=`. After verifying the nonce was issued by this node, Madis sends a Cx MAR whose SIP-Auth-Data-Item carries SIP-Authenticate (RAND) and SIP-Authorization (AUTS), then challenges again with the new MAA vectors (`stale=true`). `SIP_IMS_AKA_NUM_VECTORS` applies to both normal and AUTS MAR.
+
+## Inbound Cx push (RTR / PPR)
+
+With `SIP_IMS_CX=1` and `SIP_IMS_CX_PUSH=1`, the S-CSCF worker polls the persistent TLS Diameter peer for unsolicited requests:
+
+| Command | Action |
+| --- | --- |
+| RTR (304) | Validate User-Name + Public-Identity; force local network deregistration; answer RTA |
+| PPR (305) | Validate Public-Identity; optional User-Data JSON profile patch (associated URIs / target-only iFC); answer PPA |
+
+Handlers fail closed on malformed AVPs (`5004`). Unknown users get idempotent success after a no-op. This is not a full Diameter server listener and does not implement multi-peer push routing.
+
 ## What remains external
 
-Madis does not provide HSS/UDM storage, P-/I-/S-CSCF service logic, TAS/MMTel, PCRF/PCF, complete Diameter peer routing/failover, push-request handling for every command, or a complete IMS release profile. Carrier-specific AVP requirements and interoperability must be tested against the selected 3GPP release and vendor.
+Madis does not provide HSS/UDM storage, complete P-/I-/S-CSCF service logic, TAS/MMTel, PCRF/PCF, complete Diameter peer routing/failover, a Diameter server listen profile for every push topology, or a complete IMS release profile. Carrier-specific AVP requirements and interoperability must be tested against the selected 3GPP release and vendor.
 
 See [`diameter.md`](diameter.md) for transport, TLS, charging, and peer limitations.

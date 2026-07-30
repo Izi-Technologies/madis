@@ -1,0 +1,29 @@
+pull . "../main.mko"
+
+fn TestIMSIPSecExportDisabledByDefault() {
+    let _ = env_set("SIP_IMS_AKA_STORE_KEYS", "0")
+    let _ = env_set("SIP_IMS_IPSEC_EXPORT", "0")
+    assert_eq(ims_ipsec_export_enabled(), 0)
+    let cache = cmap_new()
+    assert_eq_str(ims_ipsec_sa_params(cache, "nonce-value-12345678", "alice@example.com", "192.0.2.10"), "")
+}
+
+fn TestIMSIPSecExportRequiresKeysAndProducesJson() {
+    let _ = env_set("SIP_IMS_AKA_STORE_KEYS", "1")
+    let _ = env_set("SIP_IMS_IPSEC_EXPORT", "1")
+    let _ = env_set("SIP_IMS_IPSEC_SPI_BASE", "2000")
+    let cache = cmap_new()
+    let nonce = "nonce-value-ipsec-export"
+    let private_identity = "alice@example.com"
+    // Install opaque keys the same way AKA would.
+    let payload = base64_encode("ck-material-xx") + "|" + base64_encode("ik-material-yy")
+    let _ = bounded_cache_pair_set(cache, "ims_aka_keys_seq", "ims_aka_keys_ring|", "ims-aka-keys|" + nonce + "|" + private_identity, payload, mono_ms(), 65536)
+    let sa = ims_ipsec_sa_params(cache, nonce, private_identity, "192.0.2.10")
+    assert_eq(if str_index(sa, "madis.ims.ipsec.sa.v1") >= 0 { 1 } else { 0 }, 1)
+    assert_eq(if str_index(sa, "ck_b64") >= 0 { 1 } else { 0 }, 1)
+    assert_eq(if str_index(sa, "spi_uc") >= 0 { 1 } else { 0 }, 1)
+    assert_eq(ims_ipsec_cache_sa(cache, private_identity, sa), 1)
+    assert_eq(if len(ims_ipsec_get_sa(cache, private_identity)) > 0 { 1 } else { 0 }, 1)
+    let _ = env_set("SIP_IMS_AKA_STORE_KEYS", "0")
+    let _ = env_set("SIP_IMS_IPSEC_EXPORT", "0")
+}

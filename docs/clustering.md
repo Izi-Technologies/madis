@@ -34,6 +34,22 @@ Within a host, `SIP_UDP_WORKERS` enables bounded `SO_REUSEPORT` workers and
 fallback consults live `registration_bindings` plus a fresh `cluster_nodes`
 heartbeat and fails closed when the owner is unavailable.
 
+## AKA vectors across nodes
+
+AKA authentication vectors (XRES, and CK/IK when `SIP_IMS_AKA_STORE_KEYS=1`)
+are deliberately **node-local secrets**: they live only in the issuing worker's
+bounded in-memory cache with `SIP_IMS_AKA_VECTOR_TTL_MS` lifetime and are never
+written to PostgreSQL or shared between nodes. A UE whose authenticated
+REGISTER lands on a node that did not issue the nonce receives a fresh
+challenge (`401`, stale) from that node's own Cx MAR instead of a hard
+rejection; registration completes one round trip later. Replay safety holds
+per node and across nodes: a consumed vector cannot be replayed to the issuer,
+and a sibling node has no XRES to validate against, so cross-node replay
+cannot succeed either. Contract: `TestIMS_AKAClusterNodeRechallenge` in
+`tests/ims_aka_test.mko`. Deployments that cannot tolerate the extra
+round trip should pin REGISTER flows by source or Call-ID at the edge rather
+than replicate secrets.
+
 ## Capacity rules
 
 The requested scale point is an acceptance-test input, not a performance claim.
@@ -87,3 +103,42 @@ Set `MADIS_HEP_ENABLE=1` and `MADIS_HEP_HOST` when the nodes should export
 HEPv3 to a collector. The harness is for topology and failover validation;
 it is not a capacity certification or a substitute for a production SIP
 load balancer.
+
+## Graceful drain and rolling upgrade
+
+1. Set `SIP_DRAIN=1` on the node leaving service (env or process restart with the flag).
+2. New `REGISTER` and initial `INVITE` receive `503` with reason tag `drain`.
+3. In-dialog requests (re-INVITE, BYE, ACK, PRACK, UPDATE) continue until natural teardown.
+4. Wait for active dialogs to end (or operator max wait); monitor admin metrics / logs.
+5. Stop the worker. Peer nodes serve new sessions; durable IMS lifecycle rows remain in Postgres.
+6. Start the replacement binary/config with `SIP_DRAIN=0`. On boot, `ims_lifecycle_load_db` hydrates Path/Service-Route state for MT routing.
+7. Optional: `SIP_IMS_LIFECYCLE_HSS_RECONCILE=1` re-SARs hydrated bindings and drops HSS denials.
+
+Never force-push mid-dialog affinity: keep Call-ID affinity on the L4 balancer until drain completes.
+
+## Multi-site disaster recovery (operator-owned)
+
+Madis does not ship multi-region active-active product logic. Operators own:
+
+| Concern | Owner |
+| --- | --- |
+| Postgres primary / replica / failover | DBA / cloud HA |
+| DNS / anycast for SIP edge | Network ops |
+| Diameter multi-peer HSS lists | `SIP_DIAMETER_HOSTS` per site |
+| Secrets and TLS material | HSM / secret manager |
+| Cross-site registration ownership | Shared DB + short registration TTL |
+
+### Site-failure checklist
+
+1. Fail over Postgres (promote replica). Point remaining Madis nodes at the new primary via `SIP_DB_URL`.
+2. Ensure `cluster_nodes` heartbeats from surviving site; mark dead site nodes stale.
+3. Re-point SIP load balancer / DNS to surviving edge.
+4. Madis workers hydrate `ims_registrations` + `registration_bindings` from DB; UEs re-REGISTER if contacts expired.
+5. Verify Cx to HSS (`SIP_DIAMETER_HOSTS` still reachable or use site-local HSS peers).
+6. Record RTO/RPO measured against your Postgres and DNS design — not Madis alone.
+
+### What Madis will not claim
+
+- Automatic multi-region transaction recovery
+- Shared in-memory dialog state across sites
+- Zero call drop on hard site loss without UE re-REGISTER

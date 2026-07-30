@@ -1,0 +1,21 @@
+// P-Charging-Vector contract tests.
+pull . "../main.mko"
+
+fn TestIMSPCVMintAndApply() {
+    let _ = env_set("SIP_IMS_CHARGING_VECTOR", "1")
+    let _ = env_set("SIP_IMS_ICID_GEN_ADDR", "scscf.example.com")
+    let msg = "INVITE sip:bob@example.com SIP/2.0\r\nVia: SIP/2.0/UDP a:5060;branch=z9hG4bK-p\r\nFrom: <sip:a@example.com>;tag=t\r\nTo: <sip:bob@example.com>\r\nCall-ID: pcv@example.com\r\nCSeq: 1 INVITE\r\nContent-Length: 0\r\n\r\n"
+    let out = ims_pcv_apply_originating(msg, "pcv@example.com")
+    assert_eq(if str_index(out, "P-Charging-Vector:") >= 0 { 1 } else { 0 }, 1)
+    assert_eq(if str_index(out, "icid-value=") >= 0 { 1 } else { 0 }, 1)
+    // Pass-through terminating preserves valid vector.
+    let term = ims_pcv_apply_terminating(out)
+    assert_eq(if str_index(term, "P-Charging-Vector:") >= 0 { 1 } else { 0 }, 1)
+    let _ = env_set("SIP_IMS_CHARGING_VECTOR", "0")
+}
+
+fn TestIMSPCVDisabled() {
+    let _ = env_set("SIP_IMS_CHARGING_VECTOR", "0")
+    let msg = "INVITE sip:bob@example.com SIP/2.0\r\nCall-ID: x@example.com\r\nContent-Length: 0\r\n\r\n"
+    assert_eq_str(ims_pcv_apply_originating(msg, "x@example.com"), msg)
+}

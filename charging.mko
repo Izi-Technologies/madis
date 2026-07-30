@@ -94,7 +94,7 @@ fn charging_https_post(url: string, body: string) -> string {
     }
     if len(host) == 0 || len(host) > 512 || len(path) > 2048 || port < 1 || port > 65535 { return "" }
     let ca = env_get_or("SIP_CHARGING_CA", "")
-    return tls_post(host, port, path, body, ca)
+    return madis_https_post(host, port, path, "", body, ca, charging_timeout_ms())
 }
 
 fn charging_exchange(cid: string, caller: string, callee: string, kind: string, request_number: int, used_seconds: int, cache: CMap, peer_lock: Mutex) -> int {
@@ -118,10 +118,18 @@ fn charging_exchange(cid: string, caller: string, callee: string, kind: string, 
     if len(url) == 0 { return if charging_fail_open() == 1 { 1 } else { 0 } }
     let request = charging_request_json_kind(cid, caller, callee, kind, request_number, used_seconds)
     let mut response = ""
+    let mut status = 0
     let low = str_to_lower(url)
-    if str_has_prefix(low, "https://") { response = charging_https_post(url, request) }
-    else { if str_has_prefix(low, "http://") { response = http_post_timeout(url, request, charging_timeout_ms()) } }
-    let status = http_last_status()
+    if str_has_prefix(low, "https://") {
+        let raw = charging_https_post(url, request)
+        status = https_post_status(raw)
+        response = https_post_body(raw)
+    } else {
+        if str_has_prefix(low, "http://") {
+            response = http_post_timeout(url, request, charging_timeout_ms())
+            status = http_last_status()
+        }
+    }
     if status < 200 || status >= 300 || len(response) == 0 || len(response) > 65536 {
         return if charging_fail_open() == 1 { 1 } else { 0 }
     }

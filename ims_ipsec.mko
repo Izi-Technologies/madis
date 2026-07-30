@@ -1,0 +1,122 @@
+// IMS access security surface (3GPP TS 33.203-shaped).
+//
+// Madis never installs kernel IPsec SAs. When SIP_IMS_AKA_STORE_KEYS=1 and
+// SIP_IMS_IPSEC_EXPORT=1, it exposes a bounded opaque SA-parameter JSON
+// document for an external security gateway / strongSwan / platform IPsec.
+// Secrets are never logged; TTL follows the AKA vector cache.
+
+fn ims_ipsec_export_enabled() -> int {
+    // Requires both export and store-keys; do not call ims_aka helpers (load order).
+    let store = str_to_lower(str_trim_space(env_get_or("SIP_IMS_AKA_STORE_KEYS", "0")))
+    if not (str_eq(store, "1") || str_eq(store, "true") || str_eq(store, "yes")) { return 0 }
+    let v = str_to_lower(str_trim_space(env_get_or("SIP_IMS_IPSEC_EXPORT", "0")))
+    return if str_eq(v, "1") || str_eq(v, "true") || str_eq(v, "yes") { 1 } else { 0 }
+}
+
+fn ims_ipsec_spi_base() -> int {
+    let mut base = 1000
+    match parse_int(env_get_or("SIP_IMS_IPSEC_SPI_BASE", "1000")) {
+        Ok(v) => { base = v }
+        Err(_) => {}
+    }
+    if base < 256 { base = 256 }
+    if base > 2147483646 { base = 2147483646 }
+    return base
+}
+
+fn ims_ipsec_port_c() -> int {
+    let mut p = 5060
+    match parse_int(env_get_or("SIP_IMS_IPSEC_PORT_C", "5060")) {
+        Ok(v) => { p = v }
+        Err(_) => {}
+    }
+    if p < 1 || p > 65535 { return 5060 }
+    return p
+}
+
+fn ims_ipsec_port_s() -> int {
+    let mut p = 5061
+    match parse_int(env_get_or("SIP_IMS_IPSEC_PORT_S", "5061")) {
+        Ok(v) => { p = v }
+        Err(_) => {}
+    }
+    if p < 1 || p > 65535 { return 5061 }
+    return p
+}
+
+// Build SA parameter document from cached CK/IK for a successful AKA nonce.
+// Returns empty when disabled or keys missing. Never logs CK/IK.
+fn ims_ipsec_nonce_ok(value: string) -> int {
+    if len(value) < 16 || len(value) > 4096 { return 0 }
+    let mut i = 0
+    while i < len(value) {
+        let c = int(value[i])
+        if c == 0 || c == 10 || c == 13 || c == 34 || c == 92 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn ims_ipsec_sa_params(cache: CMap, nonce: string, private_identity: string, ue_ip: string) -> string {
+    if ims_ipsec_export_enabled() == 0 { return "" }
+    if ims_ipsec_nonce_ok(nonce) == 0 { return "" }
+    if len(private_identity) < 1 || len(private_identity) > 1024 { return "" }
+    if len(ue_ip) < 1 || len(ue_ip) > 128 { return "" }
+    if str_index(ue_ip, "\r") >= 0 || str_index(ue_ip, "\n") >= 0 { return "" }
+    // Read the same opaque key cache slot as ims_aka (no direct ims_aka call).
+    let key_slot = "ims-aka-keys|" + nonce + "|" + private_identity
+    if cmap_has(cache, key_slot) == 0 { return "" }
+    let keys = cmap_get(cache, key_slot)
+    if len(keys) == 0 { return "" }
+    let parts = str_split(keys, "|")
+    if len(parts) < 2 { return "" }
+    let ck_b64 = parts[0]
+    let ik_b64 = parts[1]
+    if len(ck_b64) < 4 || len(ik_b64) < 4 || len(ck_b64) > 512 || len(ik_b64) > 512 { return "" }
+    // Derive SPI pair from nonce hash (deterministic, no extra randomness required).
+    let h = sha256("madis.ipsec.spi|" + nonce + "|" + private_identity)
+    let mut n = 0
+    let mut i = 0
+    while i < 8 && i < len(h) {
+        let c = int(h[i])
+        n = n * 16
+        if c >= 48 && c <= 57 { n = n + c - 48 }
+        else if c >= 97 && c <= 102 { n = n + c - 87 }
+        i = i + 1
+    }
+    if n < 0 { n = 0 - n }
+    let spi_uc = ims_ipsec_spi_base() + (n % 100000)
+    let spi_us = spi_uc + 1
+    // JSON for external enforcer only. Values are already base64 opaque.
+    return "{"
+        + "\"schema\":\"madis.ims.ipsec.sa.v1\","
+        + "\"private_identity\":\"" + private_identity + "\","
+        + "\"ue_ip\":\"" + ue_ip + "\","
+        + "\"port_c\":" + string(ims_ipsec_port_c()) + ","
+        + "\"port_s\":" + string(ims_ipsec_port_s()) + ","
+        + "\"spi_uc\":" + string(spi_uc) + ","
+        + "\"spi_us\":" + string(spi_us) + ","
+        + "\"ealg\":\"aes-cbc\","
+        + "\"ialg\":\"hmac-sha-1-96\","
+        + "\"ck_b64\":\"" + ck_b64 + "\","
+        + "\"ik_b64\":\"" + ik_b64 + "\","
+        + "\"note\":\"install_via_external_ipsec;madis_does_not_xfrm\""
+        + "}"
+}
+
+// Store last SA params under a short-lived cache key for admin/debug fetch
+// (value still secret-bearing — only when export enabled).
+fn ims_ipsec_cache_sa(cache: CMap, private_identity: string, sa_json: string) -> int {
+    if ims_ipsec_export_enabled() == 0 || len(sa_json) == 0 { return 0 }
+    if len(private_identity) < 1 || len(private_identity) > 1024 { return 0 }
+    if len(sa_json) > 4096 { return 0 }
+    let _ = bounded_cache_pair_set(cache, "ims_ipsec_seq", "ims_ipsec_ring|", "ims-ipsec-sa|" + private_identity, sa_json, mono_ms(), 8192)
+    return 1
+}
+
+fn ims_ipsec_get_sa(cache: CMap, private_identity: string) -> string {
+    if ims_ipsec_export_enabled() == 0 { return "" }
+    let key = "ims-ipsec-sa|" + private_identity
+    if cmap_has(cache, key) == 0 { return "" }
+    return cmap_get(cache, key)
+}

@@ -1,0 +1,36 @@
+pull . "../main.mko"
+
+fn TestBindIpDefaultIsWildcard() {
+    let _ = env_set("SIP_BIND_IP", "")
+    assert_eq_str(sip_bind_ip(), "0.0.0.0")
+}
+
+fn TestBindIpAcceptsConfiguredIpv4() {
+    let _ = env_set("SIP_BIND_IP", "127.0.0.1")
+    assert_eq_str(sip_bind_ip(), "127.0.0.1")
+    let _ = env_set("SIP_BIND_IP", " 192.0.2.10 ")
+    assert_eq_str(sip_bind_ip(), "192.0.2.10")
+    let _ = env_set("SIP_BIND_IP", "")
+}
+
+fn TestBindIpRejectsInvalidFailsBackToWildcard() {
+    for bad in ["999.1.1.1", "10.0.0", "10.0.0.1.5", "abc", "10.0.0.1;", "::1", "0.0.0.256"] {
+        let _ = env_set("SIP_BIND_IP", bad)
+        assert_eq_str(sip_bind_ip(), "0.0.0.0")
+    }
+    // Surrounding whitespace/CRLF is trimmed before validation.
+    let _ = env_set("SIP_BIND_IP", "10.0.0.1\r\n")
+    assert_eq_str(sip_bind_ip(), "10.0.0.1")
+    let _ = env_set("SIP_BIND_IP", "")
+}
+
+fn TestBindIpValidatorBoundary() {
+    assert_eq(sip_bind_ip_valid("0.0.0.0"), 1)
+    assert_eq(sip_bind_ip_valid("255.255.255.255"), 1)
+    assert_eq(sip_bind_ip_valid("256.0.0.1"), 0)
+    assert_eq(sip_bind_ip_valid("1.2.3"), 0)
+    assert_eq(sip_bind_ip_valid("1.2.3.4.5"), 0)
+    assert_eq(sip_bind_ip_valid("01.2.3.4"), 1)
+    assert_eq(sip_bind_ip_valid("1.2.3."), 0)
+    assert_eq(sip_bind_ip_valid("..."), 0)
+}

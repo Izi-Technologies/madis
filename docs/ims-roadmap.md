@@ -1,229 +1,230 @@
 # Madis IMS roadmap
 
-## Purpose and scope
+This roadmap describes the bounded IMS voice profile implemented on top of
+Madis’s SIP proxy/registrar foundation. It is a delivery plan and capability
+boundary; it is not a claim that Madis is a complete IMS core or a certified
+carrier platform.
 
-This document defines the implementation path from Madis’s current SIP proxy/registrar foundation to a bounded, testable IMS voice profile. It is a delivery plan and capability boundary, not a claim that Madis is a complete IMS core.
+The first target is a reproducible lab profile with a durable registration and
+authentication lifecycle. VoLTE/VoWiFi deployment, roaming, emergency
+calling, RCS, PSTN interconnect, and carrier-scale operations remain separate
+profiles with their own acceptance evidence.
 
-The first target is a lab-capable IMS voice profile. Carrier deployment, VoLTE/VoWiFi, 5G integration, roaming, emergency calling, RCS, and PSTN interconnect require additional profiles and acceptance evidence.
+## Evidence policy
 
-## Current verified foundation
+A phase is complete only when both of these are true:
 
-Madis currently provides:
+1. the behavior is implemented and bounded in the repository; and
+2. the required acceptance evidence exists for the intended deployment.
 
-- SIP UDP, TCP, TLS, WS, and WSS transport;
-- registration, authentication, transactions, dialogs, routing, dispatch, dialplans, and CDR/outbox behavior;
-- PostgreSQL-backed SIP state and an authenticated administration API;
-- selected client-side 3GPP Cx and Sh Diameter builders and answer validation;
-- optional Cx UAR/SAR authorization and opaque Cx MAR/MAA authentication-vector handling;
-- explicit bounded P-/I-/S-CSCF REGISTER and initial-INVITE role routing;
-- fail-closed HTTPS subscriber authorization with assigned S-CSCF and bounded service-profile fields;
-- registration lifecycle, dialog, transaction, identity/privacy, Path, Service-Route, P-Associated-URI, and target-only iFC boundaries;
-- RTPEngine offer/answer/delete control messages with bounded SDP validation;
-- deterministic two-subscriber Cx/AKA/session tests and an opt-in local RTPEngine UDP control-path test.
+The checklists below use these labels:
 
-These capabilities are covered by local contract and regression tests. They do not establish interoperability with a real HSS/UDM, IMS UE, RTPEngine, or carrier network.
+- **Implemented** — code exists and is covered by local contract tests.
+- **Wired** — the production request, response, worker, or lifecycle path
+  invokes the implementation.
+- **External evidence pending** — the boundary is ready, but real peer,
+  media, failure, or scale evidence has not been collected in this repository.
 
-### Initial Phase 1/2 lab components
+## Current status
 
-The repository now includes two external lab components that exercise the
-existing boundaries without moving subscriber secrets or RTP into the SIP
-worker:
+### Implemented and wired
 
-- [`../lab/ims_hss.py`](../lab/README.md) provides a bounded Cx UAR/SAR/LIR/MAR
-  Diameter adapter and the versioned subscriber authorization HTTP/HTTPS
-  contract. Its opt-in wire tests cover TCP, Diameter TLS, and HTTPS listener behavior. It uses
-  configured opaque XRES values for the selected lab profile and does not
-  implement Milenage/TUAK or production HSS secret management.
-- [`../media/rtp_module.py`](../media/README.md) provides an RTPEngine-ng
-  compatible control sidecar and a bounded one-audio-stream RTP/RTCP relay.
-  It does not implement ICE, DTLS-SRTP termination, codec transcoding,
-  recording, or production media failover.
+- SIP over UDP, TCP, TLS, WS, and WSS.
+- Stateful transactions, retransmissions, dialogs, CANCEL/ACK/BYE handling,
+  parallel forking, dispatch groups, dialplans, gateways, routing policy, CDRs,
+  and durable billing-event delivery.
+- PostgreSQL-backed registrations and lifecycle hydration after worker restart.
+- Explicit P-/I-/S-CSCF role boundaries for REGISTER and initial INVITE.
+- Cx UAR/SAR/LIR/MAR/Server-Assignment contracts, peer failover controls,
+  realm-pinned selection, backoff, and bounded in-flight work.
+- AKA consume-once vectors, expiry, multi-vector pools, and AUTS resync.
+- Associated public identities, implicit registration sets, network-initiated
+  RTR/PPR deregistration, S-CSCF reassignment, Path, and Service-Route.
+- Dynamic P-CSCF flow tokens: REGISTER minting, Route/connection refresh,
+  source-port binding, and cleanup when TCP/TLS/WS associations close.
+- RFC 5626-shaped `Require`/`Supported: outbound` bounds. Kernel IPsec is not
+  installed by Madis; optional CK/IK and bounded SA JSON remain an external
+  enforcer contract.
+- Structured iFC target selection, originating/terminating session cases, and
+  optional third-party REGISTER. The lab MMTel/TAS adapter is in `lab/`.
+- RTPEngine control for offer/answer/delete, bounded node selection/failover,
+  and profile/flag pass-through. RTP and media security remain external.
+- Session-timer request validation, dialog binding, and negotiated
+  `Session-Expires` response headers. Endpoint refresher generation is not
+  owned by the SIP worker.
+- PRACK/early-dialog bookkeeping, glare rejection, identity privacy, PAI,
+  P-Charging-Vector propagation, Rx authorization hooks, and existing Ro
+  charging boundaries.
+- Graceful drain, bounded caches, defensive SIP parsing, MAF, the management
+  API, and the separate WebUI/admin process.
 
-Their unit tests are part of the default repository checks; localhost wire
-tests are opt-in checks documented in [`testing.md`](testing.md). They reduce
-the integration gap; they do not constitute external IMS or media
-interoperability evidence.
+### Evidence currently available
 
-The reproducible Docker profile at [`../docker/ims-lab/README.md`](../docker/ims-lab/README.md)
-now composes these adapters with separate Mako `v0.5.0` P-/I-/S-CSCF workers
-and a deterministic two-subscriber client. Its passing smoke test is evidence
-for the selected TLS Cx/AKA, HTTPS subscriber authorization, deterministic
-unknown/barred registration rejection, role-chain REGISTER/initial-INVITE
-forwarding, SIP, SDP relay, RTP, and teardown path only;
-the remaining roadmap
-items below still require real UE/HSS/UDM/media interoperability and measured
-deployment acceptance.
+- Mako native source check passes with the repository’s configured Mako
+  runtime.
+- `scripts/test.sh tests` is the local native contract-test gate.
+- `scripts/lab-smoke.sh unit` runs the Mako, lab, and media unit suites and
+  fails on any failing suite.
+- `docker compose -f docker-compose.ims-lab.yml config --quiet` validates the
+  IMS lab configuration.
+- The lab adapters provide deterministic Cx/AKA and bounded media test
+  doubles. They are not Open5GS, a commercial UE, or a production RTPEngine.
 
-### Explicit boundaries
+### Not yet demonstrated
 
-The opt-in worker smoke now exercises the session-timer `422 Min-SE` rejection and valid request-forwarding path. Full refresher ownership negotiation and endpoint refresh generation remain outside this boundary.
+- A clean-machine build and complete CI run against every supported Mako
+  release/runtime combination.
+- Interoperability with a real IMS UE, Open5GS HSS, SIPp/PJSIP, Kamailio or
+  OpenSIPS, Asterisk or FreeSWITCH, and a real RTPEngine media plane.
+- NAT rebinding and MT same-flow packet captures across UDP, TCP, TLS, WS, and
+  WSS.
+- Kernel IPsec/xfrm or strongSwan installation and packet-level IPsec evidence
+  for exported SA material.
+- PostgreSQL failure, worker restart during active dialogs, network partition,
+  rolling upgrade, and registration recovery drills.
+- Repeatable CPS, concurrent-dialog, RSS, file-descriptor, database-latency,
+  retransmission, and media-capacity measurements.
+- An independent SIP-security assessment or carrier interoperability claim.
 
-- Madis sends bounded RTPEngine control messages; it does not own RTP, ICE, DTLS-SRTP, codecs, recording, or media policy.
-- Only bounded `application/sdp` bodies with `v=0` and at least one media line are sent for media rewriting. Invalid or non-SDP bodies remain unmodified.
-- `SIP_IMS_SESSION_TIMERS=1` validates request-side `Session-Expires` and `Min-SE`; it does not negotiate refresher ownership or generate endpoint refreshes.
-- `SIP_IMS_IDENTITY_POLICY=1` filters trusted and untrusted asserted/preferred identity headers; it does not provide complete RFC 3325/RFC 8224 identity interworking.
-- `SIP_IMS_PATH` supports one validated configured P-CSCF `Path`; dynamic flow tokens, discovery, and multi-hop profile-derived Path sets remain open.
-- `SIP_IMS_SERVICE_ROUTE` supports one validated configured local S-CSCF `Service-Route`; third-party registration remains external.
-- `SIP_IMS_ASSOCIATED_URI` supports one validated fallback or up to eight validated subscriber-profile identities.
-- Subscriber `initial_filter_criteria` is limited to four validated SIP/SIPS application targets. Full iFC condition evaluation and TAS behavior remain external.
-- Madis does not provide HSS/UDM storage or AKA vector generation, full AKA algorithms, TAS/MMTel, PCRF/PCF, a complete Diameter relay, media termination, or PSTN/SIGTRAN gateway behavior.
+## Delivery phases
 
-See [`../README.md`](../README.md), [`../api/ims-diameter.md`](../api/ims-diameter.md), [`../api/ims-subscriber.md`](../api/ims-subscriber.md), and [`architecture.md`](architecture.md) for the detailed boundaries.
+### L1 — Durable registration and subscriber state
 
-## First lab profile
+- [x] Durable IMPI/IMPU, Contact, Path, Service-Route, S-CSCF, auth state, and
+  expiry in `ims_registrations`.
+- [x] Restart hydration and durable expiry cleanup.
+- [x] Associated public identities and implicit registration-set membership.
+- [x] Network-initiated deregistration through RTR/PPR and local lifecycle
+  helpers.
+- [x] Optional HSS re-SAR reconciliation after restart.
+- [x] S-CSCF reassignment and fail-closed handling of server mismatch.
+- [x] Cx peer selection, realm pinning, bounded backoff, and overload limits.
+- [x] Deterministic Diameter-to-SIP error mapping.
+- [ ] End-to-end SQN/AUTS evidence with a real HSS and IMS UE.
 
-The first profile is complete only when two provisioned IMS subscribers can register and establish authenticated originating and terminating voice sessions through a selected P-/I-/S-CSCF topology.
+### L3 — P-CSCF flow and access-edge behavior
 
-### In scope
+- [x] Opaque flow token minting and dynamic Path insertion.
+- [x] Route-token and stable-connection flow refresh.
+- [x] Source-port-aware flow identity and stream-close cleanup.
+- [x] Bounded outbound extension handling.
+- [x] MT routing through stored Path when a valid flow is present.
+- [x] Optional CK/IK and SA JSON generation plus a bearer-protected local
+  worker-admin retrieval route for an external access-security enforcer; no
+  kernel SA installation.
+- [ ] UE-driven NAT rebinding, keepalive expiry, and same-flow MT packet
+  evidence.
+- [ ] External strongSwan/xfrm installation and packet-level IPsec evidence.
 
-1. SIP over UDP/TCP/TLS with a controlled access-network model.
-2. IMS AKA-backed REGISTER authorization through an HSS-compatible service.
-3. Explicit P-CSCF, I-CSCF, and S-CSCF responsibilities, even if initially deployed in one unit.
-4. Cx UAR/UAA, MAR/MAA, SAR/SAA, and LIR/LIA procedures needed for registration and session routing.
-5. A subscriber service owning IMPI, IMPU, authentication vectors, profiles, iFC, barring, and S-CSCF assignment.
-6. Basic originating and terminating SIP sessions with transaction, dialog, identity, privacy, timer, and offer/answer behavior.
-7. An external or integrated media anchor able to relay negotiated media.
-8. Observability, deterministic failures, configuration validation, recovery procedures, and reproducible interoperability tests.
+### L4 — iFC and application services
 
-## Architecture and ownership
+- [x] Bounded structured iFC conditions, priority ordering, and session cases.
+- [x] Originating and terminating AS target selection.
+- [x] Optional sequential third-party REGISTER.
+- [x] Lab MMTel/TAS adapter for barring and call forwarding examples.
+- [ ] Real TAS/MMTel interoperability, supplementary-service coverage, and
+  failure behavior under AS timeout/restart.
 
-```text
- IMS UE / access network
-          |
-       P-CSCF  -------- HSS/UDM and subscriber service
-          |
-       I-CSCF  -------- Diameter Cx/Sh peer
-          |
-       S-CSCF  -------- TAS/application service
-          |
-       SIP/dialog       RTPEngine/media platform
-          |
-       policy/charging service
-```
+### L5 — Media control
 
-| Concern | Owner in the first profile |
+- [x] RTPEngine offer/answer/delete control path.
+- [x] Bounded multi-node selection and control failover.
+- [x] Profile and flag validation/pass-through for external media policy.
+- [x] Cleanup on BYE/CANCEL and early-media bookkeeping.
+- [ ] Real RTPEngine packet captures and media success matrix.
+- [ ] ICE, DTLS-SRTP, codec, DTMF, recording, and media failover evidence.
+
+### L6 — SIP session behavior
+
+- [x] Request-side `Session-Expires` and `Min-SE` validation.
+- [x] Dialog timer binding and response-side negotiated header insertion.
+- [x] Glare rejection for concurrent re-INVITE/UPDATE.
+- [x] PRACK/early-dialog and forked response bookkeeping.
+- [x] SDP offer/answer control integration.
+- [ ] Endpoint refresher scheduling and timeout ownership, if the deployment
+  chooses to place that responsibility in a dedicated session service.
+- [ ] Real 100rel/PRACK and session-timer interoperability traces.
+
+### L7 — Clustering and recovery
+
+- [x] PostgreSQL-backed lifecycle state with node ownership metadata.
+- [x] Affinity and routing guidance for UDP, TCP, TLS, WS, and WSS.
+- [x] Graceful drain and restart hydration runbooks.
+- [x] Fail-closed stale remote-registration handling.
+- [ ] Live restart, partition, database-failover, and rolling-upgrade drills.
+- [ ] Capacity and recovery objectives measured on declared hardware.
+
+### L8 — Charging and carrier boundaries
+
+- [x] Existing Ro/charging adapter boundary.
+- [x] Originating P-Charging-Vector generation and terminating validation.
+- [x] Rx AAR/STR builders and fail-closed authorization gate.
+- [ ] Real PCRF/PCF policy evidence and reauthorization behavior.
+- [ ] IBCF/SBC, roaming, emergency, PSTN/SIGTRAN, and regulatory profiles.
+
+## MAF integration track
+
+The MADIS Application Fabric (MAF) is the language-neutral application
+boundary for JavaScript/TypeScript, Go, Python, and other clients. It uses
+versioned HTTP/JSON routes, bearer scopes, tenant isolation, idempotency keys,
+optimistic versions, durable command receipts, and replayable events. The
+canonical route and schema list lives in [`api/maf.md`](../api/maf.md) and
+[`api/maf.openapi.yaml`](../api/maf.openapi.yaml).
+
+- [x] Read-only call/event access and asynchronous command receipts.
+- [x] Tenant-scoped create, answer, reject, hangup, bridge, and media command
+  boundaries.
+- [x] Separate read/write credentials and fail-closed bearer validation.
+- [x] Inbound MAF call ownership behind `SIP_MAF_INBOUND_MODE=control`.
+- [x] Node-side command polling and bounded SIP synchronization.
+- [ ] Production mTLS/reverse-proxy deployment evidence and SDK examples for
+  each supported language.
+- [ ] Independent abuse testing for token, tenant, idempotency, replay, and
+  command-ordering boundaries.
+
+## Interoperability and adversarial test matrix
+
+Every external-evidence run should preserve traces and declare versions,
+hardware, network topology, and configuration:
+
+| System | Required evidence |
 | --- | --- |
-| SIP transactions, dialogs, routing, and CSCF role behavior | Madis IMS service |
-| IMS identities, AKA secrets, vectors, profiles, and assignment | HSS/UDM or subscriber service |
-| Media packets and media security | Media platform |
-| Application services and iFC-triggered logic | TAS/application service |
-| Policy and charging decisions | External policy/charging service |
-| Provisioning and operations | Madis API plus subscriber-service API |
+| IMS UE | AKA, REGISTER refresh/expiry, originating/terminating INVITE, CANCEL, BYE |
+| Open5GS or another Cx HSS | UAR/SAR/MAR, AUTS, RTR/PPR, timeout/error mapping |
+| RTPEngine | Offer/answer/delete, NAT, ICE/DTLS-SRTP policy, packet capture |
+| SIPp/PJSIP | Retransmissions, fork, CANCEL race, malformed input, sustained load |
+| Kamailio/OpenSIPS | Peer behavior and interoperability comparison |
+| PostgreSQL/network | Failure, restart, partition, recovery, and stale-state behavior |
+| MAF clients | Auth scope, tenant isolation, idempotency, replay, ordering, backpressure |
 
-Private identities and authentication material must remain outside general SIP routing tables and require separate access control, encryption, rotation, auditing, and backup policy.
+Local contract tests are necessary but are not a substitute for this matrix.
 
-## Remaining work
+## Definition of done for the first lab profile
 
-The phases below are ordered by dependency. A phase is complete only when its acceptance evidence exists; implementation alone is not sufficient.
+1. A provisioned subscriber completes IMS AKA registration through the selected
+   P-/I-/S-CSCF path.
+2. Cx failures map deterministically to SIP responses without stale lifecycle
+   state.
+3. Two registered subscribers complete an originating and terminating session,
+   with stored Path routing when enabled.
+4. Worker restart restores durable registration state used for MT routing.
+5. Retransmissions, CANCEL races, timeouts, dialog teardown, and drain are
+   exercised and captured.
+6. Identity/privacy and application boundaries remain enforced.
+7. External media control succeeds and tears down without the SIP worker
+   owning RTP.
+8. MAF, metrics, traces, CDR correlation, configuration, and recovery steps
+   are documented and tested.
 
-### Phase 1 — External end-to-end lab interoperability (next)
+## Explicit non-claims
 
-Local contract coverage now includes deterministic unknown/barred rejection,
-an explicitly expired AKA-vector rejection, client transaction timeout cleanup,
-malformed-request drop behavior,
-Cx malformed-answer guards, and an opt-in worker-backed HSS-unavailable `503`
-check. External HSS/UDM outage and
-malformed-answer interoperability evidence remains open.
+Madis does not currently claim full RFC ABNF coverage, complete RFC 3262
+endpoint behavior, SIP Outbound/GRUU, complete RFC 4028 endpoint ownership,
+complete RFC 3325/RFC 8224 identity handling, a full HSS/UDM/TAS/PCRF/PCF or
+charging platform, independent certification, carrier-scale failover, or a
+published capacity number. Those claims require the external evidence listed
+above.
 
-The adapter baseline is present; the remaining work is connecting it to the
-Madis deployment and a selected IMS client profile, then collecting evidence.
-
-- Connect Cx to a real HSS/UDM or selected HSS-compatible adapter over the configured Diameter security and identity boundary.
-- Exercise live UAR/UAA, MAR/MAA, SAR/SAA, and LIR/LIA, including unknown subscriber, barred subscriber, expired vector, unavailable HSS, malformed answer, and serving-S-CSCF mismatch cases.
-- Validate a real HTTPS subscriber service with TLS trust, token rotation, provisioning, assigned S-CSCF state, profile retrieval, and fail-closed behavior.
-- Register two IMS-compatible clients using the selected AKA profile, then complete originating and terminating sessions.
-- Verify retransmission, INVITE/CANCEL separation, PRACK, provisional responses, unanswered-INVITE Timer C timeout, BYE, dialog teardown, and node failure across the external systems.
-
-Acceptance evidence: reproducible traces and test logs for two subscribers registering, authenticating, placing, and clearing calls through the selected topology, with deterministic negative responses and no stale registration state.
-
-### Phase 2 — Real media-path interoperability
-
-Local RTPEngine control-path coverage now includes successful offer/answer/delete,
-malformed-response rejection, no-responder timeout failure, media-session
-capacity-exhaustion rejection, and control-listener restart recovery. Real RTPEngine,
-capacity, restart, NAT, ICE, and DTLS-SRTP interoperability remain open.
-
-The control-compatible relay baseline is present; the remaining work is
-endpoint and network interoperability against the selected media profile.
-
-- Exercise the production RTPEngine offer, answer, and delete path against a real RTPEngine instance.
-- Validate NAT traversal, codec and SDP negotiation, RTP/RTCP anchoring, ICE, DTLS-SRTP, DTMF, and media-session cleanup with selected endpoints.
-- Define behavior for RTPEngine timeout, malformed response, capacity exhaustion, restart, and unreachable media node.
-- Keep RTP ownership outside the SIP worker; the worker performs bounded media-control operations and SIP-side failure handling only.
-
-Acceptance evidence: packet and signaling captures showing negotiated media, anchoring, teardown, and controlled failure for the supported endpoint/profile matrix. The local ng-shaped loopback test is not a substitute.
-
-### Phase 3 — Selected IMS service profile
-
-- Complete the P-/I-/S-CSCF behavior required by the selected 3GPP release, including dynamic Path and flow-token handling, multi-hop routing, SIP outbound, third-party registration, and serving-node reassignment where required.
-- Implement full RFC 4028 session-refresh negotiation and endpoint refresher ownership, rather than request-side interval validation only.
-- Define trusted identity and privacy behavior for the selected access and interconnect model, including required RFC 3325/RFC 8224 interoperability.
-- Add standard iFC condition evaluation, third-party service triggering, TAS/MMTel supplementary services, and service-profile lifecycle handling.
-- Close remaining SIP interoperability gaps for reliable provisional responses, offer/answer edge cases, early dialogs, fork cleanup, and in-dialog routing. The opt-in worker-backed smoke now exercises reliable `183`/PRACK, in-dialog `UPDATE` and re-INVITE offer/answer, authenticated INVITE cancellation, and target-only iFC fork selection with losing-branch CANCEL cleanup; standard iFC/TAS behavior and external UE interoperability remain open.
-
-Acceptance evidence: standards-referenced positive, malformed, timeout, and failover tests for each selected feature. Unsupported features remain explicitly disabled or rejected.
-
-### Phase 4 — Diameter, policy, charging, and interconnect
-
-- Add required Diameter peer scheduling, capability negotiation, reconnect/failover, overload protection, relay behavior, push requests, and multi-site recovery.
-- Integrate PCRF/PCF policy and bearer handling only where required by the selected access profile.
-- Complete online/offline charging, quota, reauthorization, CDR correlation, and media-policy enforcement for the selected charging model.
-- Add IBCF/SBC topology policy and, if required, BGCF, MGCF, IMS-MGW, and SIGTRAN interworking.
-- Define and test roaming, emergency calling, lawful-intercept, and regulatory behavior before including those deployments in scope.
-
-Acceptance evidence: interoperable protocol traces, failure-recovery tests, and release-specific conformance records for every enabled interface. Unimplemented interfaces remain external.
-
-### Phase 5 — Production operations and security review
-
-- Verify active-active or active-standby clustering, transaction affinity, state ownership, registration recovery, database failover, rolling upgrades, backup/restore, and partition behavior.
-- Measure configured CPS and concurrent-call targets on representative hardware with documented CPU, memory, file descriptors, database, network, retransmission, and media conditions. Measurements are acceptance data, not capacity guarantees.
-- Complete observability for SIP transactions, Diameter exchanges, media-control failures, registration state, CDR correlation, queue drops, and node health.
-- Run an independent white-hat security review covering SIP parsing, Diameter input, HTTP contracts, TLS, authorization, replay, resource exhaustion, secrets handling, and cluster boundaries; track and retest every finding.
-
-Acceptance evidence: signed test reports, reproducible load profiles, recovery procedures, security findings with remediation status, and an upgrade/restore rehearsal that does not expose subscriber secrets or silently lose registrations.
-
-## Definition of done for the first profile
-
-The first profile is complete only when an automated or reproducible environment demonstrates:
-
-1. A provisioned subscriber performs IMS AKA registration through P-/I-/S-CSCF behavior.
-2. Cx failures produce deterministic SIP responses and do not leave stale registration state.
-3. Two registered subscribers complete originating and terminating sessions.
-4. Retransmissions, cancellation, timeout, dialog teardown, and node failure are handled correctly.
-5. Identity and privacy rules are preserved across trusted and untrusted boundaries.
-6. Media is negotiated, anchored, monitored, and torn down without the SIP worker owning RTP.
-7. Metrics, traces, CDR correlation, configuration validation, and recovery procedures are documented.
-8. Upgrade and restore procedures do not expose subscriber secrets or silently lose registration state.
-
-## Deferred carrier scope
-
-The following are not prerequisites for the first lab profile, but require separate design and acceptance before any carrier deployment:
-
-- full TAS/MMTel and supplementary services;
-- PCRF/PCF policy authorization and dedicated bearer/PDU-session control;
-- LTE/5G access integration beyond the selected lab model;
-- roaming, emergency services, lawful intercept, and regulatory call handling;
-- PSTN interworking through BGCF, MGCF, IMS-MGW, and SIGTRAN;
-- RCS, presence, messaging, conferencing, recording, transcoding, and announcements;
-- complete Diameter relay, overload, and multi-site failover;
-- online charging, quota enforcement, reauthorization, and production CDR mediation;
-- carrier-scale active-active deployment and disaster recovery.
-
-## Standards and evidence
-
-The implementation must be versioned against a selected release rather than treating “IMS support” as unbounded:
-
-- [3GPP TS 23.228 — IP Multimedia Subsystem stage 2](https://www.3gpp.org/dynareport/23228.htm)
-- [3GPP TS 24.229 — IMS call control](https://www.3gpp.org/dynareport/24229.htm)
-- [3GPP TS 29.228/29.229 — Cx/Dx](https://www.3gpp.org/dynareport/29229.htm)
-- [3GPP TS 29.328/29.329 — Sh](https://www.3gpp.org/dynareport/29329.htm)
-- [3GPP TS 29.214 — Rx](https://www.3gpp.org/dynareport/29214.htm)
-- [3GPP TS 33.203 — IMS access security](https://www.3gpp.org/dynareport/33203.htm)
-- [RFC 3261 — SIP](https://www.rfc-editor.org/rfc/rfc3261)
-- [RFC 3262 — PRACK](https://www.rfc-editor.org/rfc/rfc3262)
-- [RFC 3264 — SDP offer/answer](https://www.rfc-editor.org/rfc/rfc3264)
-- [RFC 4028 — SIP session timers](https://www.rfc-editor.org/rfc/rfc4028)
-- [RFC 5626 — SIP outbound](https://www.rfc-editor.org/rfc/rfc5626)
-- [RFC 8224 — SIP identity](https://www.rfc-editor.org/rfc/rfc8224)
-
-Local coverage is recorded in [`testing.md`](testing.md). External SIP, Diameter/IMS, media, and carrier interoperability must be recorded separately from local unit and contract tests.
+See also [`configuration.md`](configuration.md), [`clustering.md`](clustering.md),
+[`testing.md`](testing.md), [`interop-open5gs.md`](interop-open5gs.md), and the
+[IMS API contracts](../api/ims-diameter.md).

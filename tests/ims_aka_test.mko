@@ -54,3 +54,99 @@ fn TestIMS_AKAMissingVectorAndMalformedAuth() {
     let malformed = ims_aka_test_register("Authorization: Digest username=\"alice@example.com\", algorithm=AKAv1-MD5, qop=auth\r\n")
     assert_eq(ims_aka_response_valid(malformed, len(malformed), cache, "sip:alice@example.com", "alice@example.com", "example.com"), 0)
 }
+
+fn TestIMS_AKANumVectorsClamped() {
+    let _ = env_set("SIP_IMS_AKA_NUM_VECTORS", "0")
+    assert_eq(ims_aka_num_vectors(), 1)
+    let _ = env_set("SIP_IMS_AKA_NUM_VECTORS", "99")
+    assert_eq(ims_aka_num_vectors(), 5)
+    let _ = env_set("SIP_IMS_AKA_NUM_VECTORS", "3")
+    assert_eq(ims_aka_num_vectors(), 3)
+    let _ = env_set("SIP_IMS_AKA_NUM_VECTORS", "1")
+}
+
+fn TestIMS_AKAAutsParamAndRandExtraction() {
+    assert_eq(ims_aka_auts_param_ok(""), 0)
+    assert_eq(ims_aka_auts_param_ok("++++"), 0) // too short after decode likely
+    // 14-byte AUTS base64
+    let auts14 = base64_encode("0123456789abcd")
+    assert_eq(ims_aka_auts_param_ok(auts14), 1)
+    assert_eq(ims_aka_auts_param_ok("bad\rauts"), 0)
+    let auth = "0123456789abcdefABCDEFGH" // 24 bytes → RAND first 16
+    let nonce = base64_encode(auth)
+    assert_eq_str(ims_aka_rand_from_nonce(nonce), "0123456789abcdef")
+    assert_eq_str(ims_aka_rand_from_nonce("short"), "")
+}
+
+fn TestIMS_AKAAutsRequiresIssuedNonce() {
+    let cache = cmap_new()
+    let private_identity = "alice@example.com"
+    let nonce = base64_encode("0123456789abcdef")
+    let auts = base64_encode("0123456789abcd")
+    let msg = "REGISTER sip:example.com SIP/2.0\r\nVia: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-auts\r\nFrom: <sip:alice@example.com>;tag=a1\r\nTo: <sip:alice@example.com>\r\nCall-ID: auts2@example.com\r\nCSeq: 1 REGISTER\r\nAuthorization: Digest username=\"alice@example.com\", realm=\"example.com\", nonce=\"" + nonce + "\", uri=\"sip:example.com\", response=\"00000000000000000000000000000000\", algorithm=AKAv1-MD5, qop=auth, nc=00000001, cnonce=\"0a4f113b\", auts=\"" + auts + "\"\r\nContact: <sip:alice@192.0.2.10>\r\nContent-Length: 0\r\n\r\n"
+    // No issued vector → reject (no free MAR).
+    assert_eq(ims_aka_response_valid(msg, len(msg), cache, "sip:alice@example.com", private_identity, "example.com"), 0)
+    // Issue vector then AUTS → code 3 once; replay → 0.
+    let key = ims_aka_cache_key(nonce, private_identity)
+    let _ = bounded_cache_pair_set(cache, "ims_aka_seq", "ims_aka_ring|", key, "xres-value", mono_ms(), 65536)
+    assert_eq(ims_aka_response_valid(msg, len(msg), cache, "sip:alice@example.com", private_identity, "example.com"), 3)
+    assert_eq(ims_aka_response_valid(msg, len(msg), cache, "sip:alice@example.com", private_identity, "example.com"), 0)
+}
+
+fn TestIMS_AKAPoolNextWithoutMar() {
+    let cache = cmap_new()
+    let private_identity = "alice@example.com"
+    // Simulate a two-vector pool already installed after MAR (RAND-length auth).
+    let n0 = ims_aka_cache_vector(cache, private_identity, "0123456789abcdef", "1111222233334444")
+    let n1 = ims_aka_cache_vector(cache, private_identity, "fedcba9876543210", "aaaabbbbccccdddd")
+    assert_eq(if len(n0) > 0 { 1 } else { 0 }, 1)
+    assert_eq(if len(n1) > 0 { 1 } else { 0 }, 1)
+    cmap_set(cache, ims_aka_pool_slot_key(private_identity, 0), n0)
+    cmap_set(cache, ims_aka_pool_slot_key(private_identity, 1), n1)
+    cmap_set(cache, ims_aka_pool_count_key(private_identity), "2")
+    cmap_set(cache, ims_aka_pool_next_key(private_identity), "1")
+    assert_eq_str(ims_aka_pool_next_nonce(cache, private_identity), n1)
+    // Pool exhausted.
+    assert_eq_str(ims_aka_pool_next_nonce(cache, private_identity), "")
+}
+
+fn TestIMSAKAStoreKeysOptional() {
+    let _ = env_set("SIP_IMS_AKA_STORE_KEYS", "0")
+    let cache = cmap_new()
+    let nonce = ims_aka_cache_vector_with_keys(cache, "alice@example.com", "authenticate-bytes-xx", "xresvalue", "ck-secret", "ik-secret")
+    assert_eq(if len(nonce) > 0 { 1 } else { 0 }, 1)
+    assert_eq_str(ims_aka_get_keys(cache, nonce, "alice@example.com"), "")
+    let _ = env_set("SIP_IMS_AKA_STORE_KEYS", "1")
+    let cache2 = cmap_new()
+    let nonce2 = ims_aka_cache_vector_with_keys(cache2, "alice@example.com", "authenticate-bytes-yy", "xresvalue2", "ck-secret", "ik-secret")
+    assert_eq(if len(nonce2) > 0 { 1 } else { 0 }, 1)
+    let keys = ims_aka_get_keys(cache2, nonce2, "alice@example.com")
+    assert_eq(if str_index(keys, "|") >= 0 { 1 } else { 0 }, 1)
+    let _ = env_set("SIP_IMS_AKA_STORE_KEYS", "0")
+}
+
+// Cluster vector lifecycle: vectors stay node-local secrets (never at rest in
+// the database). A REGISTER answering a sibling node's challenge must produce
+// a fresh re-challenge (2) on this node — never an accept (1) and never a
+// hard failure (0) that would strand a roaming UE. The same nonce replayed to
+// the issuing node after consumption is still a hard replay rejection (0).
+fn TestIMS_AKAClusterNodeRechallenge() {
+    let node_a = cmap_new()
+    let node_b = cmap_new()
+    let private_identity = "alice@example.com"
+    let public_identity = "sip:alice@example.com"
+    let nonce = "cluster-node-a-nonce-01"
+    let key = ims_aka_cache_key(nonce, private_identity)
+    let _ = bounded_cache_pair_set(node_a, "ims_aka_seq", "ims_aka_ring|", key, "a1b2c3d4", mono_ms(), 65536)
+    let ha1 = sip_md5_hex("alice@example.com:example.com:a1b2c3d4")
+    let response = digest_response_ha1_qop(ha1, "REGISTER", "sip:example.com", nonce, "00000001", "0a4f113b", "auth")
+    let msg = ims_aka_test_register(ims_aka_test_auth(response, nonce))
+    // Sibling node never saw the nonce: re-challenge, not accept or reject.
+    assert_eq(ims_aka_response_valid(msg, len(msg), node_b, public_identity, private_identity, "example.com"), 2)
+    // Issuing node accepts exactly once...
+    assert_eq(ims_aka_response_valid(msg, len(msg), node_a, public_identity, private_identity, "example.com"), 1)
+    // ...and rejects the replay hard; the sibling still re-challenges (no XRES
+    // leaves the issuing node, so cross-node replay cannot succeed either).
+    assert_eq(ims_aka_response_valid(msg, len(msg), node_a, public_identity, private_identity, "example.com"), 0)
+    assert_eq(ims_aka_response_valid(msg, len(msg), node_b, public_identity, private_identity, "example.com"), 2)
+}

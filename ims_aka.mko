@@ -51,23 +51,218 @@ fn ims_aka_challenge(realm: string, msg: string, nonce: string, stale: int) -> s
     return sip_reply(msg, 401, "Unauthorized", sip_header_line("WWW-Authenticate", value), "")
 }
 
+// How many authentication vectors to request from the HSS per MAR (1–5).
+fn ims_aka_num_vectors() -> int {
+    let mut value = 1
+    match parse_int(env_get_or("SIP_IMS_AKA_NUM_VECTORS", "1")) {
+        Ok(v) => { value = v }
+        Err(_) => {}
+    }
+    if value < 1 { value = 1 }
+    if value > 5 { value = 5 }
+    return value
+}
+
+fn ims_aka_pool_count_key(private_identity: string) -> string {
+    return "ims-aka-pool-count|" + private_identity
+}
+
+fn ims_aka_pool_next_key(private_identity: string) -> string {
+    return "ims-aka-pool-next|" + private_identity
+}
+
+fn ims_aka_pool_slot_key(private_identity: string, slot: int) -> string {
+    return "ims-aka-pool-slot|" + private_identity + "|" + string(slot)
+}
+
+// Optional opaque CK/IK storage for access security (IPsec SA is external).
+// Default OFF — never log secrets; values are base64 and TTL-bound by nonce.
+fn ims_aka_store_keys_enabled() -> int {
+    let v = str_to_lower(str_trim_space(env_get_or("SIP_IMS_AKA_STORE_KEYS", "0")))
+    return if str_eq(v, "1") || str_eq(v, "true") || str_eq(v, "yes") { 1 } else { 0 }
+}
+
+fn ims_aka_keys_key(nonce: string, private_identity: string) -> string {
+    return "ims-aka-keys|" + nonce + "|" + private_identity
+}
+
+fn ims_aka_store_keys(cache: CMap, nonce: string, private_identity: string, ck: string, ik: string) -> int {
+    if ims_aka_store_keys_enabled() == 0 { return 1 }
+    if ims_aka_nonce_ok(nonce) == 0 { return 0 }
+    if len(ck) < 1 || len(ck) > 256 || len(ik) < 1 || len(ik) > 256 { return 0 }
+    // Opaque only: reject control characters; do not log.
+    let mut i = 0
+    while i < len(ck) {
+        let c = int(ck[i])
+        if c < 32 || c == 127 { return 0 }
+        i = i + 1
+    }
+    i = 0
+    while i < len(ik) {
+        let c = int(ik[i])
+        if c < 32 || c == 127 { return 0 }
+        i = i + 1
+    }
+    let payload = base64_encode(ck) + "|" + base64_encode(ik)
+    if len(payload) > 1024 { return 0 }
+    let _ = bounded_cache_pair_set(cache, "ims_aka_keys_seq", "ims_aka_keys_ring|", ims_aka_keys_key(nonce, private_identity), payload, mono_ms(), 65536)
+    return 1
+}
+
+fn ims_aka_get_keys(cache: CMap, nonce: string, private_identity: string) -> string {
+    if ims_aka_store_keys_enabled() == 0 { return "" }
+    let key = ims_aka_keys_key(nonce, private_identity)
+    if cmap_has(cache, key) == 0 { return "" }
+    return cmap_get(cache, key)
+}
+
+// Install one vector into the consume-once cache; returns nonce or empty.
+fn ims_aka_cache_vector(cache: CMap, private_identity: string, authenticate: string, expected: string) -> string {
+    if len(authenticate) == 0 || len(expected) == 0 { return "" }
+    let nonce = base64_encode(authenticate)
+    if ims_aka_nonce_ok(nonce) == 0 { return "" }
+    let key = ims_aka_cache_key(nonce, private_identity)
+    let _ = bounded_cache_pair_set(cache, "ims_aka_seq", "ims_aka_ring|", key, expected, mono_ms(), 65536)
+    return nonce
+}
+
+// Variant that also caches CK/IK (AVP 625/626) when store-keys is enabled.
+fn ims_aka_cache_vector_with_keys(cache: CMap, private_identity: string, authenticate: string, expected: string, ck: string, ik: string) -> string {
+    let nonce = ims_aka_cache_vector(cache, private_identity, authenticate, expected)
+    if len(nonce) == 0 { return "" }
+    let _ = ims_aka_store_keys(cache, nonce, private_identity, ck, ik)
+    return nonce
+}
+
+// Fill a local pool from a multi-item MAA. Returns the first nonce for challenge.
+// CK/IK (625/626) stored only when SIP_IMS_AKA_STORE_KEYS=1.
+fn ims_aka_store_vector_pool(cache: CMap, request: string, response: string, scheme: string, private_identity: string, max_items: int) -> string {
+    let mut stored = 0
+    let mut first_nonce = ""
+    let mut i = 0
+    while i < max_items {
+        let authenticate = ims_cx_mar_aka_field_from_answer(request, response, i, scheme, 609)
+        let expected = ims_cx_mar_aka_field_from_answer(request, response, i, scheme, 610)
+        let ck = ims_cx_mar_aka_field_from_answer(request, response, i, scheme, 625)
+        let ik = ims_cx_mar_aka_field_from_answer(request, response, i, scheme, 626)
+        let nonce = ims_aka_cache_vector_with_keys(cache, private_identity, authenticate, expected, ck, ik)
+        if len(nonce) == 0 { break }
+        cmap_set(cache, ims_aka_pool_slot_key(private_identity, stored), nonce)
+        if stored == 0 { first_nonce = nonce }
+        stored = stored + 1
+        i = i + 1
+    }
+    if stored < 1 { return "" }
+    cmap_set(cache, ims_aka_pool_count_key(private_identity), string(stored))
+    // Next challenge after the first uses slot 1+.
+    cmap_set(cache, ims_aka_pool_next_key(private_identity), "1")
+    return first_nonce
+}
+
+// Use a pre-fetched pool vector without a new MAR. Empty when pool exhausted.
+fn ims_aka_pool_next_nonce(cache: CMap, private_identity: string) -> string {
+    let count_key = ims_aka_pool_count_key(private_identity)
+    let next_key = ims_aka_pool_next_key(private_identity)
+    if cmap_has(cache, count_key) == 0 || cmap_has(cache, next_key) == 0 { return "" }
+    let mut count = 0
+    let mut next = 0
+    match parse_int(cmap_get(cache, count_key)) {
+        Ok(v) => { count = v }
+        Err(_) => { return "" }
+    }
+    match parse_int(cmap_get(cache, next_key)) {
+        Ok(v) => { next = v }
+        Err(_) => { return "" }
+    }
+    if next < 1 || next >= count { return "" }
+    let slot_key = ims_aka_pool_slot_key(private_identity, next)
+    if cmap_has(cache, slot_key) == 0 { return "" }
+    let nonce = cmap_get(cache, slot_key)
+    let key = ims_aka_cache_key(nonce, private_identity)
+    // Slot already installed at MAR time; ensure it is still live and unused.
+    if cmap_has(cache, key) == 0 || cmap_has(cache, "ims-aka-used|" + key) == 1 { return "" }
+    cmap_set(cache, next_key, string(next + 1))
+    return nonce
+}
+
 fn ims_aka_vector_challenge(realm: string, msg: string, cache: CMap, peer_lock: Mutex, public_identity: string, private_identity: string, server_name: string, stale: int) -> string {
     let scheme = env_get_or("SIP_IMS_AKA_SCHEME", "Digest-AKAv1-MD5")
     if not str_eq(scheme, "Digest-AKAv1-MD5") { return sip_resp(501, "IMS AKA Scheme Not Supported", msg, len(msg), "ims-aka-scheme") }
-    let request = ims_cx_mar(public_identity, private_identity, server_name, scheme, 0, 1)
+    // Prefer an unused vector already returned by the HSS before a new MAR.
+    let pooled = ims_aka_pool_next_nonce(cache, private_identity)
+    if len(pooled) > 0 {
+        return ims_aka_challenge(realm, msg, pooled, stale)
+    }
+    let num = ims_aka_num_vectors()
+    let request = ims_cx_mar(public_identity, private_identity, server_name, scheme, 0, num)
     let response = ims_cx_exchange(cache, peer_lock, request, ims_cx_mar_command())
-    let authenticate = ims_cx_mar_aka_field_from_answer(request, response, 0, scheme, 609)
-    let expected = ims_cx_mar_aka_field_from_answer(request, response, 0, scheme, 610)
-    if len(authenticate) == 0 || len(expected) == 0 { return sip_resp(503, "IMS Authentication Unavailable", msg, len(msg), "ims-aka-vector") }
-    let nonce = base64_encode(authenticate)
-    if ims_aka_nonce_ok(nonce) == 0 { return sip_resp(503, "Invalid IMS Authentication Vector", msg, len(msg), "ims-aka-vector") }
-    let key = ims_aka_cache_key(nonce, private_identity)
-    let _ = bounded_cache_pair_set(cache, "ims_aka_seq", "ims_aka_ring|", key, expected, mono_ms(), 65536)
+    let nonce = ims_aka_store_vector_pool(cache, request, response, scheme, private_identity, num)
+    if len(nonce) == 0 { return sip_resp(503, "IMS Authentication Unavailable", msg, len(msg), "ims-aka-vector") }
     return ims_aka_challenge(realm, msg, nonce, stale)
 }
 
-// Return 1 for a valid response, 2 when the vector is missing or stale, and
-// 0 for a bad/replayed response.
+// AUTS parameter from Digest (RFC 3310): base64, decodes to 8–32 binary octets.
+fn ims_aka_auts_param_ok(auts_b64: string) -> int {
+    if len(auts_b64) < 4 || len(auts_b64) > 128 { return 0 }
+    let mut i = 0
+    while i < len(auts_b64) {
+        let c = int(auts_b64[i])
+        if c == 0 || c == 10 || c == 13 || c == 34 || c == 92 { return 0 }
+        i = i + 1
+    }
+    let raw = base64_decode(auts_b64)
+    if len(raw) < 8 || len(raw) > 32 { return 0 }
+    return 1
+}
+
+// RAND is the leading portion of the previous SIP-Authenticate (nonce payload).
+// AKA uses 16-byte RAND when present; otherwise the full decode is used if bounded.
+fn ims_aka_rand_from_nonce(nonce: string) -> string {
+    if ims_aka_nonce_ok(nonce) == 0 { return "" }
+    let auth = base64_decode(nonce)
+    if len(auth) < 8 || len(auth) > 64 { return "" }
+    if len(auth) >= 16 { return auth[0:16] }
+    return auth
+}
+
+// SQN resync: MAR carrying AUTS + RAND from the failed challenge, then a new
+// vector pool and stale challenge. Requires a nonce this node issued (checked
+// by response_valid before code 3).
+fn ims_aka_auts_resync_challenge(realm: string, msg: string, n: int, cache: CMap, peer_lock: Mutex, public_identity: string, private_identity: string, server_name: string) -> string {
+    let scheme = env_get_or("SIP_IMS_AKA_SCHEME", "Digest-AKAv1-MD5")
+    if not str_eq(scheme, "Digest-AKAv1-MD5") { return sip_resp(501, "IMS AKA Scheme Not Supported", msg, n, "ims-aka-scheme") }
+    let auth = auth_header(msg, n)
+    let nonce = sip_auth_param(auth, "nonce")
+    let auts_b64 = sip_auth_param(auth, "auts")
+    if ims_aka_auts_param_ok(auts_b64) == 0 || ims_aka_nonce_ok(nonce) == 0 {
+        return sip_resp(403, "Bad IMS AKA Credentials", msg, n, "ims-aka-auts")
+    }
+    let rand_octets = ims_aka_rand_from_nonce(nonce)
+    let auts_octets = base64_decode(auts_b64)
+    if len(rand_octets) < 8 || len(auts_octets) < 8 {
+        return sip_resp(403, "Bad IMS AKA Credentials", msg, n, "ims-aka-auts")
+    }
+    // Drop any remaining pooled vectors for this identity; they are SQN-stale.
+    let _ = cmap_del(cache, ims_aka_pool_count_key(private_identity))
+    let _ = cmap_del(cache, ims_aka_pool_next_key(private_identity))
+    let num = ims_aka_num_vectors()
+    let request = ims_cx_mar_auts(public_identity, private_identity, server_name, scheme, rand_octets, auts_octets, num)
+    if len(request) == 0 {
+        return sip_resp(503, "IMS Authentication Unavailable", msg, n, "ims-aka-auts-mar")
+    }
+    let response = ims_cx_exchange(cache, peer_lock, request, ims_cx_mar_command())
+    let new_nonce = ims_aka_store_vector_pool(cache, request, response, scheme, private_identity, num)
+    if len(new_nonce) == 0 {
+        return sip_resp(503, "IMS Authentication Unavailable", msg, n, "ims-aka-auts-maa")
+    }
+    return ims_aka_challenge(realm, msg, new_nonce, 1)
+}
+
+// Return codes:
+//   1 — valid response; vector consumed once
+//   2 — vector missing or expired; re-challenge with a fresh vector
+//   3 — AUTS present against a nonce we issued; SQN resync MAR required
+//   0 — bad credentials or replay of a consumed vector
 fn ims_aka_response_valid(msg: string, n: int, cache: CMap, public_identity: string, private_identity: string, expected_realm: string) -> int {
     let auth = auth_header(msg, n)
     if len(auth) == 0 { return 2 }
@@ -80,7 +275,21 @@ fn ims_aka_response_valid(msg: string, n: int, cache: CMap, public_identity: str
     let nc = str_to_lower(str_trim_space(sip_auth_param(auth, "nc")))
     let cnonce = sip_auth_param(auth, "cnonce")
     let response = str_to_lower(str_trim_space(sip_auth_param(auth, "response")))
-    if len(sip_auth_param(auth, "auts")) > 0 { return 0 }
+    // AUTS: require identity match, well-formed AUTS, and a nonce we issued.
+    // Burn the vector (mark used + drop XRES) so it cannot be replayed as RES
+    // and so a second AUTS on the same nonce cannot free-run MAR.
+    if len(sip_auth_param(auth, "auts")) > 0 {
+        if not str_eq(username, private_identity) || not str_eq(auth_realm, expected_realm) || not str_eq(algorithm, "akav1-md5") || ims_aka_nonce_ok(nonce) == 0 {
+            return 0
+        }
+        if ims_aka_auts_param_ok(sip_auth_param(auth, "auts")) == 0 { return 0 }
+        let key = ims_aka_cache_key(nonce, private_identity)
+        if cmap_has(cache, key) == 0 || cmap_has(cache, "ims-aka-used|" + key) == 1 { return 0 }
+        let _ = auth_nonce_used_set(cache, "ims-aka-used|" + key, mono_ms())
+        let _ = cmap_del(cache, key)
+        let _ = cmap_del(cache, key + "|at")
+        return 3
+    }
     if not str_eq(username, private_identity) || not str_eq(auth_realm, expected_realm) || not str_eq(algorithm, "akav1-md5") || not str_eq(qop, "auth") || ims_aka_nonce_ok(nonce) == 0 || ims_text_ok(uri, 2048) == 0 || len(nc) != 8 || ims_aka_hex_ok(nc) == 0 || ims_text_ok(cnonce, 512) == 0 || len(response) != 32 || ims_aka_hex_ok(response) == 0 { return 0 }
     let key = ims_aka_cache_key(nonce, private_identity)
     if cmap_has(cache, key) == 0 { return 2 }
@@ -90,26 +299,50 @@ fn ims_aka_response_valid(msg: string, n: int, cache: CMap, public_identity: str
         Ok(v) => { created_at = v }
         Err(_) => { return 2 }
     }
-    if mono_ms() - created_at > 300000 { return 2 }
+    // Vector lifetime is operator-configurable; default five minutes.
+    let mut ttl_ms = 300000
+    match parse_int(env_get_or("SIP_IMS_AKA_VECTOR_TTL_MS", "300000")) {
+        Ok(v) => { ttl_ms = v }
+        Err(_) => {}
+    }
+    if ttl_ms < 1000 { ttl_ms = 1000 }
+    if ttl_ms > 3600000 { ttl_ms = 3600000 }
+    if mono_ms() - created_at > ttl_ms { return 2 }
     if cmap_has(cache, "ims-aka-used|" + key) == 1 { return 0 }
     let xres = cmap_get(cache, key)
     let ha1 = sip_md5_hex(username + ":" + auth_realm + ":" + xres)
     let expected = digest_response_ha1_qop(ha1, "REGISTER", uri, nonce, nc, cnonce, "auth")
     if not str_eq(response, str_to_lower(expected)) { return 0 }
+    // Consume-once: mark used only after a successful digest match so a
+    // wrong response does not burn a still-valid vector.
     let _ = auth_nonce_used_set(cache, "ims-aka-used|" + key, mono_ms())
-    let _ = public_identity
     return 1
 }
 
 // Empty string means the REGISTER passed AKA. A non-empty string is the SIP
 // response that must be returned to the endpoint.
+// On success, optionally export IPsec SA params for an external enforcer.
 fn ims_aka_register_gate(realm: string, msg: string, n: int, cache: CMap, peer_lock: Mutex, public_identity: string, private_identity: string, server_name: string) -> string {
+    return ims_aka_register_gate_src(realm, msg, n, cache, peer_lock, public_identity, private_identity, server_name, "")
+}
+
+fn ims_aka_register_gate_src(realm: string, msg: string, n: int, cache: CMap, peer_lock: Mutex, public_identity: string, private_identity: string, server_name: string, source_ip: string) -> string {
     if ims_aka_requested() == 0 { return "" }
     if ims_cx_registration_enabled() == 0 { return sip_resp(503, "IMS AKA Requires Cx", msg, n, "ims-aka-cx") }
     if ims_aka_identity_ok(public_identity, 2048) == 0 || ims_aka_identity_ok(private_identity, 1024) == 0 { return sip_resp(403, "Invalid IMS Identity", msg, n, "ims-aka-identity") }
     if has_auth(msg, n) == 0 { return ims_aka_vector_challenge(realm, msg, cache, peer_lock, public_identity, private_identity, server_name, 0) }
     let result = ims_aka_response_valid(msg, n, cache, public_identity, private_identity, realm)
-    if result == 1 { return "" }
+    if result == 1 {
+        // Export SA params when enabled; never fail REGISTER on export miss.
+        let auth = auth_header(msg, n)
+        let nonce = sip_auth_param(auth, "nonce")
+        if len(source_ip) > 0 && len(nonce) > 0 {
+            let sa = ims_ipsec_sa_params(cache, nonce, private_identity, source_ip)
+            let _ = ims_ipsec_cache_sa(cache, private_identity, sa)
+        }
+        return ""
+    }
     if result == 2 { return ims_aka_vector_challenge(realm, msg, cache, peer_lock, public_identity, private_identity, server_name, 1) }
+    if result == 3 { return ims_aka_auts_resync_challenge(realm, msg, n, cache, peer_lock, public_identity, private_identity, server_name) }
     return sip_resp(403, "Bad IMS AKA Credentials", msg, n, "ims-aka-auth")
 }

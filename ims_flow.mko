@@ -1,0 +1,298 @@
+// P-CSCF flow / Outbound (RFC 5626-shaped) boundary.
+//
+// Tracks opaque flow tokens bound to a transport connection for Path routing
+// and keepalives. Media and IPsec SA establishment remain external.
+
+fn ims_flow_dynamic_enabled() -> int {
+    let v = str_to_lower(str_trim_space(env_get_or("SIP_IMS_PATH_DYNAMIC", "0")))
+    return if str_eq(v, "1") || str_eq(v, "true") || str_eq(v, "yes") { 1 } else { 0 }
+}
+
+fn ims_flow_keepalive_s() -> int {
+    let mut s = 120
+    match parse_int(env_get_or("SIP_IMS_FLOW_KEEPALIVE_S", "120")) {
+        Ok(v) => { s = v }
+        Err(_) => {}
+    }
+    if s < 30 { s = 30 }
+    if s > 3600 { s = 3600 }
+    return s
+}
+
+fn ims_flow_capacity() -> int {
+    let mut n = 65536
+    match parse_int(env_get_or("SIP_IMS_FLOW_CAPACITY", "65536")) {
+        Ok(v) => { n = v }
+        Err(_) => {}
+    }
+    if n < 64 { n = 64 }
+    if n > 1048576 { n = 1048576 }
+    return n
+}
+
+fn ims_flow_token_ok(token: string) -> int {
+    if len(token) < 8 || len(token) > 64 { return 0 }
+    let mut i = 0
+    while i < len(token) {
+        let c = int(token[i])
+        // base64url-ish / hex
+        if (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 45 || c == 95 {
+            i = i + 1
+            continue
+        }
+        return 0
+    }
+    return 1
+}
+
+fn ims_flow_key(token: string) -> string {
+    return "ims-flow|" + token
+}
+
+fn ims_flow_mint(cache: CMap, conn_key: string, transport: string, contact: string, path_base: string, expires_s: int) -> string {
+    if len(conn_key) < 1 || len(conn_key) > 512 { return "" }
+    if len(transport) < 1 || len(transport) > 16 { return "" }
+    if len(contact) > 2048 || len(path_base) > 2048 { return "" }
+    if expires_s < 1 { return "" }
+    let seed = "madis.ims.flow|" + conn_key + "|" + string(mono_ms()) + "|" + string(now_ms())
+    let token = sha256(seed)[0:24]
+    if ims_flow_token_ok(token) == 0 { return "" }
+    let key = ims_flow_key(token)
+    // A connection owns one current flow. Replace its previous token before
+    // installing the new reverse index so repeated REGISTERs cannot retain
+    // unreachable flow records until the global capacity is exhausted.
+    if len(conn_key) > 0 {
+        let reverse_key = "ims-flow-conn|" + conn_key
+        if cmap_has(cache, reverse_key) == 1 {
+            let old_token = cmap_get(cache, reverse_key)
+            if len(old_token) > 0 && not str_eq(old_token, token) {
+                let _ = ims_flow_clear(cache, old_token)
+            }
+        }
+    }
+    let mut count = 0
+    if cmap_has(cache, "ims_flow_count") == 1 {
+        match parse_int(cmap_get(cache, "ims_flow_count")) {
+            Ok(v) => { count = v }
+            Err(_) => {}
+        }
+    }
+    if count >= ims_flow_capacity() && cmap_has(cache, key) == 0 { return "" }
+    // Field separator avoids '|' which appears in conn_key (tr|ip|port).
+    let sep = "~~"
+    let expires_at = mono_ms() + expires_s * 1000
+    let value = conn_key + sep + transport + sep + contact + sep + path_base + sep + string(expires_at) + sep + string(mono_ms())
+    if len(value) > 8192 { return "" }
+    if cmap_has(cache, key) == 0 {
+        cmap_set(cache, "ims_flow_count", string(count + 1))
+    }
+    cmap_set(cache, key, value)
+    // Reverse index for MT lookup by contact/conn.
+    if len(conn_key) > 0 {
+        cmap_set(cache, "ims-flow-conn|" + conn_key, token)
+    }
+    return token
+}
+
+fn ims_flow_fields(value: string) -> []string {
+    return str_split(value, "~~")
+}
+
+fn ims_flow_get(cache: CMap, token: string) -> string {
+    if ims_flow_token_ok(token) == 0 { return "" }
+    let key = ims_flow_key(token)
+    if cmap_has(cache, key) == 0 { return "" }
+    let value = cmap_get(cache, key)
+    let parts = ims_flow_fields(value)
+    if len(parts) < 6 { return "" }
+    let mut expires_at = 0
+    match parse_int(parts[4]) {
+        Ok(v) => { expires_at = v }
+        Err(_) => { return "" }
+    }
+    if mono_ms() > expires_at {
+        let _ = ims_flow_clear(cache, token)
+        return ""
+    }
+    return value
+}
+
+fn ims_flow_conn(value: string) -> string {
+    let parts = ims_flow_fields(value)
+    if len(parts) < 1 { return "" }
+    return parts[0]
+}
+
+fn ims_flow_path_uri(value: string) -> string {
+    let parts = ims_flow_fields(value)
+    if len(parts) < 4 { return "" }
+    return parts[3]
+}
+
+fn ims_flow_touch(cache: CMap, token: string) -> int {
+    let value = ims_flow_get(cache, token)
+    if len(value) == 0 { return 0 }
+    let parts = ims_flow_fields(value)
+    if len(parts) < 6 { return 0 }
+    // Copy fields before concat: array slots are owned by parts.
+    let p0 = "" + parts[0]
+    let p1 = "" + parts[1]
+    let p2 = "" + parts[2]
+    let p3 = "" + parts[3]
+    let mut expires_at = 0
+    match parse_int(parts[4]) {
+        Ok(v) => { expires_at = v }
+        Err(_) => { return 0 }
+    }
+    let keepalive = ims_flow_keepalive_s() * 1000
+    let new_exp = mono_ms() + keepalive
+    if new_exp > expires_at { expires_at = new_exp }
+    let sep = "~~"
+    let updated = "" + p0 + sep + p1 + sep + p2 + sep + p3 + sep + string(expires_at) + sep + string(mono_ms())
+    cmap_set(cache, ims_flow_key(token), updated)
+    return 1
+}
+
+fn ims_flow_clear(cache: CMap, token: string) -> int {
+    if ims_flow_token_ok(token) == 0 { return 0 }
+    let key = ims_flow_key(token)
+    if cmap_has(cache, key) == 0 { return 1 }
+    let value = cmap_get(cache, key)
+    let parts = ims_flow_fields(value)
+    if len(parts) > 0 && len(parts[0]) > 0 {
+        let _ = cmap_del(cache, "ims-flow-conn|" + parts[0])
+    }
+    let _ = cmap_del(cache, key)
+    let mut count = 0
+    if cmap_has(cache, "ims_flow_count") == 1 {
+        match parse_int(cmap_get(cache, "ims_flow_count")) {
+            Ok(v) => { count = v }
+            Err(_) => {}
+        }
+    }
+    if count > 0 { cmap_set(cache, "ims_flow_count", string(count - 1)) }
+    return 1
+}
+
+fn ims_flow_by_conn(cache: CMap, conn_key: string) -> string {
+    if len(conn_key) < 1 || len(conn_key) > 512 { return "" }
+    let k = "ims-flow-conn|" + conn_key
+    if cmap_has(cache, k) == 0 { return "" }
+    let token = cmap_get(cache, k)
+    if len(ims_flow_get(cache, token)) == 0 { return "" }
+    return token
+}
+
+// Extract a bounded flow token from a Path/Route URI. URI parameters are
+// case-insensitive, while the opaque token itself is case-sensitive.
+fn ims_flow_token_from_uri(uri: string) string {
+    let lower = str_to_lower(uri)
+    let marker = ";ft="
+    let at = str_index(lower, marker)
+    if at < 0 { return "" }
+    let rest = uri[at + 4:]
+    let mut end = len(rest)
+    let mut i = 0
+    while i < len(rest) {
+        let c = int(rest[i])
+        if c == 59 || c == 62 || c == 44 || c == 32 || c == 9 {
+            end = i
+            break
+        }
+        i = i + 1
+    }
+    let token = str_trim_space(rest[0:end])
+    if ims_flow_token_ok(token) == 0 { return "" }
+    return token
+}
+
+// Refresh a flow on authenticated SIP traffic. Route-token refresh handles
+// UDP NAT rebinding; the connection reverse index handles stable TCP/TLS/WS
+// associations that do not carry a Route header on every request.
+fn ims_flow_refresh_request(cache: CMap, msg: string, ip: string, source_port: int, transport: string) -> int {
+    if ims_flow_dynamic_enabled() == 0 { return 0 }
+    let mut touched = 0
+    let route_token = ims_flow_token_from_uri(sip_header(msg, "Route"))
+    if len(route_token) > 0 && ims_flow_touch(cache, route_token) == 1 {
+        touched = 1
+    }
+    let conn_key = ims_flow_conn_key(ip, source_port, transport)
+    if len(conn_key) > 0 {
+        let conn_token = ims_flow_by_conn(cache, conn_key)
+        if len(conn_token) > 0 && not str_eq(conn_token, route_token) {
+            if ims_flow_touch(cache, conn_token) == 1 { touched = 1 }
+        }
+    }
+    return touched
+}
+
+fn ims_flow_clear_conn(cache: CMap, ip: string, source_port: int, transport: string) -> int {
+    let conn_key = ims_flow_conn_key(ip, source_port, transport)
+    if len(conn_key) == 0 { return 0 }
+    let token = ims_flow_by_conn(cache, conn_key)
+    if len(token) == 0 { return 0 }
+    return ims_flow_clear(cache, token)
+}
+
+// RFC 5626: reject Require: outbound when we cannot support it; honor Supported.
+fn ims_flow_outbound_check(msg: string) -> int {
+    // 1 = ok, 0 = reject (420), 2 = outbound supported/requested
+    let require = sip_header(msg, "Require")
+    if len(require) > 0 && sip_header_token_present(require, "outbound") == 1 {
+        if ims_flow_dynamic_enabled() == 0 { return 0 }
+        return 2
+    }
+    let supported = sip_header(msg, "Supported")
+    if len(supported) > 0 && sip_header_token_present(supported, "outbound") == 1 {
+        if ims_flow_dynamic_enabled() == 1 { return 2 }
+    }
+    return 1
+}
+
+// Build Path URI with flow token: sip:host;lr;ob;ft=TOKEN (or use path base + ;ft=).
+fn ims_flow_path_with_token(path_base: string, token: string) -> string {
+    if len(path_base) == 0 || ims_flow_token_ok(token) == 0 { return "" }
+    if str_index(path_base, "\r") >= 0 || str_index(path_base, "\n") >= 0 || str_index(path_base, ",") >= 0 { return "" }
+    let mut base = path_base
+    // Strip angle brackets if present.
+    if str_has_prefix(base, "<") && str_has_suffix(base, ">") {
+        base = base[1:len(base) - 1]
+    }
+    if sip_name_addr_valid("<" + base + ">") == 0 { return "" }
+    let mut uri = base
+    if str_index(uri, ";lr") < 0 { uri = uri + ";lr" }
+    if str_index(uri, ";ob") < 0 { uri = uri + ";ob" }
+    uri = uri + ";ft=" + token
+    if len(uri) > 2048 { return "" }
+    if sip_name_addr_valid("<" + uri + ">") == 0 { return "" }
+    return uri
+}
+
+// Conn key from source: transport|ip|port (env-free, no secrets).
+fn ims_flow_conn_key(ip: string, port: int, transport: string) -> string {
+    if len(ip) < 1 || len(ip) > 128 || port < 1 || port > 65535 { return "" }
+    let tr = str_to_upper(str_trim_space(transport))
+    if len(tr) < 1 || len(tr) > 16 { return "" }
+    return tr + "|" + ip + "|" + string(port)
+}
+
+// P-CSCF REGISTER: mint flow + return Path value for insertion, or empty/static.
+fn ims_flow_register_path(cache: CMap, msg: string, ip: string, port: int, transport: string, expires_s: int) -> string {
+    if ims_flow_dynamic_enabled() == 0 { return "" }
+    let base = str_trim_space(env_get_or("SIP_IMS_PATH", ""))
+    if len(base) == 0 || str_eq(base, "__IMS_PATH_INVALID__") { return "" }
+    if len(base) > 2048 || str_index(base, ",") >= 0 || str_index(base, "\r") >= 0 || str_index(base, "\n") >= 0 {
+        return "__IMS_PATH_INVALID__"
+    }
+    if sip_name_addr_valid("<" + base + ">") == 0 { return "__IMS_PATH_INVALID__" }
+    let contact = sip_header(msg, "Contact")
+    let conn = ims_flow_conn_key(ip, port, transport)
+    if len(conn) == 0 { return "__IMS_PATH_INVALID__" }
+    let mut exp = expires_s
+    if exp < 1 { exp = ims_flow_keepalive_s() * 2 }
+    let token = ims_flow_mint(cache, conn, transport, contact, base, exp)
+    if len(token) == 0 { return "__IMS_PATH_INVALID__" }
+    let path = ims_flow_path_with_token(base, token)
+    if len(path) == 0 { return "__IMS_PATH_INVALID__" }
+    return path
+}

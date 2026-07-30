@@ -22,3 +22,15 @@ fn ims_path_apply(msg: string) -> string {
     let result = hdr_remove(msg, "Path")
     return hdr_add(result, "Path", "<" + value + ">")
 }
+
+// Apply a pre-built Path URI (dynamic flow token path). Empty leaves msg.
+fn ims_path_apply_value(msg: string, path_uri: string) -> string {
+    if len(path_uri) == 0 { return msg }
+    if str_eq(path_uri, "__IMS_PATH_INVALID__") { return path_uri }
+    if len(path_uri) > 2048 || str_index(path_uri, "\r") >= 0 || str_index(path_uri, "\n") >= 0 || str_index(path_uri, ",") >= 0 {
+        return "__IMS_PATH_INVALID__"
+    }
+    if sip_name_addr_valid("<" + path_uri + ">") == 0 { return "__IMS_PATH_INVALID__" }
+    let result = hdr_remove(msg, "Path")
+    return hdr_add(result, "Path", "<" + path_uri + ">")
+}

@@ -140,6 +140,31 @@ fn ims_cx_mar(public_identity: string, private_identity: string, server_name: st
     return ims_request(ims_cx_application(), ims_cx_mar_command(), session_id, body)
 }
 
+// MAR after AKA SQN synchronization failure (RFC 3310 AUTS).
+// SIP-Authenticate carries the failed challenge RAND; SIP-Authorization carries AUTS.
+// Binary payloads are length-bounded; empty RAND/AUTS fail closed.
+fn ims_cx_mar_auts(public_identity: string, private_identity: string, server_name: string, scheme: string, rand_octets: string, auts_octets: string, number_of_items: int) -> string {
+    if ims_text_ok(public_identity, 2048) == 0 || ims_text_ok(private_identity, 1024) == 0 || ims_text_ok(server_name, 2048) == 0 || ims_text_ok(scheme, 128) == 0 { return "" }
+    if number_of_items < 1 || number_of_items > 32 { return "" }
+    // Binary RAND/AUTS: length only (NUL bytes are valid in AKA fields).
+    if len(rand_octets) < 8 || len(rand_octets) > 64 { return "" }
+    if len(auts_octets) < 8 || len(auts_octets) > 32 { return "" }
+    let auth_item = ims_grouped_avp(612,
+        ims_u32_avp(613, 0)
+        + ims_uri_avp(608, scheme)
+        + ims_octets_avp(609, rand_octets)
+        + ims_octets_avp(610, auts_octets))
+    if len(auth_item) == 0 { return "" }
+    let session_id = ims_session_id("mar-auts|" + private_identity + "|" + public_identity)
+    let body = ims_base_request_body(session_id, ims_cx_application())
+        + diameter_avp_string(1, private_identity)
+        + ims_uri_avp(601, public_identity)
+        + ims_u32_avp(607, number_of_items)
+        + auth_item
+        + ims_uri_avp(602, server_name)
+    return ims_request(ims_cx_application(), ims_cx_mar_command(), session_id, body)
+}
+
 fn ims_cx_rtr(public_identity: string, private_identity: string, destination_host: string, reason_code: int) -> string {
     if ims_text_ok(public_identity, 2048) == 0 || ims_text_ok(private_identity, 1024) == 0 || ims_text_ok(destination_host, 2048) == 0 || reason_code < 0 || reason_code > 2 { return "" }
     let session_id = ims_session_id("rtr|" + private_identity + "|" + public_identity)
@@ -270,11 +295,28 @@ fn ims_hex_encode(value: string) -> string {
     return builder_string(b)
 }
 
+// Locate one SIP-Auth-Data-Item by Item-Number (supports multi-vector MAA).
+fn ims_cx_mar_auth_item_from_answer(request: string, response: string, item_number: int) -> string {
+    if item_number < 0 || item_number > 32 { return "" }
+    if ims_answer_success(request, response, ims_cx_application(), ims_cx_mar_command()) == 0 { return "" }
+    let direct = diameter_find_vendor_avp_n(response, 612, ims_3gpp_vendor(), item_number)
+    if len(direct) > 0 && diameter_find_grouped_vendor_u32(direct, 613, ims_3gpp_vendor()) == item_number {
+        return direct
+    }
+    let mut i = 0
+    while i < 8 {
+        let item = diameter_find_vendor_avp_n(response, 612, ims_3gpp_vendor(), i)
+        if len(item) == 0 { break }
+        if diameter_find_grouped_vendor_u32(item, 613, ims_3gpp_vendor()) == item_number { return item }
+        i = i + 1
+    }
+    return ""
+}
+
 fn ims_cx_mar_vector_from_answer(request: string, response: string, item_number: int) -> string {
     if item_number < 0 || item_number > 4294967295 { return "" }
-    if ims_answer_success(request, response, ims_cx_application(), ims_cx_mar_command()) == 0 { return "" }
-    let item = diameter_find_vendor_avp(response, 612, ims_3gpp_vendor())
-    if len(item) == 0 || diameter_find_grouped_vendor_u32(item, 613, ims_3gpp_vendor()) != item_number { return "" }
+    let item = ims_cx_mar_auth_item_from_answer(request, response, item_number)
+    if len(item) == 0 { return "" }
     let scheme = diameter_find_grouped_vendor_avp(item, 608, ims_3gpp_vendor())
     let authenticate = diameter_find_grouped_vendor_avp(item, 609, ims_3gpp_vendor())
     if len(scheme) == 0 || len(authenticate) == 0 { return "" }
@@ -295,9 +337,8 @@ fn ims_cx_mar_vector(cache: CMap, peer_lock: Mutex, public_identity: string, pri
 // internal so binary XRES never crosses a JSON or administration boundary.
 fn ims_cx_mar_aka_field_from_answer(request: string, response: string, item_number: int, scheme: string, code: int) -> string {
     if item_number < 0 || item_number > 4294967295 { return "" }
-    if ims_answer_success(request, response, ims_cx_application(), ims_cx_mar_command()) == 0 { return "" }
-    let item = diameter_find_vendor_avp(response, 612, ims_3gpp_vendor())
-    if len(item) == 0 || diameter_find_grouped_vendor_u32(item, 613, ims_3gpp_vendor()) != item_number { return "" }
+    let item = ims_cx_mar_auth_item_from_answer(request, response, item_number)
+    if len(item) == 0 { return "" }
     let vector_scheme = diameter_find_grouped_vendor_avp(item, 608, ims_3gpp_vendor())
     if not str_eq(vector_scheme, scheme) { return "" }
     return diameter_find_grouped_vendor_avp(item, code, ims_3gpp_vendor())
@@ -342,4 +383,26 @@ fn ims_cx_register_gate(cache: CMap, peer_lock: Mutex, public_identity: string, 
     if assignment_type < 1 || assignment_type > 8 { return 0 }
     if ims_cx_uar_authorized(cache, peer_lock, public_identity, private_identity, visited_network, 0, server_name) == 0 { return 0 }
     return ims_cx_sar_accepted(cache, peer_lock, public_identity, private_identity, server_name, assignment_type, 0)
+}
+
+// Result-aware gate: returns Diameter result code (>0), 2001 on success, -1 on
+// transport failure. When Cx is disabled returns 2001.
+fn ims_cx_register_result(cache: CMap, peer_lock: Mutex, public_identity: string, private_identity: string, visited_network: string, server_name: string, assignment_type: int) -> int {
+    if ims_cx_registration_enabled() == 0 { return 2001 }
+    if assignment_type < 1 || assignment_type > 8 { return 5004 }
+    let uar = ims_cx_uar(public_identity, private_identity, visited_network, 0)
+    let uaa = ims_cx_exchange(cache, peer_lock, uar, ims_cx_uar_command())
+    if len(uaa) == 0 { return -1 }
+    if ims_cx_uar_server_matches(uar, uaa, server_name) == 0 {
+        let r = ims_answer_result(uaa)
+        if r > 0 && r != 2001 && r != 2002 && r != 2003 && r != 2004 { return r }
+        return 5003
+    }
+    let sar = ims_cx_sar(public_identity, private_identity, server_name, assignment_type, 0)
+    let saa = ims_cx_exchange(cache, peer_lock, sar, ims_cx_sar_command())
+    if len(saa) == 0 { return -1 }
+    if ims_answer_success(sar, saa, ims_cx_application(), ims_cx_sar_command()) == 1 { return 2001 }
+    let sr = ims_answer_result(saa)
+    if sr > 0 { return sr }
+    return 5012
 }

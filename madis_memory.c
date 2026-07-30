@@ -11,7 +11,24 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 
+
+/* Owned string for Mako callers. The runtime's mako_str_from_cstr("") returns
+ * a TU-static singleton whose address differs from the runtime TU's empty
+ * singleton, so mako_str_free would free a static buffer; always
+ * heap-allocate, including the empty string. */
+static MakoString madis_owned_cstr(const char *s) {
+    if (!s) s = "";
+    size_t n = strlen(s);
+    char *d = (char *)malloc(n + 1);
+    if (!d) {
+        fprintf(stderr, "madis: OOM in owned_cstr\n");
+        abort();
+    }
+    memcpy(d, s, n + 1);
+    return (MakoString){d, n};
+}
 int64_t madis_udp_bind_reuseport(int64_t port) {
     if (port <= 0 || port > 65535) return -1;
 
@@ -35,6 +52,45 @@ int64_t madis_udp_bind_reuseport(int64_t port) {
     address.sin_family = AF_INET;
     address.sin_port = htons((uint16_t)port);
     address.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (bind(fd, (struct sockaddr *)&address, sizeof(address)) != 0) {
+        (void)mako_sock_close(fd);
+        return -1;
+    }
+
+    mako_sock_set_nonblock(fd, 1);
+    return (int64_t)fd;
+}
+
+/* SO_REUSEPORT UDP bind on a configured IPv4 literal (SIP_BIND_IP).
+ * Returns -1 when the address is not a parseable IPv4 literal. */
+int64_t madis_udp_bind_reuseport_addr(MakoString ip, int64_t port) {
+    if (port <= 0 || port > 65535) return -1;
+    if (!ip.data || ip.len == 0 || ip.len >= 64) return -1;
+    char host[64];
+    memcpy(host, ip.data, ip.len);
+    host[ip.len] = '\0';
+
+    struct sockaddr_in address;
+    memset(&address, 0, sizeof(address));
+    address.sin_family = AF_INET;
+    address.sin_port = htons((uint16_t)port);
+    if (inet_pton(AF_INET, host, &address.sin_addr) != 1) return -1;
+
+    mako_sock_t fd = mako_sock_create_af(AF_INET, SOCK_DGRAM);
+    if (fd == MAKO_INVALID_SOCK) return -1;
+
+    int yes = 1;
+    (void)setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&yes, sizeof(yes));
+#if defined(SO_REUSEPORT)
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, (const char *)&yes, sizeof(yes)) != 0) {
+        (void)mako_sock_close(fd);
+        return -1;
+    }
+#else
+    (void)mako_sock_close(fd);
+    return -1;
+#endif
+
     if (bind(fd, (struct sockaddr *)&address, sizeof(address)) != 0) {
         (void)mako_sock_close(fd);
         return -1;
@@ -90,7 +146,7 @@ int64_t madis_cmap_has2(MakoCMap *cache, MakoString prefix, MakoString suffix) {
 
 MakoString madis_cmap_get2(MakoCMap *cache, MakoString prefix, MakoString suffix) {
     char key[4096];
-    if (!madis_key2(key, sizeof(key), prefix, suffix)) return mako_str_from_cstr("");
+    if (!madis_key2(key, sizeof(key), prefix, suffix)) return madis_owned_cstr("");
     return mako_cmap_get(cache, (MakoString){key, strlen(key)});
 }
 
@@ -109,7 +165,7 @@ int64_t madis_cmap_has3i(MakoCMap *cache, MakoString prefix, MakoString middle, 
 
 MakoString madis_cmap_get3i(MakoCMap *cache, MakoString prefix, MakoString middle, int64_t suffix) {
     char key[4096];
-    if (!madis_key3i(key, sizeof(key), prefix, middle, suffix)) return mako_str_from_cstr("");
+    if (!madis_key3i(key, sizeof(key), prefix, middle, suffix)) return madis_owned_cstr("");
     return mako_cmap_get(cache, (MakoString){key, strlen(key)});
 }
 

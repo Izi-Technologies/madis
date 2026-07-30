@@ -1,0 +1,352 @@
+// Durable IMS registration lifecycle tests — adversarial and trust-boundary.
+pull . "../main.mko"
+
+fn ims_lifecycle_test_register(path_line: string) -> string {
+    return "REGISTER sip:example.com SIP/2.0\r\n" +
+        "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-life\r\n" +
+        "From: <sip:alice@example.com>;tag=life1\r\n" +
+        "To: <sip:alice@example.com>\r\n" +
+        "Call-ID: life-test@example.com\r\n" +
+        "CSeq: 1 REGISTER\r\n" +
+        path_line +
+        "Contact: <sip:alice@192.0.2.10:5060>\r\n" +
+        "Content-Length: 0\r\n\r\n"
+}
+
+fn ims_lifecycle_test_reset_env() {
+    let _ = env_set("SIP_IMS_ALLOW_UNTRUSTED_PATH", "0")
+    let _ = env_set("SIP_IMS_PATH_HOSTS", "")
+    let _ = env_set("SIP_IMS_PATH", "")
+    let _ = env_set("SIP_IMS_LIFECYCLE_CAPACITY", "16384")
+    let _ = env_set("SIP_IMS_LIFECYCLE_LOAD_LIMIT", "10000")
+    let _ = env_set("SIP_IMS_AKA_VECTOR_TTL_MS", "300000")
+}
+
+fn TestIMSLifecycleStoreAndFind() {
+    ims_lifecycle_test_reset_env()
+    let _ = env_set("SIP_IMS_PATH", "sip:pcscf.example.com;lr")
+    let reg = cmap_new()
+    assert_eq(ims_lifecycle_store(reg, "alice@example.com", "alice@example.com", "sip:alice@example.com", "sip:alice@192.0.2.10:5060", "UDP", 300, "192.0.2.10", 5060, "sip:pcscf.example.com;lr", "sip:scscf.example.com;lr", "sip:scscf.example.com"), 1)
+    let value = ims_lifecycle_find(reg, "alice@example.com")
+    assert_eq(if len(value) > 0 { 1 } else { 0 }, 1)
+    assert_eq_str(ims_lifecycle_private(value), "alice@example.com")
+    assert_eq_str(ims_lifecycle_public(value), "sip:alice@example.com")
+    assert_eq_str(ims_lifecycle_contact(value), "sip:alice@192.0.2.10:5060")
+    assert_eq_str(ims_lifecycle_path(value), "sip:pcscf.example.com;lr")
+    assert_eq_str(ims_lifecycle_service_route(value), "sip:scscf.example.com;lr")
+    assert_eq_str(ims_lifecycle_server_name(value), "sip:scscf.example.com")
+}
+
+fn TestIMSLifecycleRejectsUnsafeFields() {
+    ims_lifecycle_test_reset_env()
+    let reg = cmap_new()
+    assert_eq(ims_lifecycle_store(reg, "alice|evil@example.com", "alice@example.com", "sip:alice@example.com", "sip:alice@192.0.2.10", "UDP", 300, "192.0.2.10", 5060, "", "", "sip:scscf.example.com"), 0)
+    assert_eq(ims_lifecycle_store(reg, "alice@example.com", "alice@example.com", "sip:alice@example.com", "udp://alice.example.com", "UDP", 300, "192.0.2.10", 5060, "", "", "sip:scscf.example.com"), 0)
+    assert_eq(ims_lifecycle_store(reg, "alice@example.com", "alice@example.com", "sip:alice@example.com", "sip:alice@192.0.2.10", "UDP", 300, "192.0.2.10", 5060, "sip:path\r\nX-Evil: 1", "", "sip:scscf.example.com"), 0)
+    assert_eq(ims_lifecycle_store(reg, "alice@example.com", "alice@example.com", "sip:alice@example.com", "sip:alice@192.0.2.10", "BOGUS", 300, "192.0.2.10", 5060, "", "", "sip:scscf.example.com"), 0)
+    assert_eq(ims_lifecycle_store(reg, "alice@example.com", "alice@example.com", "sip:alice@example.com", "sip:alice@192.0.2.10", "UDP", 300, "192.0.2.10", 70000, "", "", "sip:scscf.example.com"), 0)
+    assert_eq_str(ims_lifecycle_find(reg, "alice@example.com"), "")
+}
+
+fn TestIMSLifecyclePathTrustFailClosed() {
+    ims_lifecycle_test_reset_env()
+    let cache = cmap_new()
+    let db = sql_open_sqlite(":memory:")
+    let with_path = ims_lifecycle_test_register("Path: <sip:attacker.example.com;lr>\r\n")
+    // Default: untrusted Path is stripped (empty), not stored as next hop.
+    assert_eq_str(ims_lifecycle_path_from_register_trusted(with_path, len(with_path), db, 0, "198.51.100.10", cache), "")
+    // Invalid scheme still fails closed with sentinel.
+    let bad = ims_lifecycle_test_register("Path: <udp://evil.example.com>\r\n")
+    assert_eq_str(ims_lifecycle_path_from_register_trusted(bad, len(bad), db, 0, "198.51.100.10", cache), "__IMS_PATH_INVALID__")
+    // Header injection in Path value.
+    let inject = ims_lifecycle_test_register("Path: <sip:x.example.com>\r\nX-Evil: 1\r\n")
+    // sip_hdr takes the Path line only; injection via CR in URI is rejected.
+    let cr = ims_lifecycle_test_register("Path: <sip:x.example.com%0d%0aX-Evil:1>\r\n")
+    let cr_result = ims_lifecycle_path_from_register_trusted(cr, len(cr), db, 0, "198.51.100.10", cache)
+    assert_eq(if str_eq(cr_result, "") || str_eq(cr_result, "__IMS_PATH_INVALID__") { 1 } else { 0 }, 1)
+    let _ = inject
+}
+
+fn TestIMSLifecyclePathHostAllowlistRequiresSourceTrust() {
+    ims_lifecycle_test_reset_env()
+    let cache = cmap_new()
+    let db = sql_open_sqlite(":memory:")
+    // Host pin alone is not enough without source trust.
+    let _ = env_set("SIP_IMS_PATH_HOSTS", "pcscf.example.com,edge.example.net")
+    let pinned = ims_lifecycle_test_register("Path: <sip:pcscf.example.com;lr>\r\n")
+    assert_eq_str(ims_lifecycle_path_from_register_trusted(pinned, len(pinned), db, 0, "198.51.100.10", cache), "")
+    // Lab override + host pin accepts.
+    let _ = env_set("SIP_IMS_ALLOW_UNTRUSTED_PATH", "1")
+    assert_eq_str(ims_lifecycle_path_from_register_trusted(pinned, len(pinned), db, 0, "198.51.100.10", cache), "sip:pcscf.example.com;lr")
+    let denied = ims_lifecycle_test_register("Path: <sip:attacker.example.com;lr>\r\n")
+    assert_eq_str(ims_lifecycle_path_from_register_trusted(denied, len(denied), db, 0, "198.51.100.10", cache), "")
+    ims_lifecycle_test_reset_env()
+}
+
+fn TestIMSLifecyclePathExactPin() {
+    ims_lifecycle_test_reset_env()
+    let cache = cmap_new()
+    let db = sql_open_sqlite(":memory:")
+    let _ = env_set("SIP_IMS_PATH", "sip:pcscf.example.com;lr")
+    let _ = env_set("SIP_IMS_ALLOW_UNTRUSTED_PATH", "1")
+    let ok = ims_lifecycle_test_register("Path: <sip:pcscf.example.com;lr>\r\n")
+    assert_eq_str(ims_lifecycle_path_from_register_trusted(ok, len(ok), db, 0, "198.51.100.10", cache), "sip:pcscf.example.com;lr")
+    // Port/param mutation of allowlisted host is rejected when only exact pin is set.
+    let mutated = ims_lifecycle_test_register("Path: <sip:pcscf.example.com:9;lr>\r\n")
+    assert_eq_str(ims_lifecycle_path_from_register_trusted(mutated, len(mutated), db, 0, "198.51.100.10", cache), "")
+    ims_lifecycle_test_reset_env()
+}
+
+fn TestIMSLifecyclePathAtRestStripsUnpinned() {
+    ims_lifecycle_test_reset_env()
+    let reg = cmap_new()
+    // Store with unpinned Path must strip it even if encode would accept the URI.
+    assert_eq(ims_lifecycle_store(reg, "alice@example.com", "alice@example.com", "sip:alice@example.com", "sip:alice@192.0.2.10:5060", "UDP", 300, "192.0.2.10", 5060, "sip:attacker.example.com;lr", "", "sip:scscf.example.com"), 1)
+    assert_eq_str(ims_lifecycle_path(ims_lifecycle_find(reg, "alice@example.com")), "")
+    let _ = env_set("SIP_IMS_PATH", "sip:pcscf.example.com;lr")
+    assert_eq(ims_lifecycle_store(reg, "bob@example.com", "bob@example.com", "sip:bob@example.com", "sip:bob@192.0.2.11:5060", "UDP", 300, "192.0.2.11", 5060, "sip:pcscf.example.com;lr", "", "sip:scscf.example.com"), 1)
+    assert_eq_str(ims_lifecycle_path(ims_lifecycle_find(reg, "bob@example.com")), "sip:pcscf.example.com;lr")
+    ims_lifecycle_test_reset_env()
+}
+
+fn TestIMSLifecyclePathLabOverrideStillNeedsPin() {
+    ims_lifecycle_test_reset_env()
+    let cache = cmap_new()
+    let db = sql_open_sqlite(":memory:")
+    // Lab override without destination pin must still fail closed.
+    let _ = env_set("SIP_IMS_ALLOW_UNTRUSTED_PATH", "1")
+    let ok = ims_lifecycle_test_register("Path: <sip:lab-pcscf.example.com;lr>\r\n")
+    assert_eq_str(ims_lifecycle_path_from_register_trusted(ok, len(ok), db, 0, "198.51.100.10", cache), "")
+    ims_lifecycle_test_reset_env()
+}
+
+fn TestIMSLifecycleLrParamIsExact() {
+    ims_lifecycle_test_reset_env()
+    assert_eq(ims_lifecycle_has_lr_param("sip:pcscf.example.com;lr"), 1)
+    assert_eq(ims_lifecycle_has_lr_param("sip:pcscf.example.com;lr;transport=tcp"), 1)
+    // Must not treat ";lroute" as loose-routing.
+    assert_eq(ims_lifecycle_has_lr_param("sip:pcscf.example.com;lroute"), 0)
+}
+
+fn TestIMSLifecycleMtTargetPrefersPath() {
+    ims_lifecycle_test_reset_env()
+    let _ = env_set("SIP_IMS_PATH", "sip:pcscf.example.com;lr")
+    let reg = cmap_new()
+    assert_eq(ims_lifecycle_store(reg, "alice@example.com", "alice@example.com", "sip:alice@example.com", "sip:alice@192.0.2.10:5060", "UDP", 300, "192.0.2.10", 5060, "sip:pcscf.example.com;lr", "sip:scscf.example.com;lr", "sip:scscf.example.com"), 1)
+    let target = ims_lifecycle_mt_target(reg, "alice@example.com")
+    assert_eq(if str_has_prefix(target, "sip:pcscf.example.com;lr|") { 1 } else { 0 }, 1)
+
+    let direct = cmap_new()
+    assert_eq(ims_lifecycle_store(direct, "bob@example.com", "bob@example.com", "sip:bob@example.com", "sip:bob@192.0.2.11:5060", "UDP", 300, "192.0.2.11", 5060, "", "", "sip:scscf.example.com"), 1)
+    assert_eq_str(ims_lifecycle_mt_target(direct, "bob@example.com"), "sip:bob@192.0.2.11:5060|UDP")
+}
+
+fn TestIMSLifecycleApplyPathRoute() {
+    ims_lifecycle_test_reset_env()
+    let msg = "INVITE sip:alice@example.com SIP/2.0\r\nVia: SIP/2.0/UDP 192.0.2.1:5060;branch=z9hG4bK1\r\nFrom: <sip:bob@example.com>;tag=b\r\nTo: <sip:alice@example.com>\r\nCall-ID: mt@example.com\r\nCSeq: 1 INVITE\r\nContent-Length: 0\r\n\r\n"
+    let routed = ims_lifecycle_apply_path_route(msg, "sip:pcscf.example.com;lr")
+    assert_eq(if str_index(routed, "Route: <sip:pcscf.example.com;lr>") >= 0 { 1 } else { 0 }, 1)
+    assert_eq(if str_index(routed, ";lr;lr") < 0 { 1 } else { 0 }, 1)
+    let routed2 = ims_lifecycle_apply_path_route(msg, "sip:pcscf.example.com")
+    assert_eq(if str_index(routed2, "Route: <sip:pcscf.example.com;lr>") >= 0 { 1 } else { 0 }, 1)
+    assert_eq_str(ims_lifecycle_apply_path_route(msg, "udp://bad"), "__IMS_PATH_INVALID__")
+}
+
+fn TestIMSLifecycleExpiryAndClear() {
+    ims_lifecycle_test_reset_env()
+    let reg = cmap_new()
+    assert_eq(ims_lifecycle_store(reg, "alice@example.com", "alice@example.com", "sip:alice@example.com", "sip:alice@192.0.2.10:5060", "UDP", 0, "192.0.2.10", 5060, "", "", "sip:scscf.example.com"), 0)
+    assert_eq(ims_lifecycle_store(reg, "alice@example.com", "alice@example.com", "sip:alice@example.com", "sip:alice@192.0.2.10:5060", "UDP", 300, "192.0.2.10", 5060, "", "", "sip:scscf.example.com"), 1)
+    assert_eq(ims_lifecycle_clear(reg, "alice@example.com"), 1)
+    assert_eq_str(ims_lifecycle_find(reg, "alice@example.com"), "")
+}
+
+fn TestIMSLifecycleReconcileWithRegistration() {
+    ims_lifecycle_test_reset_env()
+    let _ = env_set("SIP_IMS_PATH", "sip:pcscf.example.com;lr")
+    let reg = cmap_new()
+    let db = sql_open_sqlite(":memory:")
+    assert_eq(ims_lifecycle_reconcile(reg, "alice@example.com", "alice@example.com", "sip:alice@example.com", "sip:alice@192.0.2.10:5060", "UDP", 300, "192.0.2.10", 5060, "sip:pcscf.example.com;lr", "sip:scscf.example.com;lr", "sip:scscf.example.com", "", db, 0, "node-1"), 1)
+    assert_eq_str(ims_lifecycle_find(reg, "alice@example.com"), "")
+
+    assert_eq(registration_store(reg, "alice@example.com", "sip:alice@192.0.2.10:5060", "UDP", 300, "192.0.2.10", 5060), 1)
+    assert_eq(ims_lifecycle_reconcile(reg, "alice@example.com", "alice@example.com", "sip:alice@example.com", "sip:alice@192.0.2.10:5060", "UDP", 300, "192.0.2.10", 5060, "sip:pcscf.example.com;lr", "sip:scscf.example.com;lr", "sip:scscf.example.com", "sip:alice@example.com,sip:alias@example.com", db, 0, "node-1"), 1)
+    assert_eq_str(ims_lifecycle_path(ims_lifecycle_find(reg, "alice@example.com")), "sip:pcscf.example.com;lr")
+    assert_eq_str(ims_lifecycle_resolve_aor(reg, "alias@example.com"), "alice@example.com")
+    assert_eq(if len(ims_lifecycle_mt_target_resolved(reg, "alias@example.com")) > 0 { 1 } else { 0 }, 1)
+
+    assert_eq(ims_lifecycle_reconcile(reg, "alice@example.com", "alice@example.com", "sip:alice@example.com", "", "UDP", 0, "192.0.2.10", 5060, "", "", "sip:scscf.example.com", "", db, 0, "node-1"), 1)
+    assert_eq_str(ims_lifecycle_find(reg, "alice@example.com"), "")
+    assert_eq_str(ims_lifecycle_resolve_aor(reg, "alias@example.com"), "")
+}
+
+fn TestIMSLifecycleAssociatedRejectsHijackAndInjection() {
+    ims_lifecycle_test_reset_env()
+    let _ = env_set("SIP_IMS_PATH", "sip:pcscf.example.com;lr")
+    let reg = cmap_new()
+    assert_eq(registration_store(reg, "alice@example.com", "sip:alice@192.0.2.10:5060", "UDP", 300, "192.0.2.10", 5060), 1)
+    assert_eq(registration_store(reg, "bob@example.com", "sip:bob@192.0.2.11:5060", "UDP", 300, "192.0.2.11", 5060), 1)
+    let db = sql_open_sqlite(":memory:")
+    assert_eq(ims_lifecycle_reconcile(reg, "alice@example.com", "alice@example.com", "sip:alice@example.com", "sip:alice@192.0.2.10:5060", "UDP", 300, "192.0.2.10", 5060, "sip:pcscf.example.com;lr", "", "sip:scscf.example.com", "sip:shared@example.com", db, 0, "n1"), 1)
+    // Second primary cannot steal the same alias AOR.
+    assert_eq(ims_lifecycle_reconcile(reg, "bob@example.com", "bob@example.com", "sip:bob@example.com", "sip:bob@192.0.2.11:5060", "UDP", 300, "192.0.2.11", 5060, "sip:pcscf.example.com;lr", "", "sip:scscf.example.com", "sip:shared@example.com", db, 0, "n1"), 0)
+    assert_eq(ims_lifecycle_associated_set(reg, "alice@example.com", "sip:evil\r\nX:1@example.com"), 0)
+    assert_eq(ims_lifecycle_associated_set(reg, "alice@example.com", "udp://bad"), 0)
+    ims_lifecycle_test_reset_env()
+}
+
+fn TestIMSLifecycleNetworkDeregister() {
+    ims_lifecycle_test_reset_env()
+    let reg = cmap_new()
+    let db = sql_open_sqlite(":memory:")
+    assert_eq(registration_store(reg, "alice@example.com", "sip:alice@192.0.2.10:5060", "UDP", 300, "192.0.2.10", 5060), 1)
+    assert_eq(ims_lifecycle_store(reg, "alice@example.com", "alice@example.com", "sip:alice@example.com", "sip:alice@192.0.2.10:5060", "UDP", 300, "192.0.2.10", 5060, "", "", "sip:scscf.example.com"), 1)
+    assert_eq(ims_lifecycle_associated_set(reg, "alice@example.com", "sip:alias@example.com"), 1)
+    assert_eq(ims_ifc_set(reg, "alice@example.com", "sip:tas.example.com"), 1)
+    assert_eq(ims_lifecycle_network_deregister(reg, "alias@example.com", db, 0), 1)
+    assert_eq_str(ims_lifecycle_find(reg, "alice@example.com"), "")
+    assert_eq_str(ims_lifecycle_resolve_aor(reg, "alias@example.com"), "")
+    assert_eq_str(registration_find(reg, "alice@example.com"), "")
+    assert_eq_str(ims_ifc_targets(reg, "alice@example.com"), "")
+    ims_lifecycle_test_reset_env()
+}
+
+fn TestIMSLifecycleAorFromPublic() {
+    assert_eq_str(ims_lifecycle_aor_from_public("sip:Alice@Example.com"), "alice@example.com")
+    assert_eq_str(ims_lifecycle_aor_from_public("sips:bob@example.com;user=phone"), "bob@example.com")
+    assert_eq_str(ims_lifecycle_aor_from_public("sip:x@example.com\r\n"), "")
+    assert_eq_str(ims_lifecycle_aor_from_public("udp://x"), "")
+}
+
+fn TestIMSLifecycleCapacityIsBounded() {
+    ims_lifecycle_test_reset_env()
+    let _ = env_set("SIP_IMS_LIFECYCLE_CAPACITY", "16")
+    let reg = cmap_new()
+    let mut i = 0
+    while i < 16 {
+        let aor = "u" + string(i) + "@example.com"
+        assert_eq(ims_lifecycle_store(reg, aor, aor, "sip:" + aor, "sip:u" + string(i) + "@192.0.2.10:5060", "UDP", 300, "192.0.2.10", 5060, "", "", "sip:scscf.example.com"), 1)
+        i = i + 1
+    }
+    // Fail closed: refuse new AORs instead of silently evicting victims.
+    assert_eq(ims_lifecycle_store(reg, "overflow@example.com", "overflow@example.com", "sip:overflow@example.com", "sip:o@192.0.2.10:5060", "UDP", 300, "192.0.2.10", 5060, "", "", "sip:scscf.example.com"), 0)
+    assert_eq(if len(ims_lifecycle_find(reg, "u0@example.com")) > 0 { 1 } else { 0 }, 1)
+    assert_eq_str(ims_lifecycle_find(reg, "overflow@example.com"), "")
+    ims_lifecycle_test_reset_env()
+}
+
+fn TestIMSLifecycleDecodeRejectsPoisoned() {
+    ims_lifecycle_test_reset_env()
+    let reg = cmap_new()
+    // Manually poison the map with a delimiter-broken value.
+    cmap_set(reg, ims_lifecycle_key("alice@example.com"), "v1|a|b|not-a-uri|UDP|9999999999999|1.2.3.4|5060||||registered")
+    assert_eq_str(ims_lifecycle_find(reg, "alice@example.com"), "")
+    cmap_set(reg, ims_lifecycle_key("bob@example.com"), "v1|bob@example.com|sip:bob@example.com|sip:bob@192.0.2.11|UDP|" + string(now_ms() + 60000) + "|192.0.2.11|5060|sip:x\r\nY:1|||registered")
+    assert_eq_str(ims_lifecycle_find(reg, "bob@example.com"), "")
+}
+
+fn TestIMSAKAAutsRequestsFreshChallenge() {
+    ims_lifecycle_test_reset_env()
+    let cache = cmap_new()
+    let nonce = "nonce-value-123456"
+    let private_identity = "alice@example.com"
+    let key = ims_aka_cache_key(nonce, private_identity)
+    let _ = bounded_cache_pair_set(cache, "ims_aka_seq", "ims_aka_ring|", key, "aabbccdd", mono_ms(), 65536)
+    let msg = "REGISTER sip:example.com SIP/2.0\r\n" +
+        "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-auts\r\n" +
+        "From: <sip:alice@example.com>;tag=a1\r\n" +
+        "To: <sip:alice@example.com>\r\n" +
+        "Call-ID: auts-test@example.com\r\n" +
+        "CSeq: 1 REGISTER\r\n" +
+        "Authorization: Digest username=\"alice@example.com\", realm=\"example.com\", nonce=\"" + nonce + "\", uri=\"sip:example.com\", response=\"00000000000000000000000000000000\", algorithm=AKAv1-MD5, qop=auth, nc=00000001, cnonce=\"0a4f113b\", auts=\"+CMT/eF6x8A=\"\r\n" +
+        "Contact: <sip:alice@192.0.2.10>\r\n" +
+        "Content-Length: 0\r\n\r\n"
+    assert_eq(ims_aka_response_valid(msg, len(msg), cache, "sip:alice@example.com", private_identity, "example.com"), 3)
+    assert_eq(cmap_has(cache, key), 0)
+    // Forged AUTS without a nonce we issued must not force re-challenge/MAR.
+    let forged = "REGISTER sip:example.com SIP/2.0\r\nVia: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-auts2\r\nFrom: <sip:alice@example.com>;tag=a2\r\nTo: <sip:alice@example.com>\r\nCall-ID: auts2@example.com\r\nCSeq: 1 REGISTER\r\nAuthorization: Digest username=\"alice@example.com\", realm=\"example.com\", nonce=\"never-issued-nonce-xx\", uri=\"sip:example.com\", response=\"00000000000000000000000000000000\", algorithm=AKAv1-MD5, qop=auth, nc=00000001, cnonce=\"0a4f113b\", auts=\"+CMT/eF6x8A=\"\r\nContact: <sip:alice@192.0.2.10>\r\nContent-Length: 0\r\n\r\n"
+    assert_eq(ims_aka_response_valid(forged, len(forged), cache, "sip:alice@example.com", private_identity, "example.com"), 0)
+}
+
+fn TestIMSAKAVectorTtlConfigurable() {
+    ims_lifecycle_test_reset_env()
+    let _ = env_set("SIP_IMS_AKA_VECTOR_TTL_MS", "1000")
+    let cache = cmap_new()
+    let nonce = "nonce-value-ttl-test"
+    let private_identity = "alice@example.com"
+    let key = ims_aka_cache_key(nonce, private_identity)
+    let _ = bounded_cache_pair_set(cache, "ims_aka_seq", "ims_aka_ring|", key, "aabbccdd", mono_ms() - 2000, 65536)
+    let ha1 = sip_md5_hex("alice@example.com:example.com:aabbccdd")
+    let response = digest_response_ha1_qop(ha1, "REGISTER", "sip:example.com", nonce, "00000001", "0a4f113b", "auth")
+    let msg = "REGISTER sip:example.com SIP/2.0\r\nVia: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-ttl\r\nFrom: <sip:alice@example.com>;tag=t1\r\nTo: <sip:alice@example.com>\r\nCall-ID: ttl@example.com\r\nCSeq: 1 REGISTER\r\nAuthorization: Digest username=\"alice@example.com\", realm=\"example.com\", nonce=\"" + nonce + "\", uri=\"sip:example.com\", response=\"" + response + "\", algorithm=AKAv1-MD5, qop=auth, nc=00000001, cnonce=\"0a4f113b\"\r\nContact: <sip:alice@192.0.2.10>\r\nContent-Length: 0\r\n\r\n"
+    assert_eq(ims_aka_response_valid(msg, len(msg), cache, "sip:alice@example.com", private_identity, "example.com"), 2)
+    ims_lifecycle_test_reset_env()
+}
+
+fn TestIMSLifecycleIRSMembersAndDeregAll() {
+    ims_lifecycle_test_reset_env()
+    let _ = env_set("SIP_IMS_IRS_DEREG_MODE", "all")
+    let reg = cmap_new()
+    let db = sql_open_sqlite(":memory:")
+    assert_eq(registration_store(reg, "alice@example.com", "sip:alice@192.0.2.10", "UDP", 300, "192.0.2.10", 5060), 1)
+    assert_eq(registration_store(reg, "alice2@example.com", "sip:alice2@192.0.2.11", "UDP", 300, "192.0.2.11", 5060), 1)
+    assert_eq(ims_lifecycle_store(reg, "alice@example.com", "alice-private@example.com", "sip:alice@example.com", "sip:alice@192.0.2.10", "UDP", 300, "192.0.2.10", 5060, "", "", "sip:scscf.example.com"), 1)
+    assert_eq(ims_lifecycle_store(reg, "alice2@example.com", "alice-private@example.com", "sip:alice2@example.com", "sip:alice2@192.0.2.11", "UDP", 300, "192.0.2.11", 5060, "", "", "sip:scscf.example.com"), 1)
+    assert_eq(ims_lifecycle_irs_add(reg, "alice-private@example.com", "alice@example.com"), 1)
+    assert_eq(ims_lifecycle_irs_add(reg, "alice-private@example.com", "alice2@example.com"), 1)
+    let members = ims_lifecycle_irs_members(reg, "alice-private@example.com")
+    assert_eq(if str_index(members, "alice@example.com") >= 0 { 1 } else { 0 }, 1)
+    assert_eq(if str_index(members, "alice2@example.com") >= 0 { 1 } else { 0 }, 1)
+    assert_eq(ims_lifecycle_network_deregister(reg, "alice@example.com", db, 0), 1)
+    assert_eq_str(ims_lifecycle_find(reg, "alice@example.com"), "")
+    assert_eq_str(ims_lifecycle_find(reg, "alice2@example.com"), "")
+    ims_lifecycle_test_reset_env()
+}
+
+fn TestIMSLifecycleIRSDeregSingle() {
+    ims_lifecycle_test_reset_env()
+    let _ = env_set("SIP_IMS_IRS_DEREG_MODE", "single")
+    let reg = cmap_new()
+    let db = sql_open_sqlite(":memory:")
+    assert_eq(registration_store(reg, "alice@example.com", "sip:alice@192.0.2.10", "UDP", 300, "192.0.2.10", 5060), 1)
+    assert_eq(registration_store(reg, "alice2@example.com", "sip:alice2@192.0.2.11", "UDP", 300, "192.0.2.11", 5060), 1)
+    assert_eq(ims_lifecycle_store(reg, "alice@example.com", "alice-private@example.com", "sip:alice@example.com", "sip:alice@192.0.2.10", "UDP", 300, "192.0.2.10", 5060, "", "", "sip:scscf.example.com"), 1)
+    assert_eq(ims_lifecycle_store(reg, "alice2@example.com", "alice-private@example.com", "sip:alice2@example.com", "sip:alice2@192.0.2.11", "UDP", 300, "192.0.2.11", 5060, "", "", "sip:scscf.example.com"), 1)
+    assert_eq(ims_lifecycle_irs_add(reg, "alice-private@example.com", "alice@example.com"), 1)
+    assert_eq(ims_lifecycle_irs_add(reg, "alice-private@example.com", "alice2@example.com"), 1)
+    assert_eq(ims_lifecycle_network_deregister(reg, "alice@example.com", db, 0), 1)
+    assert_eq_str(ims_lifecycle_find(reg, "alice@example.com"), "")
+    assert_eq(if len(ims_lifecycle_find(reg, "alice2@example.com")) > 0 { 1 } else { 0 }, 1)
+    ims_lifecycle_test_reset_env()
+}
+
+// Explicit UE deregistration (reconcile with expires 0) must drop the AOR from
+// its implicit registration set, not just the lifecycle row.
+fn TestIMSLifecycleExplicitDeregRemovesIRSMembership() {
+    ims_lifecycle_test_reset_env()
+    let reg = cmap_new()
+    let db = sql_open_sqlite(":memory:")
+    assert_eq(registration_store(reg, "alice@example.com", "sip:alice@192.0.2.10", "UDP", 300, "192.0.2.10", 5060), 1)
+    assert_eq(registration_store(reg, "alice2@example.com", "sip:alice2@192.0.2.11", "UDP", 300, "192.0.2.11", 5060), 1)
+    assert_eq(ims_lifecycle_reconcile(reg, "alice@example.com", "alice-private@example.com", "sip:alice@example.com", "sip:alice@192.0.2.10", "UDP", 300, "192.0.2.10", 5060, "", "", "sip:scscf.example.com", "", db, 0, "node1"), 1)
+    assert_eq(ims_lifecycle_reconcile(reg, "alice2@example.com", "alice-private@example.com", "sip:alice2@example.com", "sip:alice2@192.0.2.11", "UDP", 300, "192.0.2.11", 5060, "", "", "sip:scscf.example.com", "", db, 0, "node1"), 1)
+    let members = ims_lifecycle_irs_members(reg, "alice-private@example.com")
+    assert_eq(if str_index(members, "alice@example.com") >= 0 { 1 } else { 0 }, 1)
+    // UE deregisters one AOR; the set must keep only the sibling.
+    let _ = registration_remove(reg, "alice@example.com", "sip:alice@192.0.2.10")
+    assert_eq(ims_lifecycle_reconcile(reg, "alice@example.com", "alice-private@example.com", "sip:alice@example.com", "", "UDP", 0, "192.0.2.10", 5060, "", "", "sip:scscf.example.com", "", db, 0, "node1"), 1)
+    let after = ims_lifecycle_irs_members(reg, "alice-private@example.com")
+    assert_eq(str_index(after, "alice@example.com"), -1)
+    assert_eq(if str_index(after, "alice2@example.com") >= 0 { 1 } else { 0 }, 1)
+    ims_lifecycle_test_reset_env()
+}
+
+fn TestIMSLifecycleServerMismatch() {
+    ims_lifecycle_test_reset_env()
+    let reg = cmap_new()
+    assert_eq(ims_lifecycle_store(reg, "alice@example.com", "alice@example.com", "sip:alice@example.com", "sip:alice@192.0.2.10", "UDP", 300, "192.0.2.10", 5060, "", "", "sip:old-scscf.example.com"), 1)
+    assert_eq(ims_lifecycle_server_mismatch(reg, "alice@example.com", "sip:old-scscf.example.com"), 0)
+    assert_eq(ims_lifecycle_server_mismatch(reg, "alice@example.com", "sip:new-scscf.example.com"), 1)
+    assert_eq(ims_lifecycle_server_mismatch(reg, "nobody@example.com", "sip:scscf.example.com"), 0)
+    ims_lifecycle_test_reset_env()
+}

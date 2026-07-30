@@ -68,3 +68,16 @@ fn TestIMSIdentityPrivacyApplication() {
     assert_eq_str(sip_header(ims_identity_apply_privacy(public_msg), "P-Asserted-Identity"), "<sip:asserted@example.com>")
     ims_identity_test_disable()
 }
+
+fn TestIMSIdentityAssertApply() {
+    let _ = env_set("SIP_IMS_ASSERT_IDENTITY", "1")
+    let _ = env_set("SIP_IMS_IDENTITY_POLICY", "1")
+    let msg = "INVITE sip:bob@example.com SIP/2.0\r\nFrom: <sip:alice@example.com>;tag=t\r\nContent-Length: 0\r\n\r\n"
+    let out = ims_identity_assert_apply(msg, "sip:alice@example.com")
+    assert_eq(if str_index(out, "P-Asserted-Identity: <sip:alice@example.com>") >= 0 { 1 } else { 0 }, 1)
+    let priv = "INVITE sip:bob@example.com SIP/2.0\r\nPrivacy: id\r\nFrom: <sip:alice@example.com>;tag=t\r\nContent-Length: 0\r\n\r\n"
+    let out2 = ims_identity_assert_apply(priv, "sip:alice@example.com")
+    assert_eq(str_index(out2, "P-Asserted-Identity:"), -1)
+    let _ = env_set("SIP_IMS_ASSERT_IDENTITY", "0")
+    let _ = env_set("SIP_IMS_IDENTITY_POLICY", "0")
+}

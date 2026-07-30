@@ -1,8 +1,10 @@
 // Bounded subscriber-profile initial-filter criteria.
 //
-// This is deliberately target-only: the subscriber service supplies a small
-// list of SIP application targets. Madis does not evaluate standard iFC
-// condition expressions or execute TAS logic here.
+// Supports target-only strings (legacy) and structured objects:
+//   {priority, spt:{method, session_case}, as_uri, default_handling}
+// Madis triggers AS routing only; TAS/MMTel logic remains external.
+
+fn ims_ifc_max_entries() -> int { return 8 }
 
 fn ims_ifc_target_valid(target: string) -> int {
     if len(target) < 1 || len(target) > 2048 { return 0 }
@@ -12,8 +14,99 @@ fn ims_ifc_target_valid(target: string) -> int {
     return sip_name_addr_valid("<" + target + ">")
 }
 
+// Encoded rule: priority|session_case|method|default_handling|as_uri
+// session_case: 0=originating, 1=terminating, 2=any
+// default_handling: 0=continue, 1=terminate on AS failure
+
+fn ims_ifc_method_ok(method: string) -> int {
+    let m = str_to_upper(str_trim_space(method))
+    if len(m) == 0 || len(m) > 16 { return 0 }
+    let mut i = 0
+    while i < len(m) {
+        let c = int(m[i])
+        if not ((c >= 65 && c <= 90) || c == 42) { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn ims_ifc_rule_encode_ok(priority: int, session_case: int, method: string, default_handling: int, as_uri: string) -> string {
+    if priority < 0 || priority > 9999 { return "" }
+    if session_case < 0 || session_case > 2 { return "" }
+    if default_handling < 0 || default_handling > 1 { return "" }
+    if ims_ifc_target_valid(as_uri) == 0 { return "" }
+    let mut m = str_to_upper(str_trim_space(method))
+    if len(m) == 0 { m = "*" }
+    if ims_ifc_method_ok(m) == 0 { return "" }
+    return string(priority) + "|" + string(session_case) + "|" + m + "|" + string(default_handling) + "|" + as_uri
+}
+
+fn ims_ifc_rule_as_uri(rule: string) -> string {
+    let parts = str_split(rule, "|")
+    if len(parts) < 5 { return "" }
+    return parts[4]
+}
+
+fn ims_ifc_rule_priority(rule: string) -> int {
+    let parts = str_split(rule, "|")
+    if len(parts) < 1 { return 9999 }
+    match parse_int(parts[0]) {
+        Ok(v) => { return v }
+        Err(_) => { return 9999 }
+    }
+    return 9999
+}
+
+fn ims_ifc_rule_session_case(rule: string) -> int {
+    let parts = str_split(rule, "|")
+    if len(parts) < 2 { return 2 }
+    match parse_int(parts[1]) {
+        Ok(v) => { return v }
+        Err(_) => { return 2 }
+    }
+    return 2
+}
+
+fn ims_ifc_rule_method(rule: string) -> string {
+    let parts = str_split(rule, "|")
+    if len(parts) < 3 { return "*" }
+    return parts[2]
+}
+
+fn ims_ifc_rule_default_handling(rule: string) -> int {
+    let parts = str_split(rule, "|")
+    if len(parts) < 4 { return 0 }
+    match parse_int(parts[3]) {
+        Ok(v) => { return v }
+        Err(_) => { return 0 }
+    }
+    return 0
+}
+
+fn ims_ifc_rule_matches(rule: string, session_case: int, method: string) -> int {
+    let sc = ims_ifc_rule_session_case(rule)
+    if sc != 2 && sc != session_case { return 0 }
+    let rm = ims_ifc_rule_method(rule)
+    if str_eq(rm, "*") { return 1 }
+    return if str_eq(rm, str_to_upper(str_trim_space(method))) { 1 } else { 0 }
+}
+
+// Legacy comma-separated targets still accepted as priority-order any-case INVITE rules.
 fn ims_ifc_targets_valid(targets: string) -> int {
     if len(targets) < 1 || len(targets) > 8192 { return 0 }
+    // Structured multi-rule uses ';' separators between rules.
+    if str_index(targets, "|") >= 0 {
+        let rules = str_split(targets, ";")
+        if len(rules) < 1 || len(rules) > ims_ifc_max_entries() { return 0 }
+        let mut i = 0
+        while i < len(rules) {
+            let r = str_trim_space(rules[i])
+            if len(ims_ifc_rule_as_uri(r)) == 0 { return 0 }
+            if ims_ifc_target_valid(ims_ifc_rule_as_uri(r)) == 0 { return 0 }
+            i = i + 1
+        }
+        return 1
+    }
     let items = str_split(targets, ",")
     if len(items) < 1 || len(items) > 4 { return 0 }
     let mut seen = ""
@@ -29,8 +122,72 @@ fn ims_ifc_targets_valid(targets: string) -> int {
     return 1
 }
 
-// Return a comma-separated target list. Missing or empty profile data is
-// compatible. A present but malformed criteria field fails closed.
+// Convert legacy CSV targets to encoded rules for uniform matching.
+fn ims_ifc_legacy_to_rules(targets: string) -> string {
+    if len(targets) == 0 { return "" }
+    if str_index(targets, "|") >= 0 { return targets }
+    let items = str_split(targets, ",")
+    let mut out = ""
+    let mut i = 0
+    while i < len(items) {
+        let t = str_trim_space(items[i])
+        let rule = ims_ifc_rule_encode_ok(i, 2, "*", 0, t)
+        if len(rule) == 0 { return "" }
+        if i > 0 { out = out + ";" }
+        out = out + rule
+        i = i + 1
+    }
+    return out
+}
+
+// Extract raw JSON array element text (object or string) at index.
+fn ims_ifc_array_elem(arr: string, index: int) -> string {
+    if len(arr) < 2 || int(arr[0]) != 91 { return "" }
+    let n = len(arr)
+    let mut i = 1
+    let mut cur = 0
+    while i < n {
+        while i < n && (int(arr[i]) == 32 || int(arr[i]) == 9 || int(arr[i]) == 10 || int(arr[i]) == 13) { i = i + 1 }
+        if i >= n || int(arr[i]) == 93 { return "" }
+        let start = i
+        let c = int(arr[i])
+        if c == 34 {
+            i = i + 1
+            while i < n {
+                if int(arr[i]) == 92 { i = i + 2; continue }
+                if int(arr[i]) == 34 { i = i + 1; break }
+                i = i + 1
+            }
+        } else if c == 123 {
+            let mut depth = 1
+            i = i + 1
+            while i < n && depth > 0 {
+                let ch = int(arr[i])
+                if ch == 34 {
+                    i = i + 1
+                    while i < n {
+                        if int(arr[i]) == 92 { i = i + 2; continue }
+                        if int(arr[i]) == 34 { i = i + 1; break }
+                        i = i + 1
+                    }
+                    continue
+                }
+                if ch == 123 { depth = depth + 1 }
+                if ch == 125 { depth = depth - 1 }
+                i = i + 1
+            }
+        } else {
+            while i < n && int(arr[i]) != 44 && int(arr[i]) != 93 { i = i + 1 }
+        }
+        if cur == index { return arr[start:i] }
+        cur = cur + 1
+        while i < n && (int(arr[i]) == 32 || int(arr[i]) == 9 || int(arr[i]) == 10 || int(arr[i]) == 13) { i = i + 1 }
+        if i < n && int(arr[i]) == 44 { i = i + 1 }
+    }
+    return ""
+}
+
+// Parse profile initial_filter_criteria: string array (legacy) or object array.
 fn ims_ifc_profile_targets(response: string) -> string {
     if len(response) == 0 || str_eq(response, "__IMS_SUBSCRIBER_DISABLED__") { return "" }
     let profile = json_get_object(response, "service_profile")
@@ -38,20 +195,64 @@ fn ims_ifc_profile_targets(response: string) -> string {
     let criteria = json_get_object(profile, "initial_filter_criteria")
     if len(criteria) == 0 { return "__IMS_IFC_INVALID__" }
     let count = json_array_len(criteria)
-    if count < 0 || count > 4 { return "__IMS_IFC_INVALID__" }
+    if count < 0 || count > ims_ifc_max_entries() { return "__IMS_IFC_INVALID__" }
     if count == 0 { return "" }
 
-    let mut result = ""
+    // Detect first element type: string → legacy; object → structured.
+    let first = json_array_get_string(criteria, 0)
+    if len(first) > 0 {
+        let mut result = ""
+        let mut i = 0
+        while i < count {
+            let target = json_array_get_string(criteria, i)
+            if ims_ifc_target_valid(target) == 0 { return "__IMS_IFC_INVALID__" }
+            if i > 0 { result = result + "," }
+            result = result + target
+            i = i + 1
+        }
+        if count > 4 { return "__IMS_IFC_INVALID__" }
+        if ims_ifc_targets_valid(result) == 0 { return "__IMS_IFC_INVALID__" }
+        return result
+    }
+
+    let mut rules = ""
     let mut i = 0
     while i < count {
-        let target = json_array_get_string(criteria, i)
-        if ims_ifc_target_valid(target) == 0 { return "__IMS_IFC_INVALID__" }
-        if i > 0 { result = result + "," }
-        result = result + target
+        let elem = ims_ifc_array_elem(criteria, i)
+        if len(elem) < 2 || int(elem[0]) != 123 { return "__IMS_IFC_INVALID__" }
+        let mut as_uri = str_trim_space(json_get_string(elem, "as_uri"))
+        if len(as_uri) == 0 { as_uri = str_trim_space(json_get_string(elem, "application_server")) }
+        let mut priority = i
+        let pri_int = json_get_int(elem, "priority")
+        if pri_int >= 0 && pri_int <= 9999 { priority = pri_int }
+        let mut default_handling = 0
+        let dh_int = json_get_int(elem, "default_handling")
+        if dh_int == 0 || dh_int == 1 { default_handling = dh_int }
+        let mut method = "*"
+        let mut session_case = 2
+        let spt = json_get_object(elem, "spt")
+        if len(spt) > 0 {
+            let m = str_trim_space(json_get_string(spt, "method"))
+            if len(m) > 0 { method = m }
+            let sc = str_to_lower(str_trim_space(json_get_string(spt, "session_case")))
+            if len(sc) > 0 {
+                if str_eq(sc, "originating") || str_eq(sc, "0") { session_case = 0 }
+                else if str_eq(sc, "terminating") || str_eq(sc, "1") { session_case = 1 }
+                else if str_eq(sc, "any") || str_eq(sc, "2") { session_case = 2 }
+            } else {
+                // Numeric form only when string form is absent.
+                let sc_int = json_get_int(spt, "session_case")
+                if sc_int >= 0 && sc_int <= 2 { session_case = sc_int }
+            }
+        }
+        let rule = ims_ifc_rule_encode_ok(priority, session_case, method, default_handling, as_uri)
+        if len(rule) == 0 { return "__IMS_IFC_INVALID__" }
+        if i > 0 { rules = rules + ";" }
+        rules = rules + rule
         i = i + 1
     }
-    if ims_ifc_targets_valid(result) == 0 { return "__IMS_IFC_INVALID__" }
-    return result
+    if ims_ifc_targets_valid(rules) == 0 { return "__IMS_IFC_INVALID__" }
+    return rules
 }
 
 fn ims_ifc_key(aor: string) -> string {
@@ -69,18 +270,84 @@ fn ims_ifc_targets(reg: CMap, aor: string) -> string {
     return targets
 }
 
-// State is written only after a successful REGISTER contact transaction.
-// Empty criteria explicitly removes the prior profile trigger.
+// Return matched AS URIs (comma-separated) sorted by priority for session_case
+// (0=orig, 1=term) and method. Empty if none match.
+fn ims_ifc_match_targets(reg: CMap, aor: string, session_case: int, method: string) -> string {
+    let raw = ims_ifc_targets(reg, aor)
+    if len(raw) == 0 { return "" }
+    let rules = ims_ifc_legacy_to_rules(raw)
+    if len(rules) == 0 { return "" }
+    let items = str_split(rules, ";")
+    // Simple insertion sort by priority (N<=8).
+    let mut ordered = make([]string, 0, 8)
+    let mut i = 0
+    while i < len(items) {
+        let r = str_trim_space(items[i])
+        if ims_ifc_rule_matches(r, session_case, method) == 1 {
+            ordered = append(ordered, r)
+        }
+        i = i + 1
+    }
+    // Bubble sort by priority ascending.
+    let mut a = 0
+    while a < len(ordered) {
+        let mut b = a + 1
+        while b < len(ordered) {
+            if ims_ifc_rule_priority(ordered[b]) < ims_ifc_rule_priority(ordered[a]) {
+                let tmp = ordered[a]
+                ordered[a] = ordered[b]
+                ordered[b] = tmp
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    let mut out = ""
+    let mut j = 0
+    while j < len(ordered) {
+        let uri = ims_ifc_rule_as_uri(ordered[j])
+        if len(uri) > 0 {
+            if len(out) > 0 { out = out + "," }
+            out = out + uri
+        }
+        j = j + 1
+    }
+    return out
+}
+
+// Default handling of first matched rule: 0 continue, 1 terminate on failure.
+fn ims_ifc_first_default_handling(reg: CMap, aor: string, session_case: int, method: string) -> int {
+    let raw = ims_ifc_targets(reg, aor)
+    if len(raw) == 0 { return 0 }
+    let rules = ims_ifc_legacy_to_rules(raw)
+    let items = str_split(rules, ";")
+    let mut best_pri = 10000
+    let mut handling = 0
+    let mut i = 0
+    while i < len(items) {
+        let r = str_trim_space(items[i])
+        if ims_ifc_rule_matches(r, session_case, method) == 1 {
+            let p = ims_ifc_rule_priority(r)
+            if p < best_pri {
+                best_pri = p
+                handling = ims_ifc_rule_default_handling(r)
+            }
+        }
+        i = i + 1
+    }
+    return handling
+}
+
 fn ims_ifc_originating_targets(reg: CMap, aor: string, initial_dialog: int, local_role: int) -> string {
     if initial_dialog != 1 || local_role != 1 { return "" }
     if len(registration_find(reg, aor)) == 0 { return "" }
-    return ims_ifc_targets(reg, aor)
+    return ims_ifc_match_targets(reg, aor, 0, "INVITE")
 }
 
 fn ims_ifc_terminating_targets(reg: CMap, aor: string, initial_dialog: int, local_role: int) -> string {
     if initial_dialog != 1 || local_role != 1 { return "" }
     if len(registration_find(reg, aor)) == 0 { return "" }
-    return ims_ifc_targets(reg, aor)
+    return ims_ifc_match_targets(reg, aor, 1, "INVITE")
 }
 
 fn ims_ifc_set(reg: CMap, aor: string, targets: string) -> int {
@@ -103,11 +370,112 @@ fn ims_ifc_clear(reg: CMap, aor: string) -> int {
     return 1
 }
 
-// Reconcile profile state only after REGISTER contact mutations. A profile
-// never survives the final expired or explicit deregistered binding.
 fn ims_ifc_reconcile_registration(reg: CMap, aor: string, targets: string) -> int {
     if len(registration_find(reg, aor)) == 0 {
         return ims_ifc_clear(reg, aor)
     }
     return ims_ifc_set(reg, aor, targets)
+}
+
+// Third-party REGISTER: fire REGISTER to each AS after successful 200 REGISTER.
+// No body secrets. Timeout via env SIP_IMS_3PREG_TIMEOUT_MS (default 200, max 2000).
+// Failure policy: default_handling 1 on any AS → report failure (caller may clear).
+fn ims_ifc_3preg_enabled() -> int {
+    let v = str_to_lower(str_trim_space(env_get_or("SIP_IMS_3PREG", "0")))
+    return if str_eq(v, "1") || str_eq(v, "true") || str_eq(v, "yes") { 1 } else { 0 }
+}
+
+// Worker-originated 3pREG transactions carry this Via branch prefix. Their
+// responses and timeouts are consumed locally, never proxied toward the
+// fabricated Via the builder stamped.
+fn ims_ifc_3preg_branch(branch: string) -> int {
+    return if str_has_prefix(branch, "z9hG4bK-3preg-") { 1 } else { 0 }
+}
+
+fn ims_ifc_3preg_timeout_ms() -> int {
+    let mut ms = 200
+    match parse_int(env_get_or("SIP_IMS_3PREG_TIMEOUT_MS", "200")) {
+        Ok(v) => { ms = v }
+        Err(_) => {}
+    }
+    if ms < 50 { ms = 50 }
+    if ms > 2000 { ms = 2000 }
+    return ms
+}
+
+// 3pREG identity host: SIP_IMS_SERVER_NAME host part, falling back to
+// SIP_REALM. Nothing deployment-specific is hardcoded; invalid configuration
+// disables the builder instead of emitting a bogus Via/Contact.
+fn ims_ifc_3preg_host() -> string {
+    let server = str_trim_space(env_get_or("SIP_IMS_SERVER_NAME", ""))
+    let mut t = server
+    let low = str_to_lower(t)
+    if str_has_prefix(low, "sips:") { t = t[5:] }
+    else if str_has_prefix(low, "sip:") { t = t[4:] }
+    else { t = "" }
+    let at = str_index(t, "@")
+    if at >= 0 { t = t[at + 1:] }
+    let mut end = len(t)
+    let mut i = 0
+    while i < len(t) {
+        let c = int(t[i])
+        if c == 58 || c == 59 || c == 63 || c == 47 { end = i; break }
+        i = i + 1
+    }
+    let mut host = str_to_lower(t[0:end])
+    if len(host) == 0 {
+        host = str_to_lower(str_trim_space(env_get_or("SIP_REALM", "")))
+    }
+    if len(host) < 1 || len(host) > 253 { return "" }
+    let mut j = 0
+    while j < len(host) {
+        let c = int(host[j])
+        if not ((c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c == 45 || c == 46 || c == 58) { return "" }
+        j = j + 1
+    }
+    return host
+}
+
+fn ims_ifc_3preg_build(public_identity: string, as_uri: string, expires: int, call_id: string) -> string {
+    if ims_ifc_target_valid(as_uri) == 0 { return "" }
+    if len(public_identity) < 1 || len(public_identity) > 2048 { return "" }
+    if expires < 0 || expires > 86400 { return "" }
+    let host = ims_ifc_3preg_host()
+    if len(host) == 0 { return "" }
+    let branch = "z9hG4bK-3preg-" + sha256(call_id + "|" + as_uri)[0:12]
+    let from_tag = "3p" + sha256(call_id)[0:8]
+    return "REGISTER " + as_uri + " SIP/2.0\r\n" +
+        "Via: SIP/2.0/UDP " + host + ";branch=" + branch + "\r\n" +
+        "From: <" + public_identity + ">;tag=" + from_tag + "\r\n" +
+        "To: <" + public_identity + ">\r\n" +
+        "Call-ID: 3preg-" + sha256(call_id + "|" + as_uri)[0:24] + "@" + host + "\r\n" +
+        "CSeq: 1 REGISTER\r\n" +
+        "Contact: <sip:scscf@" + host + ">\r\n" +
+        "Expires: " + string(expires) + "\r\n" +
+        "Max-Forwards: 70\r\n" +
+        "Content-Length: 0\r\n\r\n"
+}
+
+// Extract unique AS URIs from stored criteria for 3pREG (any session case).
+fn ims_ifc_3preg_targets(reg: CMap, aor: string) -> string {
+    let raw = ims_ifc_targets(reg, aor)
+    if len(raw) == 0 { return "" }
+    let rules = ims_ifc_legacy_to_rules(raw)
+    let items = str_split(rules, ";")
+    let mut out = ""
+    let mut seen = ""
+    let mut i = 0
+    while i < len(items) {
+        let uri = ims_ifc_rule_as_uri(str_trim_space(items[i]))
+        if len(uri) > 0 {
+            let marker = "|" + uri + "|"
+            if str_index(seen, marker) < 0 {
+                seen = seen + marker
+                if len(out) > 0 { out = out + "," }
+                out = out + uri
+            }
+        }
+        i = i + 1
+    }
+    return out
 }

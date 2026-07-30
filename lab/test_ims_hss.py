@@ -23,15 +23,17 @@ try:
         SubscriberHTTPServer,
         RESULT_SUCCESS,
         RESULT_UNKNOWN_USER,
+        THREEGPP_VENDOR,
         _avp_text,
         _avp_u32,
+        _parse_avps,
+        _vendor_bytes,
         _vendor_grouped,
         _vendor_text,
+        authorization_document,
         build_message,
         parse_message,
-        authorization_document,
         _tls_context,
-        parse_message,
     )
 except ImportError:
     from ims_hss import (
@@ -40,17 +42,19 @@ except ImportError:
         HssStore,
         DiameterServer,
         SubscriberHTTPServer,
-    RESULT_SUCCESS,
-    RESULT_UNKNOWN_USER,
-    _avp_text,
-    _avp_u32,
-    _vendor_grouped,
-    _vendor_text,
-    build_message,
-    parse_message,
+        RESULT_SUCCESS,
+        RESULT_UNKNOWN_USER,
+        THREEGPP_VENDOR,
+        _avp_text,
+        _avp_u32,
+        _parse_avps,
+        _vendor_bytes,
+        _vendor_grouped,
+        _vendor_text,
         authorization_document,
-        _tls_context,
+        build_message,
         parse_message,
+        _tls_context,
     )
 
 
@@ -93,6 +97,77 @@ class HssAdapterTests(unittest.TestCase):
         self.assertIsNotNone(item)
         self.assertIn(b"xres-alice", item)
         self.assertIn(b"Digest-AKAv1-MD5", item)
+        self.assertEqual(len([a for a in response.avps if a.code == 612]), 1)
+        nested = _parse_avps(item)
+        auth = next(a.value for a in nested if a.code == 609 and a.vendor == THREEGPP_VENDOR)
+        self.assertEqual(len(auth), 32)  # RAND(16) || AUTN-like(16)
+
+    def test_mar_multi_vector_count(self) -> None:
+        body = self.identity_body(303) + _avp_u32(607, 3, vendor=THREEGPP_VENDOR)
+        response = parse_message(self.app.handle(self.request(303, body)))
+        self.assertEqual(response.find(268), RESULT_SUCCESS.to_bytes(4, "big"))
+        items = [a for a in response.avps if a.code == 612 and a.vendor == THREEGPP_VENDOR]
+        self.assertEqual(len(items), 3)
+
+    def test_mar_auts_resync_requires_issued_rand(self) -> None:
+        # First MAR issues RAND.
+        first = parse_message(self.app.handle(self.request(303, self.identity_body(303))))
+        self.assertEqual(first.find(268), RESULT_SUCCESS.to_bytes(4, "big"))
+        item_raw = first.find(612, THREEGPP_VENDOR)
+        self.assertIsNotNone(item_raw)
+        nested = _parse_avps(item_raw)
+        authenticate = None
+        for avp in nested:
+            if avp.code == 609 and avp.vendor == THREEGPP_VENDOR:
+                authenticate = avp.value
+        self.assertIsNotNone(authenticate)
+        assert authenticate is not None
+        rand = authenticate[:16]
+        auts = b"0123456789abcd"  # 14-byte lab AUTS
+
+        # AUTS with unknown RAND fails closed.
+        bad_item = (
+            _avp_u32(613, 0, vendor=THREEGPP_VENDOR)
+            + _vendor_text(608, "Digest-AKAv1-MD5")
+            + _vendor_bytes(609, b"x" * 16)
+            + _vendor_bytes(610, auts)
+        )
+        bad_body = (
+            _avp_text(263, "session;alice")
+            + _avp_text(1, "alice@example.com")
+            + _vendor_text(601, "sip:alice@example.com")
+            + _vendor_text(602, "sip:scscf.example.com")
+            + _avp_u32(607, 1, vendor=THREEGPP_VENDOR)
+            + _vendor_grouped(612, bad_item)
+        )
+        bad = parse_message(self.app.handle(self.request(303, bad_body)))
+        self.assertEqual(bad.find(268), RESULT_UNKNOWN_USER.to_bytes(4, "big"))
+
+        # AUTS with issued RAND succeeds and returns a new vector.
+        good_item = (
+            _avp_u32(613, 0, vendor=THREEGPP_VENDOR)
+            + _vendor_text(608, "Digest-AKAv1-MD5")
+            + _vendor_bytes(609, rand)
+            + _vendor_bytes(610, auts)
+        )
+        good_body = (
+            _avp_text(263, "session;alice-resync")
+            + _avp_text(1, "alice@example.com")
+            + _vendor_text(601, "sip:alice@example.com")
+            + _vendor_text(602, "sip:scscf.example.com")
+            + _avp_u32(607, 2, vendor=THREEGPP_VENDOR)
+            + _vendor_grouped(612, good_item)
+        )
+        good = parse_message(self.app.handle(self.request(303, good_body)))
+        self.assertEqual(good.find(268), RESULT_SUCCESS.to_bytes(4, "big"))
+        good_items = [a for a in good.avps if a.code == 612 and a.vendor == THREEGPP_VENDOR]
+        self.assertEqual(len(good_items), 2)
+        new_auth = None
+        for avp in _parse_avps(good_items[0].value):
+            if avp.code == 609 and avp.vendor == THREEGPP_VENDOR:
+                new_auth = avp.value
+        self.assertIsNotNone(new_auth)
+        self.assertNotEqual(new_auth, authenticate)
 
     def test_unknown_subscriber_and_server_mismatch_fail_closed(self) -> None:
         unknown = self.request(300, _avp_text(1, "missing@example.com") + _vendor_text(601, "sip:missing@example.com") + _vendor_text(602, "sip:scscf.example.com"))

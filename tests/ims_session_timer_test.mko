@@ -71,3 +71,23 @@ fn TestIMSSessionTimerAbsentSessionHeader() {
     assert_eq(ims_session_timer_request_check(ims_timer_test_request("", "600")), 1)
     ims_timer_test_disable()
 }
+
+fn TestIMSSessionTimerBindAndGlare() {
+    let _ = env_set("SIP_IMS_SESSION_TIMERS", "1")
+    let cache = cmap_new()
+    assert_eq(ims_session_timer_bind(cache, "cid-1", 1800, "uac"), 1)
+    let value = ims_session_timer_lookup(cache, "cid-1")
+    assert_eq(if str_index(value, "1800") >= 0 { 1 } else { 0 }, 1)
+    assert_eq(ims_session_glare_begin(cache, "cid-glare"), 1)
+    assert_eq(ims_session_glare_begin(cache, "cid-glare"), 0)
+    assert_eq(ims_session_glare_end(cache, "cid-glare"), 1)
+    assert_eq(ims_session_glare_begin(cache, "cid-glare"), 1)
+    let request = ims_timer_test_request("1800;refresher=uac", "")
+    let response = "SIP/2.0 200 OK\r\nVia: SIP/2.0/UDP 192.0.2.20:5060;branch=z9hG4bK-response\r\nFrom: <sip:a@example.com>;tag=timer-a\r\nTo: <sip:b@example.com>;tag=timer-b\r\nCall-ID: cid-1\r\nCSeq: 1 INVITE\r\nContent-Length: 0\r\n\r\n"
+    let negotiated = ims_session_timer_apply_response(cache, "cid-1", request, response)
+    assert_eq(if str_index(negotiated, "Session-Expires: 1800;refresher=uac") >= 0 { 1 } else { 0 }, 1)
+    let _ = ims_session_timer_bind(cache, "cid-2", 1800, "uac")
+    let with_header = "SIP/2.0 200 OK\r\nSession-Expires: 1800;refresher=uac\r\nContent-Length: 0\r\n\r\n"
+    assert_eq(if str_index(ims_session_timer_apply_response(cache, "cid-2", request, with_header), "Session-Expires: 1800;refresher=uac\r\nSession-Expires") >= 0 { 1 } else { 0 }, 0)
+    let _ = env_set("SIP_IMS_SESSION_TIMERS", "0")
+}

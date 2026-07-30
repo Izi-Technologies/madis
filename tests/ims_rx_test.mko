@@ -1,0 +1,46 @@
+pull . "../main.mko"
+
+fn TestIMSRxDisabledNoOp() {
+    let _ = env_set("SIP_IMS_RX", "0")
+    let cache = cmap_new()
+    let lock = mutex_new()
+    assert_eq(ims_rx_authorize(cache, lock, "cid1", "alice", "audio"), 1)
+    assert_eq(ims_rx_terminate(cache, lock, "cid1"), 1)
+}
+
+fn TestIMSRxAarWireShape() {
+    let _ = env_set("SIP_DIAMETER_ORIGIN_HOST", "scscf.example.com")
+    let _ = env_set("SIP_DIAMETER_ORIGIN_REALM", "example.com")
+    let _ = env_set("SIP_DIAMETER_DEST_REALM", "example.com")
+    let aar = ims_rx_aar("cid-1", "madis.voice", "sip:alice@example.com", "audio")
+    assert_eq(diameter_message_valid(aar), 1)
+    assert_eq(diameter_header_command(aar), 265)
+    assert_eq(diameter_header_application(aar), 16777236)
+    let strq = ims_rx_str("cid-bye", 1)
+    assert_eq(diameter_message_valid(strq), 1)
+    assert_eq(diameter_header_command(strq), 275)
+    // Fail closed on bad inputs.
+    assert_eq_str(ims_rx_aar("", "app", "x", ""), "")
+    assert_eq_str(ims_rx_aar("cid", "", "x", ""), "")
+    assert_eq_str(ims_rx_aar("cid", "app", "x\r\n", ""), "")
+    assert_eq_str(ims_rx_str("", 1), "")
+}
+
+// AAR and STR for one call must share the Diameter Session-Id (AVP 263) or the
+// PCRF cannot correlate termination with the authorized AF session.
+fn TestIMSRxSessionIdCorrelation() {
+    let _ = env_set("SIP_DIAMETER_ORIGIN_HOST", "scscf.example.com")
+    let _ = env_set("SIP_DIAMETER_ORIGIN_REALM", "example.com")
+    let _ = env_set("SIP_DIAMETER_DEST_REALM", "example.com")
+    let aar = ims_rx_aar("call-42@example.com", "madis.voice", "sip:alice@example.com", "audio")
+    let strq = ims_rx_str("call-42@example.com", 1)
+    assert(len(aar) > 0 && len(strq) > 0)
+    let aar_session = diameter_find_avp(aar, 263)
+    let str_session = diameter_find_avp(strq, 263)
+    assert(len(aar_session) > 0)
+    assert_eq_str(aar_session, str_session)
+    // A different call gets a different session.
+    let other = ims_rx_str("call-43@example.com", 1)
+    assert(str_contains(diameter_find_avp(other, 263), "rx-"))
+    assert(not str_eq(diameter_find_avp(other, 263), aar_session))
+}

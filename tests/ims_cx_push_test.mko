@@ -1,0 +1,111 @@
+// Inbound Cx RTR/PPR push handling — adversarial unit tests (no sockets).
+pull . "../main.mko"
+
+fn ims_cx_push_test_reset() {
+    let _ = env_set("SIP_IMS_CX", "1")
+    let _ = env_set("SIP_IMS_CX_PUSH", "1")
+    let _ = env_set("SIP_DIAMETER_ORIGIN_HOST", "scscf.example.com")
+    let _ = env_set("SIP_DIAMETER_ORIGIN_REALM", "example.com")
+    let _ = env_set("SIP_DIAMETER_DEST_REALM", "example.com")
+    let _ = env_set("SIP_IMS_PATH", "")
+    let _ = env_set("SIP_IMS_ALLOW_UNTRUSTED_PATH", "0")
+}
+
+fn TestIMSCxPushDisabledByDefault() {
+    let _ = env_set("SIP_IMS_CX", "1")
+    let _ = env_set("SIP_IMS_CX_PUSH", "0")
+    let rtr = ims_cx_rtr("sip:alice@example.com", "alice@example.com", "scscf.example.com", 0)
+    assert_eq(diameter_message_valid(rtr), 1)
+    let reg = cmap_new()
+    let db = sql_open_sqlite(":memory:")
+    assert_eq_str(ims_cx_handle_inbound(reg, db, 0, rtr), "")
+    ims_cx_push_test_reset()
+    let _ = env_set("SIP_IMS_CX_PUSH", "0")
+}
+
+fn TestIMSCxRtrDeregistersLifecycle() {
+    ims_cx_push_test_reset()
+    let reg = cmap_new()
+    let db = sql_open_sqlite(":memory:")
+    assert_eq(registration_store(reg, "alice@example.com", "sip:alice@192.0.2.10:5060", "UDP", 300, "192.0.2.10", 5060), 1)
+    assert_eq(ims_lifecycle_store(reg, "alice@example.com", "alice@example.com", "sip:alice@example.com", "sip:alice@192.0.2.10:5060", "UDP", 300, "192.0.2.10", 5060, "", "", "sip:scscf.example.com"), 1)
+    assert_eq(ims_lifecycle_associated_set(reg, "alice@example.com", "sip:alias@example.com"), 1)
+    assert_eq(ims_ifc_set(reg, "alice@example.com", "sip:tas.example.com"), 1)
+
+    let rtr = ims_cx_rtr("sip:alice@example.com", "alice@example.com", "scscf.example.com", 0)
+    assert_eq(ims_cx_push_request_kind(rtr), ims_cx_rtr_command())
+    let answer = ims_cx_handle_inbound(reg, db, 0, rtr)
+    assert_eq(diameter_message_valid(answer), 1)
+    assert_eq(diameter_header_command(answer), ims_cx_rtr_command())
+    assert_eq((diameter_header_flags(answer) / 128) % 2, 0)
+    assert_eq(diameter_find_u32(answer, 268), 2001)
+    assert_eq_str(ims_lifecycle_find(reg, "alice@example.com"), "")
+    assert_eq_str(ims_lifecycle_resolve_aor(reg, "alias@example.com"), "")
+    assert_eq_str(registration_find(reg, "alice@example.com"), "")
+    assert_eq_str(ims_ifc_targets(reg, "alice@example.com"), "")
+}
+
+fn TestIMSCxRtrRejectsMalformedIdentity() {
+    ims_cx_push_test_reset()
+    let reg = cmap_new()
+    let db = sql_open_sqlite(":memory:")
+    // Build a request-like header without required identities.
+    let sid = ims_session_id("rtr|bad")
+    let body = ims_base_request_body(sid, ims_cx_application())
+    let bad = ims_request(ims_cx_application(), ims_cx_rtr_command(), sid, body)
+    let answer = ims_cx_handle_inbound(reg, db, 0, bad)
+    assert_eq(diameter_find_u32(answer, 268), 5004)
+}
+
+fn TestIMSCxRtrIdempotentUnknownUser() {
+    ims_cx_push_test_reset()
+    let reg = cmap_new()
+    let db = sql_open_sqlite(":memory:")
+    let rtr = ims_cx_rtr("sip:nobody@example.com", "nobody@example.com", "scscf.example.com", 1)
+    let answer = ims_cx_handle_inbound(reg, db, 0, rtr)
+    assert_eq(diameter_find_u32(answer, 268), 2001)
+}
+
+fn TestIMSCxPprUpdatesAssociatedAndIfc() {
+    ims_cx_push_test_reset()
+    let reg = cmap_new()
+    let db = sql_open_sqlite(":memory:")
+    assert_eq(registration_store(reg, "alice@example.com", "sip:alice@192.0.2.10:5060", "UDP", 300, "192.0.2.10", 5060), 1)
+    assert_eq(ims_lifecycle_store(reg, "alice@example.com", "alice@example.com", "sip:alice@example.com", "sip:alice@192.0.2.10:5060", "UDP", 300, "192.0.2.10", 5060, "", "", "sip:scscf.example.com"), 1)
+
+    let profile = "{\"associated_uris\":[\"sip:alice@example.com\",\"sip:alias2@example.com\"],\"initial_filter_criteria\":[\"sip:tas.example.com\"]}"
+    let ppr = ims_cx_ppr("sip:alice@example.com", "sip:scscf.example.com", profile)
+    assert_eq(ims_cx_push_request_kind(ppr), ims_cx_ppr_command())
+    let answer = ims_cx_handle_inbound(reg, db, 0, ppr)
+    assert_eq(diameter_find_u32(answer, 268), 2001)
+    assert_eq_str(ims_lifecycle_resolve_aor(reg, "alias2@example.com"), "alice@example.com")
+    assert_eq_str(ims_ifc_targets(reg, "alice@example.com"), "sip:tas.example.com")
+}
+
+fn TestIMSCxPprRejectsUnsafeUserData() {
+    ims_cx_push_test_reset()
+    let reg = cmap_new()
+    let db = sql_open_sqlite(":memory:")
+    assert_eq(registration_store(reg, "alice@example.com", "sip:alice@192.0.2.10:5060", "UDP", 300, "192.0.2.10", 5060), 1)
+    assert_eq(ims_lifecycle_store(reg, "alice@example.com", "alice@example.com", "sip:alice@example.com", "sip:alice@192.0.2.10:5060", "UDP", 300, "192.0.2.10", 5060, "", "", "sip:scscf.example.com"), 1)
+
+    let evil = "{\"associated_uris\":[\"sip:x@example.com\\r\\nX-Evil:1\"]}"
+    let ppr = ims_cx_ppr("sip:alice@example.com", "sip:scscf.example.com", evil)
+    // May fail at builder or handler; either must not install alias.
+    if len(ppr) > 0 {
+        let answer = ims_cx_handle_inbound(reg, db, 0, ppr)
+        assert_eq(if diameter_find_u32(answer, 268) == 5004 || diameter_find_u32(answer, 268) == 2001 { 1 } else { 0 }, 1)
+    }
+    let binary = ims_cx_ppr("sip:alice@example.com", "sip:scscf.example.com", "not-json-profile")
+    let ans2 = ims_cx_handle_inbound(reg, db, 0, binary)
+    assert_eq(diameter_find_u32(ans2, 268), 5004)
+    assert_eq_str(ims_lifecycle_resolve_aor(reg, "x@example.com"), "")
+}
+
+fn TestIMSCxPushAnswerIsNotRequest() {
+    ims_cx_push_test_reset()
+    let rtr = ims_cx_rtr("sip:alice@example.com", "alice@example.com", "scscf.example.com", 0)
+    let answer = ims_cx_push_answer(rtr, 2001)
+    assert_eq(ims_cx_push_request_kind(answer), 0)
+    assert_eq_str(diameter_find_avp(answer, 263), diameter_find_avp(rtr, 263))
+}

@@ -1,0 +1,289 @@
+// Inbound Cx RTR/PPR for the local S-CSCF (client peer poll + optional TLS listen).
+// Fail closed on malformed AVPs. No hardcoded hosts.
+
+fn ims_cx_push_enabled() -> int {
+    if ims_cx_registration_enabled() == 0 { return 0 }
+    let value = str_to_lower(str_trim_space(env_get_or("SIP_IMS_CX_PUSH", "0")))
+    return if str_eq(value, "1") || str_eq(value, "true") || str_eq(value, "yes") { 1 } else { 0 }
+}
+
+fn ims_cx_push_request_kind(msg: string) -> int {
+    if diameter_message_valid(msg) == 0 { return 0 }
+    if diameter_header_application(msg) != ims_cx_application() { return 0 }
+    let flags = diameter_header_flags(msg)
+    if flags < 0 || (flags / 128) % 2 != 1 { return 0 }
+    let command = diameter_header_command(msg)
+    if command == ims_cx_rtr_command() || command == ims_cx_ppr_command() { return command }
+    return 0
+}
+
+fn ims_cx_push_private_identity(msg: string) -> string {
+    let value = diameter_find_avp(msg, 1)
+    return if ims_text_ok(value, 1024) == 1 { value } else { "" }
+}
+
+fn ims_cx_push_public_identity(msg: string) -> string {
+    let value = diameter_find_vendor_avp(msg, 601, ims_3gpp_vendor())
+    if ims_text_ok(value, 2048) == 0 { return "" }
+    let low = str_to_lower(value)
+    if not str_has_prefix(low, "sip:") && not str_has_prefix(low, "sips:") { return "" }
+    return value
+}
+
+fn ims_cx_push_user_data(msg: string) -> string {
+    let value = diameter_find_vendor_avp(msg, 606, ims_3gpp_vendor())
+    if len(value) == 0 { return "" }
+    if len(value) > 8192 || int(value[0]) != 123 { return "__IMS_PUSH_USER_DATA_INVALID__" }
+    return value
+}
+
+fn ims_cx_ppr(public_identity: string, server_name: string, user_data: string) -> string {
+    if ims_text_ok(public_identity, 2048) == 0 || ims_text_ok(server_name, 2048) == 0 { return "" }
+    if len(user_data) > 8192 { return "" }
+    let session_id = ims_session_id("ppr|" + public_identity + "|" + server_name)
+    let mut body = ims_base_request_body(session_id, ims_cx_application())
+        + ims_uri_avp(601, public_identity)
+        + ims_uri_avp(602, server_name)
+    if len(user_data) > 0 { body = body + ims_octets_avp(606, user_data) }
+    return ims_request(ims_cx_application(), ims_cx_ppr_command(), session_id, body)
+}
+
+fn ims_cx_push_answer(request: string, result_code: int) -> string {
+    if diameter_message_valid(request) == 0 || result_code < 1000 || result_code > 5999 { return "" }
+    let command = diameter_header_command(request)
+    if command != ims_cx_rtr_command() && command != ims_cx_ppr_command() { return "" }
+    let session_id = diameter_find_avp(request, 263)
+    let origin_host = diameter_origin_host()
+    let origin_realm = diameter_origin_realm()
+    if ims_text_ok(session_id, 1024) == 0 || diameter_identity_ok(origin_host) == 0 || diameter_identity_ok(origin_realm) == 0 { return "" }
+    let body = diameter_avp_string(263, session_id)
+        + madis_diameter_avp_u32(268, result_code)
+        + madis_diameter_avp_u32(277, 1)
+        + diameter_avp_string(264, origin_host)
+        + diameter_avp_string(296, origin_realm)
+    let message = diameter_header(0, command, ims_cx_application(), diameter_read_u32(request, 12), diameter_read_u32(request, 16), body)
+    return if diameter_message_valid(message) == 1 { message } else { "" }
+}
+
+// Reuse subscriber/iFC extractors via a minimal authorize envelope.
+fn ims_cx_ppr_apply_user_data(reg: CMap, aor: string, user_data: string) -> int {
+    if ims_lifecycle_aor_ok(aor) == 0 { return 0 }
+    if len(user_data) == 0 { return 1 }
+    if str_eq(user_data, "__IMS_PUSH_USER_DATA_INVALID__") || int(user_data[0]) != 123 { return 0 }
+    let mut profile = user_data
+    if str_index(user_data, "\"service_profile\"") >= 0 {
+        profile = json_get_object(user_data, "service_profile")
+        if len(profile) == 0 { return 0 }
+    }
+    let fake = "{\"schema\":\"madis.ims.subscriber.authorization.v1\",\"operation\":\"authorize-register\",\"request_id\":\"0123456789abcdef0123456789abcdef\",\"public_identity\":\"sip:x@x\",\"private_identity\":\"x@x\",\"decision\":\"allow\",\"assigned_server_name\":\"sip:x\",\"service_profile\":" + profile + "}"
+    if str_index(profile, "\"associated_uris\"") >= 0 {
+        let assoc = ims_subscriber_profile_associated_list(fake)
+        if str_eq(assoc, "__IMS_PROFILE_INVALID__") || ims_lifecycle_associated_set(reg, aor, assoc) == 0 { return 0 }
+    }
+    if str_index(profile, "\"initial_filter_criteria\"") >= 0 {
+        let targets = ims_ifc_profile_targets(fake)
+        if str_eq(targets, "__IMS_IFC_INVALID__") || ims_ifc_set(reg, aor, targets) == 0 { return 0 }
+    }
+    return 1
+}
+
+fn ims_cx_apply_rtr(reg: CMap, db: SqlDB, db_ok: int, request: string) -> string {
+    let private_identity = ims_cx_push_private_identity(request)
+    let public_identity = ims_cx_push_public_identity(request)
+    if len(private_identity) == 0 || len(public_identity) == 0 {
+        return ims_cx_push_answer(request, 5004)
+    }
+    let aor = ims_lifecycle_aor_from_public(public_identity)
+    if len(aor) == 0 { return ims_cx_push_answer(request, 5004) }
+    let _ = private_identity
+    let _ = ims_lifecycle_network_deregister(reg, aor, db, db_ok)
+    return ims_cx_push_answer(request, 2001)
+}
+
+fn ims_cx_apply_ppr(reg: CMap, db: SqlDB, db_ok: int, request: string) -> string {
+    let _ = db
+    let _ = db_ok
+    let public_identity = ims_cx_push_public_identity(request)
+    if len(public_identity) == 0 { return ims_cx_push_answer(request, 5004) }
+    let aor = ims_lifecycle_aor_from_public(public_identity)
+    if len(aor) == 0 { return ims_cx_push_answer(request, 5004) }
+    let user_data = ims_cx_push_user_data(request)
+    if str_eq(user_data, "__IMS_PUSH_USER_DATA_INVALID__") { return ims_cx_push_answer(request, 5004) }
+    let primary = ims_lifecycle_resolve_aor(reg, aor)
+    if len(primary) == 0 { return ims_cx_push_answer(request, 2001) }
+    if ims_cx_ppr_apply_user_data(reg, primary, user_data) == 0 { return ims_cx_push_answer(request, 5004) }
+    return ims_cx_push_answer(request, 2001)
+}
+
+fn ims_cx_handle_inbound(reg: CMap, db: SqlDB, db_ok: int, msg: string) -> string {
+    if ims_cx_push_enabled() == 0 { return "" }
+    let kind = ims_cx_push_request_kind(msg)
+    if kind == ims_cx_rtr_command() { return ims_cx_apply_rtr(reg, db, db_ok, msg) }
+    if kind == ims_cx_ppr_command() { return ims_cx_apply_ppr(reg, db, db_ok, msg) }
+    return ""
+}
+
+fn ims_cx_push_reply_base(conn: TlsConn, msg: string) -> int {
+    let command = diameter_header_command(msg)
+    let flags = diameter_header_flags(msg)
+    if command == 280 && flags >= 0 && (flags / 128) % 2 == 1 {
+        let dwa = diameter_base_answer(msg, 280)
+        return if len(dwa) > 0 && diameter_tls_conn_write(conn, dwa) == 1 { 1 } else { 0 }
+    }
+    if command == 282 && flags >= 0 && (flags / 128) % 2 == 1 {
+        let dpa = diameter_base_answer(msg, 282)
+        if len(dpa) > 0 { let _ = diameter_tls_conn_write(conn, dpa) }
+        return 2
+    }
+    if command == 257 && flags >= 0 && (flags / 128) % 2 == 1 {
+        let cea = diameter_cea_for_cer(msg, ims_cx_application())
+        return if len(cea) > 0 && diameter_tls_conn_write(conn, cea) == 1 { 1 } else { 0 }
+    }
+    return -1
+}
+
+fn ims_cx_push_server_session(conn: TlsConn, reg: CMap, db: SqlDB, db_ok: int) -> int {
+    if tls_conn_fd(conn) < 0 { return 0 }
+    let cer = diameter_tls_conn_read_message(conn)
+    if len(cer) == 0 || diameter_header_command(cer) != 257 {
+        let _ = tls_conn_close(conn)
+        return 0
+    }
+    let cea = diameter_cea_for_cer(cer, ims_cx_application())
+    if len(cea) == 0 || diameter_tls_conn_write(conn, cea) == 0 {
+        let _ = tls_conn_close(conn)
+        return 0
+    }
+    let mut n = 0
+    while n < 64 && shutdown_requested() == 0 {
+        let msg = diameter_tls_conn_read_message(conn)
+        if len(msg) == 0 { break }
+        let base = ims_cx_push_reply_base(conn, msg)
+        if base == 2 { break }
+        if base == 1 { n = n + 1; continue }
+        if base == 0 { break }
+        let answer = ims_cx_handle_inbound(reg, db, db_ok, msg)
+        if len(answer) == 0 || diameter_tls_conn_write(conn, answer) == 0 { break }
+        n = n + 1
+    }
+    let _ = tls_conn_close(conn)
+    return 1
+}
+
+fn ims_cx_push_listen_enabled() -> int {
+    if ims_cx_push_enabled() == 0 { return 0 }
+    let value = str_to_lower(str_trim_space(env_get_or("SIP_IMS_CX_PUSH_LISTEN", "0")))
+    return if str_eq(value, "1") || str_eq(value, "true") || str_eq(value, "yes") { 1 } else { 0 }
+}
+
+fn ims_cx_push_listen_port() -> int {
+    let mut port = 3868
+    match parse_int(env_get_or("SIP_IMS_CX_PUSH_PORT", "3868")) {
+        Ok(v) => { port = v }
+        Err(_) => {}
+    }
+    if port < 1 || port > 65535 { return -1 }
+    return port
+}
+
+fn ims_cx_push_server_worker(reg: CMap) -> int {
+    if ims_cx_push_listen_enabled() == 0 { return 0 }
+    if tls_server_available() == 0 {
+        slog("  CxPush:  listen skipped (TLS unavailable)")
+        return 1
+    }
+    let port = ims_cx_push_listen_port()
+    if port < 1 {
+        slog("  CxPush:  listen port invalid")
+        return 1
+    }
+    let mut cert = str_trim_space(env_get_or("SIP_DIAMETER_SERVER_CERT", ""))
+    let mut key = str_trim_space(env_get_or("SIP_DIAMETER_SERVER_KEY", ""))
+    if len(cert) == 0 {
+        cert = str_trim_space(env_get_or("SIP_TLS_CERT", ""))
+        key = str_trim_space(env_get_or("SIP_TLS_KEY", ""))
+    }
+    let client_ca = str_trim_space(env_get_or("SIP_DIAMETER_SERVER_CLIENT_CA", env_get_or("SIP_DIAMETER_CA", "")))
+    if len(cert) == 0 || len(key) == 0 || len(client_ca) == 0 {
+        slog("  CxPush:  listen needs server cert/key and client CA (mTLS)")
+        return 1
+    }
+    let srv = tls_server_new_mtls(cert, key, client_ca)
+    let fd = tcp_listen(port)
+    if fd < 0 {
+        slog("  CxPush:  bind failed on :" + string(port))
+        let _ = tls_server_free(srv)
+        return 1
+    }
+    let _ = register_listener(fd)
+    let _ = io_set_nonblocking(fd, 1)
+    slog("  CxPush:  Diameter TLS mTLS listen :" + string(port))
+    let db_url = env_get_or("SIP_DB_URL", "")
+    let mut db_ok = 0
+    let mut db = sql_open_postgres(db_url)
+    if len(db_url) > 0 { db_ok = 1 }
+    while shutdown_requested() == 0 {
+        let c = tcp_accept_nb(fd)
+        if c < 0 {
+            if should_stop_accepting() == 1 { break }
+            sleep_ms(5)
+            continue
+        }
+        let _ = io_set_nonblocking(c, 0)
+        let _ = tcp_nodelay(c)
+        let conn = tls_accept(srv, c)
+        if tls_conn_fd(conn) < 0 {
+            let _ = tcp_close(c)
+            continue
+        }
+        let allowed_cn = str_trim_space(env_get_or("SIP_IMS_CX_PUSH_CLIENT_CN", ""))
+        if len(allowed_cn) > 0 && not str_eq(str_trim_space(tls_peer_cn(conn)), allowed_cn) {
+            let _ = tls_conn_close(conn)
+            continue
+        }
+        let _ = ims_cx_push_server_session(conn, reg, db, db_ok)
+    }
+    let _ = tcp_close(fd)
+    let _ = tls_server_free(srv)
+    return 0
+}
+
+fn ims_cx_push_poll(cache: CMap, peer_lock: Mutex, reg: CMap, db: SqlDB, db_ok: int) -> int {
+    if ims_cx_push_enabled() == 0 { return 0 }
+    mutex_lock(peer_lock)
+    let handle = diameter_peer_handle(cache)
+    if handle < 1 || tls_pool_fd(handle) < 0 {
+        mutex_unlock(peer_lock)
+        return 0
+    }
+    let _ = tls_pool_set_timeout(handle, 50)
+    let msg = diameter_peer_read_pool_message(handle)
+    if len(msg) == 0 {
+        mutex_unlock(peer_lock)
+        return 0
+    }
+    let command = diameter_header_command(msg)
+    let flags = diameter_header_flags(msg)
+    if command == 280 && flags >= 0 && (flags / 128) % 2 == 1 {
+        let dwa = diameter_base_answer(msg, 280)
+        if len(dwa) > 0 { let _ = tls_pool_send(handle, dwa) }
+        mutex_unlock(peer_lock)
+        return 1
+    }
+    if command == 282 && flags >= 0 && (flags / 128) % 2 == 1 {
+        let dpa = diameter_base_answer(msg, 282)
+        if len(dpa) > 0 { let _ = tls_pool_send(handle, dpa) }
+        let _ = diameter_peer_close_locked(cache)
+        mutex_unlock(peer_lock)
+        return 1
+    }
+    let answer = ims_cx_handle_inbound(reg, db, db_ok, msg)
+    if len(answer) > 0 {
+        if tls_pool_send(handle, answer) != len(answer) { let _ = diameter_peer_close_locked(cache) }
+        mutex_unlock(peer_lock)
+        return 1
+    }
+    let _ = diameter_peer_close_locked(cache)
+    mutex_unlock(peer_lock)
+    return 0
+}

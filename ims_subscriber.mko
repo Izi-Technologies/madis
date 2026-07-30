@@ -92,10 +92,9 @@ fn ims_subscriber_authorized(public_identity: string, private_identity: string, 
     return if str_eq(response, "__IMS_SUBSCRIBER_DISABLED__") || len(response) > 0 { 1 } else { 0 }
 }
 
-// Extract only the explicitly defined public-identity alias list from an
-// already-authorized response. Missing profile data is compatible; malformed
-// present data fails closed before any registrar state is written.
-fn ims_subscriber_profile_associated_header(response: string) -> string {
+// Comma-separated public identities from the subscriber profile (max 8).
+// Missing profile data is empty (compatible). Malformed present data fails closed.
+fn ims_subscriber_profile_associated_list(response: string) -> string {
     if len(response) == 0 || str_eq(response, "__IMS_SUBSCRIBER_DISABLED__") { return "" }
     let profile = json_get_object(response, "service_profile")
     if len(profile) == 0 { return "" }
@@ -106,7 +105,7 @@ fn ims_subscriber_profile_associated_header(response: string) -> string {
     if count < 0 || count > 8 { return "__IMS_PROFILE_INVALID__" }
     if count == 0 { return "" }
 
-    let mut result = "P-Associated-URI: "
+    let mut result = ""
     let mut seen = ""
     let mut i = 0
     while i < count {
@@ -117,10 +116,28 @@ fn ims_subscriber_profile_associated_header(response: string) -> string {
         let marker = "|" + uri + "|"
         if str_index(seen, marker) >= 0 { return "__IMS_PROFILE_INVALID__" }
         seen = seen + marker
-        let rendered = "<" + uri + ">"
-        if len(result) + len(rendered) + 2 > 8192 { return "__IMS_PROFILE_INVALID__" }
+        if i > 0 { result = result + "," }
+        result = result + uri
+        i = i + 1
+    }
+    return result
+}
+
+// Extract only the explicitly defined public-identity alias list from an
+// already-authorized response. Missing profile data is compatible; malformed
+// present data fails closed before any registrar state is written.
+fn ims_subscriber_profile_associated_header(response: string) -> string {
+    let list = ims_subscriber_profile_associated_list(response)
+    if len(list) == 0 { return "" }
+    if str_eq(list, "__IMS_PROFILE_INVALID__") { return "__IMS_PROFILE_INVALID__" }
+    let items = str_split(list, ",")
+    let mut result = "P-Associated-URI: "
+    let mut i = 0
+    while i < len(items) {
+        let uri = str_trim_space(items[i])
+        if len(uri) == 0 { return "__IMS_PROFILE_INVALID__" }
         if i > 0 { result = result + ", " }
-        result = result + rendered
+        result = result + "<" + uri + ">"
         i = i + 1
     }
     return result + "\r\n"

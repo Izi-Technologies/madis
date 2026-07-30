@@ -217,9 +217,11 @@ fn app_gateway_http_post_ca(url: string, token: string, body: string, timeout_ms
         if http_forward_body_len(response) <= 0 || http_forward_body_len(response) > 65536 { return "" }
         return http_forward_body(response)
     }
-    let response = tls_post(host, port, path, ca, body)
-    if len(response) == 0 || http_last_status() < 200 || http_last_status() >= 300 || len(response) > 65536 { return "" }
-    return response
+    let response = madis_https_post(host, port, path, token, body, ca, timeout_ms)
+    if https_post_status(response) < 200 || https_post_status(response) >= 300 { return "" }
+    let https_body = https_post_body(response)
+    if len(https_body) <= 0 || len(https_body) > 65536 { return "" }
+    return https_body
 }
 
 fn app_gateway_http_post(url: string, token: string, body: string, timeout_ms: int) -> string {

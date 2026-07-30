@@ -14,6 +14,78 @@ opaque XRES values for the repository's selected `Digest-AKAv1-MD5` lab
 profile. It does not implement Milenage/TUAK, durable secret protection, full
 Sh user data, Diameter relay/failover, or carrier policy.
 
+### Cx MAR multi-vector and AUTS (lab)
+
+- **Number-Of-Auth-Items** (AVP 607, 1–5): MAA returns that many
+  `SIP-Auth-Data-Item` groups with distinct RAND||AUTN-like authenticate
+  blobs and the configured XRES.
+- **AUTS resync**: when MAR includes SIP-Authorization=AUTS and
+  SIP-Authenticate=RAND, the adapter accepts only if RAND matches the last
+  RAND issued for that private identity, then returns a fresh vector set.
+  Unknown RAND fails closed (`5001`). This exercises Madis’s AUTS→MAR path
+  without real SQN cryptography.
+
+Evidence tests (default CI):
+
+```sh
+python3 -m unittest lab.test_ims_hss.HssAdapterTests.test_mar_multi_vector_count \
+  lab.test_ims_hss.HssAdapterTests.test_mar_auts_resync_requires_issued_rand -v
+```
+
+### Multi-peer Madis client against the lab HSS
+
+Run two adapter instances on different ports and point Madis at both:
+
+```text
+SIP_DIAMETER_HOSTS=127.0.0.1:3868,127.0.0.1:3869
+SIP_DIAMETER_TLS=0
+SIP_DIAMETER_ALLOW_PLAINTEXT=1
+```
+
+Stop the first listener to exercise preferred-peer advance on open/exchange
+failure. For TLS multi-peer, use operator-managed certs on each instance.
+
+### Open5GS / production HSS
+
+Replace the lab adapter with a real HSS (for example Open5GS HSS + freeDiameter)
+using the same Madis env (`SIP_DIAMETER_*`, `SIP_IMS_CX`, `SIP_IMS_AKA`). Expect
+to validate:
+
+1. UAR/SAR/LIR against real subscriber data
+2. MAR multi-vector and AUTS SQN recovery with a real UE (Milenage)
+3. RTR/PPR over the client peer and/or `SIP_IMS_CX_PUSH_LISTEN`
+
+See [`../docs/interop-open5gs.md`](../docs/interop-open5gs.md) for env matrix,
+IPsec SA export, Rx hooks, and operator compose overlay notes.
+
+Record packet captures separately from unit tests; the lab adapter only proves
+Madis wire boundaries and fail-closed policy.
+
+## Lab MMTel / TAS stub
+
+`mmtel_as.py` is a deterministic UDP SIP AS for iFC / 3pREG evidence:
+
+```sh
+python3 lab/mmtel_as.py --seed-json lab/mmtel_seed.json --bind 0.0.0.0 --port 5090
+```
+
+| Seed flag | Behaviour |
+| --- | --- |
+| `barring_mo: true` | INVITE → 603 Decline |
+| `cfu: sip:...` | INVITE → 302 Contact redirect |
+| (default) | INVITE → 200; REGISTER → 200 (3pREG) |
+
+Point subscriber `initial_filter_criteria` `as_uri` at this AS. Not production
+MMTel; call-forward logic stays outside Madis.
+
+## Smoke helpers
+
+```sh
+./scripts/lab-smoke.sh unit   # contract + lab unit tests
+./scripts/lab-smoke.sh e2e    # needs Mako 0.5.0; builds Madis and runs two-subscriber Cx/AKA call
+./scripts/lab-smoke.sh docker # full P/I/S compose (Docker must have enough RAM to cargo-build Mako)
+```
+
 ## Run locally
 
 Use a private seed file. Do not commit it or place real subscriber secrets in
