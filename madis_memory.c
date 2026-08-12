@@ -10,6 +10,10 @@
  * Test builds without OpenSSL get stub functions that return failure. */
 #if defined(MAKO_HAS_OPENSSL) || defined(MAKO_USE_OPENSSL)
 #include "mako_http.h"
+/* Provide stubs for QUIC/HKDF helpers that mako_tls.h references but
+ * are defined in other runtime modules not linked into this bridge. */
+static inline MakoString mako_sha256_raw(MakoString d) { (void)d; return (MakoString){NULL,0}; }
+static inline MakoString mako_hmac_sha256_raw(MakoString k, MakoString d) { (void)k; (void)d; return (MakoString){NULL,0}; }
 #include "mako_tls.h"
 #define MADIS_TLS_AVAILABLE 1
 #endif
