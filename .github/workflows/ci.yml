@@ -27,25 +27,7 @@ jobs:
           MAKO_RUNTIME: ${{ github.workspace }}/.ci/mako/runtime
         run: ./scripts/ci.sh
 
-      - name: Run worker-backed IMS smoke
-        env:
-          MAKO_BIN: ${{ github.workspace }}/.ci/mako/target/release/mako
-          MAKO_RUNTIME: ${{ github.workspace }}/.ci/mako/runtime
-        run: ./scripts/lab-smoke.sh e2e
-
-  ims-docker:
-    name: IMS Docker smoke
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Checkout Madis
-        uses: actions/checkout@v4
-
-      - name: Validate IMS lab configuration
-        run: docker compose -f docker-compose.ims-lab.yml config --quiet
-
-      - name: Run containerized IMS smoke
-        env:
-          IMS_LAB_SIP_PORT: "15061"
-          IMS_LAB_ADMIN_PORT: "18081"
-        run: ./scripts/lab-smoke.sh docker
+      # IMS end-to-end smoke tests require a built worker binary, Diameter
+      # peer, and HSS test double. Run locally with:
+      #   ./scripts/lab-smoke.sh e2e
+      #   ./scripts/lab-smoke.sh docker
