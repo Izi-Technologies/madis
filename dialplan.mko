@@ -170,12 +170,12 @@ fn db_rate_ok(user: string, cache: CMap) -> int {
         return 1
     }
     let st = cmap_get(cache, key)
-    let parts = str_split(st, "|")
-    if len(parts) < 2 { return 1 }
+    let pipe = str_index(st, "|")
+    if pipe < 0 { return 1 }
     let mut tokens = 0
     let mut last = 0
-    match parse_int(parts[0]) { Ok(v) => { tokens = v } Err(_) => { return 1 } }
-    match parse_int(parts[1]) { Ok(v) => { last = v } Err(_) => { return 1 } }
+    match parse_int(st[0:pipe]) { Ok(v) => { tokens = v } Err(_) => { return 1 } }
+    match parse_int(st[pipe + 1:]) { Ok(v) => { last = v } Err(_) => { return 1 } }
     tokens = tokens + (now - last) / 10
     if tokens > limit { tokens = limit }
     if tokens <= 0 { return 0 }
@@ -209,14 +209,20 @@ fn db_cdr_code(db: SqlDB, db_ok: int, cid: string, code: string) -> int {
     return 0
 }
 
-// Log a SIP transaction for the call ladder
+// SIP transaction ladder is debug data. Gated behind SIP_SIP_TX_LOG to keep
+// SQL off the hot path in production. Default: off.
+fn db_sip_tx_enabled() -> int {
+    let v = str_to_lower(str_trim_space(env_get_or("SIP_TX_LOG", "0")))
+    if str_eq(v, "1") || str_eq(v, "true") { return 1 }
+    return 0
+}
+
 fn db_sip_tx(db: SqlDB, db_ok: int, cid: string, direction: string, method: string, code: int, src: string, dst: string) -> int {
-    if db_ok == 0 { return 0 }
+    if db_ok == 0 || db_sip_tx_enabled() == 0 { return 0 }
     let mut label = method
     if code > 0 { label = string(code) + " " + method }
     let flow = src + " -> " + dst
-    let result = sql_exec_str4(db, "INSERT INTO sip_transactions (call_id, direction, method, source) VALUES ($1, $2, $3, $4)", cid, direction, label, flow)
-    return result
+    return sql_exec_str4(db, "INSERT INTO sip_transactions (call_id, direction, method, source) VALUES ($1, $2, $3, $4)", cid, direction, label, flow)
 }
 
 // ============ CORE PROCESSING ============

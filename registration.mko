@@ -279,6 +279,133 @@ fn registration_cleanup_db(db: SqlDB, db_ok: int) -> int {
     return 1
 }
 
+// Active expiry sweep: proactively clean expired in-memory bindings so stale
+// contacts are not routed to between expiry and the next registration_find.
+// Scans the AOR ring and removes expired slots. Runs in the heartbeat loop.
+fn registration_sweep_expired(reg: CMap) -> int {
+    let mut cleaned = 0
+    let mut i = 0
+    while i < 16384 {
+        let ring_key = "reg_aor_ring|" + string(i)
+        if cmap_has(reg, ring_key) == 1 {
+            let aor = cmap_get(reg, ring_key)
+            if len(aor) > 0 {
+                let prefix = "reg|" + aor + "|"
+                let mut j = 0
+                let mut any_live = 0
+                while j < 8 {
+                    let slot_key = prefix + string(j)
+                    if cmap_has(reg, slot_key) == 1 {
+                        if registration_live(cmap_get(reg, slot_key)) == 0 {
+                            let _ = cmap_del(reg, slot_key)
+                            cleaned = cleaned + 1
+                        } else {
+                            any_live = 1
+                        }
+                    }
+                    j = j + 1
+                }
+                // If no live bindings remain, clean the legacy key too.
+                if any_live == 0 && cmap_has(reg, aor) == 1 {
+                    if registration_live(cmap_get(reg, aor)) == 0 {
+                        let _ = cmap_del(reg, aor)
+                    }
+                }
+            }
+        }
+        i = i + 1
+        if cleaned >= 512 { break }
+    }
+    return cleaned
+}
+
+// ============ RFC 5626 OUTBOUND KEEPALIVE ============
+// For NAT-traversed registrations (UDP/TCP/TLS), the proxy sends periodic
+// CRLF keepalives to maintain the NAT binding. Without this, registrations
+// behind NAT go stale silently when the mapping expires (typically 30-120s).
+//
+// The keepalive runs in the heartbeat loop (every 1s). It scans live
+// registrations and sends a bare CRLF to the source IP:port for UDP, or
+// a double-CRLF on persistent TCP/TLS connections.
+
+fn registration_keepalive_enabled() -> int {
+    let v = str_to_lower(str_trim_space(env_get_or("SIP_KEEPALIVE", "1")))
+    if str_eq(v, "0") || str_eq(v, "false") || str_eq(v, "no") { return 0 }
+    return 1
+}
+
+fn registration_keepalive_interval_ms() -> int {
+    let mut interval = 25000
+    match parse_int(env_get_or("SIP_KEEPALIVE_INTERVAL", "25")) {
+        Ok(v) => { interval = v * 1000 }
+        Err(_) => {}
+    }
+    if interval < 5000 { interval = 5000 }
+    if interval > 120000 { interval = 120000 }
+    return interval
+}
+
+fn registration_keepalive_tick(reg: CMap, cache: CMap) -> int {
+    if registration_keepalive_enabled() == 0 { return 0 }
+    let now = mono_ms()
+    let mut last = 0
+    if cmap_has(cache, "keepalive_at") == 1 {
+        match parse_int(cmap_get(cache, "keepalive_at")) { Ok(v) => { last = v } Err(_) => {} }
+    }
+    let interval = registration_keepalive_interval_ms()
+    if last > 0 && now - last < interval { return 0 }
+    cmap_set(cache, "keepalive_at", string(now))
+
+    // Scan live registrations and send CRLF keepalives.
+    // The keepalive fd is a process-local ephemeral UDP socket.
+    let mut ka_fd = -1
+    if cmap_has(cache, "keepalive_fd") == 1 {
+        match parse_int(cmap_get(cache, "keepalive_fd")) { Ok(v) => { ka_fd = v } Err(_) => {} }
+    }
+    if ka_fd < 0 {
+        ka_fd = nb_udp_bind(0)
+        if ka_fd >= 0 { cmap_set(cache, "keepalive_fd", string(ka_fd)) }
+    }
+    if ka_fd < 0 { return 0 }
+
+    let mut sent = 0
+    let mut i = 0
+    // Scan the AOR ring for live registrations with source IP/port.
+    while i < 16384 {
+        let ring_key = "reg_aor_ring|" + string(i)
+        if cmap_has(reg, ring_key) == 1 {
+            let aor = cmap_get(reg, ring_key)
+            if len(aor) > 0 {
+                let value = registration_find(reg, aor)
+                if len(value) > 0 {
+                    let parts = str_split(value, "|")
+                    // value = contact|transport|expires_at|ip|port
+                    if len(parts) >= 5 {
+                        let reg_ip = parts[3]
+                        let mut reg_port = 0
+                        match parse_int(parts[4]) { Ok(v) => { reg_port = v } Err(_) => {} }
+                        let reg_transport = str_to_lower(parts[1])
+                        if len(reg_ip) > 0 && reg_port > 0 {
+                            if str_eq(reg_transport, "udp") {
+                                // RFC 5626 §3.5.1: CRLF for UDP
+                                let _ = udp_send_to(ka_fd, reg_ip, reg_port, "\r\n\r\n")
+                                sent = sent + 1
+                            }
+                            // TCP/TLS/WSS keepalives use the persistent connection
+                            // which is managed by the stream workers. The worker's
+                            // evloop handles idle timeout; we don't send here.
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+        // Batch: max 256 keepalives per tick to avoid stalling the heartbeat loop
+        if sent >= 256 { break }
+    }
+    return sent
+}
+
 fn registration_load_db(db: SqlDB, db_ok: int, reg: CMap) -> int {
     if db_ok == 0 { return 0 }
     let rows = sql_query_rows_str(db, "SELECT aor, contact, transport, EXTRACT(EPOCH FROM (expires_at - NOW()))::INT, source_ip, source_port FROM registration_bindings WHERE expires_at > NOW() ORDER BY updated_at DESC LIMIT 10000", "")

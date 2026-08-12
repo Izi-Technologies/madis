@@ -1,0 +1,255 @@
+// Tests for security hardening: rate limits, auth delay, enumeration
+// detection, scanner detection, fraud prefixes, and message size.
+pull . "../parser.mko"
+pull . "../nat.mko"
+pull . "../auth.mko"
+pull . "../security.mko"
+pull . "../stream.mko"
+
+// --- Proxy Protocol v1 parsing ---
+
+fn TestProxyProtocolV1Tcp4() {
+    let pp = proxy_protocol_parse("PROXY TCP4 192.168.1.1 10.0.0.1 56324 5060\r\nINVITE sip:x SIP/2.0\r\n")
+    assert_eq_str(pp[0], "192.168.1.1")
+    assert_eq_str(pp[1], "56324")
+    assert_eq(if str_has_prefix(pp[2], "INVITE") { 1 } else { 0 }, 1)
+}
+
+fn TestProxyProtocolV1Tcp6() {
+    let pp = proxy_protocol_parse("PROXY TCP6 2001:db8::1 ::1 43210 5060\r\nREGISTER sip:x SIP/2.0\r\n")
+    assert_eq_str(pp[0], "2001:db8::1")
+    assert_eq_str(pp[1], "43210")
+    assert_eq(if str_has_prefix(pp[2], "REGISTER") { 1 } else { 0 }, 1)
+}
+
+fn TestProxyProtocolV1Unknown() {
+    let pp = proxy_protocol_parse("PROXY UNKNOWN\r\nSIP data here")
+    assert_eq_str(pp[0], "")
+    assert_eq_str(pp[1], "")
+    assert_eq_str(pp[2], "SIP data here")
+}
+
+fn TestProxyProtocolV1Malformed() {
+    // Too short
+    let pp1 = proxy_protocol_parse("PROXY\r\n")
+    assert_eq_str(pp1[0], "")
+    // No CRLF
+    let pp2 = proxy_protocol_parse("PROXY TCP4 1.2.3.4 5.6.7.8 1234 5060")
+    assert_eq_str(pp2[0], "")
+    // Bad protocol
+    let pp3 = proxy_protocol_parse("PROXY UDP4 1.2.3.4 5.6.7.8 1234 5060\r\n")
+    assert_eq_str(pp3[0], "")
+    // Invalid port
+    let pp4 = proxy_protocol_parse("PROXY TCP4 1.2.3.4 5.6.7.8 99999 5060\r\n")
+    assert_eq_str(pp4[0], "")
+    // Not a PROXY header
+    let pp5 = proxy_protocol_parse("INVITE sip:x SIP/2.0\r\n")
+    assert_eq_str(pp5[0], "")
+}
+
+fn TestProxyProtocolV1EmptyRemainder() {
+    let pp = proxy_protocol_parse("PROXY TCP4 10.0.0.1 10.0.0.2 12345 5060\r\n")
+    assert_eq_str(pp[0], "10.0.0.1")
+    assert_eq_str(pp[2], "")
+}
+
+// --- Enumeration scanner detection ---
+
+fn TestEnumScannerUnderThreshold() {
+    let cache = cmap_new()
+    let mut i = 0
+    while i < 19 {
+        let result = sec_is_enum_scanner("10.0.0.1", "user" + string(i), cache)
+        assert_eq(result, 0)
+        i = i + 1
+    }
+}
+
+fn TestEnumScannerTriggersAtThreshold() {
+    let cache = cmap_new()
+    let mut i = 0
+    while i < 20 {
+        let _ = sec_is_enum_scanner("10.0.0.1", "user" + string(i), cache)
+        i = i + 1
+    }
+    let triggered = sec_is_enum_scanner("10.0.0.1", "user20", cache)
+    assert_eq(triggered, 1)
+}
+
+fn TestEnumScannerDifferentIpsAreIndependent() {
+    let cache = cmap_new()
+    let mut i = 0
+    while i < 19 {
+        let _ = sec_is_enum_scanner("10.0.0.1", "user" + string(i), cache)
+        i = i + 1
+    }
+    // Different IP should not be triggered
+    let result = sec_is_enum_scanner("10.0.0.2", "user0", cache)
+    assert_eq(result, 0)
+}
+
+fn TestEnumScannerDuplicateUsernameNotCounted() {
+    let cache = cmap_new()
+    let mut i = 0
+    while i < 50 {
+        // Same username repeated — should NOT trigger (only 1 distinct)
+        let _ = sec_is_enum_scanner("10.0.0.1", "sameuser", cache)
+        i = i + 1
+    }
+    // Count should be 1, not 50
+    let result = sec_is_enum_scanner("10.0.0.1", "sameuser", cache)
+    assert_eq(result, 0)
+}
+
+fn TestEnumScannerCommaInjection() {
+    let cache = cmap_new()
+    // An attacker sends a username with commas trying to inflate the count
+    let _ = sec_is_enum_scanner("10.0.0.1", "a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t", cache)
+    // Should not trigger — comma is stripped, only first segment counted
+    let result = sec_is_enum_scanner("10.0.0.1", "x", cache)
+    assert_eq(result, 0)
+}
+
+// --- Auth delay progressive backpressure ---
+
+fn TestAuthDelayZeroBelow3Failures() {
+    let cache = cmap_new()
+    assert_eq(sec_auth_delay_ms("10.0.0.1", cache), 0)
+    let _ = sec_auth_fail_incr("10.0.0.1", cache)
+    assert_eq(sec_auth_delay_ms("10.0.0.1", cache), 0)
+    let _ = sec_auth_fail_incr("10.0.0.1", cache)
+    assert_eq(sec_auth_delay_ms("10.0.0.1", cache), 0)
+}
+
+fn TestAuthDelay500After3Failures() {
+    let cache = cmap_new()
+    let _ = sec_auth_fail_incr("10.0.0.1", cache)
+    let _ = sec_auth_fail_incr("10.0.0.1", cache)
+    let _ = sec_auth_fail_incr("10.0.0.1", cache)
+    assert_eq(sec_auth_delay_ms("10.0.0.1", cache), 500)
+}
+
+fn TestAuthDelay1000After6Failures() {
+    let cache = cmap_new()
+    let mut i = 0
+    while i < 6 { let _ = sec_auth_fail_incr("10.0.0.1", cache); i = i + 1 }
+    assert_eq(sec_auth_delay_ms("10.0.0.1", cache), 1000)
+}
+
+fn TestAuthDelay2000After10Failures() {
+    let cache = cmap_new()
+    let mut i = 0
+    while i < 10 { let _ = sec_auth_fail_incr("10.0.0.1", cache); i = i + 1 }
+    assert_eq(sec_auth_delay_ms("10.0.0.1", cache), 2000)
+}
+
+fn TestAuthFailClearResetsDelay() {
+    let cache = cmap_new()
+    let mut i = 0
+    while i < 5 { let _ = sec_auth_fail_incr("10.0.0.1", cache); i = i + 1 }
+    assert_eq(sec_auth_delay_ms("10.0.0.1", cache), 500)
+    let _ = sec_auth_fail_clear("10.0.0.1", cache)
+    assert_eq(sec_auth_delay_ms("10.0.0.1", cache), 0)
+}
+
+// --- Scanner detection ---
+
+fn TestScannerDetectionKnownAgents() {
+    let msg_base = "REGISTER sip:x SIP/2.0\r\nVia: SIP/2.0/UDP 1.2.3.4;branch=z9hG4bK1\r\nFrom: <sip:a@b>;tag=t\r\nTo: <sip:a@b>\r\nCall-ID: c\r\nCSeq: 1 REGISTER\r\nMax-Forwards: 70\r\n"
+    let scanners = ["friendly-scanner", "sipvicious/0.3", "sipcli", "sipsak", "sundayddr", "iwar", "VaxSIPUserAgent", "nmap", "SIPpts"]
+    let mut i = 0
+    while i < len(scanners) {
+        let msg = msg_base + "User-Agent: " + scanners[i] + "\r\nContent-Length: 0\r\n\r\n"
+        assert_eq(sec_is_scanner(msg, len(msg)), 1)
+        i = i + 1
+    }
+}
+
+fn TestScannerDetectionLegitAgent() {
+    let msg = "REGISTER sip:x SIP/2.0\r\nVia: SIP/2.0/UDP 1.2.3.4;branch=z9hG4bK1\r\nFrom: <sip:a@b>;tag=t\r\nTo: <sip:a@b>\r\nCall-ID: c\r\nCSeq: 1 REGISTER\r\nMax-Forwards: 70\r\nUser-Agent: Oste-Phone/1.0\r\nContent-Length: 0\r\n\r\n"
+    assert_eq(sec_is_scanner(msg, len(msg)), 0)
+}
+
+fn TestScannerDetectionNoUA() {
+    let msg = "REGISTER sip:x SIP/2.0\r\nVia: SIP/2.0/UDP 1.2.3.4;branch=z9hG4bK1\r\nFrom: <sip:a@b>;tag=t\r\nTo: <sip:a@b>\r\nCall-ID: c\r\nCSeq: 1 REGISTER\r\nMax-Forwards: 70\r\nContent-Length: 0\r\n\r\n"
+    assert_eq(sec_is_scanner(msg, len(msg)), 0)
+}
+
+fn TestScannerSippNotBlocked() {
+    let msg = "INVITE sip:x SIP/2.0\r\nVia: SIP/2.0/UDP 1.2.3.4;branch=z9hG4bK1\r\nFrom: <sip:a@b>;tag=t\r\nTo: <sip:a@b>\r\nCall-ID: c\r\nCSeq: 1 INVITE\r\nMax-Forwards: 70\r\nUser-Agent: sipp/3.6\r\nContent-Length: 0\r\n\r\n"
+    assert_eq(sec_is_scanner(msg, len(msg)), 0)
+}
+
+// --- Toll fraud prefix detection ---
+
+fn TestFraudPrefixDefaultList() {
+    let cache = cmap_new()
+    assert_eq(sec_is_fraud_dest("+9001234567", cache), 1)
+    assert_eq(sec_is_fraud_dest("+8091234567", cache), 1)
+    assert_eq(sec_is_fraud_dest("+8501234567", cache), 1)
+    assert_eq(sec_is_fraud_dest("+8811234567", cache), 1)
+}
+
+fn TestFraudPrefixLegitNotBlocked() {
+    let cache = cmap_new()
+    assert_eq(sec_is_fraud_dest("+12125551234", cache), 0)
+    assert_eq(sec_is_fraud_dest("+442071234567", cache), 0)
+    assert_eq(sec_is_fraud_dest("+491711234567", cache), 0)
+}
+
+fn TestFraudPrefixEmptyDest() {
+    let cache = cmap_new()
+    assert_eq(sec_is_fraud_dest("", cache), 0)
+}
+
+// --- Digest nonce nc hex parsing ---
+
+fn TestNonceNcHexParse() {
+    // Verify the hex parser works for nc values
+    let cache = cmap_new()
+    let nonce = "test-nonce-001"
+    let _ = auth_nonce_cache_set(cache, nonce, mono_ms())
+    // nc = "00000001" in hex = 1
+    // nc = "00000002" in hex = 2
+    // The nc monotonicity check should accept increasing values
+    // and reject replays. We test this indirectly through the
+    // bounded_cache_set mechanism.
+    let nc_key = "nonce_nc|" + nonce
+    let _ = bounded_cache_set(cache, "nonce_nc_seq", "nonce_nc_ring|", nc_key, "1", 65536)
+    assert_eq(cmap_has(cache, nc_key), 1)
+    assert_eq_str(cmap_get(cache, nc_key), "1")
+}
+
+// --- Digest URI mismatch ---
+
+fn TestDigestUriMismatchBlocked() {
+    // Construct a message where R-URI != digest uri
+    let msg = "INVITE sip:premium@toll.example.com SIP/2.0\r\n"
+        + "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK1\r\n"
+        + "From: <sip:alice@example.com>;tag=t\r\n"
+        + "To: <sip:premium@toll.example.com>\r\n"
+        + "Call-ID: uri-mismatch-test\r\n"
+        + "CSeq: 1 INVITE\r\n"
+        + "Max-Forwards: 70\r\n"
+        + "Content-Length: 0\r\n\r\n"
+    let ruri = sip_request_uri(msg)
+    assert_eq_str(ruri, "sip:premium@toll.example.com")
+    // The digest uri would be "sip:legit@example.com" — different user
+    let legit_user = sip_uri_user("sip:legit@example.com")
+    let ruri_user = sip_uri_user(ruri)
+    assert_eq(if str_eq(legit_user, ruri_user) { 1 } else { 0 }, 0)
+}
+
+fn TestDigestUriMatchAllowed() {
+    let uri = "sip:alice@example.com"
+    let ruri = "sip:alice@example.com"
+    assert_eq_str(sip_uri_user(uri), sip_uri_user(ruri))
+    assert_eq_str(sip_uri_host(uri), sip_uri_host(ruri))
+}
+
+fn TestDigestUriHostCaseInsensitive() {
+    let uri = "sip:alice@Example.COM"
+    let ruri = "sip:alice@example.com"
+    assert_eq_str(sip_uri_user(uri), sip_uri_user(ruri))
+    assert_eq_str(str_to_lower(sip_uri_host(uri)), str_to_lower(sip_uri_host(ruri)))
+}

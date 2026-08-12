@@ -138,6 +138,52 @@ expiry/wildcard cases. The reusable local harnesses are
 reported separately from RFC conformance; a high CPS result does not prove
 timer or protocol compliance.
 
+## Security hardening
+
+The following adversarial protections are implemented:
+
+- **PROXY protocol source validation**: `SIP_PROXY_TRUSTED_IPS` whitelist
+  required when `SIP_PROXY_PROTOCOL=1`. Only listed IPs may send PROXY headers.
+  Default: loopback only. Without this, any TCP client can spoof their source IP
+  and bypass all IP-based security.
+- **Registration contact ownership**: contact URI host must match the source IP,
+  AOR domain, or a private range. Override with `SIP_ALLOW_FOREIGN_CONTACT=1`.
+  Prevents registration hijacking where an attacker registers another user's
+  contact to intercept their calls.
+- **Digest constant-time comparison**: credential hash comparison uses XOR-all
+  loop instead of `str_eq` to prevent timing-based response recovery.
+- **Nonce count monotonicity**: nc values are tracked per nonce and must
+  increase. Replayed or out-of-order nc values are rejected.
+- **Digest URI validation**: the `uri` field in the Authorization header is
+  validated against the Request-URI user and host (RFC 7616 §3.4.6). An attacker
+  who authenticates for `sip:legit@host` cannot rewrite the R-URI to a
+  premium-rate destination.
+- **Per-IP connection limit**: `SIP_PER_IP_CONN_LIMIT` (default 100) on TCP/TLS/WSS
+  accept. Prevents slowloris and connection-flood DoS.
+- **Per-method rate limits**: `SIP_INVITE_RATE_LIMIT` (default 20/sec/IP) and
+  `SIP_REGISTER_RATE_LIMIT` (default 10/sec/IP) protect the expensive auth and
+  routing paths independently of the global per-IP limit.
+- **User enumeration detection**: 20+ distinct usernames from one IP in 60
+  seconds triggers a permanent ban. Scanner UA detection supplements this.
+- **Progressive auth delay**: 500ms–2s backpressure on stream transports after
+  repeated auth failures. Skipped for UDP to avoid blocking the packet loop.
+- **Message size limit**: `SIP_MAX_MESSAGE_SIZE` (default 64KB) rejects oversized
+  messages before parsing to prevent CPU amplification.
+- **Toll fraud prefix list**: configurable via `SIP_FRAUD_PREFIXES`, default
+  covers IRSF/premium-rate/satellite ranges.
+- **SDP header injection guard**: MAF `answer_sdp` rejects bodies containing the
+  SIP header/body separator (`\r\n\r\n`).
+- **DNS rebinding guard**: outbound connections to resolved private/loopback IPs
+  are rejected unless `SIP_ALLOW_PRIVATE_TARGETS=1`. Prevents attacker-controlled
+  DNS records from redirecting traffic to internal services.
+- **Ban ring eviction resistance**: permanent bans are stored outside the bounded
+  ring (immune to eviction). Temporary bans use a 65536-slot ring. The per-IP
+  connection limit (100 concurrent) means an attacker needs 6.5M connections to
+  fill the ring.
+- **Active registration expiry**: the heartbeat loop proactively sweeps expired
+  in-memory bindings, closing the window between expiry and the next lookup where
+  calls could route to stale contacts.
+
 References: [RFC 3261](https://www.rfc-editor.org/rfc/rfc3261.html),
 [RFC 3581](https://www.rfc-editor.org/rfc/rfc3581/),
 [RFC 3263](https://www.rfc-editor.org/rfc/rfc3263.html), and

@@ -96,9 +96,19 @@ Listener workers and scheduler settings are bounded through the `SIP_*_WORKERS` 
 Billing delivery is at least once: an application must commit its own transaction before acknowledging an event. Optional live applications and modules have bounded synchronous timeouts. Application failures can be configured open or closed; module failures are closed by default. Online preauthorization is fail-closed unless the operator explicitly enables `SIP_CHARGING_FAIL_OPEN=1`.
 
 These controls reduce common failure modes but do not replace operating-system isolation, database permissions, secret management, network policy, backup/restore testing, or external security review.
-TCP workers multiplex non-blocking connections in one event loop instead of
-holding a worker inside one connection. `SIP_TCP_MAX_CONNECTIONS` bounds each
-TCP worker. SIP call/dialog records are bounded by `SIP_CALL_STATE_CAPACITY`;
+TCP, TLS, and WSS workers multiplex non-blocking connections in one event loop
+instead of holding a worker inside one connection. `SIP_TCP_MAX_CONNECTIONS`
+bounds each stream worker. Worker counts are configurable per transport:
+`SIP_UDP_WORKERS`, `SIP_TCP_WORKERS`, `SIP_TLS_WORKERS`, `SIP_WSS_WORKERS`.
+Multiple workers use SO_REUSEPORT for kernel-level load distribution. TLS
+workers share a single OpenSSL `SSL_CTX` and drive handshakes non-blocking
+inside the same event loop as data I/O — no connection blocks the accept path.
+
+HAProxy PROXY protocol v1 is supported on TCP, TLS, and WSS listeners when
+`SIP_PROXY_PROTOCOL=1`. The PROXY header is parsed before TLS handshake (TLS)
+or before WebSocket upgrade (WSS), preserving the original client IP/port.
+
+SIP call/dialog records are bounded by `SIP_CALL_STATE_CAPACITY`;
 new calls are rejected at that limit so active state is not evicted silently.
 HEP wire packets use a per-process bounded `chan[string]` controlled by
 `SIP_HEP_QUEUE_CAPACITY`; a detached sender performs collector I/O, and queue

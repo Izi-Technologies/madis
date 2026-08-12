@@ -304,10 +304,26 @@ fn sip_assoc_list_remove(cache: CMap, list_key: string, item: string) -> int {
     return 0
 }
 
+// DNS rebinding guard: reject outbound connections to private/loopback IPs
+// unless explicitly allowed. Prevents an attacker-controlled DNS record from
+// redirecting SIP traffic to internal services.
+fn sip_outbound_target_safe(host: string) -> int {
+    if len(host) == 0 { return 0 }
+    let allow_private = env_get_or("SIP_ALLOW_PRIVATE_TARGETS", "0")
+    if str_eq(allow_private, "1") { return 1 }
+    // Only check when the host looks like an IP (not a hostname that needs DNS)
+    if parse_ip_ok(host) == 1 {
+        if is_private_ip(host) == 1 { return 0 }
+        if str_eq(host, "0.0.0.0") || str_eq(host, "::") { return 0 }
+    }
+    return 1
+}
+
 fn sip_forward_tcp(target: string, msg: string, cache: CMap, owner: int) -> int {
     let host = sip_target_host(target)
     let port = sip_target_port(target, 5060)
     if len(host) == 0 || port <= 0 { return 0 }
+    if sip_outbound_target_safe(host) == 0 { return 0 }
     let assoc_key = "tcp_assoc|" + string(owner) + "|" + host + ":" + string(port)
     let mut fd = -1
     if cmap_has(cache, assoc_key) == 1 {
@@ -351,6 +367,7 @@ fn sip_forward_tls(target: string, msg: string, cache: CMap, owner: int) -> int 
     let host = sip_target_host(target)
     let port = sip_target_port(target, 5061)
     if len(host) == 0 || port <= 0 { return 0 }
+    if sip_outbound_target_safe(host) == 0 { return 0 }
     let ca = env_get_or("SIP_UPSTREAM_CA", "")
     let item = host + ":" + string(port)
     let assoc_key = "tls_assoc|" + string(owner) + "|" + item
@@ -420,6 +437,7 @@ fn sip_forward_wss(target: string, msg: string, cache: CMap, owner: int) -> int 
     let host = sip_target_host(target)
     let port = sip_target_port(target, 443)
     if len(host) == 0 || port <= 0 { return 0 }
+    if sip_outbound_target_safe(host) == 0 { return 0 }
     let path = sip_target_path(target)
     let item = host + ":" + string(port) + path
     let assoc_key = "wss_assoc|" + string(owner) + "|" + item

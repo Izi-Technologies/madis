@@ -28,6 +28,9 @@ fn digest_challenge_value(realm: string, nonce: string, stale: int) -> string {
 // CMap has no TTL primitive. Keep attacker-derived cache keys bounded with a
 // fixed ring; the ring stores the real key so eviction removes both entries.
 // This is deliberately shared by auth, ACL, and security caches.
+// Bounded ring storage. Each seq_key/ring_prefix pair is an independent
+// eviction domain — ban entries never evict rate-limit entries and vice versa.
+// This prevents an attacker from filling one domain to flush another.
 fn bounded_state_set(store: CMap, index: CMap, seq_key: string, ring_prefix: string, key: string, value: string, capacity: int) -> int {
     if cmap_has(store, key) == 1 {
         cmap_set(store, key, value)
@@ -184,7 +187,32 @@ fn db_digest_valid(db: SqlDB, db_ok: int, msg: string, n: int, method: string, f
         Ok(v) => { nonce_at = v }
         Err(_) => { return 0 }
     }
-    if mono_ms() - nonce_at > 300000 { return 2 }
+    // Default 120s nonce lifetime; configurable via SIP_NONCE_TTL_SEC.
+    let mut nonce_ttl = 120000
+    match parse_int(env_get_or("SIP_NONCE_TTL_SEC", "120")) { Ok(v) => { nonce_ttl = v * 1000 } Err(_) => {} }
+    if nonce_ttl < 30000 { nonce_ttl = 30000 }
+    if nonce_ttl > 600000 { nonce_ttl = 600000 }
+    if mono_ms() - nonce_at > nonce_ttl { return 2 }
+    // nc monotonicity: reject replayed or out-of-order nonce counts.
+    if len(nc) == 8 {
+        let nc_key = "nonce_nc|" + nonce
+        let mut last_nc = 0
+        if cmap_has(cache, nc_key) == 1 {
+            match parse_int(cmap_get(cache, nc_key)) { Ok(v) => { last_nc = v } Err(_) => {} }
+        }
+        let mut this_nc = 0
+        let nc_low = str_to_lower(nc)
+        let mut hi = 0
+        while hi < len(nc_low) {
+            let hc = int(nc_low[hi])
+            this_nc = this_nc * 16
+            if hc >= 48 && hc <= 57 { this_nc = this_nc + (hc - 48) }
+            else if hc >= 97 && hc <= 102 { this_nc = this_nc + (hc - 87) }
+            hi = hi + 1
+        }
+        if this_nc > 0 && this_nc <= last_nc { return 0 }
+        let _ = bounded_cache_set(cache, "nonce_nc_seq", "nonce_nc_ring|", nc_key, string(this_nc), 65536)
+    }
     let mut domain = realm
     if len(domain) == 0 { domain = fallback_domain }
     let _ = domain
@@ -206,7 +234,35 @@ fn db_digest_valid(db: SqlDB, db_ok: int, msg: string, n: int, method: string, f
     } else {
         digest_response_ha1_alg(ha1, method, uri, nonce, algorithm, "")
     }
-    if str_eq(str_to_lower(expected), str_to_lower(response)) {
+    // Constant-time comparison to prevent timing-based credential recovery.
+    let exp_low = str_to_lower(expected)
+    let resp_low = str_to_lower(response)
+    let mut digest_match = 0
+    if len(exp_low) > 0 && len(exp_low) == len(resp_low) {
+        let mut diff = 0
+        let mut di = 0
+        while di < len(exp_low) {
+            diff = diff | (int(exp_low[di]) ^ int(resp_low[di]))
+            di = di + 1
+        }
+        if diff == 0 { digest_match = 1 }
+    }
+    if digest_match == 1 {
+        // RFC 7616 §3.4.6: verify the digest uri matches the Request-URI.
+        // An attacker who authenticates for sip:legit@host then rewrites the
+        // R-URI to sip:premium@toll can bypass toll-fraud checks.
+        let request_uri = sip_request_uri(msg)
+        if len(request_uri) > 0 && len(uri) > 0 && not str_eq(uri, request_uri) {
+            // Allow minor normalization differences (port, scheme) by
+            // comparing host+user only when the full URI doesn't match.
+            let uri_user = sip_uri_user(uri)
+            let uri_host = sip_uri_host(uri)
+            let ruri_user = sip_uri_user(request_uri)
+            let ruri_host = sip_uri_host(request_uri)
+            if not str_eq(uri_user, ruri_user) || not str_eq(str_to_lower(uri_host), str_to_lower(ruri_host)) {
+                return 0
+            }
+        }
         let mut used_key = "nonce_used|" + nonce + "|" + username + "|" + method + "|" + uri
         if len(qop) > 0 { used_key = used_key + "|" + nc + "|" + cnonce }
         if cmap_has(cache, used_key) == 1 { return 0 }

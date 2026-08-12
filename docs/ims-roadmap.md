@@ -68,6 +68,10 @@ The checklists below use these labels:
   fails on any failing suite.
 - `docker compose -f docker-compose.ims-lab.yml config --quiet` validates the
   IMS lab configuration.
+- The full containerized IMS smoke passes with the lab HSS, P-/I-/S-CSCF
+  chain, media relay, two-subscriber Cx/AKA registration, authenticated
+  INVITE, SDP/RTP relay, ACK, and BYE. It is reproducible lab evidence, not
+  real-UE, external-HSS, or carrier interoperability evidence.
 - The lab adapters provide deterministic Cx/AKA and bounded media test
   doubles. They are not Open5GS, a commercial UE, or a production RTPEngine.
 
@@ -264,3 +268,15 @@ above.
 See also [`configuration.md`](configuration.md), [`clustering.md`](clustering.md),
 [`testing.md`](testing.md), [`interop-open5gs.md`](interop-open5gs.md), and the
 [IMS API contracts](../api/ims-diameter.md).
+
+## Commercial carrier desk track — 2026-07-31
+
+The MAF-backed carrier desk is now wired as a separate PostgreSQL application boundary above Madis. The current delivery includes authenticated HTMX operations, server-side RBAC, carrier/customer accounts, account status, commercial contact and credit-limit fields, rate-card creation, account-specific rate assignment history, and tenant-aware terminal-call rating with longest-prefix fallback. This is an operator workflow and billing foundation; it is not a claim of completed credit control, settlement, or carrier-scale commercial readiness.
+
+- [x] Manage carriers and customers from one account workspace.
+- [x] Assign an enabled rate card to an account and retain effective-dated assignment history.
+- [x] Prefer an active account assignment during terminal-call rating, then fall back to longest-prefix matching.
+- [x] Keep account and rate-card writes behind RBAC permissions and preserve ledger rows when an account is suspended.
+- [ ] Add balance holds, pre-origination credit authorization, and fraud controls.
+- [ ] Add versioned tariffs, tax, adjustments, settlement, invoice lifecycle, and payment state.
+- [ ] Add carrier reconciliation, approval history, external identity, and production backup/HA evidence.

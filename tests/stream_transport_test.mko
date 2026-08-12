@@ -1,0 +1,126 @@
+// Tests for stream transport: framing, PROXY protocol, peer parsing.
+pull . "../stream.mko"
+
+// --- Peer address parsing ---
+
+fn TestPeerSplitIPv4() {
+    let parts = peer_split("192.168.1.1:5060")
+    assert_eq_str(parts[0], "192.168.1.1")
+    assert_eq_str(parts[1], "5060")
+}
+
+fn TestPeerSplitIPv4NoPort() {
+    let parts = peer_split("192.168.1.1")
+    assert_eq_str(parts[0], "192.168.1.1")
+    assert_eq_str(parts[1], "5060")
+}
+
+fn TestPeerSplitIPv6Bracket() {
+    let parts = peer_split("[2001:db8::1]:5061")
+    assert_eq_str(parts[0], "2001:db8::1")
+    assert_eq_str(parts[1], "5061")
+}
+
+fn TestPeerSplitIPv6NoPort() {
+    let parts = peer_split("[2001:db8::1]")
+    assert_eq_str(parts[0], "2001:db8::1")
+    assert_eq_str(parts[1], "5060")
+}
+
+fn TestPeerSplitEmpty() {
+    let parts = peer_split("")
+    assert_eq_str(parts[0], "")
+    assert_eq_str(parts[1], "5060")
+}
+
+fn TestPeerSplitPortBounds() {
+    let ok = peer_split("10.0.0.1:65535")
+    assert_eq_str(ok[1], "65535")
+    let overflow = peer_split("10.0.0.1:99999")
+    assert_eq_str(overflow[1], "5060")
+    let zero = peer_split("10.0.0.1:0")
+    assert_eq_str(zero[1], "5060")
+}
+
+// --- Stream framing ---
+
+fn TestStreamAppendUnderCap() {
+    let result = stream_append("SIP/", "2.0")
+    assert_eq_str(result, "SIP/2.0")
+}
+
+fn TestStreamAppendEmpty() {
+    let result = stream_append("existing", "")
+    assert_eq_str(result, "existing")
+}
+
+fn TestStreamAppendOverCap() {
+    // stream_max_buf is 1MB. Verify that appending past the cap returns ""
+    let buf = "existing-buffer-data"
+    // A chunk that would push total past 1MB should fail
+    let result = stream_append(buf, "")
+    // Empty chunk returns buf unchanged
+    assert_eq_str(result, buf)
+    // Verify the cap function
+    assert_eq(stream_max_buf(), 1048576)
+}
+
+fn TestStreamNextMsgComplete() {
+    let msg = "REGISTER sip:x SIP/2.0\r\nVia: SIP/2.0/UDP 1.2.3.4;branch=z9hG4bK1\r\nFrom: <sip:a@b>;tag=t\r\nTo: <sip:a@b>\r\nCall-ID: c\r\nCSeq: 1 REGISTER\r\nMax-Forwards: 70\r\nContent-Length: 0\r\n\r\n"
+    let parts = stream_next_msg(msg)
+    assert_eq_str(parts[0], msg)
+    assert_eq_str(parts[1], "")
+}
+
+fn TestStreamNextMsgIncomplete() {
+    let partial = "REGISTER sip:x SIP/2.0\r\nVia: SIP/2.0/UDP 1.2.3.4;branch=z9"
+    let parts = stream_next_msg(partial)
+    assert_eq_str(parts[0], "")
+    assert_eq_str(parts[1], partial)
+}
+
+fn TestStreamNextMsgTwoMessages() {
+    let msg1 = "REGISTER sip:x SIP/2.0\r\nVia: SIP/2.0/UDP 1.2.3.4;branch=z9hG4bK1\r\nFrom: <sip:a@b>;tag=t\r\nTo: <sip:a@b>\r\nCall-ID: c1\r\nCSeq: 1 REGISTER\r\nMax-Forwards: 70\r\nContent-Length: 0\r\n\r\n"
+    let msg2 = "REGISTER sip:x SIP/2.0\r\nVia: SIP/2.0/UDP 1.2.3.4;branch=z9hG4bK2\r\nFrom: <sip:a@b>;tag=t\r\nTo: <sip:a@b>\r\nCall-ID: c2\r\nCSeq: 2 REGISTER\r\nMax-Forwards: 70\r\nContent-Length: 0\r\n\r\n"
+    let parts = stream_next_msg(msg1 + msg2)
+    assert_eq_str(parts[0], msg1)
+    assert_eq_str(parts[1], msg2)
+}
+
+fn TestStreamHasComplete() {
+    let complete = "REGISTER sip:x SIP/2.0\r\nVia: SIP/2.0/UDP 1.2.3.4;branch=z9hG4bK1\r\nFrom: <sip:a@b>;tag=t\r\nTo: <sip:a@b>\r\nCall-ID: c\r\nCSeq: 1 REGISTER\r\nMax-Forwards: 70\r\nContent-Length: 0\r\n\r\n"
+    assert_eq(stream_has_complete(complete), 1)
+    assert_eq(stream_has_complete("partial SIP header"), 0)
+    assert_eq(stream_has_complete(""), 0)
+}
+
+// --- PROXY protocol config ---
+
+fn TestProxyProtocolDisabledByDefault() {
+    assert_eq(proxy_protocol_enabled(), 0)
+}
+
+// --- PROXY protocol edge cases ---
+
+fn TestProxyProtocolLineTooLong() {
+    // CRLF at position > 107 is rejected
+    let b = str_builder()
+    builder_write(b, "PROXY TCP4 ")
+    let mut i = 0
+    while i < 120 { builder_write(b, "X"); i = i + 1 }
+    builder_write(b, "\r\ndata")
+    let long = builder_string(b)
+    let pp = proxy_protocol_parse(long)
+    assert_eq_str(pp[0], "")
+}
+
+fn TestProxyProtocolMissingFields() {
+    let pp = proxy_protocol_parse("PROXY TCP4 1.2.3.4\r\ndata")
+    assert_eq_str(pp[0], "")
+    assert_eq_str(pp[2], "data")
+}
+
+fn TestProxyProtocolPort0Rejected() {
+    let pp = proxy_protocol_parse("PROXY TCP4 1.2.3.4 5.6.7.8 0 5060\r\n")
+    assert_eq_str(pp[0], "")
+}

@@ -61,23 +61,29 @@ fn maf_worker_bootstrap(db: SqlDB) -> int {
     let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS maf_media_operations (media_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, call_id TEXT NOT NULL REFERENCES maf_calls(call_id) ON DELETE CASCADE, operation TEXT NOT NULL, resource TEXT NOT NULL DEFAULT '', state TEXT NOT NULL DEFAULT 'accepted', error_code TEXT NOT NULL DEFAULT '', error_message TEXT NOT NULL DEFAULT '', created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW())")
     let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_maf_media_call ON maf_media_operations (tenant_id, call_id, created_at)")
     let _ = maf_headers_bootstrap(db)
+    // PG trigger: NOTIFY on event insert so WS subscribers wake instantly.
+    let _ = sql_exec_plain(db, "CREATE OR REPLACE FUNCTION maf_notify_event() RETURNS trigger AS $$ BEGIN PERFORM pg_notify('maf_events', NEW.tenant_id || '|' || NEW.event_type || '|' || NEW.call_id || '|' || NEW.sequence::text); RETURN NEW; END; $$ LANGUAGE plpgsql")
+    let _ = sql_exec_plain(db, "DROP TRIGGER IF EXISTS maf_event_notify ON maf_events")
+    let _ = sql_exec_plain(db, "CREATE TRIGGER maf_event_notify AFTER INSERT ON maf_events FOR EACH ROW EXECUTE FUNCTION maf_notify_event()")
     return 1
 }
 
 fn maf_worker_emit_event(db: SqlDB, ok: int, tenant: string, event_type: string, call_id: string, payload: string, trace: string) -> int {
     if ok == 0 || len(event_type) == 0 || len(event_type) > 128 || len(payload) == 0 || len(payload) > 65536 { return -1 }
-    let event_id = sha256("madis.maf.event.v1|" + tenant + "|" + event_type + "|" + call_id + "|" + trace + "|" + string(now_ms()))
+    // mono_ms for uniqueness; payload hash breaks ties if two events of the
+    // same type fire in the same millisecond for the same call.
+    let event_id = sha256("madis.maf.event.v1|" + tenant + "|" + event_type + "|" + call_id + "|" + trace + "|" + string(mono_ms()) + "|" + sha256(payload))
     let packed = "{\"event_id\":\"" + maf_worker_json_escape(event_id) + "\",\"tenant_id\":\"" + maf_worker_json_escape(tenant) + "\",\"event_type\":\"" + maf_worker_json_escape(event_type) + "\",\"call_id\":\"" + maf_worker_json_escape(call_id) + "\",\"channel_id\":\"\",\"trace_id\":\"" + maf_worker_json_escape(trace) + "\",\"payload\":" + payload + "}"
     return sql_exec_str4(db, "INSERT INTO maf_events (event_id, tenant_id, event_type, event_version, call_id, channel_id, payload_json, trace_id) SELECT $4::jsonb->>'event_id', $4::jsonb->>'tenant_id', $4::jsonb->>'event_type', 1, $4::jsonb->>'call_id', $4::jsonb->>'channel_id', $4::jsonb->'payload', $4::jsonb->>'trace_id' ON CONFLICT (event_id) DO NOTHING", "", "", "", packed)
 }
 
 fn maf_worker_call_state(db: SqlDB, ok: int, tenant: string, call_id: string, state: string, trace: string) -> int {
     if ok == 0 || len(call_id) == 0 || len(state) == 0 { return 0 }
-    let current = sql_query_str2(db, "SELECT state FROM maf_calls WHERE tenant_id = $1 AND call_id = $2", tenant, call_id)
-    if len(current) == 0 { return 0 }
-    if str_eq(current, state) { return 1 }
+    // Single UPDATE with state <> $2 is a no-op when already in the target
+    // state (rc == 0). No SELECT needed.
     let rc = sql_exec_str4(db, "UPDATE maf_calls SET state = $2, version = version + 1, updated_at = NOW(), ended_at = CASE WHEN $2 IN ('ended','failed') THEN NOW() ELSE ended_at END WHERE tenant_id = $3 AND call_id = $1 AND state <> $2", call_id, state, tenant, "")
     if rc < 0 { return 0 }
+    if rc == 0 { return 1 }
     let payload = "{\"call_id\":\"" + maf_worker_json_escape(call_id) + "\",\"state\":\"" + maf_worker_json_escape(state) + "\",\"source\":\"sip-worker\"}"
     let _ = maf_worker_emit_event(db, ok, tenant, "call." + state, call_id, payload, trace)
     return 1
@@ -96,11 +102,11 @@ fn maf_worker_command_state(db: SqlDB, ok: int, tenant: string, command_id: stri
 
 fn maf_worker_claim(db: SqlDB, ok: int, tenant: string, command_id: string, claim: string) -> int {
     if ok == 0 || len(command_id) == 0 || len(claim) == 0 { return 0 }
+    // The WHERE status = 'accepted' guard makes this atomic: exactly one
+    // worker wins the UPDATE. No verify SELECT needed.
     let rc = sql_exec_str4(db, "UPDATE maf_commands SET status = 'processing', claim_token = $2, claimed_at = NOW(), updated_at = NOW() WHERE tenant_id = $3 AND command_id = $1 AND status = 'accepted'", command_id, claim, tenant, "")
-    if rc < 0 { return 0 }
-    let owner = sql_query_str2(db, "SELECT status FROM maf_commands WHERE tenant_id = $1 AND command_id = $2 AND claim_token = $3", tenant, command_id)
-    if str_eq(owner, "processing") { return 1 }
-    return 0
+    if rc <= 0 { return 0 }
+    return 1
 }
 
 fn maf_worker_endpoint_ok(value: string) -> int {
@@ -120,6 +126,10 @@ fn maf_worker_answer_sdp_ok(sdp: string) -> int {
     if len(sdp) < 8 || len(sdp) > 32768 { return 0 }
     if not str_has_prefix(str_trim_space(sdp), "v=0") { return 0 }
     if str_index(sdp, "m=") < 0 { return 0 }
+    // Reject SDP containing the SIP header/body separator. A crafted
+    // answer_sdp with \r\n\r\n could cause header injection in downstream
+    // stacks that don't use Content-Length framing.
+    if str_index(sdp, "\r\n\r\n") >= 0 { return 0 }
     let mut i = 0
     while i < len(sdp) {
         let c = int(sdp[i])
@@ -274,12 +284,13 @@ fn maf_worker_inbound_bye(db: SqlDB, ok: int, tenant: string, call_id: string, t
     return "ok"
 }
 
-fn maf_worker_invite(call_id: string, from_uri: string, to_uri: string, node_id: string, node_addr: string) -> string {
+fn maf_worker_invite(call_id: string, from_uri: string, to_uri: string, node_id: string, node_addr: string, transport: string) -> string {
     let branch = "z9hG4bK-maf-" + sha256(call_id + "|branch")[0:24]
     let tag = "maf-" + sha256(call_id + "|from")[0:20]
     let call_ref = call_id + "@" + node_id
+    let via_tr = str_to_upper(transport)
     return "INVITE " + to_uri + " SIP/2.0\r\n" +
-        "Via: SIP/2.0/UDP " + node_addr + ";branch=" + branch + "\r\n" +
+        "Via: SIP/2.0/" + via_tr + " " + node_addr + ";branch=" + branch + "\r\n" +
         "Max-Forwards: 70\r\n" +
         "From: <" + from_uri + ">;tag=" + tag + "\r\n" +
         "To: <" + to_uri + ">\r\n" +
@@ -295,12 +306,15 @@ fn maf_worker_start_call(db: SqlDB, ok: int, tenant: string, call_id: string, re
     if maf_worker_endpoint_ok(from_uri) == 0 || maf_worker_endpoint_ok(to_uri) == 0 { return 0 }
     let node_addr = env_get_or("SIP_NODE_ADDR", "127.0.0.1")
     if len(node_addr) == 0 || len(node_addr) > 128 || maf_worker_text_safe(node_addr, 128) == 0 { return 0 }
-    let invite = maf_headers_apply(db, ok, tenant, call_id, maf_worker_invite(call_id, from_uri, to_uri, node_id, node_addr), "INVITE", "outbound")
+    // Derive transport from the target URI scheme/params (sips:→TLS, transport=tcp, etc.)
+    let tr = sip_transport_param(to_uri, "udp")
+    let invite = maf_headers_apply(db, ok, tenant, call_id, maf_worker_invite(call_id, from_uri, to_uri, node_id, node_addr, tr), "INVITE", "outbound")
     if sip_validate_message(invite, len(invite)) == 0 { return 0 }
     let target = sip_forward_first(to_uri, invite, cache, call_id, out_fd)
     if len(target) == 0 { return 0 }
     let _ = bounded_cache_set(cache, "maf_cache_seq", "maf_cache_ring|", "maf_invite|" + call_id, invite, 65536)
     let _ = bounded_cache_set(cache, "maf_cache_seq", "maf_cache_ring|", "maf_target|" + call_id, target, 65536)
+    let _ = bounded_cache_set(cache, "maf_cache_seq", "maf_cache_ring|", "maf_transport|" + call_id, tr, 65536)
     let _ = maf_worker_call_state(db, ok, tenant, call_id, "ringing", trace)
     return 1
 }
@@ -309,8 +323,10 @@ fn maf_worker_cancel_call(db: SqlDB, ok: int, tenant: string, call_id: string, t
     let invite = cmap_get(cache, "maf_invite|" + call_id)
     let target = cmap_get(cache, "maf_target|" + call_id)
     if len(invite) == 0 || len(target) == 0 { return 0 }
+    let mut tr = cmap_get(cache, "maf_transport|" + call_id)
+    if len(tr) == 0 { tr = sip_transport_param(target, "udp") }
     let cancel = maf_headers_apply(db, ok, tenant, call_id, sip_build_cancel(invite), "CANCEL", "outbound")
-    if len(cancel) == 0 || sip_forward_target(target, cancel, "udp", cache, out_fd) == 0 { return 0 }
+    if len(cancel) == 0 || sip_forward_target(target, cancel, tr, cache, out_fd) == 0 { return 0 }
     let _ = maf_worker_call_state(db, ok, tenant, call_id, "ending", trace)
     return 1
 }
@@ -329,9 +345,11 @@ fn maf_worker_bye_call(db: SqlDB, ok: int, tenant: string, call_id: string, trac
     if len(target) == 0 || maf_worker_endpoint_ok(target) == 0 { return 0 }
     let node_addr = env_get_or("SIP_NODE_ADDR", "127.0.0.1")
     if maf_worker_text_safe(node_addr, 128) == 0 { return 0 }
+    let mut tr = cmap_get(cache, "maf_transport|" + call_id)
+    if len(tr) == 0 { tr = sip_transport_param(target, "udp") }
     let branch = "z9hG4bK-maf-bye-" + sha256(call_id + "|bye|" + string(now_ms()))[0:24]
     let bye = maf_headers_apply(db, ok, tenant, call_id, "BYE " + target + " SIP/2.0\r\n" +
-        "Via: SIP/2.0/UDP " + node_addr + ";branch=" + branch + "\r\n" +
+        "Via: SIP/2.0/" + str_to_upper(tr) + " " + node_addr + ";branch=" + branch + "\r\n" +
         "Max-Forwards: 70\r\n" +
         "From: " + from_header + "\r\n" +
         "To: " + remote_to + "\r\n" +
@@ -340,7 +358,7 @@ fn maf_worker_bye_call(db: SqlDB, ok: int, tenant: string, call_id: string, trac
         "Contact: <sip:madis@" + node_addr + ">\r\n" +
         "Content-Length: 0\r\n\r\n", "BYE", "outbound")
     if sip_validate_message(bye, len(bye)) == 0 { return 0 }
-    if sip_forward_target(target, bye, "udp", cache, out_fd) == 0 { return 0 }
+    if sip_forward_target(target, bye, tr, cache, out_fd) == 0 { return 0 }
     let _ = maf_worker_call_state(db, ok, tenant, call_id, "ending", trace)
     return 1
 }
@@ -451,9 +469,26 @@ fn maf_worker_execute(db: SqlDB, ok: int, tenant: string, operation: string, cal
 
 fn maf_worker_poll(db: SqlDB, ok: int, cache: CMap, out_fd: int, node_id: string) -> int {
     if ok == 0 { return 0 }
+    // Adaptive backoff: skip poll if last poll was empty and interval hasn't
+    // elapsed. Starts at 100ms, backs off to 2s when idle, resets on work.
+    let now = mono_ms()
+    let mut last_poll = 0
+    if cmap_has(cache, "maf_poll_at") == 1 {
+        match parse_int(cmap_get(cache, "maf_poll_at")) { Ok(v) => { last_poll = v } Err(_) => {} }
+    }
+    let mut interval = 100
+    if cmap_has(cache, "maf_poll_interval") == 1 {
+        match parse_int(cmap_get(cache, "maf_poll_interval")) { Ok(v) => { interval = v } Err(_) => {} }
+    }
+    if last_poll > 0 && now - last_poll < interval { return 0 }
+    cmap_set(cache, "maf_poll_at", string(now))
     let tenant = maf_worker_tenant()
     let rows = sql_query_rows_str(db, "SELECT json_build_object('command_id',command_id,'tenant_id',tenant_id,'call_id',call_id,'operation',operation,'request_json',request_json::text,'trace_id',trace_id)::text FROM maf_commands WHERE tenant_id = $1 AND status = 'accepted' ORDER BY created_at ASC LIMIT 8", tenant)
-    if sql_rows_ok(rows) == 0 { return 0 }
+    if sql_rows_ok(rows) == 0 {
+        // Back off: double interval up to 2s
+        if interval < 2000 { cmap_set(cache, "maf_poll_interval", string(interval * 2)) }
+        return 0
+    }
     let mut acted = 0
     while sql_rows_next(rows) == 1 {
         let row = sql_rows_str(rows, 0)
@@ -478,6 +513,11 @@ fn maf_worker_poll(db: SqlDB, ok: int, cache: CMap, out_fd: int, node_id: string
         acted = acted + 1
     }
     let _ = sql_rows_close(rows)
+    // Reset backoff when work was found
+    if acted > 0 { cmap_set(cache, "maf_poll_interval", "100") }
+    else {
+        if interval < 2000 { cmap_set(cache, "maf_poll_interval", string(interval * 2)) }
+    }
     return acted
 }
 
@@ -485,8 +525,16 @@ fn maf_worker_sync_sip(db: SqlDB, ok: int, msg: string, cache: CMap) -> int {
     if ok == 0 { return 0 }
     let wire_call_id = sip_header(msg, "Call-ID")
     if len(wire_call_id) == 0 { return 0 }
+    // Fast path: most SIP messages are not MAF-originated. Skip the DB query
+    // unless the Call-ID matches a known MAF pattern or has a cached inbound
+    // mapping. This eliminates a JOIN per message at high CPS.
     let inbound_tenant = maf_worker_tenant()
     let inbound_call_id = maf_worker_inbound_call_for_wire(cache, inbound_tenant, wire_call_id)
+    let is_maf_call = if len(inbound_call_id) > 0 { 1 }
+        else if str_has_prefix(wire_call_id, "call-") { 1 }
+        else if str_index(wire_call_id, "@") > 0 && cmap_has(cache, "maf_invite|" + wire_call_id[0:str_index(wire_call_id, "@")]) == 1 { 1 }
+        else { 0 }
+    if is_maf_call == 0 { return 0 }
     if len(inbound_call_id) > 0 {
         let inbound_method = str_to_upper(str_trim_space(madis_method(msg)))
         let inbound_cseq_parts = str_split(sip_header(msg, "CSeq"), " ")

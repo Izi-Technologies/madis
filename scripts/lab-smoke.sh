@@ -36,6 +36,7 @@ case "$cmd" in
     echo "lab-smoke e2e: ok"
     ;;
   docker)
+    trap 'docker compose -f docker-compose.ims-lab.yml down -v --remove-orphans >/dev/null 2>&1 || true' EXIT
     # Build one Madis image first (shared by P/I/S-CSCF) to avoid triple compile OOM.
     echo "Building Madis image (low-memory Mako cargo)..."
     docker compose -f docker-compose.ims-lab.yml build scscf

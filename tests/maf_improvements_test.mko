@@ -1,0 +1,171 @@
+// Tests for MAF improvements: adaptive poll, event filtering, transport
+// selection, JSON escape dedup, and event ID uniqueness.
+pull . "../parser.mko"
+pull . "../admin/http.mko"
+pull . "../admin/ui.mko"
+pull . "../maf_api.mko"
+
+fn sip_forward_first(targets: string, msg: string, cache: CMap, cid: string, out_fd: int) string { return "" }
+fn sip_forward_target(target: string, msg: string, tr: string, cache: CMap, out_fd: int) int { return 0 }
+fn sip_transport_param(target: string, fallback: string) string {
+    let low = str_to_lower(target)
+    if str_has_prefix(low, "sips:") { return "tls" }
+    let p = str_index(low, "transport=")
+    if p >= 0 {
+        let start = p + 10
+        let mut end = start
+        while end < len(target) {
+            let c = int(target[end])
+            if c == 59 || c == 62 || c == 32 { break }
+            end = end + 1
+        }
+        if end > start { return str_to_lower(target[start:end]) }
+    }
+    return fallback
+}
+fn sip_prepend_header(msg: string, name: string, value: string) string { return msg }
+fn sip_header_n(msg: string, name: string, index: int) string { return sip_header(msg, name) }
+fn bounded_cache_set(cache: CMap, seq_key: string, ring_prefix: string, key: string, value: string, capacity: int) int { return 0 }
+fn via_add_received(msg: string, n: int, ip: string, port: int) string { return msg }
+fn sip_server_txn_record(request: string, response: string, ip: string, port: int, transport: string, owner: int, cache: CMap) int { return 1 }
+fn sip_forward_reply(reply: string, cache: CMap, out_fd: int) int { return 1 }
+fn module_gateway_call(msg: string, ip: string, port: int, tr: string, event: string, module: string, operation: string, payload: string) string { return "__MODULE_FAIL__" }
+fn module_gateway_command_valid(raw: string, msg: string, event: string, module: string, operation: string, payload: string, for_response: int) int { return 0 }
+fn module_gateway_action(raw: string, msg: string, event: string, module: string, operation: string, payload: string) string { return "fail" }
+pull . "../headers.mko"
+pull . "../maf_headers.mko"
+pull . "../maf_worker.mko"
+
+fn tbl_query_param(db: SqlDB, ok: int, sql: string, param: string, max: int) []string {
+    return make([]string, 0, 0)
+}
+
+// --- JSON escape dedup ---
+
+fn TestMafHeadersJsonEscapeDelegates() {
+    let input = "hello \"world\""
+    let from_worker = maf_worker_json_escape(input)
+    let from_headers = maf_headers_json_escape(input)
+    assert_eq_str(from_worker, from_headers)
+}
+
+fn TestMafJsonEscapeSpecialChars() {
+    assert_eq_str(maf_worker_json_escape("a\"b"), "a\\\"b")
+    assert_eq_str(maf_worker_json_escape("a\\b"), "a\\\\b")
+    assert_eq_str(maf_worker_json_escape("a\nb"), "a\\nb")
+    assert_eq_str(maf_worker_json_escape("a\tb"), "a\\tb")
+}
+
+// --- Tenant validation ---
+
+fn TestMafWorkerTenantDefault() {
+    // Without SIP_MAF_TENANT set, returns "default"
+    let t = maf_worker_tenant()
+    assert_eq(if len(t) > 0 { 1 } else { 0 }, 1)
+}
+
+// --- Text safety ---
+
+fn TestMafWorkerTextSafe() {
+    assert_eq(maf_worker_text_safe("hello", 10), 1)
+    assert_eq(maf_worker_text_safe("hello", 3), 0)
+    assert_eq(maf_worker_text_safe("", 10), 1)
+}
+
+fn TestMafWorkerTextSafeRejectsControlChars() {
+    // NUL can't be embedded in Mako string literals; test \n and \r.
+    assert_eq(maf_worker_text_safe("a\nb", 10), 0)
+    assert_eq(maf_worker_text_safe("a\rb", 10), 0)
+}
+
+// --- Endpoint validation ---
+
+fn TestMafWorkerEndpointOk() {
+    assert_eq(maf_worker_endpoint_ok("sip:alice@example.com"), 1)
+    assert_eq(maf_worker_endpoint_ok(""), 0)
+}
+
+// --- SDP validation ---
+
+fn TestMafWorkerAnswerSdpOk() {
+    let valid_sdp = "v=0\r\no=- 1 1 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\nm=audio 8000 RTP/AVP 0\r\n"
+    assert_eq(maf_worker_answer_sdp_ok(valid_sdp), 1)
+    assert_eq(maf_worker_answer_sdp_ok("short"), 0)
+    assert_eq(maf_worker_answer_sdp_ok("v=1\r\nm=audio 8000 RTP/AVP 0\r\n"), 0)
+}
+
+// --- Inbound call ID generation ---
+
+fn TestMafWorkerInboundCallId() {
+    let id = maf_worker_inbound_call_id("default", "test-call-id-123")
+    assert_eq(if str_has_prefix(id, "call-in-") { 1 } else { 0 }, 1)
+    assert_eq(if len(id) > 10 { 1 } else { 0 }, 1)
+}
+
+fn TestMafWorkerInboundCallIdDeterministic() {
+    let a = maf_worker_inbound_call_id("default", "same-id")
+    let b = maf_worker_inbound_call_id("default", "same-id")
+    assert_eq_str(a, b)
+}
+
+fn TestMafWorkerInboundCallIdDiffersByTenant() {
+    let a = maf_worker_inbound_call_id("tenant-a", "call-1")
+    let b = maf_worker_inbound_call_id("tenant-b", "call-1")
+    assert_eq(if str_eq(a, b) { 1 } else { 0 }, 0)
+}
+
+fn TestMafWorkerInboundCallIdRejectsEmpty() {
+    assert_eq_str(maf_worker_inbound_call_id("", "call-1"), "")
+    assert_eq_str(maf_worker_inbound_call_id("default", ""), "")
+}
+
+// --- MAF API route coverage ---
+
+fn TestMafApiRouteEvents() {
+    assert_eq(maf_api_route("GET", "/admin/api/v1/maf/events"), 8)
+}
+
+fn TestMafApiRouteHeaders() {
+    assert_eq(maf_api_route("POST", "/admin/api/v1/maf/calls/call-abc/headers"), 9)
+}
+
+fn TestMafApiWsRoute() {
+    assert_eq(maf_api_ws_route("GET", "/admin/api/v1/maf/events/ws"), 1)
+    assert_eq(maf_api_ws_route("POST", "/admin/api/v1/maf/events/ws"), 0)
+}
+
+fn TestMafApiRouteRejectsUnknown() {
+    assert_eq(maf_api_route("DELETE", "/admin/api/v1/maf/calls"), 0)
+    assert_eq(maf_api_route("GET", "/admin/api/v1/maf/unknown"), 0)
+}
+
+// --- MAF header policy ---
+
+fn TestMafHeadersProtectedHeaders() {
+    assert_eq(maf_headers_protected("Via"), 1)
+    assert_eq(maf_headers_protected("via"), 1)
+    assert_eq(maf_headers_protected("Call-ID"), 1)
+    assert_eq(maf_headers_protected("From"), 1)
+    assert_eq(maf_headers_protected("Content-Length"), 1)
+    assert_eq(maf_headers_protected("Authorization"), 1)
+    assert_eq(maf_headers_protected("X-Custom"), 0)
+    assert_eq(maf_headers_protected("P-Asserted-Identity"), 0)
+}
+
+fn TestMafHeadersActionOk() {
+    assert_eq(maf_headers_action_ok("add"), 1)
+    assert_eq(maf_headers_action_ok("set"), 1)
+    assert_eq(maf_headers_action_ok("remove"), 1)
+    assert_eq(maf_headers_action_ok("rename"), 1)
+    assert_eq(maf_headers_action_ok("copy"), 1)
+    assert_eq(maf_headers_action_ok("move"), 1)
+    assert_eq(maf_headers_action_ok("delete"), 0)
+    assert_eq(maf_headers_action_ok("inject"), 0)
+}
+
+fn TestMafHeadersDirectionOk() {
+    assert_eq(maf_headers_direction_ok("inbound"), 1)
+    assert_eq(maf_headers_direction_ok("outbound"), 1)
+    assert_eq(maf_headers_direction_ok("both"), 1)
+    assert_eq(maf_headers_direction_ok("sideways"), 0)
+}

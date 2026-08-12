@@ -79,7 +79,7 @@ fn TestMafWorkerEndpointAndInviteBoundaries() {
     assert_eq(maf_worker_endpoint_ok("sips:bob@example.net:5061"), 1)
     assert_eq(maf_worker_endpoint_ok("https://evil.example.net"), 0)
     assert_eq(maf_worker_endpoint_ok("sip:alice@example.net\r\nX-Evil: 1"), 0)
-    let invite = maf_worker_invite("call-12345678", "sip:alice@example.net", "sip:bob@example.net", "node1", "127.0.0.1")
+    let invite = maf_worker_invite("call-12345678", "sip:alice@example.net", "sip:bob@example.net", "node1", "127.0.0.1", "udp")
     assert_eq(sip_validate_message(invite, len(invite)), 1)
     assert(str_contains(invite, "CSeq: 1 INVITE"))
     assert(str_contains(invite, "Call-ID: call-12345678@node1"))
@@ -126,7 +126,7 @@ fn TestMafInboundAnswerSdpRejectsControls() {
 
 fn TestMafInboundAnswerMessage() {
     let sdp = "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=MAF\r\nt=0 0\r\nm=audio 4000 RTP/AVP 0\r\n"
-    let invite = maf_worker_invite("call-in-1234567890", "sip:alice@example.net", "sip:madis@example.net", "node1", "127.0.0.1")
+    let invite = maf_worker_invite("call-in-1234567890", "sip:alice@example.net", "sip:madis@example.net", "node1", "127.0.0.1", "udp")
     let answer = maf_worker_build_inbound_answer(invite, sdp, "sip:madis@127.0.0.1", "maf-in-testtag")
     assert_eq(sip_validate_message(answer, len(answer)), 1)
     assert_eq(sip_status_code(answer), 200)

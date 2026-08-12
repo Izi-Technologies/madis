@@ -74,6 +74,14 @@ The same suite covers the RTPEngine SDP boundary: content-type checks, required 
 
 `tests/ims_ifc_test.mko` covers target-only `service_profile.initial_filter_criteria` extraction, four-target and uniqueness limits, SIP/SIPS target validation, unsafe delimiter rejection, malformed array elements, structured criteria (priority, method, session_case, default_handling), originating/terminating live-registration guards, final-binding expiry reconciliation, outbound `Privacy: id` filtering for AS forks, clearing of stored triggers, third-party REGISTER builder identity derivation (`SIP_IMS_SERVER_NAME`/`SIP_REALM`, never hardcoded), and the Via-branch guard that keeps worker-originated 3pREG responses local. It does not prove standard iFC condition evaluation or TAS behavior. Worker-originated 3pREG delivery to AS targets, local response consumption, and the authenticated-fork session are covered by the opt-in worker smoke (`IMS_END_TO_END_FORK=1`).
 
+`tests/security_hardening_test.mko` covers PROXY protocol v1 parsing (TCP4, TCP6, UNKNOWN, malformed, edge cases), enumeration scanner detection (threshold, cross-IP independence, duplicate suppression, comma injection), progressive auth delay (backpressure tiers, clear-on-success), scanner UA detection (known agents, legitimate agents, SIPp exclusion), toll fraud prefix matching (default list, legitimate passthrough), and digest URI mismatch validation (user/host comparison, case insensitivity).
+
+`tests/stream_transport_test.mko` covers peer address parsing (IPv4, IPv6 bracket, no-port default, port bounds), stream framing (append, overflow cap, complete/incomplete message detection, two-message pipeline), PROXY protocol configuration, and PROXY protocol edge cases (line too long, missing fields, port 0 rejection).
+
+`tests/rfc_compliance_fix_test.mko` covers OPTIONS 200 To-tag presence, 405 To-tag presence, Allow header content, sip_resp tag generation, Max-Forwards processing (default, zero, invalid, decrement), loop detection, transaction key stability, Route processing (present, absent, pop, comma-separated), Proxy-Require/420 handling, CSeq parsing, and RSeq validation.
+
+`tests/maf_improvements_test.mko` covers MAF JSON escape delegation, special character handling, tenant validation, text safety, endpoint validation, SDP validation, inbound call ID generation (determinism, tenant isolation, empty rejection), MAF API route coverage, WebSocket route validation, and header policy validation (protected headers, actions, directions).
+
 `tests/bind_config_test.mko` covers `SIP_BIND_IP` parsing: wildcard default, configured IPv4 literals, trimming, and fail-back-to-wildcard on invalid values. It does not prove interface binding on a multi-homed host.
 
 `tests/https_client_test.mko` covers the Mako HTTPS client (`madis_https.mko`, built on the runtime TLS pool) envelope ("status|body") parsing and, with `MADIS_HTTPS_TEST_URL`/`MADIS_HTTPS_TEST_CA`/`MADIS_HTTPS_TEST_TOKEN` set, a live authenticated HTTPS POST including bearer delivery, DNS resolution, hostname verification, and fail-closed behavior with a wrong CA. TLS endpoints must use DNS names. It does not replace interoperability testing against the production subscriber/charging/application endpoints.
@@ -204,6 +212,12 @@ into the repository. SIP/admin ports are loopback-published; HSS and media
 control remain on the private Compose network. A passing run is an integration
 smoke result, not proof of complete 3GPP IMS interoperability, ICE/DTLS-SRTP,
 real UE compatibility, clustered state, or production capacity.
+
+The GitHub CI workflow runs this smoke on dedicated host ports (`15061` for
+SIP and `18081` for the P-CSCF admin endpoint). For local runs, override
+`IMS_LAB_SIP_PORT` and `IMS_LAB_ADMIN_PORT` when another process owns the
+defaults. The smoke harness always removes its containers, network, and test
+certificate volume on exit, including startup failures.
 
 ## Release checklist
 

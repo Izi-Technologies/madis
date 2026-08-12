@@ -14,6 +14,21 @@ fn proxy_config_reload(cache: CMap) -> int {
     let _ = cmap_del(cache, "rtpengine_cfg")
     let _ = cmap_del(cache, "shaken|v2")
     let _ = cmap_del(cache, "sec_enabled")
+    // Security: flush cached bans, ACL, IP auth, whitelist, and config values
+    // so changes take effect immediately instead of waiting for ring eviction.
+    let _ = cmap_del(cache, "sec_auth_thresh")
+    let _ = cmap_del(cache, "sec_ban_dur")
+    let _ = cmap_del(cache, "fraud_pfx")
+    let _ = cmap_del(cache, "rl_limit")
+    // Flush all ban cache entries (ban|<ip>) by resetting the ring sequence.
+    // The next lookup will re-query the database.
+    cmap_set(cache, "ban_seq", "0")
+    // Flush ACL cache entries
+    cmap_set(cache, "acl_seq", "0")
+    // Flush whitelist cache
+    cmap_set(cache, "wl_seq", "0")
+    // Flush IP auth cache
+    cmap_set(cache, "ipauth_seq", "0")
     cmap_set(cache, "config_reloaded_at", string(now_ms()))
     metric_add(7, 1)
     return epoch
@@ -35,6 +50,111 @@ fn proxy_metric_message(msg: string, reply: string, elapsed: int, calls: CMap) -
     hist_observe(0, elapsed)
     gauge_set(0, cmap_len(calls))
     return 0
+}
+
+// ============ LABELED METRICS (CMap-backed) ============
+// Prometheus-style counters with method/transport/code labels stored in CMap.
+// The fixed metric_add slots stay for backward compatibility; these add
+// per-label breakdown for debugging production traffic patterns.
+
+fn proxy_metric_labeled(msg: string, reply: string, tr: string, method: string, cache: CMap) -> int {
+    // Per-method counter — method is already parsed by the caller
+    if len(method) > 0 {
+        // Build the CMap key directly to avoid intermediate label string
+        let _ = cmap_incr(cache, "prom|sip_requests|method=\"" + method + "\",transport=\"" + tr + "\"", 1)
+    }
+    // Per-code counter
+    if len(reply) > 0 {
+        let code = sip_status_code(reply)
+        if code > 0 {
+            let _ = cmap_incr(cache, "prom|sip_responses|code=\"" + string(code) + "\",class=\"" + string(code / 100) + "xx\"", 1)
+        }
+    }
+    return 0
+}
+
+// Connection gauge tracking per transport
+fn proxy_conn_incr(cache: CMap, transport: string) -> int {
+    let _ = cmap_incr(cache, "prom|sip_connections|transport=\"" + transport + "\"", 1)
+    return 1
+}
+
+fn proxy_conn_decr(cache: CMap, transport: string) -> int {
+    let key = "prom|sip_connections|transport=\"" + transport + "\""
+    let mut val = 0
+    if cmap_has(cache, key) == 1 {
+        match parse_int(cmap_get(cache, key)) { Ok(v) => { val = v } Err(_) => {} }
+    }
+    if val > 0 { val = val - 1 }
+    cmap_set(cache, key, string(val))
+    return 1
+}
+
+// Render all labeled metrics as Prometheus text exposition format.
+// Scans CMap for keys starting with "prom|".
+fn proxy_metrics_labeled_export(cache: CMap) -> string {
+    let mut b = str_builder()
+    // Counters: sip_requests_total, sip_responses_total
+    // Gauges: sip_connections
+    let metrics = ["sip_requests", "sip_responses", "sip_connections"]
+    let types = ["counter", "counter", "gauge"]
+    let mut mi = 0
+    while mi < len(metrics) {
+        let name = metrics[mi]
+        let metric_type = types[mi]
+        let prefix = "prom|" + name + "|"
+        // Scan the known label combinations from cache
+        let mut found = 0
+        let mut si = 0
+        // Check transport labels
+        let transports = ["UDP", "TCP", "TLS", "WS"]
+        let mut ti = 0
+        while ti < len(transports) {
+            let key = prefix + "transport=\"" + transports[ti] + "\""
+            if cmap_has(cache, key) == 1 {
+                if found == 0 {
+                    builder_write(b, "# TYPE madis_" + name + "_total " + metric_type + "\n")
+                    found = 1
+                }
+                builder_write(b, "madis_" + name + "_total{" + "transport=\"" + transports[ti] + "\"} " + cmap_get(cache, key) + "\n")
+            }
+            ti = ti + 1
+        }
+        // Check method labels
+        let methods = ["INVITE", "REGISTER", "BYE", "CANCEL", "OPTIONS", "ACK", "PRACK", "UPDATE", "REFER", "INFO", "MESSAGE", "NOTIFY"]
+        let mut mti = 0
+        while mti < len(methods) {
+            let mut tti = 0
+            while tti < len(transports) {
+                let key = prefix + "method=\"" + methods[mti] + "\",transport=\"" + transports[tti] + "\""
+                if cmap_has(cache, key) == 1 {
+                    if found == 0 {
+                        builder_write(b, "# TYPE madis_" + name + "_total " + metric_type + "\n")
+                        found = 1
+                    }
+                    builder_write(b, "madis_" + name + "_total{method=\"" + methods[mti] + "\",transport=\"" + transports[tti] + "\"} " + cmap_get(cache, key) + "\n")
+                }
+                tti = tti + 1
+            }
+            mti = mti + 1
+        }
+        // Check code labels (2xx-6xx)
+        let mut code = 200
+        while code < 700 {
+            let class = string(code / 100) + "xx"
+            let key = prefix + "code=\"" + string(code) + "\",class=\"" + class + "\""
+            if cmap_has(cache, key) == 1 {
+                if found == 0 {
+                    builder_write(b, "# TYPE madis_" + name + "_total " + metric_type + "\n")
+                    found = 1
+                }
+                builder_write(b, "madis_" + name + "_total{code=\"" + string(code) + "\",class=\"" + class + "\"} " + cmap_get(cache, key) + "\n")
+            }
+            code = code + 1
+        }
+        mi = mi + 1
+    }
+    return builder_string(b)
 }
 
 fn proxy_admin_secret_equal(actual: string, expected: string) int {
@@ -95,7 +215,7 @@ fn proxy_admin_worker(reg: CMap, calls: CMap, cache: CMap) -> int {
                 let _ = http_respond_json(c, 503, "{\"ready\":false}\n")
             }
         } else if str_eq(path, "/metrics") {
-            let _ = http_respond_ct(c, 200, "text/plain; version=0.0.4", metrics_export_prom())
+            let _ = http_respond_ct(c, 200, "text/plain; version=0.0.4", metrics_export_prom() + proxy_metrics_labeled_export(cache))
         } else if str_eq(path, "/ims/ipsec/sa") {
             if not str_eq(http_method(c), "POST") {
                 let _ = http_respond_json(c, 405, "{\"ok\":false,\"error\":\"POST required\"}\n")

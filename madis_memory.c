@@ -6,6 +6,15 @@
 #include "mako_cmap.h"
 #include "mako_net.h"
 
+/* Forward-declare only the TLS functions we use, avoiding the full
+ * mako_tls.h header which depends on crypto helpers not linked here. */
+extern void *mako_tls_accept_start(void *ctx, int64_t fd);
+extern int64_t mako_tls_handshake_step(void *conn);
+extern int64_t mako_tls_conn_fd(void *conn);
+extern MakoString mako_tls_read_nb(void *conn, int64_t max);
+extern int64_t mako_tls_write_nb(void *conn, MakoString data);
+extern int64_t mako_tls_conn_close(void *conn);
+
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -182,4 +191,59 @@ void madis_cmap_set_i64(MakoCMap *cache, MakoString prefix, MakoString suffix, i
     int n = snprintf(val, sizeof(val), "%lld", (long long)value);
     if (n < 0 || (size_t)n >= sizeof(val)) return;
     mako_cmap_set(cache, (MakoString){key, strlen(key)}, (MakoString){val, (size_t)n});
+}
+
+/* ---- Server-side TLS connection handle table ----
+ * Mako cannot store TlsConn (void*) in maps or arrays. This table maps
+ * integer handles to opaque TLS connection pointers so the multiplexed
+ * TLS worker can track connections with map[string]int.
+ */
+#define MADIS_TLS_POOL_CAP 8192
+static void *madis_tls_table[MADIS_TLS_POOL_CAP];
+static int64_t madis_tls_seq = 0;
+
+int64_t madis_tls_srv_accept(void *srv, int64_t fd) {
+    void *conn = mako_tls_accept_start(srv, fd);
+    if (!conn || mako_tls_conn_fd(conn) < 0) return -1;
+    int64_t slot = __sync_fetch_and_add(&madis_tls_seq, 1) % MADIS_TLS_POOL_CAP;
+    void *old = madis_tls_table[slot];
+    if (old) mako_tls_conn_close(old);
+    madis_tls_table[slot] = conn;
+    return slot;
+}
+
+int64_t madis_tls_srv_fd(int64_t handle) {
+    if (handle < 0 || handle >= MADIS_TLS_POOL_CAP) return -1;
+    void *conn = madis_tls_table[handle];
+    if (!conn) return -1;
+    return mako_tls_conn_fd(conn);
+}
+
+int64_t madis_tls_srv_handshake(int64_t handle) {
+    if (handle < 0 || handle >= MADIS_TLS_POOL_CAP) return -1;
+    void *conn = madis_tls_table[handle];
+    if (!conn) return -1;
+    return mako_tls_handshake_step(conn);
+}
+
+MakoString madis_tls_srv_read(int64_t handle, int64_t max) {
+    if (handle < 0 || handle >= MADIS_TLS_POOL_CAP) return (MakoString){NULL, 0};
+    void *conn = madis_tls_table[handle];
+    if (!conn) return (MakoString){NULL, 0};
+    return mako_tls_read_nb(conn, max);
+}
+
+int64_t madis_tls_srv_write(int64_t handle, MakoString data) {
+    if (handle < 0 || handle >= MADIS_TLS_POOL_CAP) return -1;
+    void *conn = madis_tls_table[handle];
+    if (!conn) return -1;
+    return mako_tls_write_nb(conn, data);
+}
+
+int64_t madis_tls_srv_close(int64_t handle) {
+    if (handle < 0 || handle >= MADIS_TLS_POOL_CAP) return -1;
+    void *conn = madis_tls_table[handle];
+    if (!conn) return -1;
+    madis_tls_table[handle] = NULL;
+    return mako_tls_conn_close(conn);
 }

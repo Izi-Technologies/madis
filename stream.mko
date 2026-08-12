@@ -106,3 +106,106 @@ fn stream_has_complete(buf: string) -> int {
     if sip_first_message_len(buf) > 0 { return 1 }
     return 0
 }
+
+// ============ PROXY PROTOCOL v1 (HAProxy) ============
+// "PROXY TCP4 srcip dstip srcport dstport\r\n"
+// "PROXY TCP6 srcip dstip srcport dstport\r\n"
+// "PROXY UNKNOWN\r\n"
+// Returns [src_ip, src_port, remainder]. src_ip empty on parse failure or
+// if the line is UNKNOWN (caller keeps the socket peer as-is).
+fn proxy_protocol_enabled() -> int {
+    let v = str_to_lower(str_trim_space(env_get_or("SIP_PROXY_PROTOCOL", "0")))
+    if str_eq(v, "1") || str_eq(v, "true") || str_eq(v, "yes") { return 1 }
+    return 0
+}
+
+// Validate that the TCP peer sending PROXY protocol is a trusted load balancer.
+// SIP_PROXY_TRUSTED_IPS is a comma-separated whitelist (required when PP is on).
+// Without this, any client can spoof their source IP and bypass all IP-based
+// security (bans, rate limits, ACL, IP auth).
+// Per-IP connection limit to prevent connection-flood DoS (slowloris).
+// Default: 100 concurrent connections per source IP.
+fn sip_per_ip_conn_limit() -> int {
+    let mut limit = 100
+    match parse_int(env_get_or("SIP_PER_IP_CONN_LIMIT", "100")) {
+        Ok(v) => { limit = v }
+        Err(_) => {}
+    }
+    if limit < 10 { limit = 10 }
+    if limit > 10000 { limit = 10000 }
+    return limit
+}
+
+fn sip_per_ip_conn_check(cache: CMap, ip: string) -> int {
+    let key = "ip_conns|" + ip
+    let mut count = 0
+    if cmap_has(cache, key) == 1 {
+        match parse_int(cmap_get(cache, key)) { Ok(v) => { count = v } Err(_) => {} }
+    }
+    if count >= sip_per_ip_conn_limit() { return 0 }
+    cmap_set(cache, key, string(count + 1))
+    return 1
+}
+
+fn sip_per_ip_conn_release(cache: CMap, ip: string) -> int {
+    let key = "ip_conns|" + ip
+    let mut count = 0
+    if cmap_has(cache, key) == 1 {
+        match parse_int(cmap_get(cache, key)) { Ok(v) => { count = v } Err(_) => {} }
+    }
+    if count > 0 { count = count - 1 }
+    cmap_set(cache, key, string(count))
+    return 1
+}
+
+fn proxy_protocol_peer_trusted(socket_ip: string) -> int {
+    let trusted = env_get_or("SIP_PROXY_TRUSTED_IPS", "")
+    // If no trusted list configured, only trust loopback
+    if len(trusted) == 0 {
+        if str_eq(socket_ip, "127.0.0.1") || str_eq(socket_ip, "::1") { return 1 }
+        return 0
+    }
+    let parts = str_split(trusted, ",")
+    let mut i = 0
+    while i < len(parts) {
+        if str_eq(str_trim_space(parts[i]), socket_ip) { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+fn proxy_protocol_parse(buf: string) -> []string {
+    let mut out = make([]string, 3)
+    out[0] = ""
+    out[1] = ""
+    out[2] = buf
+    if len(buf) < 8 { return out }
+    // Must start with "PROXY "
+    if not str_has_prefix(buf, "PROXY ") { return out }
+    let crlf = str_index(buf, "\r\n")
+    if crlf < 0 || crlf > 107 { return out }
+    let line = buf[6:crlf]
+    out[2] = buf[crlf + 2:]
+    // "UNKNOWN" — no address info, keep socket peer
+    if str_has_prefix(line, "UNKNOWN") { return out }
+    let parts = str_split(line, " ")
+    // "TCP4 srcip dstip srcport dstport" or "TCP6 ..."
+    if len(parts) < 5 { return out }
+    let proto = str_to_upper(parts[0])
+    if not str_eq(proto, "TCP4") && not str_eq(proto, "TCP6") { return out }
+    let src_ip = parts[1]
+    let src_port = parts[3]
+    // Validate port range
+    let mut port_ok = 0
+    match parse_int(src_port) {
+        Ok(v) => { if v > 0 && v <= 65535 { port_ok = 1 } }
+        Err(_) => {}
+    }
+    if port_ok == 0 { return out }
+    // Validate IP has content (not exhaustive, but safe — invalid IPs
+    // fail downstream without causing harm)
+    if len(src_ip) < 1 { return out }
+    out[0] = src_ip
+    out[1] = src_port
+    return out
+}

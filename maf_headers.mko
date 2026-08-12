@@ -4,21 +4,10 @@
 // application can safely control only its own call.  Framing, routing,
 // authentication, and dialog-identity headers remain worker-owned.
 
+// Reuse maf_worker_json_escape from maf_worker.mko (pulled into the same
+// namespace via dot-pull).
 fn maf_headers_json_escape(s: string) -> string {
-    let mut b = str_builder()
-    let mut i = 0
-    while i < len(s) {
-        let c = int(s[i])
-        if c == 34 { builder_write(b, "\\\"") }
-        else if c == 92 { builder_write(b, "\\\\") }
-        else if c == 10 { builder_write(b, "\\n") }
-        else if c == 13 { builder_write(b, "\\r") }
-        else if c == 9 { builder_write(b, "\\t") }
-        else if c < 32 || c == 127 { builder_write_byte(b, byte(32)) }
-        else { builder_write_byte(b, byte(c)) }
-        i = i + 1
-    }
-    return builder_string(b)
+    return maf_worker_json_escape(s)
 }
 
 fn maf_headers_name_safe(value: string) -> int {

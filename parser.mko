@@ -131,11 +131,14 @@ fn sip_resp(st: int, reason: string, msg: string, n: int, tag: string) -> string
 fn sip_options_response(msg: string) -> string {
     let allow = "Allow: INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, PRACK, UPDATE\r\n"
         + "Accept: application/sdp, application/pidf+xml, application/simple-message-summary\r\n"
-    return sip_reply(msg, 200, "OK", allow, "")
+    // RFC 3261 §8.2.6.2: all non-100 responses MUST have a To-tag.
+    let tag = "opt-" + sha256("madis.options|" + sip_header(msg, "Call-ID"))[0:16]
+    return sip_reply_with_to_tag(msg, 200, "OK", allow, "", tag)
 }
 
 fn sip_method_not_allowed(msg: string) -> string {
-    return sip_reply(msg, 405, "Method Not Allowed", "Allow: INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, PRACK, UPDATE\r\n", "")
+    let tag = "mna-" + sha256("madis.405|" + sip_header(msg, "Call-ID"))[0:16]
+    return sip_reply_with_to_tag(msg, 405, "Method Not Allowed", "Allow: INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, PRACK, UPDATE\r\n", "", tag)
 }
 
 fn sip_cseq_valid(msg: string, is_response: int) -> int {

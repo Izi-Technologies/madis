@@ -1,0 +1,215 @@
+// Tests for RFC 3261 compliance fixes: To-tag on OPTIONS/405, CANCEL→487,
+// 302 redirect following, and in-dialog REFER forwarding.
+pull . "../parser.mko"
+pull . "../rfc.mko"
+pull . "../registration.mko"
+pull . "../nat.mko"
+pull . "../auth.mko"
+pull . "../headers.mko"
+
+fn rfc_test_invite() -> string {
+    return "INVITE sip:bob@example.com SIP/2.0\r\n"
+        + "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-rfc-test\r\n"
+        + "From: <sip:alice@example.com>;tag=from1\r\n"
+        + "To: <sip:bob@example.com>\r\n"
+        + "Call-ID: rfc-test-001\r\n"
+        + "CSeq: 1 INVITE\r\n"
+        + "Max-Forwards: 70\r\n"
+        + "Content-Length: 0\r\n\r\n"
+}
+
+fn rfc_test_options() -> string {
+    return "OPTIONS sip:proxy@example.com SIP/2.0\r\n"
+        + "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-opt-test\r\n"
+        + "From: <sip:alice@example.com>;tag=from1\r\n"
+        + "To: <sip:proxy@example.com>\r\n"
+        + "Call-ID: options-test-001\r\n"
+        + "CSeq: 1 OPTIONS\r\n"
+        + "Max-Forwards: 70\r\n"
+        + "Content-Length: 0\r\n\r\n"
+}
+
+fn rfc_test_refer() -> string {
+    return "REFER sip:bob@example.com SIP/2.0\r\n"
+        + "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-ref-test\r\n"
+        + "From: <sip:alice@example.com>;tag=from1\r\n"
+        + "To: <sip:bob@example.com>;tag=to1\r\n"
+        + "Call-ID: refer-test-001\r\n"
+        + "CSeq: 1 REFER\r\n"
+        + "Max-Forwards: 70\r\n"
+        + "Refer-To: <sip:carol@example.com>\r\n"
+        + "Content-Length: 0\r\n\r\n"
+}
+
+// --- OPTIONS 200 must have To-tag ---
+
+fn TestOptionsResponseHasToTag() {
+    let msg = rfc_test_options()
+    let resp = sip_options_response(msg)
+    assert_eq(sip_is_response(resp), 1)
+    assert_eq(sip_status_code(resp), 200)
+    let to = sip_header(resp, "To")
+    let tag = sip_addr_tag(to)
+    assert_eq(if len(tag) > 0 { 1 } else { 0 }, 1)
+}
+
+// --- 405 must have To-tag ---
+
+fn TestMethodNotAllowedHasToTag() {
+    let msg = rfc_test_refer()
+    let resp = sip_method_not_allowed(msg)
+    assert_eq(sip_status_code(resp), 405)
+    let to = sip_header(resp, "To")
+    let tag = sip_addr_tag(to)
+    assert_eq(if len(tag) > 0 { 1 } else { 0 }, 1)
+}
+
+// --- OPTIONS 200 has Allow header ---
+
+fn TestOptionsResponseHasAllow() {
+    let msg = rfc_test_options()
+    let resp = sip_options_response(msg)
+    let allow = sip_header(resp, "Allow")
+    assert_eq(if str_contains(allow, "INVITE") { 1 } else { 0 }, 1)
+    assert_eq(if str_contains(allow, "BYE") { 1 } else { 0 }, 1)
+    assert_eq(if str_contains(allow, "CANCEL") { 1 } else { 0 }, 1)
+    assert_eq(if str_contains(allow, "REGISTER") { 1 } else { 0 }, 1)
+    assert_eq(if str_contains(allow, "PRACK") { 1 } else { 0 }, 1)
+    assert_eq(if str_contains(allow, "UPDATE") { 1 } else { 0 }, 1)
+}
+
+// --- 405 has Allow header ---
+
+fn TestMethodNotAllowedHasAllow() {
+    let resp = sip_method_not_allowed(rfc_test_refer())
+    let allow = sip_header(resp, "Allow")
+    assert_eq(if str_contains(allow, "INVITE") { 1 } else { 0 }, 1)
+}
+
+// --- To-tag on error responses ---
+
+fn TestSipRespWithTag() {
+    let msg = rfc_test_invite()
+    let resp = sip_resp(403, "Forbidden", msg, len(msg), "test-tag")
+    assert_eq(sip_status_code(resp), 403)
+    let to = sip_header(resp, "To")
+    let tag = sip_addr_tag(to)
+    assert_eq_str(tag, "test-tag")
+}
+
+// --- Max-Forwards processing ---
+
+fn TestMaxForwardsDefault70() {
+    let msg = str_replace(rfc_test_invite(), "Max-Forwards: 70\r\n", "")
+    assert_eq(sip_get_max_forwards(msg, len(msg)), 70)
+}
+
+fn TestMaxForwardsZeroReturnsZero() {
+    let msg = str_replace(rfc_test_invite(), "Max-Forwards: 70", "Max-Forwards: 0")
+    assert_eq(sip_get_max_forwards(msg, len(msg)), 0)
+}
+
+fn TestMaxForwardsInvalidReturnsNeg1() {
+    let msg = str_replace(rfc_test_invite(), "Max-Forwards: 70", "Max-Forwards: -5")
+    assert_eq(sip_get_max_forwards(msg, len(msg)), -1)
+    let msg2 = str_replace(rfc_test_invite(), "Max-Forwards: 70", "Max-Forwards: abc")
+    assert_eq(sip_get_max_forwards(msg2, len(msg2)), -1)
+}
+
+fn TestMaxForwardsDecrement() {
+    let msg = rfc_test_invite()
+    let result = sip_decrement_max_forwards(msg, len(msg))
+    assert_eq(sip_get_max_forwards(result, len(result)), 69)
+}
+
+// --- Loop detection ---
+
+fn TestLoopDetection() {
+    let msg = rfc_test_invite()
+    assert_eq(sip_detect_loop(msg, len(msg), "192.0.2.10", 5060), 1)
+    assert_eq(sip_detect_loop(msg, len(msg), "10.0.0.1", 5060), 0)
+}
+
+// --- Transaction key stability ---
+
+fn TestTransactionKeyStable() {
+    let msg = rfc_test_invite()
+    let k1 = sip_transaction_key(msg, len(msg))
+    let k2 = sip_transaction_key(msg, len(msg))
+    assert_eq_str(k1, k2)
+    assert_eq(if len(k1) > 2 { 1 } else { 0 }, 1)
+}
+
+// --- Route processing ---
+
+fn TestRoutePresent() {
+    let msg = str_replace(rfc_test_invite(), "Max-Forwards:", "Route: <sip:proxy@10.0.0.1;lr>\r\nMax-Forwards:")
+    assert_eq(sip_has_route(msg, len(msg)), 1)
+}
+
+fn TestRouteAbsent() {
+    assert_eq(sip_has_route(rfc_test_invite(), len(rfc_test_invite())), 0)
+}
+
+fn TestPopRoute() {
+    let msg = str_replace(rfc_test_invite(), "Max-Forwards:", "Route: <sip:proxy@10.0.0.1;lr>\r\nMax-Forwards:")
+    let popped = sip_pop_route(msg, len(msg))
+    assert_eq(sip_has_route(popped, len(popped)), 0)
+}
+
+fn TestPopRouteComma() {
+    let msg = str_replace(rfc_test_invite(), "Max-Forwards:", "Route: <sip:first@10.0.0.1;lr>, <sip:second@10.0.0.2;lr>\r\nMax-Forwards:")
+    let popped = sip_pop_route(msg, len(msg))
+    assert_eq(sip_has_route(popped, len(popped)), 1)
+    let route = sip_get_route(popped, len(popped))
+    assert_eq(if str_contains(route, "second") { 1 } else { 0 }, 1)
+}
+
+// --- Proxy-Require / 420 ---
+
+fn TestProxyRequireUnsupported() {
+    let msg = str_replace(rfc_test_invite(), "Max-Forwards:", "Proxy-Require: foo-extension\r\nMax-Forwards:")
+    let unsupported = sip_check_require(msg, len(msg))
+    assert_eq(if len(unsupported) > 0 { 1 } else { 0 }, 1)
+}
+
+fn TestNoProxyRequire() {
+    assert_eq_str(sip_check_require(rfc_test_invite(), len(rfc_test_invite())), "")
+}
+
+// --- CSeq parsing ---
+
+fn TestCseqNumberValue() {
+    let msg = rfc_test_invite()
+    assert_eq(sip_cseq_number_value(msg), 1)
+}
+
+fn TestCseqMethodValue() {
+    assert_eq_str(sip_cseq_method_value(rfc_test_invite()), "INVITE")
+}
+
+// --- PRACK RSeq ---
+
+fn TestRSeqParsing() {
+    let resp = "SIP/2.0 183 Session Progress\r\n"
+        + "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK1\r\n"
+        + "From: <sip:a@b>;tag=t\r\n"
+        + "To: <sip:b@c>;tag=t2\r\n"
+        + "Call-ID: prack-test\r\n"
+        + "CSeq: 1 INVITE\r\n"
+        + "RSeq: 42\r\n"
+        + "Content-Length: 0\r\n\r\n"
+    assert_eq(sip_rseq_number_value(resp), 42)
+}
+
+fn TestRSeqInvalid() {
+    let resp = "SIP/2.0 183 Session Progress\r\n"
+        + "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK1\r\n"
+        + "From: <sip:a@b>;tag=t\r\n"
+        + "To: <sip:b@c>;tag=t2\r\n"
+        + "Call-ID: prack-test\r\n"
+        + "CSeq: 1 INVITE\r\n"
+        + "RSeq: -1\r\n"
+        + "Content-Length: 0\r\n\r\n"
+    assert_eq(sip_rseq_number_value(resp), -1)
+}

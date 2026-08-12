@@ -207,6 +207,31 @@ fn maf_api_limit(q: string) -> int {
     return value
 }
 
+fn maf_api_events_filtered(db: SqlDB, ok: int, tenant: string, q: string) -> string {
+    if ok == 0 { return "" }
+    let cursor = maf_api_parse_cursor(q)
+    let limit = maf_api_limit(q)
+    let event_type = query_val(q, "event_type")
+    let call_id = query_val(q, "call_id")
+    let packed = "{\"tenant_id\":\"" + maf_api_json_escape(tenant) + "\",\"event_type\":\"" + maf_api_json_escape(event_type) + "\",\"call_id\":\"" + maf_api_json_escape(call_id) + "\"}"
+    let mut base = "SELECT json_build_object('schema','madis.maf.event.v1','event_id',event_id,'event_type',event_type,'event_version',event_version,'tenant_id',tenant_id,'call_id',call_id,'channel_id',channel_id,'sequence',sequence,'occurred_at',occurred_at,'trace_id',trace_id,'payload',payload_json)::text FROM maf_events WHERE tenant_id = $1::jsonb->>'tenant_id' AND sequence > " + string(cursor)
+    if len(event_type) > 0 { base = base + " AND event_type = $1::jsonb->>'event_type'" }
+    if len(call_id) > 0 { base = base + " AND call_id = $1::jsonb->>'call_id'" }
+    base = base + " ORDER BY sequence ASC"
+    let rows = tbl_query_param(db, ok, base, packed, limit)
+    let mut out = "{\"schema\":\"madis.maf.event-page.v1\",\"events\":["
+    let mut i = 0
+    while i < len(rows) {
+        if len(out) + len(rows[i]) + 2 > 262144 { break }
+        if i > 0 { out = out + "," }
+        out = out + rows[i]
+        i = i + 1
+    }
+    let mut next = cursor
+    if len(rows) > 0 { next = json_get_int(rows[len(rows) - 1], "sequence") }
+    return out + "],\"next_cursor\":\"" + string(next) + "\",\"truncated\":" + if len(rows) >= limit { "true" } else { "false" } + "}\n"
+}
+
 fn maf_api_events(db: SqlDB, ok: int, tenant: string, q: string) -> string {
     if ok == 0 { return "" }
     let cursor = maf_api_parse_cursor(q)
@@ -234,6 +259,14 @@ fn maf_api_events(db: SqlDB, ok: int, tenant: string, q: string) -> string {
 // connection is read-only and bearer-authenticated during the HTTP upgrade;
 // each frame is a replay page so a reconnect can safely resume from the last
 // committed numeric cursor.
+//
+// Adaptive poll: 50ms when events are flowing, backs off to 2s when idle.
+// A PG trigger fires pg_notify('maf_events', ...) on insert; when a Mako
+// runtime with sql_listen support is available, the sleep is replaced by a
+// notification wait for near-zero latency.
+//
+// Filters: ?event_type=call.answered  — type filter
+//          ?call_id=call-abc123       — call-scoped subscription
 fn maf_api_ws_session(fd: int, db_url: string, tenant: string, initial_query: string) -> int {
     let _ = io_set_nonblocking(fd, 0)
     let _ = tcp_nodelay(fd)
@@ -247,18 +280,43 @@ fn maf_api_ws_session(fd: int, db_url: string, tenant: string, initial_query: st
     let mut cursor = maf_api_parse_cursor(initial_query)
     if cursor < 0 { cursor = 0 }
     let event_type = query_val(initial_query, "event_type")
+    let call_filter = query_val(initial_query, "call_id")
     let mut alive = 1
-    let mut tick = 0
-    while alive == 1 && tick <= 3600 {
+    let mut idle_ms = 50
+    let mut last_ping = mono_ms()
+    while alive == 1 {
         let mut q = "cursor=" + string(cursor) + "&limit=100"
         if len(event_type) > 0 { q = q + "&event_type=" + event_type }
-        let page = maf_api_events(db, db_ok, tenant, q)
-        if len(page) == 0 || ws_send_text(fd, page) < 0 { alive = 0 }
-        if alive == 1 {
-            let next_raw = json_get_string(page, "next_cursor")
-            match parse_int(next_raw) { Ok(v) => { if v > cursor { cursor = v } } Err(_) => {} }
-            sleep_ms(1000)
-            tick = tick + 1
+        if len(call_filter) > 0 { q = q + "&call_id=" + call_filter }
+        let page = maf_api_events_filtered(db, db_ok, tenant, q)
+        if len(page) == 0 { alive = 0; continue }
+        let next_raw = json_get_string(page, "next_cursor")
+        let mut next = cursor
+        match parse_int(next_raw) { Ok(v) => { next = v } Err(_) => {} }
+        if next > cursor {
+            // Events found — send and reset to fast poll
+            if ws_send_text(fd, page) < 0 { alive = 0; continue }
+            cursor = next
+            idle_ms = 50
+        } else {
+            // No new events — back off
+            if idle_ms < 2000 { idle_ms = idle_ms * 2 }
+        }
+        // Keepalive heartbeat every 30s — send an empty event page so the
+        // client knows the connection is alive. Uses ws_send_text (always
+        // available) instead of ws_send_ping (may not exist in runtime).
+        let now = mono_ms()
+        if now - last_ping >= 30000 {
+            let hb = "{\"schema\":\"madis.maf.event-page.v1\",\"events\":[],\"next_cursor\":\"" + string(cursor) + "\",\"heartbeat\":true}\n"
+            if ws_send_text(fd, hb) < 0 { alive = 0; continue }
+            last_ping = now
+        }
+        // Check for client close (non-blocking)
+        if io_read_ready(fd, idle_ms) > 0 {
+            let frame = ws_recv(fd, 256)
+            // Any client frame besides pong is unexpected; a close or empty
+            // read means the client is gone.
+            if len(frame) == 0 { alive = 0; continue }
         }
     }
     let _ = ws_send_close(fd, 1000, "")
@@ -414,7 +472,9 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         if maf_api_parse_cursor(q) < 0 { return maf_api_error(400, "invalid cursor") }
         let event_type = query_val(q, "event_type")
         if len(event_type) > 0 && maf_api_identifier_ok(event_type, 1, 128) == 0 { return maf_api_error(400, "invalid event_type") }
-        return http_resp(200, "application/json", maf_api_events(db, ok, maf_api_tenant(), q), "Cache-Control: no-store\r\n")
+        let call_id_filter = query_val(q, "call_id")
+        if len(call_id_filter) > 0 && maf_api_identifier_ok(call_id_filter, 1, 128) == 0 { return maf_api_error(400, "invalid call_id") }
+        return http_resp(200, "application/json", maf_api_events_filtered(db, ok, maf_api_tenant(), q), "Cache-Control: no-store\r\n")
     }
     return maf_api_error(404, "not found")
 }

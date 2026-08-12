@@ -7,70 +7,81 @@ fn sec_is_banned(db: SqlDB, db_ok: int, src_ip: string, cache: CMap) -> int {
     let now = now_ms()
 
     if cmap_has(cache, key) == 1 {
-        let cached = str_split(cmap_get(cache, key), "|")
-        let mut cached_at = 0
-        if len(cached) >= 2 {
-            match parse_int(cached[1]) { Ok(v) => { cached_at = v } Err(_) => {} }
-        }
-        // Check if cache is fresh (within 5 seconds).
-        if cached_at > 0 && now - cached_at < 5000 {
-            if len(cached) > 0 && str_eq(cached[0], "1") { return 1 }
-            return 0
+        let cached = cmap_get(cache, key)
+        // Format: "0|<timestamp>" or "1|<timestamp>". Parse without str_split.
+        let pipe = str_index(cached, "|")
+        if pipe > 0 {
+            let mut cached_at = 0
+            match parse_int(cached[pipe + 1:]) { Ok(v) => { cached_at = v } Err(_) => {} }
+            if cached_at > 0 && now - cached_at < 5000 {
+                if int(cached[0]) == 49 { return 1 }
+                return 0
+            }
         }
     }
 
     if db_ok == 0 { return 0 }
-    let r = sql_query_str(db, "SELECT 1 FROM security_bans WHERE source_ip = $1 AND (permanent = true OR expires_at > NOW())", src_ip)
+    let r = sql_query_str(db, "SELECT CASE WHEN permanent THEN 'P' ELSE 'T' END FROM security_bans WHERE source_ip = $1 AND (permanent = true OR expires_at > NOW()) LIMIT 1", src_ip)
     if len(r) > 0 {
-        let _ = bounded_cache_set(cache, "ban_seq", "ban_ring|", key, "1|" + string(now), 16384)
+        if str_eq(r, "P") {
+            // Permanent bans stored outside the ring — immune to eviction.
+            cmap_set(cache, key, "1|" + string(now))
+        } else {
+            let _ = bounded_cache_set(cache, "ban_seq", "ban_ring|", key, "1|" + string(now), 65536)
+        }
         return 1
     }
-    let _ = bounded_cache_set(cache, "ban_seq", "ban_ring|", key, "0|" + string(now), 16384)
+    let _ = bounded_cache_set(cache, "ban_seq", "ban_ring|", key, "0|" + string(now), 65536)
     return 0
 }
 
-// Record auth failure and auto-ban if threshold exceeded
+// Record auth failure and auto-ban if threshold exceeded.
+// Uses in-memory counter for the hot path; DB write only on ban.
 fn sec_auth_failure(db: SqlDB, db_ok: int, src_ip: string, sip_user: string, cache: CMap) -> int {
-    if db_ok == 0 { return 0 }
-    // Log the event
-    let _ = sql_exec_str4(db, "INSERT INTO security_events (event_type, source_ip, sip_user, severity) VALUES ($1, $2, $3, $4)", "auth_failure", src_ip, sip_user, "medium")
+    // In-memory counter is the hot path — no DB query needed.
+    let count = sec_auth_fail_incr(src_ip, cache)
 
-    // Count recent failures from this IP (last 10 minutes)
-    let count_str = sql_query_str(db, "SELECT COUNT(*) FROM security_events WHERE source_ip = $1 AND event_type = 'auth_failure' AND ts > NOW() - INTERVAL '10 minutes'", src_ip)
-    let mut count = 0
-    match parse_int(count_str) {
-        Ok(v) => { count = v }
-        Err(_) => { count = 0 }
-    }
-
-    // Get threshold from config
-    let thresh_str = sql_query_str(db, "SELECT value FROM config WHERE key = $1", "security_max_auth_failures")
+    // Get threshold from cache or config
     let mut threshold = 5
-    match parse_int(thresh_str) {
-        Ok(v) => { threshold = v }
-        Err(_) => {}
+    let thresh_key = "sec_auth_thresh"
+    if cmap_has(cache, thresh_key) == 1 {
+        match parse_int(cmap_get(cache, thresh_key)) { Ok(v) => { threshold = v } Err(_) => {} }
+    } else if db_ok == 1 {
+        let thresh_str = sql_query_str(db, "SELECT value FROM config WHERE key = $1", "security_max_auth_failures")
+        if len(thresh_str) > 0 { match parse_int(thresh_str) { Ok(v) => { threshold = v } Err(_) => {} } }
+        cmap_set(cache, thresh_key, string(threshold))
     }
     if threshold < 1 || threshold > 100000 { threshold = 5 }
 
     if count >= threshold {
-        // Auto-ban
-        let ban_dur_raw = sql_query_str(db, "SELECT value FROM config WHERE key = $1", "security_ban_duration_min")
+        // Ban: one DB write (not three)
         let mut ban_dur = 60
-        match parse_int(ban_dur_raw) {
-            Ok(v) => { if v >= 1 && v <= 10080 { ban_dur = v } }
-            Err(_) => {}
+        let ban_key = "sec_ban_dur"
+        if cmap_has(cache, ban_key) == 1 {
+            match parse_int(cmap_get(cache, ban_key)) { Ok(v) => { ban_dur = v } Err(_) => {} }
+        } else if db_ok == 1 {
+            let raw = sql_query_str(db, "SELECT value FROM config WHERE key = $1", "security_ban_duration_min")
+            if len(raw) > 0 { match parse_int(raw) { Ok(v) => { if v >= 1 && v <= 10080 { ban_dur = v } } Err(_) => {} } }
+            cmap_set(cache, ban_key, string(ban_dur))
         }
-        let _ = sql_exec_str4(db, "INSERT INTO security_bans (source_ip, reason, expires_at, permanent) VALUES ($1, $2, NOW() + ($3 || ' minutes')::interval, false) ON CONFLICT (source_ip) DO UPDATE SET ban_count = security_bans.ban_count + 1, reason = $2, expires_at = NOW() + ($3 || ' minutes')::interval, permanent = false", src_ip, "auth_failures:" + count_str, string(ban_dur), "")
-        let _ = sql_exec_str4(db, "INSERT INTO security_events (event_type, source_ip, sip_user, severity) VALUES ($1, $2, $3, $4)", "auto_ban", src_ip, sip_user, "high")
+        if db_ok == 1 {
+            let _ = sql_exec_str4(db, "INSERT INTO security_bans (source_ip, reason, expires_at, permanent) VALUES ($1, $2, NOW() + ($3 || ' minutes')::interval, false) ON CONFLICT (source_ip) DO UPDATE SET ban_count = security_bans.ban_count + 1, reason = $2, expires_at = NOW() + ($3 || ' minutes')::interval, permanent = false", src_ip, "auth_failures:" + string(count), string(ban_dur), "")
+        }
         let _ = bounded_cache_set(cache, "ban_seq", "ban_ring|", "ban|" + src_ip, "1|" + string(now_ms()), 16384)
         return 1
+    }
+    // Log only every 5th failure to reduce DB write volume under attack
+    if db_ok == 1 && count - (count / 5) * 5 == 0 {
+        let _ = sql_exec_str4(db, "INSERT INTO security_events (event_type, source_ip, sip_user, severity) VALUES ($1, $2, $3, $4)", "auth_failure", src_ip, sip_user, "medium")
     }
     return 0
 }
 
-// Detect SIP scanners by User-Agent
+// Detect SIP scanners by User-Agent. Built-in list covers known tools;
+// SIP_SCANNER_UA_LIST extends with comma-separated substrings.
 fn sec_is_scanner(msg: string, msglen: int) -> int {
     let ua = sip_hdr(msg, "User-Agent", msglen)
+    if len(ua) == 0 { return 0 }
     let ua_low = str_to_lower(ua)
     if str_contains(ua_low, "sipvicious") { return 1 }
     if str_contains(ua_low, "sipcli") { return 1 }
@@ -81,30 +92,155 @@ fn sec_is_scanner(msg: string, msglen: int) -> int {
     if str_contains(ua_low, "iwar") { return 1 }
     if str_contains(ua_low, "sip-scan") { return 1 }
     if str_contains(ua_low, "vaxsipuseragent") { return 1 }
+    if str_contains(ua_low, "nmap") { return 1 }
+    if str_contains(ua_low, "sippts") { return 1 }
+    if str_contains(ua_low, "sipp") { return 0 }
+    // Configurable extension list
+    let extra = env_get_or("SIP_SCANNER_UA_LIST", "")
+    if len(extra) > 0 {
+        let items = str_split(extra, ",")
+        let mut i = 0
+        while i < len(items) {
+            let pattern = str_to_lower(str_trim_space(items[i]))
+            if len(pattern) > 0 && str_contains(ua_low, pattern) { return 1 }
+            i = i + 1
+        }
+    }
     return 0
 }
 
-// Check for toll fraud (high-cost destination)
+// Check for toll fraud (high-cost / IRSF destination).
+// Default list covers known premium-rate and IRSF ranges. Extended via
+// SIP_FRAUD_PREFIXES env or `security_fraud_prefixes` config key.
+fn sec_fraud_default_prefixes() -> string {
+    // Premium-rate, shared-cost, and known IRSF ranges only.
+    // Does NOT include legitimate country codes to avoid false positives.
+    // Operators should extend via SIP_FRAUD_PREFIXES for their market.
+    return "+900,+809,+284,+473,+649,+767,+268," +
+        // Satellite / special
+        "+870,+878,+879,+881,+882,+883," +
+        // Premium-rate service numbers (ITU E.164 test/special)
+        "+991,+999," +
+        // Caribbean premium (known IRSF targets)
+        "+246,+269,+297,+350,+423,+500,+508,+590,+599,+670,+672," +
+        "+674,+675,+676,+677,+678,+679,+680,+681,+682,+683," +
+        "+685,+686,+687,+688,+689,+690,+691,+692," +
+        // North Korea
+        "+850"
+}
+
 fn sec_is_fraud_dest(dest: string, cache: CMap) -> int {
     let key = "fraud_pfx"
-    let mut prefixes = "+900,+809,+284,+473,+649,+767,+268"
+    let mut prefixes = ""
     if cmap_has(cache, key) == 1 {
         prefixes = cmap_get(cache, key)
+    } else {
+        prefixes = env_get_or("SIP_FRAUD_PREFIXES", sec_fraud_default_prefixes())
+        let _ = bounded_cache_set(cache, "fraud_seq", "fraud_ring|", key, prefixes, 64)
     }
+    if len(prefixes) == 0 { return 0 }
     let parts = str_split(prefixes, ",")
     let mut i = 0
     while i < len(parts) {
-        if str_has_prefix(dest, str_trim_space(parts[i])) { return 1 }
+        let pfx = str_trim_space(parts[i])
+        if len(pfx) > 0 && str_has_prefix(dest, pfx) { return 1 }
         i = i + 1
     }
+    return 0
+}
+
+// Behavioral scanner detection: many distinct usernames from one IP in a
+// short window indicates enumeration, regardless of User-Agent string.
+fn sec_is_enum_scanner(src_ip: string, username: string, cache: CMap) -> int {
+    // Sanitize early — before any cache write.
+    let mut safe_user = username
+    if str_contains(safe_user, ",") { safe_user = str_split(safe_user, ",")[0] }
+    if len(safe_user) > 128 { safe_user = safe_user[0:128] }
+    let set_key = "enum_users|" + src_ip
+    let ts_key = "enum_ts|" + src_ip
+    let now = mono_ms()
+    // Reset window every 60s
+    let mut last = 0
+    if cmap_has(cache, ts_key) == 1 {
+        match parse_int(cmap_get(cache, ts_key)) { Ok(v) => { last = v } Err(_) => {} }
+    }
+    if last == 0 || now - last > 60000 {
+        let _ = bounded_cache_set(cache, "enum_seq", "enum_ring|", set_key, safe_user, 16384)
+        let _ = bounded_cache_set(cache, "enum_seq", "enum_ring|", ts_key, string(now), 16384)
+        return 0
+    }
+    let mut existing = ""
+    if cmap_has(cache, set_key) == 1 { existing = cmap_get(cache, set_key) }
+    if not str_contains("," + existing + ",", "," + safe_user + ",") {
+        let updated = existing + "," + safe_user
+        let _ = bounded_cache_set(cache, "enum_seq", "enum_ring|", set_key, updated, 16384)
+        existing = updated
+    }
+    // Count distinct users (comma-separated)
+    let count = len(str_split(existing, ","))
+    // 20+ distinct usernames from one IP in 60s = enumeration
+    if count >= 20 { return 1 }
     return 0
 }
 
 // Rate tracking per IP (platform rate_allow: window 1s)
 fn sec_rate_check(src_ip: string, limit: int, cache: CMap) -> int {
     let _ = cache
-    // 1 = allowed, 0 = over limit
     return rate_allow("sip|" + src_ip, limit, 1000)
+}
+
+// Per-method rate limiting. INVITE and REGISTER are the expensive paths
+// (auth, routing, DB) and the primary brute-force targets. Other methods
+// share the global per-IP limit above.
+fn sec_method_rate_check(src_ip: string, method: string, cache: CMap) -> int {
+    let _ = cache
+    if str_eq(method, "INVITE") {
+        // Default: 20 INVITE/sec per IP — enough for a PBX, kills dialers
+        let mut limit = 20
+        match parse_int(env_get_or("SIP_INVITE_RATE_LIMIT", "20")) { Ok(v) => { limit = v } Err(_) => {} }
+        if limit <= 0 { return 1 }
+        return rate_allow("sip_inv|" + src_ip, limit, 1000)
+    }
+    if str_eq(method, "REGISTER") {
+        // Default: 10 REGISTER/sec per IP
+        let mut limit = 10
+        match parse_int(env_get_or("SIP_REGISTER_RATE_LIMIT", "10")) { Ok(v) => { limit = v } Err(_) => {} }
+        if limit <= 0 { return 1 }
+        return rate_allow("sip_reg|" + src_ip, limit, 1000)
+    }
+    return 1
+}
+
+// Progressive back-pressure: after repeated auth failures, add a delay
+// before responding so brute-force attempts stall without consuming a ban slot.
+fn sec_auth_delay_ms(src_ip: string, cache: CMap) -> int {
+    let key = "auth_fail_count|" + src_ip
+    let mut count = 0
+    if cmap_has(cache, key) == 1 {
+        match parse_int(cmap_get(cache, key)) { Ok(v) => { count = v } Err(_) => {} }
+    }
+    // 0-2 failures: no delay. 3-5: 500ms. 6-9: 1s. 10+: 2s.
+    if count < 3 { return 0 }
+    if count < 6 { return 500 }
+    if count < 10 { return 1000 }
+    return 2000
+}
+
+fn sec_auth_fail_incr(src_ip: string, cache: CMap) -> int {
+    let key = "auth_fail_count|" + src_ip
+    let mut count = 0
+    if cmap_has(cache, key) == 1 {
+        match parse_int(cmap_get(cache, key)) { Ok(v) => { count = v } Err(_) => {} }
+    }
+    count = count + 1
+    let _ = bounded_cache_set(cache, "auth_fail_seq", "auth_fail_ring|", key, string(count), 16384)
+    return count
+}
+
+fn sec_auth_fail_clear(src_ip: string, cache: CMap) -> int {
+    let key = "auth_fail_count|" + src_ip
+    if cmap_has(cache, key) == 1 { let _ = cmap_del(cache, key) }
+    return 0
 }
 
 // Log security event
