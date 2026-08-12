@@ -349,9 +349,35 @@ fn rtp_offer(host: string, port: int, call_id: string, from_tag: string, sdp: st
     return rtp_offer_cache(cmap_new(), host, port, call_id, from_tag, sdp)
 }
 
+// Detect WebRTC SDP: presence of ICE candidates, DTLS fingerprint, or
+// RTP/SAVPF media lines indicates a WebRTC endpoint.
+fn rtp_sdp_is_webrtc(sdp: string) -> int {
+    if str_contains(sdp, "a=ice-ufrag") { return 1 }
+    if str_contains(sdp, "a=fingerprint") { return 1 }
+    if str_contains(sdp, "RTP/SAVPF") { return 1 }
+    if str_contains(sdp, "RTP/SAVP ") { return 1 }
+    return 0
+}
+
+// WebRTC-to-SIP bridging flags for RTPEngine. When the offerer is WebRTC,
+// tell RTPEngine to accept ICE/DTLS on the caller side and provide plain
+// RTP on the callee side (and vice versa for the answer).
+fn rtp_webrtc_bridge_flags(is_webrtc_offer: int) -> string {
+    if is_webrtc_offer == 1 {
+        // Caller is WebRTC: accept ICE+DTLS, provide plain RTP to callee
+        return "ICE=force DTLS=passive SDES-off rtcp-mux-offer rtcp-mux-accept"
+    }
+    return ""
+}
+
 fn rtp_offer_cache(cache: CMap, host: string, port: int, call_id: string, from_tag: string, sdp: string) -> string {
     if rtp_dialog_tag_safe(from_tag) == 0 { return "" }
-    let flags = rtp_policy_flags()
+    let mut flags = rtp_policy_flags()
+    // Auto-detect WebRTC and apply bridging flags when no explicit profile set
+    if len(flags) == 0 && rtp_sdp_is_webrtc(sdp) == 1 {
+        flags = rtp_webrtc_bridge_flags(1)
+        let _ = bounded_cache_set(cache, "rtp_seq", "rtp_ring|", "rtp_webrtc|" + call_id, "1", 65536)
+    }
     let mut cmd = ""
     if len(flags) > 0 {
         cmd = bencode_dict_5(
@@ -404,13 +430,31 @@ fn rtp_debug_exchange(op: string, call_id: string, resp: string) -> int {
 
 fn rtp_answer_cache(cache: CMap, host: string, port: int, call_id: string, from_tag: string, to_tag: string, sdp: string) -> string {
     if rtp_dialog_tag_safe(from_tag) == 0 || rtp_dialog_tag_safe(to_tag) == 0 { return "" }
-    let cmd = bencode_dict_5(
+    // If the offer was WebRTC, the answer is from a SIP phone — tell RTPEngine
+    let mut answer_flags = ""
+    if cmap_has(cache, "rtp_webrtc|" + call_id) == 1 {
+        answer_flags = "rtcp-mux-accept"
+    }
+    let mut cmd = ""
+    if len(answer_flags) > 0 {
+        cmd = bencode_dict_5(
+            "command", "answer",
+            "call-id", call_id,
+            "from-tag", from_tag,
+            "to-tag", to_tag,
+            "sdp", sdp
+        )
+        // Append flags to the bencode — insert before closing 'e'
+        cmd = cmd[0:len(cmd) - 1] + bencode_str("flags") + bencode_str(answer_flags) + "e"
+    } else {
+    cmd = bencode_dict_5(
         "command", "answer",
         "call-id", call_id,
         "from-tag", from_tag,
         "to-tag", to_tag,
         "sdp", sdp
     )
+    }
     let resp = rtp_send_call(cache, call_id, cmd, host, port)
     let _ = rtp_debug_exchange("answer", call_id, resp)
     if len(resp) == 0 { return "" }

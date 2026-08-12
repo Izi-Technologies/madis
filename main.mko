@@ -43,6 +43,7 @@ pull . "./ops.mko"
 pull . "./maf_headers.mko"
 pull . "./maf_worker.mko"
 pull . "./hep.mko"
+pull . "./cluster.mko"
 
 fn ims_ifc_prepare_outbound(msg: string) -> string {
     return ims_identity_apply_privacy(msg)
@@ -1706,6 +1707,14 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
         let _ = cmap_del(cache, "dialog_branch|" + cid)
         let _ = cmap_del(cache, "dialog_non2xx|" + cid)
         if sent == 1 { return "" }
+        // Cluster failover: if this node doesn't own the dialog, check PG
+        // for a dialog binding from a failed node and forward BYE there.
+        let cluster_dst = cluster_call_lookup(db, db_ok, cid)
+        if len(cluster_dst) > 0 {
+            let cluster_tr = sip_transport_param(cluster_dst, "udp")
+            let _ = sip_forward_target(cluster_dst, msg, cluster_tr, cache, forward_fd)
+            return ""
+        }
         return sip_resp(481, "Call/Transaction Does Not Exist", data, dl, "bye")
     } else {
     // === CANCEL ===
@@ -2875,6 +2884,7 @@ fn main() {
         let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_routing_rules_pri ON routing_rules (priority) WHERE enabled = true")
 
         let _ = ims_lifecycle_bootstrap(db)
+        if cluster_call_state_enabled() == 1 { let _ = cluster_call_bootstrap(db) }
         let hydrated = registration_load_db(db, 1, reg)
         let ims_hydrated = ims_lifecycle_load_db(db, 1, reg)
         let ims_hss_dropped = ims_lifecycle_hss_reconcile(cache, diameter_lock, reg, db, 1)
@@ -3096,6 +3106,8 @@ fn main() {
             // Active expiry: proactively remove expired in-memory bindings
             // so stale contacts are never routed to.
             let _ = registration_sweep_expired(reg)
+            // Cluster: replicate confirmed dialogs to PG for failover.
+            let _ = cluster_call_sync(calls, cache, hb_db, hb_db_ok, hb_node_id)
             // RFC 5626 outbound keepalive for NAT-traversed registrations.
             let _ = registration_keepalive_tick(reg, cache)
 
