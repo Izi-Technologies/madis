@@ -8,9 +8,16 @@
 
 /* Include full TLS header when OpenSSL is available (production build).
  * Test builds without OpenSSL get stub functions that return failure. */
-/* Server-side TLS handle table is compiled only when mako_tls.h can be
- * included without breaking the build. The verify job and test builds
- * lack the full TLS dependency chain. Stub functions let them link. */
+/* Server-side TLS handle table. When OpenSSL is available, include mako_tls.h
+ * with stubs for the QUIC/HKDF helpers it references (mako_sha256_raw etc.)
+ * that are defined in other runtime modules not linked into this bridge. */
+#if defined(MAKO_HAS_OPENSSL) || defined(MAKO_USE_OPENSSL)
+#include "mako_http.h"
+static inline MakoString mako_sha256_raw(MakoString d) { (void)d; return (MakoString){NULL,0}; }
+static inline MakoString mako_hmac_sha256_raw(MakoString k, MakoString d) { (void)k; (void)d; return (MakoString){NULL,0}; }
+#include "mako_tls.h"
+#define MADIS_TLS_BRIDGE 1
+#endif
 
 #include <errno.h>
 #include <stdint.h>
