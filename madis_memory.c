@@ -6,14 +6,13 @@
 #include "mako_cmap.h"
 #include "mako_net.h"
 
-/* Forward-declare only the TLS functions we use, avoiding the full
- * mako_tls.h header which depends on crypto helpers not linked here. */
-extern void *mako_tls_accept_start(void *ctx, int64_t fd);
-extern int64_t mako_tls_handshake_step(void *conn);
-extern int64_t mako_tls_conn_fd(void *conn);
-extern MakoString mako_tls_read_nb(void *conn, int64_t max);
-extern int64_t mako_tls_write_nb(void *conn, MakoString data);
-extern int64_t mako_tls_conn_close(void *conn);
+/* Include full TLS header when OpenSSL is available (production build).
+ * Test builds without OpenSSL get stub functions that return failure. */
+#if defined(MAKO_HAS_OPENSSL) || defined(MAKO_USE_OPENSSL)
+#include "mako_http.h"
+#include "mako_tls.h"
+#define MADIS_TLS_AVAILABLE 1
+#endif
 
 #include <errno.h>
 #include <stdint.h>
@@ -193,11 +192,9 @@ void madis_cmap_set_i64(MakoCMap *cache, MakoString prefix, MakoString suffix, i
     mako_cmap_set(cache, (MakoString){key, strlen(key)}, (MakoString){val, (size_t)n});
 }
 
-/* ---- Server-side TLS connection handle table ----
- * Mako cannot store TlsConn (void*) in maps or arrays. This table maps
- * integer handles to opaque TLS connection pointers so the multiplexed
- * TLS worker can track connections with map[string]int.
- */
+/* ---- Server-side TLS connection handle table ---- */
+#ifdef MADIS_TLS_AVAILABLE
+
 #define MADIS_TLS_POOL_CAP 8192
 static void *madis_tls_table[MADIS_TLS_POOL_CAP];
 static int64_t madis_tls_seq = 0;
@@ -247,3 +244,14 @@ int64_t madis_tls_srv_close(int64_t handle) {
     madis_tls_table[handle] = NULL;
     return mako_tls_conn_close(conn);
 }
+
+#else /* !MADIS_TLS_AVAILABLE — stubs for test/non-TLS builds */
+
+int64_t madis_tls_srv_accept(void *srv, int64_t fd) { (void)srv; (void)fd; return -1; }
+int64_t madis_tls_srv_fd(int64_t handle) { (void)handle; return -1; }
+int64_t madis_tls_srv_handshake(int64_t handle) { (void)handle; return -1; }
+MakoString madis_tls_srv_read(int64_t handle, int64_t max) { (void)handle; (void)max; return (MakoString){NULL, 0}; }
+int64_t madis_tls_srv_write(int64_t handle, MakoString data) { (void)handle; (void)data; return -1; }
+int64_t madis_tls_srv_close(int64_t handle) { (void)handle; return -1; }
+
+#endif /* MADIS_TLS_AVAILABLE */
