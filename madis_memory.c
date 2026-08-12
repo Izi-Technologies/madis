@@ -11,12 +11,14 @@
 /* Server-side TLS handle table. When OpenSSL is available, include mako_tls.h
  * with stubs for the QUIC/HKDF helpers it references (mako_sha256_raw etc.)
  * that are defined in other runtime modules not linked into this bridge. */
-#if defined(MAKO_HAS_OPENSSL) || defined(MAKO_USE_OPENSSL)
+/* TLS handle table requires explicit opt-in via -DMADIS_TLS_BRIDGE.
+ * The Dockerfile passes this flag; test and CI builds do not. */
+#ifdef MADIS_TLS_BRIDGE
 #include "mako_http.h"
+/* Stub QUIC/HKDF helpers that mako_tls.h compiles unconditionally. */
 static inline MakoString mako_sha256_raw(MakoString d) { (void)d; return (MakoString){NULL,0}; }
 static inline MakoString mako_hmac_sha256_raw(MakoString k, MakoString d) { (void)k; (void)d; return (MakoString){NULL,0}; }
 #include "mako_tls.h"
-#define MADIS_TLS_BRIDGE 1
 #endif
 
 #include <errno.h>
