@@ -8,15 +8,9 @@
 
 /* Include full TLS header when OpenSSL is available (production build).
  * Test builds without OpenSSL get stub functions that return failure. */
-#if defined(MAKO_HAS_OPENSSL) || defined(MAKO_USE_OPENSSL)
-#include "mako_http.h"
-/* Provide stubs for QUIC/HKDF helpers that mako_tls.h references but
- * are defined in other runtime modules not linked into this bridge. */
-static inline MakoString mako_sha256_raw(MakoString d) { (void)d; return (MakoString){NULL,0}; }
-static inline MakoString mako_hmac_sha256_raw(MakoString k, MakoString d) { (void)k; (void)d; return (MakoString){NULL,0}; }
-#include "mako_tls.h"
-#define MADIS_TLS_AVAILABLE 1
-#endif
+/* Server-side TLS handle table is compiled only when mako_tls.h can be
+ * included without breaking the build. The verify job and test builds
+ * lack the full TLS dependency chain. Stub functions let them link. */
 
 #include <errno.h>
 #include <stdint.h>
@@ -196,8 +190,10 @@ void madis_cmap_set_i64(MakoCMap *cache, MakoString prefix, MakoString suffix, i
     mako_cmap_set(cache, (MakoString){key, strlen(key)}, (MakoString){val, (size_t)n});
 }
 
-/* ---- Server-side TLS connection handle table ---- */
-#ifdef MADIS_TLS_AVAILABLE
+/* ---- Server-side TLS connection handle table ----
+ * When compiled with -DMADIS_TLS_BRIDGE and the full mako_tls.h available
+ * (production Dockerfile), the real implementation is used. Otherwise stubs. */
+#ifdef MADIS_TLS_BRIDGE
 
 #define MADIS_TLS_POOL_CAP 8192
 static void *madis_tls_table[MADIS_TLS_POOL_CAP];
@@ -249,7 +245,7 @@ int64_t madis_tls_srv_close(int64_t handle) {
     return mako_tls_conn_close(conn);
 }
 
-#else /* !MADIS_TLS_AVAILABLE — stubs for test/non-TLS builds */
+#else /* stubs for test/verify/non-TLS builds */
 
 int64_t madis_tls_srv_accept(void *srv, int64_t fd) { (void)srv; (void)fd; return -1; }
 int64_t madis_tls_srv_fd(int64_t handle) { (void)handle; return -1; }
@@ -258,4 +254,4 @@ MakoString madis_tls_srv_read(int64_t handle, int64_t max) { (void)handle; (void
 int64_t madis_tls_srv_write(int64_t handle, MakoString data) { (void)handle; (void)data; return -1; }
 int64_t madis_tls_srv_close(int64_t handle) { (void)handle; return -1; }
 
-#endif /* MADIS_TLS_AVAILABLE */
+#endif /* MADIS_TLS_BRIDGE */
