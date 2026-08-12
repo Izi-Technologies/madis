@@ -390,13 +390,18 @@ fn app_command_apply(msg: string, raw: string) -> string {
 }
 
 fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, port: int, source_port: int, tr: string, forward_fd: int, db: SqlDB, db_ok: int, cache: CMap, realm: string, node_id: string, diameter_lock: Mutex) -> string {
-    // Cache public IP — env_get_or is not free at 10K+ CPS
+    // Cache public IP — env_get_or is not free at 10K+ CPS.
+    // Only cache if SIP_PUBLIC_IP is explicitly set; the fallback (source IP)
+    // is per-message and must not be cached.
     let mut public_ip = ip
     if cmap_has(cache, "_public_ip") == 1 {
         public_ip = cmap_get(cache, "_public_ip")
     } else {
-        public_ip = env_get_or("SIP_PUBLIC_IP", ip)
-        if len(public_ip) > 0 { cmap_set(cache, "_public_ip", public_ip) }
+        let configured_ip = env_get_or("SIP_PUBLIC_IP", "")
+        if len(configured_ip) > 0 {
+            public_ip = configured_ip
+            cmap_set(cache, "_public_ip", configured_ip)
+        }
     }
 
     // --- Response processing (Section 16.7) ---
