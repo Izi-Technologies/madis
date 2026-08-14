@@ -15,6 +15,9 @@ import (
 	"strings"
 )
 
+// MAFVersion is the protocol version sent as X-MAF-Version on every request.
+const MAFVersion = "0.5.0"
+
 type Client struct {
 	BaseURL string
 	Token   string
@@ -72,6 +75,7 @@ func (c *Client) request(ctx context.Context, method, path string, body any, que
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Token)
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-MAF-Version", MAFVersion)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

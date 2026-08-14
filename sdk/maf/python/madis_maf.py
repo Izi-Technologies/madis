@@ -9,6 +9,14 @@ from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 
+MAF_VERSION = "0.5.0"
+"""Protocol version sent as X-MAF-Version on every request.
+
+The server may reject requests with an unsupported version.  Bump this
+constant only when the contract (schemas, routes, required fields) changes
+in a way that requires coordinated SDK and server updates."""
+
+
 class MafError(RuntimeError):
     """HTTP or contract failure returned by the MAF endpoint."""
 
@@ -48,6 +56,7 @@ class MadisMaf:
         headers = {
             "Authorization": f"Bearer {self.token}",
             "Accept": "application/json",
+            "X-MAF-Version": MAF_VERSION,
         }
         if payload is not None:
             headers["Content-Type"] = "application/json"
