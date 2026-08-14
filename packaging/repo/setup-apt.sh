@@ -1,20 +1,29 @@
 #!/usr/bin/env bash
+# Install Madis on Debian/Ubuntu from GitHub Releases.
 set -euo pipefail
 
-GPG_KEY_URL="https://packages.izi.tech/gpg.key"
-REPO_URL="https://packages.izi.tech/apt"
+REPO="Izi-Technologies/madis"
+VERSION="${1:-latest}"
 
-echo "Adding Madis APT repository..."
+if [ "$VERSION" = "latest" ]; then
+    VERSION=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | sed 's/.*"v\(.*\)".*/\1/')
+fi
 
-# Import GPG key
-curl -fsSL "$GPG_KEY_URL" | gpg --dearmor -o /usr/share/keyrings/madis-archive-keyring.gpg
+if [ -z "$VERSION" ]; then
+    echo "Could not determine latest version." >&2
+    exit 1
+fi
 
-# Add repository
-cat > /etc/apt/sources.list.d/madis.list <<EOF
-deb [signed-by=/usr/share/keyrings/madis-archive-keyring.gpg] $REPO_URL stable main
-EOF
+DEB="madis_${VERSION}_amd64.deb"
+URL="https://github.com/$REPO/releases/download/v${VERSION}/${DEB}"
 
-apt-get update
+echo "Installing Madis ${VERSION} from GitHub Releases..."
 
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+
+curl -fsSL -o "$TMP/$DEB" "$URL"
+dpkg -i "$TMP/$DEB" || apt-get install -f -y
 echo ""
-echo "Run: sudo apt install madis"
+echo "Madis ${VERSION} installed. Configure /etc/madis/madis.env and run:"
+echo "  sudo systemctl enable --now madis"
