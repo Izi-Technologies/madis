@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: MADIS Application Fabric
-  version: 1.0.0
+  version: 0.5.0
   description: >-
     Language-neutral command and replayable event contract for external MADIS
     applications. The MAF HTTP routes in this document are served by the
@@ -177,6 +177,7 @@ paths:
         - {name: cursor, in: query, schema: {type: string, maxLength: 256}}
         - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 100}}
         - {name: event_type, in: query, schema: {type: string, minLength: 1, maxLength: 128}}
+        - {name: call_id, in: query, description: Scope the subscription to a single call, schema: {type: string, minLength: 1, maxLength: 128}}
       responses:
         '200': {description: Event page, content: {application/json: {schema: {$ref: '#/components/schemas/EventPage'}}}}
         '401': {description: Authentication failed}
@@ -352,3 +353,4 @@ components:
         events: {type: array, items: {$ref: '#/components/schemas/Event'}}
         next_cursor: {type: string}
         truncated: {type: boolean}
+        heartbeat: {type: boolean, description: Present and true on keepalive frames with no events}
