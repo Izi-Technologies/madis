@@ -4,12 +4,21 @@ Madis is a SIP proxy and registrar written in [Mako](https://github.com/loreste/
 
 This README is an orientation guide, not a complete feature matrix. The linked documentation and source contracts are authoritative for configuration and protocol boundaries.
 
+## Version
+
+**v0.5.0** — requires Mako 0.5.0+.
+
 ## Current implementation
 
-- SIP UDP, TCP, TLS, WS, and WSS listeners with registration, digest authentication, transactions, dialogs, retransmission handling, routing, forking, dispatch, dialplans, and response routing.
+- SIP UDP, TCP, TLS, WS, and WSS listeners with registration, digest authentication, transactions, dialogs, retransmission handling, routing, forking, dispatch, dialplans, and response routing. Multiplexed TCP/WSS workers with serial TLS handshakes and `SO_REUSEPORT` multi-worker scaling. PROXY protocol v1 support for HAProxy deployments.
+- RFC 3261 compliance improvements: To-tag on all responses, CANCEL→487 generation, 3xx redirect following, and in-dialog REFER/INFO/MESSAGE forwarding. RFC 5626 outbound keepalive.
+- Security hardening: per-method rate limits, digest URI validation, nonce-count monotonicity, registration enumeration detection, DNS rebinding guard, per-IP connection limits, constant-time digest comparison, and progressive authentication delay.
 - PostgreSQL-backed registrations, routing policy, access control, security state, CDRs, and a durable billing-event outbox.
 - A standalone authenticated WebUI and versioned machine API under `/admin/api/v1/`.
-- Optional RTPEngine-ng control messages for bounded SDP offer/answer/delete operations. The SIP worker does not own RTP, RTCP, ICE, DTLS-SRTP, codecs, recording, or media policy.
+- Optional RTPEngine-ng control messages for bounded SDP offer/answer/delete operations, with WebRTC bridge support (auto-detect ICE/DTLS SDP). The SIP worker does not own RTP, RTCP, ICE, DTLS-SRTP, codecs, recording, or media policy.
+- Cluster call state replication via `SIP_CLUSTER_CALLS`.
+- Prometheus labeled metrics (per-method, per-response-code, per-transport) and graceful shutdown with connection drain.
+- MAF SDKs in Python, Go, TypeScript, and Erlang with 56 contract tests. MAF event subscriptions with bearer-authenticated WebSocket, call-scoped filtering, and heartbeat.
 - Selected Diameter RFC 6733/RFC 8506, IMS Cx/Sh, HEPv3, STIR/SHAKEN, charging, and signed external-application contracts. These are bounded integration surfaces, not complete relay, policy, media, or carrier platforms.
 - A bounded IMS voice profile: role-aware P-/I-/S-CSCF REGISTER and initial-INVITE handling, selected Cx/AKA authorization, HTTPS subscriber authorization, durable IMS registration lifecycle (IMPI/IMPU, Path, Service-Route, S-CSCF binding, restart hydration, and Path-aware MT routing), dynamic flow-token refresh/cleanup when enabled, session-timer validation plus negotiated response headers, trusted identity/privacy filtering, P-Associated-URI handling, target-only subscriber iFC application targets, and terminating P-Charging-Vector validation.
 

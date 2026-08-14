@@ -112,6 +112,28 @@ executor paths and HTTP/WebSocket boundary wiring, but do not establish
 external media-module interoperability, kernel IPsec installation, gRPC
 availability, or production SIP interoperability.
 
+## MAF Python SDK tests
+
+The `sdk/maf/tests/` directory contains 56 Python tests across 6 files:
+
+- `test_maf_openapi_contract.py` — OpenAPI contract validation against the MAF HTTP surface.
+- `test_maf_lifecycle.py` — Call lifecycle state transitions and command sequencing.
+- `test_maf_tenant_auth.py` — Tenant credential scoping, read/write separation, and rejection.
+- `test_maf_cursor_recovery.py` — WebSocket event cursor persistence and replay-after-reconnect.
+- `test_maf_load.py` — Concurrent call creation, event throughput, and connection-pool bounds.
+- `test_maf_sdk.py` — SDK client construction and basic request shaping.
+
+Run with:
+
+```sh
+python3 -m pytest sdk/maf/tests/ -v
+# or:
+python3 -m unittest discover -s sdk/maf/tests -p 'test_*.py'
+```
+
+These are offline contract and unit tests. They do not require a running
+worker or database.
+
 | Test | Coverage |
 | --- | --- |
 | `tests/admin_http_test.mko` | HTTP framing, cookie boundaries, form decoding, and Origin checks. |

@@ -85,13 +85,52 @@ Terminate public HTTPS and WebSocket traffic in nginx, Caddy, HAProxy, or an equ
 | `SIP_UPSTREAM_TLS_INSECURE=1` | Explicit lab-only bypass of outbound certificate verification. Do not use as a production fix. |
 | `SIP_WSS_IDLE_MS` | Idle lifetime for reusable outbound WSS associations; the usual default is 600000 ms. |
 
-## Worker, registration, and transaction bounds
+## Worker scaling
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `SIP_UDP_WORKERS` | `1` | UDP listener worker count. |
-| `SIP_TCP_WORKERS` | `1` | Stream listener worker count. |
+| `SIP_UDP_WORKERS` | `1` | UDP listener worker count (max 8). |
+| `SIP_TCP_WORKERS` | `1` | Stream listener worker count (max 8). |
+| `SIP_TLS_WORKERS` | `1` | TLS listener worker count (max 4). |
+| `SIP_WSS_WORKERS` | `1` | WebSocket-over-TLS listener worker count (max 4). |
 | `SIP_SCHED_WORKERS` | `0` | Bounded Mako scheduler pool; `0` keeps the default per-kick threading behavior. |
+
+## PROXY Protocol
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SIP_PROXY_PROTOCOL` | `0` | Enable HAProxy PROXY Protocol v1 on stream listeners (`1`, `true`, or `yes`). |
+| `SIP_PROXY_TRUSTED_IPS` | loopback only | Comma-separated IP whitelist of trusted load balancers permitted to send PROXY protocol headers. Without this, only `127.0.0.1` and `::1` are trusted. Required when `SIP_PROXY_PROTOCOL` is enabled to prevent source-IP spoofing. |
+
+## Security and rate limiting
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SIP_INVITE_RATE_LIMIT` | `20` | Maximum INVITE requests per second per source IP. |
+| `SIP_REGISTER_RATE_LIMIT` | `10` | Maximum REGISTER requests per second per source IP. |
+| `SIP_PER_IP_CONN_LIMIT` | `100` | Maximum concurrent TCP/TLS/WSS connections per source IP; bounded to `10..10000`. Excess connections are closed before SIP parsing. |
+| `SIP_MAX_MESSAGE_SIZE` | `65536` | Maximum SIP message size in bytes accepted by the parser. |
+| `SIP_NONCE_TTL_SEC` | `120` | Digest authentication nonce lifetime in seconds. |
+| `SIP_FRAUD_PREFIXES` | built-in IRSF list | Comma-separated E.164 prefixes treated as toll-fraud destinations. Replaces the built-in premium-rate and IRSF prefix list. |
+| `SIP_SCANNER_UA_LIST` | Empty | Comma-separated additional User-Agent substrings to reject as SIP scanners, extending the built-in list. |
+| `SIP_ALLOW_FOREIGN_CONTACT` | `0` | Set to `1` to permit REGISTER Contact addresses that do not match the source IP or private ranges. Required for legitimate third-party registration. |
+| `SIP_ALLOW_PRIVATE_TARGETS` | `0` | Set to `1` to allow routing to private/RFC 1918 target addresses. |
+
+## Production operations
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SIP_TX_LOG` | `0` | Set to `1` to enable per-transaction logging. |
+| `SIP_SHUTDOWN_DRAIN_MS` | `5000` | Graceful shutdown drain period in milliseconds before the process exits. |
+| `SIP_KEEPALIVE` | `1` | Enable SIP keepalive probes on registered endpoints (`1` enabled, `0` disabled). |
+| `SIP_KEEPALIVE_INTERVAL` | `25` | Keepalive probe interval in seconds. |
+| `SIP_CLUSTER_CALLS` | `0` | Set to `1` to enable cross-node call routing through the cluster. |
+| `SIP_CONN_IDLE_TIMEOUT` | `120` | Idle timeout in seconds for stream (TCP/TLS/WSS) connections. |
+
+## Registration, connection, and transaction bounds
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
 | `SIP_TCP_MAX_CONNECTIONS` | `65536` | Per-TCP-worker accepted-connection ceiling; bounded to `1024..1048576`, with excess connections closed before SIP parsing. |
 | `SIP_CALL_STATE_CAPACITY` | `262144` | Per-process SIP call/dialog state-record budget; bounded to `16384..1048576`, with new calls rejected at the limit instead of evicting live state. |
 | `SIP_T1_MS` | `500` | Base transaction timer. |
@@ -224,7 +263,7 @@ Additional IMS control env:
 | `SIP_IMS_RX` | `0` | Enable Rx AAR authorize on INVITE (needs PCRF peer) |
 | `SIP_IMS_RX_AF_APP_ID` | `madis.voice` | AF-Application-Identifier |
 | `SIP_IMS_RX_DEST_HOST` | empty | Optional PCRF Diameter host AVP |
-| `SIP_RTPENGINE_PROFILE` | empty | `ice-srtp`, `srtp`, `ice`, `dtls-srtp`, `plain` |
+| `SIP_RTPENGINE_PROFILE` | empty | `plain`, `ice`, `srtp`, `ice-srtp`, `webrtc`, `dtls-srtp` |
 
 With `SIP_IMS_CX=1`, the HSS UAA must return a `Server-Name` exactly matching `SIP_IMS_SERVER_NAME`; missing or mismatched assignment fails REGISTER before SAR and no local binding is written.
 

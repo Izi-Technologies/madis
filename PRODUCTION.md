@@ -140,3 +140,65 @@ matrix checks, and fuzz cases. `RFC_FULL=1 sh bench/rfc_gate.sh` additionally
 runs sanitizer and soak jobs when the host has the required tools. These gates
 are adversarial regression checks, not a certification of complete compliance
 with every SIP/WebRTC extension or every independent implementation.
+
+## PROXY protocol
+
+Set `SIP_PROXY_PROTOCOL=1` to accept PROXY protocol v1 headers on TCP and TLS
+listeners. When enabled, the real client IP from the PROXY header is used for
+authentication, rate limiting, and CDRs. Use this behind HAProxy or any load
+balancer that speaks PROXY protocol v1. Do not enable it on listeners that
+accept direct client connections.
+
+## Security tuning
+
+Per-method rate limits, nonce TTL, and fraud-prefix blocking are configured via
+environment variables. Key settings:
+
+- `SIP_RATE_LIMIT_REGISTER`, `SIP_RATE_LIMIT_INVITE`, `SIP_RATE_LIMIT_OPTIONS` — per-IP method rate limits (requests/second).
+- `SIP_NONCE_TTL` — digest nonce lifetime in seconds.
+- `SIP_FRAUD_PREFIXES` — comma-separated dial-string prefixes to reject outright.
+- `SIP_MAX_CONNECTIONS_PER_IP` — per-IP TCP/TLS/WSS connection cap.
+- `SIP_AUTH_DELAY_BASE_MS`, `SIP_AUTH_DELAY_MAX_MS` — progressive delay on repeated authentication failures.
+
+See [`docs/configuration.md`](docs/configuration.md) for the full variable
+reference.
+
+## Scaling
+
+Set `SIP_WORKERS` to the number of SIP worker processes. Each worker binds its
+own UDP/TCP/TLS/WS/WSS listeners using `SO_REUSEPORT`, so the kernel
+distributes connections across workers without a front-end dispatcher.
+TCP and WSS workers are multiplexed; TLS handshakes are serialized per
+connection. A typical starting point is one worker per CPU core.
+
+## Graceful shutdown
+
+On `SIGTERM` the SIP worker enters drain mode: it stops accepting new
+connections, waits for in-flight transactions and dialogs to complete (up to
+`SIP_DRAIN_TIMEOUT_S`, default 30), and then exits. Active calls receive a
+`BYE` if the drain timeout expires. The `/readyz` endpoint returns 503 during
+drain so load balancers stop routing new traffic before the process exits.
+
+## Cluster call state
+
+Set `SIP_CLUSTER_CALLS=1` and configure `SIP_CLUSTER_PEERS` (comma-separated
+`host:port` list) to replicate active call state across SIP workers. This
+enables mid-dialog request routing to any cluster member after a failover.
+State replication is best-effort and eventually consistent; it does not
+replace a shared database for durable registration or billing state.
+
+## Metrics
+
+The worker exposes Prometheus metrics at `/metrics` (on `SIP_ADMIN_PORT`).
+Counters and gauges are labeled by method, response code, and transport:
+
+- `sip_requests_total{method, transport}` — inbound request count.
+- `sip_responses_total{method, code, transport}` — outbound response count.
+- `sip_active_calls` — gauge of currently active dialogs.
+- `sip_registrations_active` — gauge of live AoR bindings.
+- `sip_auth_failures_total{method}` — authentication failure count.
+- `sip_transactions_active` — gauge of in-flight transactions.
+
+Scrape `/metrics` with Prometheus or any compatible collector. The endpoint
+is unauthenticated by default; restrict access via `SIP_ADMIN_TOKEN` or
+network policy.

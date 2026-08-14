@@ -107,6 +107,13 @@ inside the same event loop as data I/O — no connection blocks the accept path.
 HAProxy PROXY protocol v1 is supported on TCP, TLS, and WSS listeners when
 `SIP_PROXY_PROTOCOL=1`. The PROXY header is parsed before TLS handshake (TLS)
 or before WebSocket upgrade (WSS), preserving the original client IP/port.
+Only peers listed in `SIP_PROXY_TRUSTED_IPS` (default: loopback) may send
+PROXY headers; untrusted peers are rejected to prevent source-IP spoofing.
+
+Per-IP connection limits (`SIP_PER_IP_CONN_LIMIT`, default 100) bound
+concurrent stream connections from a single source address. Connection counts
+are tracked as a Prometheus-style gauge (`madis_sip_connections_total`) labeled
+by transport.
 
 SIP call/dialog records are bounded by `SIP_CALL_STATE_CAPACITY`;
 new calls are rejected at that limit so active state is not evicted silently.

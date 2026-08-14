@@ -88,6 +88,50 @@ environment-specific IP addresses, or private hostnames in Git. Use file
 permissions and a secret manager where available; documentation examples must
 use placeholders or environment-provided values.
 
+## Reload and cache flush
+
+`POST /reload` on the worker HTTP port increments the configuration epoch and
+flushes the in-memory ban, ACL, whitelist, IP-auth, fraud-prefix, and
+rate-limit caches. The next lookup for each category re-queries the database,
+so security policy changes take effect immediately without a full restart.
+
+## Metrics
+
+`/metrics` exposes Prometheus-format counters and gauges. Labeled metrics
+include:
+
+- `madis_sip_requests_total{method,transport}` — per-method, per-transport request counts.
+- `madis_sip_responses_total{code,class}` — per-status-code response counts with class label (e.g. `2xx`).
+- `madis_sip_connections_total{transport}` — gauge of active stream connections by transport.
+
+The labeled counters supplement the fixed metric slots (backward-compatible);
+both are emitted in every `/metrics` scrape.
+
+## Graceful shutdown
+
+On `SIGTERM` the worker stops accepting new connections and enters a drain
+period controlled by `SIP_SHUTDOWN_DRAIN_MS` (default 5000, clamped
+0–30000 ms). During drain the worker continues flushing transactions and
+cleaning registrations. If the active call count reaches zero before the timer
+expires, drain exits early. After drain the worker begins server shutdown.
+
+## Registration keepalive
+
+`SIP_KEEPALIVE=1` (default) enables periodic OPTIONS keepalive probes to
+registered contacts. `SIP_KEEPALIVE_INTERVAL` sets the probe interval in
+seconds (default 25). Disable with `SIP_KEEPALIVE=0` when a downstream
+keepalive mechanism already exists.
+
+## Cluster call state
+
+When `SIP_CLUSTER_CALLS=1` the worker periodically syncs its active call map
+to a shared `cluster_calls` PostgreSQL table keyed by `(call_id, node_id)`.
+Each row stores `dialog_dst`, `transport`, `from_tag`, `to_tag`, and
+`confirmed_at`. On BYE, if the owning node is unreachable, a sibling can look
+up the dialog destination from the table and attempt failover delivery. Stale
+rows (>30 s without refresh) are pruned automatically; node-specific rows are
+removed on clean shutdown.
+
 ## API operations
 
 The machine API is at `/admin/api/v1/` and uses separate bearer scopes:
