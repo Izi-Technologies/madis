@@ -55,15 +55,49 @@ The default repository checks cover the offline lab unit/contract tests. Listene
 
 Madis is not a complete telecom business platform, HSS/UDM, Diameter relay, TAS, PCRF/PCF, RTP/media server, PSTN/SIGTRAN gateway, or generic SQL/API gateway. Review [`PRODUCTION.md`](PRODUCTION.md), [`RFC_COMPLIANCE.md`](RFC_COMPLIANCE.md), and [`docs/ims-roadmap.md`](docs/ims-roadmap.md) before treating any optional interface as deployment-ready.
 
-## Quick start
+## Install
 
-For a Linux host:
+### Package install (no Mako required)
+
+Pre-built packages are published to [GitHub Releases](https://github.com/Izi-Technologies/madis/releases).
+
+**Debian / Ubuntu:**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Izi-Technologies/madis/main/packaging/repo/setup-apt.sh | sudo bash
+```
+
+**RHEL / Fedora / Rocky / AlmaLinux:**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Izi-Technologies/madis/main/packaging/repo/setup-dnf.sh | sudo bash
+```
+
+Pin a specific version:
+
+```sh
+sudo bash setup-apt.sh 0.5.0
+sudo bash setup-dnf.sh 0.5.0
+```
+
+After install, configure `/etc/madis/madis.env` (see the example at `/etc/madis/madis.env.example`) and start:
+
+```sh
+sudo systemctl enable --now madis
+```
+
+### Docker
+
+```sh
+docker compose up -d --build
+```
+
+### Source install
+
+For a Linux host with the Mako compiler:
 
 ```sh
 sudo ./install.sh
-madis status
-madis health
-madis webui
 ```
 
 The installer provisions PostgreSQL state, systemd units, the SIP worker, standalone WebUI, `madis` CLI, log rotation, and generated credentials. Keep the WebUI private and terminate public HTTPS/WSS at a reverse proxy.

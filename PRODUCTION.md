@@ -8,9 +8,27 @@ This is the short operational reference. The detailed guides are
 [`docs/integrations.md`](docs/integrations.md),
 [`docs/modules.md`](docs/modules.md), and [`api/README.md`](api/README.md).
 
-The supported build entrypoint is `main.mko`. It pulls the modular SIP, state,
-transport, routing, media, security, and operations modules. `sipproxy_full.mko`
-is a legacy reference archive and is not part of the supported build.
+## Installation
+
+Pre-built packages (no Mako compiler required):
+
+```sh
+# Debian / Ubuntu
+curl -fsSL https://raw.githubusercontent.com/Izi-Technologies/madis/main/packaging/repo/setup-apt.sh | sudo bash
+
+# RHEL / Fedora / Rocky / AlmaLinux
+curl -fsSL https://raw.githubusercontent.com/Izi-Technologies/madis/main/packaging/repo/setup-dnf.sh | sudo bash
+```
+
+Packages are published to [GitHub Releases](https://github.com/Izi-Technologies/madis/releases)
+on each tagged version. The `.deb` and `.rpm` include the compiled binary,
+systemd units, and an example configuration file. Dependencies: `libssl3`,
+`libpq5`, `ca-certificates`.
+
+For source builds, the supported entrypoint is `main.mko`. It pulls the modular
+SIP, state, transport, routing, media, security, and operations modules.
+`sipproxy_full.mko` is a legacy reference archive and is not part of the
+supported build.
 
 ## Operational endpoints
 
