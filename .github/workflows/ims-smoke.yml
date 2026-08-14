@@ -1,0 +1,38 @@
+# IMS end-to-end Docker smoke tests.
+# These require the full IMS lab stack (HSS, media, P/I/S-CSCF, client)
+# built and run via docker compose. They may fail without sufficient Docker
+# resources or if Mako cargo builds OOM. Failures here do NOT block CI.
+
+name: ims-smoke
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  ims-docker-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - name: Checkout Madis
+        uses: actions/checkout@v4
+
+      - name: Checkout pinned Mako compiler
+        uses: actions/checkout@v4
+        with:
+          repository: loreste/mako
+          ref: v0.5.0
+          path: .ci/mako
+
+      - name: Build Mako 0.5.0
+        run: cargo build --release --manifest-path .ci/mako/Cargo.toml
+
+      - name: Validate docker-compose config
+        run: docker compose -f docker-compose.ims-lab.yml config --quiet
+
+      - name: Run IMS Docker smoke tests
+        env:
+          MAKO_BIN: ${{ github.workspace }}/.ci/mako/target/release/mako
+          MAKO_RUNTIME: ${{ github.workspace }}/.ci/mako/runtime
+        run: ./scripts/lab-smoke.sh docker

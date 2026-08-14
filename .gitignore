@@ -43,4 +43,4 @@ madis.env
 *~
 .vscode/
 .idea/
-apps/
+apps/madis-billing/node_modules/
