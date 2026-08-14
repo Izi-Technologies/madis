@@ -1,0 +1,11 @@
+Package: madis
+Version: 0.5.0
+Section: net
+Priority: optional
+Architecture: amd64
+Depends: libssl3 | libssl1.1, libpq5, ca-certificates
+Maintainer: Izi Technologies <packages@izi.tech>
+Description: Madis SIP Proxy and Registrar
+ High-performance SIP proxy with UDP/TCP/TLS/WSS support,
+ PostgreSQL-backed routing, STIR/SHAKEN, IMS, and MAF application fabric.
+Homepage: https://github.com/Izi-Technologies/madis

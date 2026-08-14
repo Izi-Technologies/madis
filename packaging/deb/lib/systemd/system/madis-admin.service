@@ -1,0 +1,27 @@
+[Unit]
+Description=Madis SIP WebUI
+After=network.target postgresql.service
+Requires=postgresql.service
+ConditionPathExists=/opt/madis/admin-bin
+
+[Service]
+Type=simple
+User=madis
+Group=madis
+EnvironmentFile=/etc/madis/madis.env
+ExecStart=/opt/madis/admin-bin
+WorkingDirectory=/opt/madis
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+StandardOutput=append:/var/log/madis/madis-admin.log
+StandardError=append:/var/log/madis/madis-admin-error.log
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/madis
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

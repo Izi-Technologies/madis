@@ -1,0 +1,64 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Madis
+        uses: actions/checkout@v4
+
+      - name: Checkout pinned Mako compiler
+        uses: actions/checkout@v4
+        with:
+          repository: loreste/mako
+          ref: v0.5.0
+          path: .ci/mako
+
+      - name: Build Mako 0.5.0
+        run: cargo build --release --manifest-path .ci/mako/Cargo.toml
+
+      - name: Build madis binary
+        env:
+          MAKO_BIN: ${{ github.workspace }}/.ci/mako/target/release/mako
+          MAKO_RUNTIME: ${{ github.workspace }}/.ci/mako/runtime
+        run: |
+          sudo apt-get update && sudo apt-get install -y libssl-dev libpq-dev
+          ./scripts/build-native.sh main.mko madis
+          chmod +x madis
+
+      - name: Run tests
+        env:
+          MAKO_BIN: ${{ github.workspace }}/.ci/mako/target/release/mako
+          MAKO_RUNTIME: ${{ github.workspace }}/.ci/mako/runtime
+        run: ./scripts/ci.sh
+
+      - name: Install packaging tools
+        run: sudo apt-get install -y dpkg-dev rpm
+
+      - name: Build packages
+        run: |
+          chmod +x packaging/build-packages.sh
+          ./packaging/build-packages.sh ./madis
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            packaging/dist/*.deb
+            packaging/dist/*.rpm
+            madis
+
+      - name: Upload to package repository
+        if: false
+        run: |
+          echo "TODO: upload packaging/dist/*.deb to APT repo"
+          echo "TODO: upload packaging/dist/*.rpm to YUM repo"

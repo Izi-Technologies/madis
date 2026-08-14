@@ -1,0 +1,27 @@
+[Unit]
+Description=Madis SIP Proxy
+After=network.target postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=madis
+Group=madis
+EnvironmentFile=/etc/madis/madis.env
+ExecStart=/usr/local/bin/madis
+WorkingDirectory=/opt/madis
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+StandardOutput=append:/var/log/madis/madis.log
+StandardError=append:/var/log/madis/madis-error.log
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/madis
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

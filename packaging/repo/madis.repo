@@ -1,0 +1,6 @@
+[madis]
+name=Madis SIP Proxy
+baseurl=https://packages.izi.tech/rpm
+enabled=1
+gpgcheck=1
+gpgkey=https://packages.izi.tech/gpg.key

@@ -1,0 +1,34 @@
+#!/bin/bash
+set -e
+
+MADIS_USER="madis"
+MADIS_CONF_DIR="/etc/madis"
+MADIS_LOG_DIR="/var/log/madis"
+MADIS_INSTALL_DIR="/opt/madis"
+
+# Create system user/group
+if ! getent group "$MADIS_USER" >/dev/null 2>&1; then
+    groupadd --system "$MADIS_USER"
+fi
+if ! getent passwd "$MADIS_USER" >/dev/null 2>&1; then
+    useradd --system --no-create-home --shell /usr/sbin/nologin \
+        --gid "$MADIS_USER" "$MADIS_USER"
+fi
+
+# Create directories
+install -d -m 0750 -o root -g "$MADIS_USER" "$MADIS_CONF_DIR"
+install -d -m 0750 -o "$MADIS_USER" -g "$MADIS_USER" "$MADIS_LOG_DIR"
+install -d -m 0755 -o root -g root "$MADIS_INSTALL_DIR"
+
+# Install example config if no config exists
+if [ ! -f "$MADIS_CONF_DIR/madis.env" ]; then
+    install -m 0640 -o root -g "$MADIS_USER" \
+        "$MADIS_CONF_DIR/madis.env.example" "$MADIS_CONF_DIR/madis.env"
+fi
+
+# Reload systemd
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload
+fi
+
+echo "Madis installed. Edit /etc/madis/madis.env then: systemctl enable --now madis"
