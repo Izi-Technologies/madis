@@ -16,8 +16,8 @@ PostgreSQL-backed routing, STIR/SHAKEN, IMS, and MAF application fabric.
 
 %install
 install -D -m 0755 %{_sourcedir}/madis %{buildroot}/usr/local/bin/madis
-install -D -m 0644 %{_sourcedir}/madis.service %{buildroot}%{_unitdir}/madis.service
-install -D -m 0644 %{_sourcedir}/madis-admin.service %{buildroot}%{_unitdir}/madis-admin.service
+install -D -m 0644 %{_sourcedir}/madis.service %{buildroot}/usr/lib/systemd/system/madis.service
+install -D -m 0644 %{_sourcedir}/madis-admin.service %{buildroot}/usr/lib/systemd/system/madis-admin.service
 install -D -m 0644 %{_sourcedir}/madis.env.example %{buildroot}/etc/madis/madis.env.example
 
 %pre
@@ -48,6 +48,6 @@ fi
 
 %files
 /usr/local/bin/madis
-%{_unitdir}/madis.service
-%{_unitdir}/madis-admin.service
+/usr/lib/systemd/system/madis.service
+/usr/lib/systemd/system/madis-admin.service
 %config(noreplace) /etc/madis/madis.env.example
