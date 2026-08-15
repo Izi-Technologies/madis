@@ -1765,17 +1765,23 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
 
 // Single ingress wrapper keeps tracing, metrics, transaction replay, and
 // dialog bookkeeping consistent across UDP/TCP/TLS/WSS workers.
-fn sip_max_message_size() -> int {
+// Cache message size limit — env lookup + parse_int once, not per message.
+fn sip_max_message_size_cached(cache: CMap) -> int {
+    if cmap_has(cache, "_max_msg_size") == 1 {
+        let mut v = 65536
+        match parse_int(cmap_get(cache, "_max_msg_size")) { Ok(n) => { v = n } Err(_) => {} }
+        return v
+    }
     let mut limit = 65536
     match parse_int(env_get_or("SIP_MAX_MESSAGE_SIZE", "65536")) { Ok(v) => { limit = v } Err(_) => {} }
     if limit < 4096 { limit = 4096 }
     if limit > 1048576 { limit = 1048576 }
+    cmap_set(cache, "_max_msg_size", string(limit))
     return limit
 }
 
 fn process_sip(data: string, dl: int, reg: CMap, calls: CMap, ip: string, port: int, source_port: int, tr: string, forward_fd: int, db: SqlDB, db_ok: int, cache: CMap, outbox: chan[string], realm: string, node_id: string, diameter_lock: Mutex) -> string {
-    // Reject oversized messages before parsing to prevent CPU amplification.
-    if dl > sip_max_message_size() {
+    if dl > sip_max_message_size_cached(cache) {
         metric_add(6, 1)
         return "SIP/2.0 413 Request Entity Too Large\r\nContent-Length: 0\r\n\r\n"
     }
@@ -1783,35 +1789,41 @@ fn process_sip(data: string, dl: int, reg: CMap, calls: CMap, ip: string, port: 
         metric_add(6, 1)
         return "SIP/2.0 400 Bad Request\r\nContent-Length: 0\r\n\r\n"
     }
-    // Cache HEP local IP — two env lookups per message adds up at high CPS
-    let mut hep_local_ip = ""
-    if cmap_has(cache, "_hep_local_ip") == 1 {
-        hep_local_ip = cmap_get(cache, "_hep_local_ip")
+    // HEP capture — skip entirely when disabled (zero cost on hot path)
+    let mut hep_on = 0
+    if cmap_has(cache, "_hep_on") == 1 {
+        if str_eq(cmap_get(cache, "_hep_on"), "1") { hep_on = 1 }
     } else {
-        hep_local_ip = env_get_or("SIP_HEP_LOCAL_IP", env_get_or("SIP_PUBLIC_IP", "127.0.0.1"))
-        cmap_set(cache, "_hep_local_ip", hep_local_ip)
+        hep_on = hep_enabled()
+        cmap_set(cache, "_hep_on", string(hep_on))
     }
-    let _ = hep_capture(outbox, cache, data, ip, source_port, hep_local_ip, port, tr)
+    if hep_on == 1 {
+        let mut hep_local_ip = ""
+        if cmap_has(cache, "_hep_local_ip") == 1 {
+            hep_local_ip = cmap_get(cache, "_hep_local_ip")
+        } else {
+            hep_local_ip = env_get_or("SIP_HEP_LOCAL_IP", env_get_or("SIP_PUBLIC_IP", "127.0.0.1"))
+            cmap_set(cache, "_hep_local_ip", hep_local_ip)
+        }
+        let _ = hep_capture(outbox, cache, data, ip, source_port, hep_local_ip, port, tr)
+    }
     let started = mono_ms()
     let txn_key = sip_txn_begin(data, cache)
     let _ = len(txn_key)
     let _ = sip_server_txn_ack(data, cache)
-    let core_data = data[0:len(data)]
-    let core_ip = ip[0:len(ip)]
-    let core_tr = tr[0:len(tr)]
-    let core_realm = realm[0:len(realm)]
-    let core_node_id = node_id[0:len(node_id)]
-    let reply = process_sip_core(core_data, dl, reg, calls, core_ip, port, source_port, core_tr, forward_fd, db, db_ok, cache, core_realm, core_node_id, diameter_lock)
+    // Pass data directly — Mako 0.5.3 ownership model handles the boundary.
+    let reply = process_sip_core(data, dl, reg, calls, ip, port, source_port, tr, forward_fd, db, db_ok, cache, realm, node_id, diameter_lock)
     let elapsed = mono_ms() - started
     let _ = sip_txn_finish(data, reply, cache)
-    if sip_is_response(data) == 1 {
+    let is_resp = sip_is_response(data)
+    if is_resp == 1 {
         let _ = sip_txn_cache_forwarded_response(reply, cache)
     }
     let _ = sip_txn_cache_response(data, reply, cache)
-    if sip_is_response(data) == 0 && sip_status_code(reply) >= 200 {
-        let mut peer_port = sip_msg_response_port(data)
-        if peer_port <= 0 { peer_port = 5060 }
-        let _ = sip_server_txn_record(data, reply, ip, peer_port, tr, forward_fd, cache)
+    if is_resp == 0 && len(reply) > 0 && sip_status_code(reply) >= 200 {
+        let mut pp = sip_msg_response_port(data)
+        if pp <= 0 { pp = 5060 }
+        let _ = sip_server_txn_record(data, reply, ip, pp, tr, forward_fd, cache)
     }
     let _ = sip_dialog_observe(data, reply, calls, cache)
     let _ = maf_worker_sync_sip(db, db_ok, data, cache)

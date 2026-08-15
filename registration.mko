@@ -77,10 +77,18 @@ fn registration_value(contact: string, transport: string, expires_at: int, ip: s
 }
 
 fn registration_live(value: string) -> int {
-    let parts = str_split(value, "|")
-    if len(parts) < 3 { return 0 }
+    // Format: contact|transport|expires_at|ip|port
+    // Use str_index to find the third field without allocating an array.
+    let p1 = str_index(value, "|")
+    if p1 < 0 { return 0 }
+    let p2 = str_index(value[p1 + 1:], "|")
+    if p2 < 0 { return 0 }
+    let exp_start = p1 + 1 + p2 + 1
+    let mut exp_end = exp_start
+    while exp_end < len(value) && int(value[exp_end]) != 124 { exp_end = exp_end + 1 }
+    if exp_end == exp_start { return 0 }
     let mut expires_at = 0
-    match parse_int(parts[2]) {
+    match parse_int(value[exp_start:exp_end]) {
         Ok(v) => { expires_at = v }
         Err(_) => { return 0 }
     }
@@ -89,9 +97,9 @@ fn registration_live(value: string) -> int {
 }
 
 fn registration_matches(value: string, contact: string) -> int {
-    let parts = str_split(value, "|")
-    if len(parts) < 1 { return 0 }
-    if str_eq(parts[0], contact) { return 1 }
+    let p = str_index(value, "|")
+    if p < 0 { return if str_eq(value, contact) { 1 } else { 0 } }
+    if str_eq(value[0:p], contact) { return 1 }
     return 0
 }
 
