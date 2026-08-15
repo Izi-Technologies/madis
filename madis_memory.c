@@ -94,8 +94,11 @@ MakoString madis_passport_sign(MakoString payload, MakoString private_key_pem, M
         && EVP_DigestSignUpdate(ctx, input, input_len) == 1
         && EVP_DigestSignFinal(ctx, NULL, &der_len) == 1;
     if (ok) {
-        der = (unsigned char *)malloc(der_len);
-        ok = der && EVP_DigestSignFinal(ctx, der, &der_len) == 1;
+        if (der_len > 256) ok = 0; /* P-256 DER sig is ~72 bytes max */
+        else {
+            der = (unsigned char *)malloc(der_len);
+            ok = der && EVP_DigestSignFinal(ctx, der, &der_len) == 1;
+        }
     }
     if (ctx) EVP_MD_CTX_free(ctx);
     EVP_PKEY_free(pkey);
@@ -151,7 +154,8 @@ static int8_t madis_b64url_val(unsigned char c) {
 
 MakoString madis_base64url_decode(MakoString data) {
     if (!data.data || data.len == 0) return madis_owned_cstr("");
-    size_t cap = (data.len / 4 + 1) * 3;
+    if (data.len > 65536) return madis_owned_cstr(""); /* cap input size */
+    size_t cap = (data.len / 4 + 1) * 3 + 4; /* +4 safety margin for partial blocks */
     uint8_t *buf = (uint8_t *)malloc(cap);
     if (!buf) return madis_owned_cstr("");
     size_t o = 0;
@@ -163,9 +167,9 @@ MakoString madis_base64url_decode(MakoString data) {
             v = (v << 6) | (uint32_t)c;
             n++;
         }
-        if (n >= 2) buf[o++] = (v >> (6*(n-1) - 2)) & 0xff;
-        if (n >= 3) buf[o++] = (v >> (6*(n-2) - 4)) & 0xff;
-        if (n >= 4) buf[o++] = v & 0xff;
+        if (n >= 2 && o < cap) buf[o++] = (v >> (6*(n-1) - 2)) & 0xff;
+        if (n >= 3 && o < cap) buf[o++] = (v >> (6*(n-2) - 4)) & 0xff;
+        if (n >= 4 && o < cap) buf[o++] = v & 0xff;
     }
     char *result = (char *)malloc(o + 1);
     if (!result) { free(buf); return madis_owned_cstr(""); }
@@ -375,11 +379,20 @@ static int64_t madis_tls_seq = 0;
 int64_t madis_tls_srv_accept(void *srv, int64_t fd) {
     void *conn = mako_tls_accept_start(srv, fd);
     if (!conn || mako_tls_conn_fd(conn) < 0) return -1;
-    int64_t slot = __sync_fetch_and_add(&madis_tls_seq, 1) % MADIS_TLS_POOL_CAP;
-    void *old = madis_tls_table[slot];
-    if (old) mako_tls_conn_close(old);
-    madis_tls_table[slot] = conn;
-    return slot;
+    /* Find a free slot. Scan from the sequence counter; if no free slot
+     * in a full sweep, reject the connection rather than overwriting an
+     * active one (use-after-reassign prevention). */
+    int64_t base = __sync_fetch_and_add(&madis_tls_seq, 1);
+    for (int scan = 0; scan < MADIS_TLS_POOL_CAP; scan++) {
+        int64_t slot = (base + scan) % MADIS_TLS_POOL_CAP;
+        if (madis_tls_table[slot] == NULL) {
+            madis_tls_table[slot] = conn;
+            return slot;
+        }
+    }
+    /* Pool exhausted — close the new connection */
+    mako_tls_conn_close(conn);
+    return -1;
 }
 
 int64_t madis_tls_srv_fd(int64_t handle) {
@@ -398,6 +411,7 @@ int64_t madis_tls_srv_handshake(int64_t handle) {
 
 MakoString madis_tls_srv_read(int64_t handle, int64_t max) {
     if (handle < 0 || handle >= MADIS_TLS_POOL_CAP) return (MakoString){NULL, 0};
+    if (max <= 0 || max > 1048576) return (MakoString){NULL, 0};
     void *conn = madis_tls_table[handle];
     if (!conn) return (MakoString){NULL, 0};
     return mako_tls_read_nb(conn, max);
