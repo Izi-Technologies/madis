@@ -1,8 +1,14 @@
 // ============ STIR/SHAKEN (RFC 8224/8225/8226) ============
-// Signing: HS256 lab mode or platform ECDSA P-256 / ES256 with a PEM key.
-// Verification: HS256 secret, RS256 PEM, ES256 PEM, and/or JWKS.
+// Signing: ES256 with PASSporT header (RFC 8225 §9) via C bridge.
+// Verification: ES256, RS256, HS256 (lab), and JWKS with iat freshness.
+// HS256 is lab-only and does not comply with RFC 8225.
 
-// PASSporT JSON claims (compact)
+// C bridge for PASSporT-compliant JWT signing and base64url
+extern "C" fn madis_passport_sign(payload: string, key: string, cert_url: string) -> string;
+extern "C" fn madis_base64url_encode(data: string) -> string;
+extern "C" fn madis_base64url_decode(data: string) -> string;
+
+// PASSporT JSON claims (RFC 8225 §5)
 fn shaken_passport_payload(orig_tn: string, dest_tn: string, attest: string, origid: string, iat: int) -> string {
     return "{\"attest\":\"" + attest + "\",\"dest\":{\"tn\":[\"" + dest_tn + "\"]},\"iat\":" + string(iat) + ",\"orig\":{\"tn\":\"" + orig_tn + "\"},\"origid\":\"" + origid + "\"}"
 }
@@ -12,6 +18,16 @@ fn shaken_identity_token(identity: string) -> string {
     let semi = str_index(identity, ";")
     if semi < 0 { return identity }
     return identity[0:semi]
+}
+
+// Extract info=<url> from Identity header parameters
+fn shaken_identity_info(identity: string) -> string {
+    let idx = str_index(str_to_lower(identity), "info=<")
+    if idx < 0 { return "" }
+    let start = idx + 6
+    let end = str_index(identity[start:], ">")
+    if end < 0 { return "" }
+    return identity[start:start + end]
 }
 
 // Attestation claim from verified JWT payload
@@ -27,28 +43,69 @@ fn shaken_attest_from_payload(payload: string) -> string {
     return ""
 }
 
+// Extract iat (issued-at) from JWT payload
+fn shaken_iat_from_payload(payload: string) -> int {
+    let idx = str_index(payload, "\"iat\":")
+    if idx < 0 { return 0 }
+    let start = idx + 6
+    let mut end = start
+    while end < len(payload) {
+        let c = int(payload[end])
+        if c < 48 || c > 57 { break }
+        end = end + 1
+    }
+    if end == start { return 0 }
+    let mut val = 0
+    match parse_int(payload[start:end]) { Ok(v) => { val = v } Err(_) => {} }
+    return val
+}
+
+// Extract orig TN from JWT payload
+fn shaken_orig_from_payload(payload: string) -> string {
+    let idx = str_index(payload, "\"orig\":{\"tn\":\"")
+    if idx < 0 { return "" }
+    let start = idx + 14
+    let end = str_index(payload[start:], "\"")
+    if end < 0 { return "" }
+    return payload[start:start + end]
+}
+
+// Extract first dest TN from JWT payload
+fn shaken_dest_from_payload(payload: string) -> string {
+    let idx = str_index(payload, "\"dest\":{\"tn\":[\"")
+    if idx < 0 { return "" }
+    let start = idx + 15
+    let end = str_index(payload[start:], "\"")
+    if end < 0 { return "" }
+    return payload[start:start + end]
+}
+
+// Configurable iat freshness window (RFC 8224 §6.2.1)
+fn shaken_iat_max_age_sec() -> int {
+    let mut age = 60
+    match parse_int(env_get_or("STIR_SHAKEN_IAT_MAX_AGE", "60")) {
+        Ok(v) => { age = v }
+        Err(_) => {}
+    }
+    if age < 10 { age = 10 }
+    if age > 3600 { age = 3600 }
+    return age
+}
+
 // Load PEM/JWKS material: if value looks like a path, read_file; else use inline
 fn shaken_load_material(value: string) -> string {
     if len(value) == 0 { return "" }
     if str_has_prefix(value, "-----") { return value }
     if str_has_prefix(value, "{") { return value }
-    if str_has_prefix(value, "/") {
-        let body = read_file(value)
-        return body
-    }
-    // relative path
-    if str_contains(value, ".pem") {
-        let body = read_file(value)
-        if len(body) > 0 { return body }
-    }
-    if str_contains(value, ".json") {
+    if str_has_prefix(value, "/") { return read_file(value) }
+    if str_contains(value, ".pem") || str_contains(value, ".json") {
         let body = read_file(value)
         if len(body) > 0 { return body }
     }
     return value
 }
 
-// Optional JWKS fetch over verified HTTPS (empty ca uses platform trust)
+// Optional JWKS fetch over verified HTTPS
 fn shaken_fetch_jwks(url: string) -> string {
     if len(url) == 0 { return "" }
     if str_has_prefix(url, "https://") {
@@ -56,12 +113,27 @@ fn shaken_fetch_jwks(url: string) -> string {
         if len(body) > 0 { return body }
         return ""
     }
-    if str_has_prefix(url, "http://") {
-        // cleartext only for lab; prefer https
-        return http_get(url)
-    }
+    if str_has_prefix(url, "http://") { return http_get(url) }
     return shaken_load_material(url)
 }
+
+// Fetch certificate from x5u URL for verification (RFC 8226)
+fn shaken_fetch_cert(url: string, cache: CMap) -> string {
+    if len(url) == 0 { return "" }
+    // Cache fetched certs for 5 minutes
+    let key = "shaken_cert|" + url
+    if cmap_has(cache, key) == 1 { return cmap_get(cache, key) }
+    let mut cert = ""
+    if str_has_prefix(url, "https://") {
+        cert = https_get(url, "", 5000)
+    }
+    if len(cert) > 0 {
+        let _ = bounded_cache_set(cache, "shaken_cert_seq", "shaken_cert_ring|", key, cert, 256)
+    }
+    return cert
+}
+
+// ============ SIGNING (RFC 8224 §4, RFC 8225 §9) ============
 
 fn shaken_sign_cfg(orig_tn: string, dest_tn: string, attest: string, cert_url: string, cfg: []string) -> string {
     if len(cfg) < 5 { return "" }
@@ -70,25 +142,38 @@ fn shaken_sign_cfg(orig_tn: string, dest_tn: string, attest: string, cert_url: s
     let origid = base64_encode(random_bytes(16))
     let iat = now_ms() / 1000
     let payload = shaken_passport_payload(orig_tn, dest_tn, attest, origid, iat)
+    let mut info = cert_url
+    if len(info) == 0 { info = "https://localhost/sti.pem" }
+
     let mut token = ""
-    let mut alg = "HS256"
     if str_eq(str_to_lower(cfg[4]), "es256") {
-        token = jwt_sign_es256(payload, material)
-        alg = "ES256"
+        // RFC 8225 compliant: PASSporT header with x5u via C bridge
+        token = madis_passport_sign(payload, material, info)
     } else {
+        // HS256 lab mode — non-compliant, for testing only
         token = jwt_sign(payload, material)
     }
     if len(token) == 0 { return "" }
-    let mut info = cert_url
-    if len(info) == 0 { info = "https://localhost/sti.pem" }
+    let mut alg = "ES256"
+    if not str_eq(str_to_lower(cfg[4]), "es256") { alg = "HS256" }
     return token + ";info=<" + info + ">;alg=" + alg + ";ppt=shaken"
 }
 
-// Verify Identity using configured material.
-// cfg: [enabled, cert_url, attest, secret, mode, pubkey, jwks]
-// mode: hs256 | rs256 | jwks | auto (default)
-// Returns "A"/"B"/"C" or ""
-fn shaken_verify_cfg(msg: string, msglen: int, cfg: []string) -> string {
+fn shaken_add_identity_cfg(msg: string, orig_tn: string, dest_tn: string, attest: string, cfg: []string) -> string {
+    let identity_val = shaken_sign_cfg(orig_tn, dest_tn, attest, cfg[1], cfg)
+    if len(identity_val) == 0 { return msg }
+    let mut result = hdr_add(msg, "Identity", identity_val)
+    result = hdr_add(result, "P-Attestation-Indicator", attest)
+    // RFC 8224 §4.1: authentication service MUST include a Date header
+    if len(sip_header(result, "Date")) == 0 {
+        result = hdr_add(result, "Date", time_format(now_ms()))
+    }
+    return result
+}
+
+// ============ VERIFICATION (RFC 8224 §6) ============
+
+fn shaken_verify_cfg(msg: string, msglen: int, cfg: []string, cache: CMap) -> string {
     let _ = msglen
     let identity = sip_header(msg, "Identity")
     if len(identity) == 0 { return "" }
@@ -106,59 +191,85 @@ fn shaken_verify_cfg(msg: string, msglen: int, cfg: []string) -> string {
     if len(cfg) >= 6 { pubkey = shaken_load_material(cfg[5]) }
     if len(cfg) >= 7 { jwks = shaken_load_material(cfg[6]) }
 
+    // RFC 8226: fetch certificate from x5u if no local key configured
+    if len(pubkey) == 0 {
+        let info_url = shaken_identity_info(identity)
+        if len(info_url) > 0 && str_has_prefix(info_url, "https://") {
+            let cert = shaken_fetch_cert(info_url, cache)
+            if len(cert) > 0 { pubkey = cert }
+        }
+    }
+
     let mut ok = 0
     if str_eq(mode, "hs256") {
-        if len(secret) > 0 {
-            if jwt_verify(token, secret) == 1 { ok = 1 }
-        }
-    } else {
-    if str_eq(mode, "rs256") {
-        if len(pubkey) > 0 {
-            if jwt_verify_rs256(token, pubkey) == 1 { ok = 1 }
-        }
-    } else {
-    if str_eq(mode, "es256") {
-        if len(pubkey) > 0 {
-            if jwt_verify_es256(token, pubkey) == 1 { ok = 1 }
-        }
-    } else {
-    if str_eq(mode, "jwks") {
-        if len(jwks) > 0 {
-            if jwt_verify_jwks(token, jwks) == 1 { ok = 1 }
-        }
+        if len(secret) > 0 { if jwt_verify(token, secret) == 1 { ok = 1 } }
+    } else if str_eq(mode, "rs256") {
+        if len(pubkey) > 0 { if jwt_verify_rs256(token, pubkey) == 1 { ok = 1 } }
+    } else if str_eq(mode, "es256") {
+        if len(pubkey) > 0 { if jwt_verify_es256(token, pubkey) == 1 { ok = 1 } }
+    } else if str_eq(mode, "jwks") {
+        if len(jwks) > 0 { if jwt_verify_jwks(token, jwks) == 1 { ok = 1 } }
     } else {
         // auto: try strongest configured material first
-        if len(jwks) > 0 {
-            if jwt_verify_jwks(token, jwks) == 1 { ok = 1 }
+        if len(jwks) > 0 { if jwt_verify_jwks(token, jwks) == 1 { ok = 1 } }
+        if ok == 0 && len(pubkey) > 0 {
+            if jwt_verify_es256(token, pubkey) == 1 { ok = 1 }
+            if ok == 0 { if jwt_verify_rs256(token, pubkey) == 1 { ok = 1 } }
         }
-        if ok == 0 {
-            if len(pubkey) > 0 {
-                if jwt_verify_rs256(token, pubkey) == 1 { ok = 1 }
-            }
-        }
-        if ok == 0 {
-            if len(secret) > 0 {
-                if jwt_verify(token, secret) == 1 { ok = 1 }
-            }
-        }
-    }}}}
+        if ok == 0 && len(secret) > 0 { if jwt_verify(token, secret) == 1 { ok = 1 } }
+    }
 
     if ok == 0 { return "" }
     let payload = jwt_payload(token)
+
+    // RFC 8224 §6.2.1: check iat freshness
+    let iat = shaken_iat_from_payload(payload)
+    if iat > 0 {
+        let now = now_ms() / 1000
+        let age = now - iat
+        if age < 0 - 30 || age > shaken_iat_max_age_sec() { return "" }
+    }
+
     return shaken_attest_from_payload(payload)
 }
 
-fn shaken_add_identity_cfg(msg: string, orig_tn: string, dest_tn: string, attest: string, cfg: []string) -> string {
-    let identity_val = shaken_sign_cfg(orig_tn, dest_tn, attest, cfg[1], cfg)
-    if len(identity_val) == 0 { return msg }
-    let mut result = hdr_add(msg, "Identity", identity_val)
-    result = hdr_add(result, "P-Attestation-Indicator", attest)
-    return result
-}
-
-fn shaken_verify_and_annotate_cfg(msg: string, msglen: int, cfg: []string) -> string {
-    let attest = shaken_verify_cfg(msg, msglen, cfg)
+// Verify and annotate with orig/dest validation (RFC 8224 §6.2.2)
+fn shaken_verify_and_annotate_cfg(msg: string, msglen: int, cfg: []string, cache: CMap) -> string {
+    let attest = shaken_verify_cfg(msg, msglen, cfg, cache)
     if len(attest) > 0 {
+        // RFC 8224 §6.2.2: validate orig matches From, dest matches R-URI
+        let identity = sip_header(msg, "Identity")
+        let token = shaken_identity_token(identity)
+        let payload = jwt_payload(token)
+        let orig_tn = shaken_orig_from_payload(payload)
+        let dest_tn = shaken_dest_from_payload(payload)
+        let from_user = sip_uri_user(sip_header(msg, "From"))
+        let ruri_user = sip_uri_user(sip_request_uri(msg))
+
+        // Strip leading + for comparison
+        let mut from_clean = from_user
+        let mut ruri_clean = ruri_user
+        let mut orig_clean = orig_tn
+        let mut dest_clean = dest_tn
+        if str_has_prefix(from_clean, "+") { from_clean = from_clean[1:] }
+        if str_has_prefix(ruri_clean, "+") { ruri_clean = ruri_clean[1:] }
+        if str_has_prefix(orig_clean, "+") { orig_clean = orig_clean[1:] }
+        if str_has_prefix(dest_clean, "+") { dest_clean = dest_clean[1:] }
+
+        let mut tn_valid = 1
+        if len(orig_clean) > 0 && len(from_clean) > 0 && not str_eq(orig_clean, from_clean) {
+            tn_valid = 0
+        }
+        if len(dest_clean) > 0 && len(ruri_clean) > 0 && not str_eq(dest_clean, ruri_clean) {
+            tn_valid = 0
+        }
+
+        if tn_valid == 0 {
+            let mut result = hdr_add(msg, "P-Identity-Verified", "false")
+            result = hdr_add(result, "P-Identity-Error", "orig-dest-mismatch")
+            return result
+        }
+
         let mut result = hdr_set(msg, "P-Attestation-Indicator", attest)
         result = hdr_add(result, "P-Identity-Verified", "true")
         return result
@@ -187,7 +298,6 @@ fn db_shaken_config(db: SqlDB, db_ok: int, cache: CMap) -> []string {
     result[6] = ""
 
     if db_ok == 0 {
-        // Env overrides for standalone mode
         let env_en = env_get_or("STIR_SHAKEN_ENABLED", "")
         if str_eq(env_en, "true") { result[0] = "1" }
         result[1] = env_get_or("STIR_SHAKEN_CERT_URL", "")
@@ -205,7 +315,6 @@ fn db_shaken_config(db: SqlDB, db_ok: int, cache: CMap) -> []string {
         return result
     }
 
-    // Per-field cache (JWKS JSON may contain separators)
     let ck = "shaken|v2"
     if cmap_has(cache, ck) == 1 {
         result[0] = cmap_get(cache, "shaken|en")

@@ -6,11 +6,175 @@
 #include "mako_cmap.h"
 #include "mako_net.h"
 
-/* Include full TLS header when OpenSSL is available (production build).
- * Test builds without OpenSSL get stub functions that return failure. */
-/* Server-side TLS handle table. When OpenSSL is available, include mako_tls.h
- * with stubs for the QUIC/HKDF helpers it references (mako_sha256_raw etc.)
- * that are defined in other runtime modules not linked into this bridge. */
+/* Forward declare madis_owned_cstr for functions defined before it */
+static MakoString madis_owned_cstr(const char *s);
+
+/* ---- Base64url encoding (RFC 4648 §5) ---- */
+static size_t madis_b64url_encode(const uint8_t *src, size_t slen, char *dst, size_t dlen) {
+    static const char t[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    size_t needed = ((slen + 2) / 3) * 4;
+    if (dlen < needed + 1) return 0;
+    size_t i = 0, o = 0;
+    for (; i + 2 < slen; i += 3) {
+        uint32_t v = ((uint32_t)src[i] << 16) | ((uint32_t)src[i+1] << 8) | src[i+2];
+        dst[o++] = t[(v >> 18) & 0x3f]; dst[o++] = t[(v >> 12) & 0x3f];
+        dst[o++] = t[(v >> 6) & 0x3f]; dst[o++] = t[v & 0x3f];
+    }
+    if (i < slen) {
+        uint32_t v = (uint32_t)src[i] << 16;
+        if (i + 1 < slen) v |= (uint32_t)src[i+1] << 8;
+        dst[o++] = t[(v >> 18) & 0x3f]; dst[o++] = t[(v >> 12) & 0x3f];
+        if (i + 1 < slen) dst[o++] = t[(v >> 6) & 0x3f];
+    }
+    dst[o] = 0;
+    return o;
+}
+
+MakoString madis_base64url_encode(MakoString data) {
+    if (!data.data || data.len == 0) return madis_owned_cstr("");
+    size_t cap = ((data.len + 2) / 3) * 4 + 1;
+    char *buf = (char *)malloc(cap);
+    if (!buf) return madis_owned_cstr("");
+    size_t n = madis_b64url_encode((const uint8_t *)data.data, data.len, buf, cap);
+    MakoString result = {buf, n};
+    return result;
+}
+
+/* ---- STIR/SHAKEN PASSporT JWT signing (RFC 8224/8225) ----
+ * Signs a PASSporT with the correct header:
+ *   {"alg":"ES256","ppt":"shaken","typ":"passport","x5u":"<cert_url>"}
+ * Returns the complete JWT (header.payload.signature) or "" on failure.
+ * The runtime's jwt_sign_es256 uses {"alg":"ES256","typ":"JWT"} which
+ * does not comply with RFC 8225. */
+#ifdef MADIS_TLS_BRIDGE
+#include <openssl/evp.h>
+#include <openssl/ec.h>
+#include <openssl/pem.h>
+#include <openssl/ecdsa.h>
+
+MakoString madis_passport_sign(MakoString payload, MakoString private_key_pem, MakoString cert_url) {
+    if (!payload.data || payload.len == 0 || payload.len > 8192
+        || !private_key_pem.data || private_key_pem.len == 0
+        || !cert_url.data || cert_url.len == 0 || cert_url.len > 2048)
+        return madis_owned_cstr("");
+
+    /* Build PASSporT header */
+    char hdr_json[2200];
+    int hdr_n = snprintf(hdr_json, sizeof(hdr_json),
+        "{\"alg\":\"ES256\",\"ppt\":\"shaken\",\"typ\":\"passport\",\"x5u\":\"%.*s\"}",
+        (int)cert_url.len, cert_url.data);
+    if (hdr_n < 0 || (size_t)hdr_n >= sizeof(hdr_json)) return madis_owned_cstr("");
+
+    /* Base64url encode header and payload */
+    char hdr_b64[4096], pay_b64[12000];
+    size_t hdr_b64_len = madis_b64url_encode((const uint8_t *)hdr_json, (size_t)hdr_n, hdr_b64, sizeof(hdr_b64));
+    size_t pay_b64_len = madis_b64url_encode((const uint8_t *)payload.data, payload.len, pay_b64, sizeof(pay_b64));
+    if (hdr_b64_len == 0 || pay_b64_len == 0) return madis_owned_cstr("");
+
+    /* Build signing input: header.payload */
+    size_t input_len = hdr_b64_len + 1 + pay_b64_len;
+    char *input = (char *)malloc(input_len + 1);
+    if (!input) return madis_owned_cstr("");
+    memcpy(input, hdr_b64, hdr_b64_len);
+    input[hdr_b64_len] = '.';
+    memcpy(input + hdr_b64_len + 1, pay_b64, pay_b64_len);
+    input[input_len] = 0;
+
+    /* Load private key */
+    BIO *bio = BIO_new_mem_buf(private_key_pem.data, (int)private_key_pem.len);
+    EVP_PKEY *pkey = bio ? PEM_read_bio_PrivateKey(bio, NULL, NULL, NULL) : NULL;
+    if (bio) BIO_free(bio);
+    if (!pkey) { free(input); return madis_owned_cstr(""); }
+
+    /* Sign with ES256 */
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    size_t der_len = 0;
+    unsigned char *der = NULL;
+    int ok = ctx && EVP_DigestSignInit(ctx, NULL, EVP_sha256(), NULL, pkey) == 1
+        && EVP_DigestSignUpdate(ctx, input, input_len) == 1
+        && EVP_DigestSignFinal(ctx, NULL, &der_len) == 1;
+    if (ok) {
+        der = (unsigned char *)malloc(der_len);
+        ok = der && EVP_DigestSignFinal(ctx, der, &der_len) == 1;
+    }
+    if (ctx) EVP_MD_CTX_free(ctx);
+    EVP_PKEY_free(pkey);
+
+    if (!ok || !der) { free(der); free(input); return madis_owned_cstr(""); }
+
+    /* Convert DER signature to fixed-width R||S (64 bytes for P-256) */
+    ECDSA_SIG *sig = NULL;
+    const unsigned char *p = der;
+    sig = d2i_ECDSA_SIG(NULL, &p, (long)der_len);
+    free(der);
+    if (!sig) { free(input); return madis_owned_cstr(""); }
+
+    const BIGNUM *r = NULL, *s = NULL;
+    ECDSA_SIG_get0(sig, &r, &s);
+    unsigned char rs[64];
+    memset(rs, 0, 64);
+    BN_bn2binpad(r, rs, 32);
+    BN_bn2binpad(s, rs + 32, 32);
+    ECDSA_SIG_free(sig);
+
+    /* Base64url encode signature */
+    char sig_b64[128];
+    size_t sig_b64_len = madis_b64url_encode(rs, 64, sig_b64, sizeof(sig_b64));
+    if (sig_b64_len == 0) { free(input); return madis_owned_cstr(""); }
+
+    /* Assemble JWT: header.payload.signature */
+    size_t total = input_len + 1 + sig_b64_len;
+    char *jwt = (char *)malloc(total + 1);
+    if (!jwt) { free(input); return madis_owned_cstr(""); }
+    memcpy(jwt, input, input_len);
+    jwt[input_len] = '.';
+    memcpy(jwt + input_len + 1, sig_b64, sig_b64_len);
+    jwt[total] = 0;
+    free(input);
+
+    return (MakoString){jwt, total};
+}
+#else
+MakoString madis_passport_sign(MakoString payload, MakoString key, MakoString url) {
+    (void)payload; (void)key; (void)url; return madis_owned_cstr("");
+}
+#endif
+
+static int8_t madis_b64url_val(unsigned char c) {
+    if (c >= 'A' && c <= 'Z') return (int8_t)(c - 'A');
+    if (c >= 'a' && c <= 'z') return (int8_t)(c - 'a' + 26);
+    if (c >= '0' && c <= '9') return (int8_t)(c - '0' + 52);
+    if (c == '-') return 62;
+    if (c == '_') return 63;
+    return -1;
+}
+
+MakoString madis_base64url_decode(MakoString data) {
+    if (!data.data || data.len == 0) return madis_owned_cstr("");
+    size_t cap = (data.len / 4 + 1) * 3;
+    uint8_t *buf = (uint8_t *)malloc(cap);
+    if (!buf) return madis_owned_cstr("");
+    size_t o = 0;
+    for (size_t i = 0; i < data.len; ) {
+        uint32_t v = 0; int n = 0;
+        for (; n < 4 && i < data.len; i++) {
+            int8_t c = madis_b64url_val((unsigned char)data.data[i]);
+            if (c < 0) continue;
+            v = (v << 6) | (uint32_t)c;
+            n++;
+        }
+        if (n >= 2) buf[o++] = (v >> (6*(n-1) - 2)) & 0xff;
+        if (n >= 3) buf[o++] = (v >> (6*(n-2) - 4)) & 0xff;
+        if (n >= 4) buf[o++] = v & 0xff;
+    }
+    char *result = (char *)malloc(o + 1);
+    if (!result) { free(buf); return madis_owned_cstr(""); }
+    memcpy(result, buf, o);
+    result[o] = 0;
+    free(buf);
+    return (MakoString){result, o};
+}
+
 /* TLS handle table requires explicit opt-in via -DMADIS_TLS_BRIDGE.
  * The Dockerfile passes this flag; test and CI builds do not. */
 #ifdef MADIS_TLS_BRIDGE
