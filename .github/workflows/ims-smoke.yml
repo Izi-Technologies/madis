@@ -6,8 +6,7 @@
 name: ims-smoke
 
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 jobs:
   ims-docker-smoke:
