@@ -2361,7 +2361,8 @@ fn tls_apply_sni(srv: TlsServer, spec: string) -> int {
     return 0
 }
 
-// Server-side TLS integer handles (madis_memory.c bridge).
+// Server-side TLS C bridge (madis_memory.c).
+// tls_server_reload is now a Mako 0.5.4 builtin — no C bridge needed.
 extern "C" fn madis_tls_srv_accept(srv: TlsServer, fd: int) -> int;
 extern "C" fn madis_tls_srv_fd(handle: int) -> int;
 extern "C" fn madis_tls_srv_handshake(handle: int) -> int;
@@ -2512,6 +2513,28 @@ fn tls_worker(fd: int, srv: TlsServer, port: int, reg: CMap, calls: CMap, cache:
         let _ = sip_stream_poll(forward_fd, reg, calls, db, db_ok, cache, outbox, realm, nid, diameter_lock)
         let _ = sip_client_txn_tick(cache, forward_fd)
         let _ = sip_server_txn_tick(cache, forward_fd)
+        // Hot TLS cert reload: check cert file mtime every 30s
+        if cmap_has(cache, "_tls_cert") == 1 {
+            let tls_now = mono_ms()
+            let mut tls_last_check = 0
+            if cmap_has(cache, "_tls_check_at") == 1 {
+                match parse_int(cmap_get(cache, "_tls_check_at")) { Ok(v) => { tls_last_check = v } Err(_) => {} }
+            }
+            if tls_now - tls_last_check >= 30000 {
+                cmap_set(cache, "_tls_check_at", string(tls_now))
+                let cert_path = cmap_get(cache, "_tls_cert")
+                let key_path = cmap_get(cache, "_tls_key")
+                let new_size = string(path_file_size(cert_path))
+                let old_size = cmap_get(cache, "_tls_mtime")
+                if not str_eq(new_size, old_size) {
+                    let rc = tls_server_reload(srv, cert_path, key_path)
+                    if rc == 1 {
+                        cmap_set(cache, "_tls_mtime", new_size)
+                        slog("  TLS:     cert reloaded from " + cert_path)
+                    }
+                }
+            }
+        }
     }
     let _ = evloop_close(el)
     return 0
@@ -2773,6 +2796,24 @@ fn sip_scheduler_workers(udp_workers: int, tcp_workers: int, tls_workers: int, w
 
 fn main() {
     let _ = signal_on_term()
+    // Validate config at startup — log warnings, abort on critical errors
+    let config_errors = proxy_validate_config()
+    if len(config_errors) > 0 {
+        let lines = str_split(config_errors, "\n")
+        let mut has_error = 0
+        let mut i = 0
+        while i < len(lines) {
+            let line = str_trim_space(lines[i])
+            if len(line) > 0 { slog("  Config:  " + line) }
+            if str_has_prefix(line, "ERROR:") { has_error = 1 }
+            i = i + 1
+        }
+        // Abort on errors, continue on warnings
+        if has_error == 1 {
+            slog("  Config:  fix errors above and restart")
+            return
+        }
+    }
     let report_path = env_get_or("SIP_CRASH_REPORT", "")
     if len(report_path) > 0 { let _ = crash_report_install(report_path) }
     let udp_port = sip_config_port("SIP_UDP_PORT", 5060)
@@ -3037,6 +3078,10 @@ fn main() {
                 slog("  TLS:     skipped (no cert/key)")
             } else {
             let tls_srv = tls_server_new(tls_cert_path, tls_key_path)
+            // Store cert paths for hot reload in heartbeat loop
+            cmap_set(cache, "_tls_cert", tls_cert_path)
+            cmap_set(cache, "_tls_key", tls_key_path)
+            cmap_set(cache, "_tls_mtime", string(path_file_size(tls_cert_path)))
             let tls_sni = env_get_or("SIP_TLS_SNI", "")
             let _ = tls_apply_sni(tls_srv, tls_sni)
             let mut tls_i = 0

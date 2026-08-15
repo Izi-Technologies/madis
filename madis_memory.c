@@ -372,6 +372,23 @@ void madis_cmap_set_i64(MakoCMap *cache, MakoString prefix, MakoString suffix, i
  * (production Dockerfile), the real implementation is used. Otherwise stubs. */
 #ifdef MADIS_TLS_BRIDGE
 
+/* Hot TLS cert reload: update the SSL_CTX in-place. New connections use
+ * the new cert; existing connections keep their negotiated cert.
+ * Returns 1 on success, 0 on failure (old cert remains active). */
+int64_t madis_tls_reload_cert(void *ctx, MakoString cert_path, MakoString key_path) {
+    if (!ctx || !cert_path.data || cert_path.len == 0 || cert_path.len > 4096
+        || !key_path.data || key_path.len == 0 || key_path.len > 4096)
+        return 0;
+    MakoTlsServer *server = (MakoTlsServer *)ctx;
+    if (!server->ctx) return 0;
+    char cbuf[4097], kbuf[4097];
+    memcpy(cbuf, cert_path.data, cert_path.len); cbuf[cert_path.len] = 0;
+    memcpy(kbuf, key_path.data, key_path.len); kbuf[key_path.len] = 0;
+    if (SSL_CTX_use_certificate_chain_file(server->ctx, cbuf) != 1) return 0;
+    if (SSL_CTX_use_PrivateKey_file(server->ctx, kbuf, SSL_FILETYPE_PEM) != 1) return 0;
+    return 1;
+}
+
 #define MADIS_TLS_POOL_CAP 8192
 static void *madis_tls_table[MADIS_TLS_POOL_CAP];
 static int64_t madis_tls_seq = 0;
@@ -434,6 +451,7 @@ int64_t madis_tls_srv_close(int64_t handle) {
 
 #else /* stubs for test/verify/non-TLS builds */
 
+int64_t madis_tls_reload_cert(void *ctx, MakoString cert, MakoString key) { (void)ctx; (void)cert; (void)key; return 0; }
 int64_t madis_tls_srv_accept(void *srv, int64_t fd) { (void)srv; (void)fd; return -1; }
 int64_t madis_tls_srv_fd(int64_t handle) { (void)handle; return -1; }
 int64_t madis_tls_srv_handshake(int64_t handle) { (void)handle; return -1; }

@@ -1,5 +1,101 @@
 // ============ OBSERVABILITY / ADMIN PLANE ============
 
+// ============ CONFIG VALIDATION ============
+// Validates environment variables before the worker starts. Returns a list
+// of errors as a newline-separated string. Empty string = valid.
+
+fn proxy_validate_config() -> string {
+    let mut errors = ""
+    let mut b = str_builder()
+
+    // Required for production
+    let db = env_get_or("SIP_DB_URL", "")
+    if len(db) == 0 {
+        builder_write(b, "WARNING: SIP_DB_URL not set — running in standalone/memory mode\n")
+    }
+
+    // Port ranges
+    let ports = ["SIP_UDP_PORT", "SIP_TCP_PORT", "SIP_TLS_PORT", "SIP_WSS_PORT", "SIP_ADMIN_PORT"]
+    let mut pi = 0
+    while pi < len(ports) {
+        let raw = env_get_or(ports[pi], "")
+        if len(raw) > 0 {
+            let mut valid = 0
+            match parse_int(raw) { Ok(v) => { if v > 0 && v <= 65535 { valid = 1 } } Err(_) => {} }
+            if valid == 0 { builder_write(b, "ERROR: " + ports[pi] + "=" + raw + " is not a valid port (1-65535)\n") }
+        }
+        pi = pi + 1
+    }
+
+    // Worker counts
+    let workers = ["SIP_UDP_WORKERS", "SIP_TCP_WORKERS", "SIP_TLS_WORKERS", "SIP_WSS_WORKERS"]
+    let mut wi = 0
+    while wi < len(workers) {
+        let raw = env_get_or(workers[wi], "")
+        if len(raw) > 0 {
+            let mut valid = 0
+            match parse_int(raw) { Ok(v) => { if v >= 1 && v <= 8 { valid = 1 } } Err(_) => {} }
+            if valid == 0 { builder_write(b, "ERROR: " + workers[wi] + "=" + raw + " must be 1-8\n") }
+        }
+        wi = wi + 1
+    }
+
+    // Token lengths
+    let tokens = ["SIP_ADMIN_TOKEN", "SIP_CARRIER_API_TOKEN", "SIP_CONTROL_API_TOKEN", "SIP_CONTROL_API_READ_TOKEN"]
+    let mut ti = 0
+    while ti < len(tokens) {
+        let raw = env_get_or(tokens[ti], "")
+        if len(raw) > 0 && len(raw) < 16 {
+            builder_write(b, "ERROR: " + tokens[ti] + " is too short (minimum 16 characters)\n")
+        }
+        ti = ti + 1
+    }
+
+    // TLS cert paths
+    let cert = env_get_or("SIP_TLS_CERT", "")
+    let key = env_get_or("SIP_TLS_KEY", "")
+    if len(cert) > 0 && len(key) == 0 {
+        builder_write(b, "ERROR: SIP_TLS_CERT set but SIP_TLS_KEY is missing\n")
+    }
+    if len(key) > 0 && len(cert) == 0 {
+        builder_write(b, "ERROR: SIP_TLS_KEY set but SIP_TLS_CERT is missing\n")
+    }
+    if len(cert) > 0 && path_file_size(cert) < 0 {
+        builder_write(b, "ERROR: SIP_TLS_CERT file not found: " + cert + "\n")
+    }
+    if len(key) > 0 && path_file_size(key) < 0 {
+        builder_write(b, "ERROR: SIP_TLS_KEY file not found: " + key + "\n")
+    }
+
+    // PROXY protocol
+    if proxy_protocol_enabled() == 1 {
+        let trusted = env_get_or("SIP_PROXY_TRUSTED_IPS", "")
+        if len(trusted) == 0 {
+            builder_write(b, "WARNING: SIP_PROXY_PROTOCOL=1 but SIP_PROXY_TRUSTED_IPS not set — only loopback trusted\n")
+        }
+    }
+
+    // Bind IP
+    let bind = str_trim_space(env_get_or("SIP_BIND_IP", ""))
+    if len(bind) > 0 && sip_bind_ip_valid(bind) == 0 {
+        builder_write(b, "ERROR: SIP_BIND_IP=" + bind + " is not a valid IPv4 address\n")
+    }
+
+    // Rate limits
+    let inv_rate = env_get_or("SIP_INVITE_RATE_LIMIT", "")
+    if len(inv_rate) > 0 {
+        match parse_int(inv_rate) { Ok(_) => {} Err(_) => { builder_write(b, "ERROR: SIP_INVITE_RATE_LIMIT=" + inv_rate + " is not an integer\n") } }
+    }
+
+    // Realm
+    let realm = env_get_or("SIP_REALM", "")
+    if len(realm) == 0 {
+        builder_write(b, "WARNING: SIP_REALM not set — using default 'mako.local'\n")
+    }
+
+    return builder_string(b)
+}
+
 fn proxy_cache_epoch(cache: CMap) -> string {
     if cmap_has(cache, "config_epoch") == 1 { return cmap_get(cache, "config_epoch") }
     cmap_set(cache, "config_epoch", "0")
@@ -238,6 +334,13 @@ fn proxy_admin_worker(reg: CMap, calls: CMap, cache: CMap) -> int {
                 let _ = http_respond_json(c, 200, "{\"reloaded\":true,\"epoch\":" + string(epoch) + "}\n")
             } else {
                 let _ = http_respond_json(c, 405, "{\"ok\":false,\"error\":\"POST required\"}\n")
+            }
+        } else if str_eq(path, "/check-config") {
+            let errors = proxy_validate_config()
+            if len(errors) == 0 {
+                let _ = http_respond_json(c, 200, "{\"valid\":true}\n")
+            } else {
+                let _ = http_respond_ct(c, 200, "text/plain", errors)
             }
         } else if str_eq(path, "/state") {
             let body = "{\"registrations\":" + string(cmap_len(reg)) + ",\"calls\":" + string(cmap_len(calls)) + ",\"cache\":" + string(cmap_len(cache)) + "}\n"
