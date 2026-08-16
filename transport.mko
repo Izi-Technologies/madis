@@ -368,6 +368,17 @@ fn sip_forward_tls(target: string, msg: string, cache: CMap, owner: int) -> int 
     let port = sip_target_port(target, 5061)
     if len(host) == 0 || port <= 0 { return 0 }
     if sip_outbound_target_safe(host) == 0 { return 0 }
+    // RFC 5923: try reusing an inbound TLS connection (alias) before opening outbound
+    let alias_handle = tls_reuse_lookup(cache, host, port)
+    if alias_handle >= 0 {
+        let sent_alias = tls_server_pool_write(alias_handle, msg)
+        if sent_alias >= 0 {
+            cmap_set(cache, "last_forward_target", host + ":" + string(port) + ";tls;alias-reuse")
+            return 1
+        }
+        // Alias connection dead — clear it and fall through to normal path
+        let _ = tls_reuse_clear(cache, alias_handle)
+    }
     let ca = env_get_or("SIP_UPSTREAM_CA", "")
     let item = host + ":" + string(port)
     let assoc_key = "tls_assoc|" + string(owner) + "|" + item
@@ -391,7 +402,9 @@ fn sip_forward_tls(target: string, msg: string, cache: CMap, owner: int) -> int 
         handle = -1
     }
     if handle < 0 { return 0 }
-    let sent = tls_pool_send(handle, msg)
+    // RFC 5923 §5: add ;alias to our Via so the remote side can reuse this connection
+    let out_msg = tls_reuse_add_via_alias(msg)
+    let sent = tls_pool_send(handle, out_msg)
     if sent >= 0 {
         cmap_set(cache, assoc_key, string(handle))
         let list_key = "tls_assoc_list|" + string(owner)

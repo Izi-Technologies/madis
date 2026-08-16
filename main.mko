@@ -24,6 +24,7 @@ pull . "./rtpengine.mko"
 pull . "./stream.mko"
 pull . "./registration.mko"
 pull . "./outbound.mko"
+pull . "./tls_reuse.mko"
 pull . "./transport.mko"
 pull . "./b2bua.mko"
 pull . "./app_gateway.mko"
@@ -45,6 +46,7 @@ pull . "./maf_headers.mko"
 pull . "./maf_worker.mko"
 pull . "./hep.mko"
 pull . "./cluster.mko"
+pull . "./event_package.mko"
 
 fn ims_ifc_prepare_outbound(msg: string) -> string {
     return ims_identity_apply_privacy(msg)
@@ -1778,7 +1780,15 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
     if is_options == 1 {
         return sip_options_response(data)
     } else {
-    // === REFER / INFO / MESSAGE / NOTIFY / SUBSCRIBE ===
+    // === SUBSCRIBE (RFC 6665) ===
+    // Event package handling — intercept SUBSCRIBE before the generic
+    // in-dialog forwarder so the proxy can act as notifier.
+    if str_eq(method, "SUBSCRIBE") && event_package_enabled() == 1 {
+        let evt_resp = event_package_handle_subscribe(data, dl, cache, reg)
+        if len(evt_resp) > 0 { return evt_resp }
+        // Unsupported event package — fall through to forward or reject
+    }
+    // === REFER / INFO / MESSAGE / NOTIFY / SUBSCRIBE (passthrough) ===
     // RFC 3261 §16.2: a proxy MUST forward any request it understands if it
     // can determine the next hop. In-dialog requests (To-tag present) use the
     // existing dialog binding. Out-of-dialog requests are forwarded through
@@ -2398,6 +2408,8 @@ fn tls_srv_cleanup(handle: int, el: EvLoop, tls_handles: map[string]int, buffers
     let _ = ims_flow_clear_conn(cache, peers[fd_key], peer_ports[fd_key], "TLS")
     let _ = proxy_conn_decr(cache, "TLS")
     if len(peers[fd_key]) > 0 { let _ = sip_per_ip_conn_release(cache, peers[fd_key]) }
+    // RFC 5923: clear any alias entries for this closing connection
+    let _ = tls_reuse_clear(cache, handle)
     let _ = tls_server_pool_close(handle)
     delete(tls_handles, fd_key)
     delete(buffers, fd_key)
@@ -2503,6 +2515,15 @@ fn tls_worker(fd: int, srv: TlsServer, port: int, reg: CMap, calls: CMap, cache:
                                 if sip_ingress_header_safe(msg, len(msg)) == 0 || sip_ok(msg) == 0 { budget = budget - 1; continue }
                                 let tls_txn = sip_transaction_key(msg, len(msg))
                                 if len(tls_txn) > 2 { let _ = sip_server_conn_track(cache, tls_txn, event_fd) }
+                                // RFC 5923: register inbound TLS conn as reusable when Via has ;alias
+                                if sip_is_response(msg) == 0 && tls_reuse_enabled() == 1 {
+                                    let alias_via = sip_header(msg, "Via")
+                                    if tls_reuse_via_has_alias(alias_via) == 1 {
+                                        let ah = sip_via_host(alias_via)
+                                        let ap = sip_via_port(alias_via)
+                                        let _ = tls_reuse_register_alias(cache, ah, ap, handle)
+                                    }
+                                }
  let reply = process_sip(msg, len(msg), reg, calls, peers[fd_key], port, peer_ports[fd_key], "TLS", forward_fd, db, db_ok, cache, outbox, realm, nid, diameter_lock)
                                 if len(reply) > 0 {
                                     if sip_is_response(msg) == 1 {
@@ -3193,6 +3214,8 @@ fn main() {
             // RFC 4028 §10: generate refresh re-INVITEs for sessions where
             // the proxy is the negotiated refresher.
             let _ = ims_session_timer_refresh_tick(cache, node_addr, udp_port, "udp")
+            // RFC 6665: expire stale event subscriptions and send terminal NOTIFYs.
+            let _ = event_package_sweep(cache, reg)
 
             slog("[" + hb_node_id + "] regs=" + string(cmap_len(reg)) + " calls=" + string(cmap_len(calls)) + " cache=" + string(cmap_len(cache)))
         }

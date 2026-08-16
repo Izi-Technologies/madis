@@ -136,8 +136,13 @@ fn sip_outbound_supported_header(headers: string) -> string {
 }
 
 fn sip_options_response(msg: string) -> string {
-    let mut allow = "Allow: INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, PRACK, UPDATE\r\n"
+    let mut allow = "Allow: INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, PRACK, UPDATE, SUBSCRIBE, NOTIFY\r\n"
         + "Accept: application/sdp, application/pidf+xml, application/simple-message-summary\r\n"
+        + "Supported: eventlist\r\n"
+    let evt_on = str_to_lower(str_trim_space(env_get_or("SIP_EVENT_PACKAGES", "0")))
+    if str_eq(evt_on, "1") || str_eq(evt_on, "true") {
+        allow = allow + "Allow-Events: " + str_to_lower(str_trim_space(env_get_or("SIP_EVENT_PACKAGE_LIST", "presence,message-summary"))) + "\r\n"
+    }
     allow = sip_outbound_supported_header(allow)
     // RFC 3261 §8.2.6.2: all non-100 responses MUST have a To-tag.
     let tag = "opt-" + sha256("madis.options|" + sip_header(msg, "Call-ID"))[0:16]
@@ -146,7 +151,7 @@ fn sip_options_response(msg: string) -> string {
 
 fn sip_method_not_allowed(msg: string) -> string {
     let tag = "mna-" + sha256("madis.405|" + sip_header(msg, "Call-ID"))[0:16]
-    return sip_reply_with_to_tag(msg, 405, "Method Not Allowed", "Allow: INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, PRACK, UPDATE\r\n", "", tag)
+    return sip_reply_with_to_tag(msg, 405, "Method Not Allowed", "Allow: INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, PRACK, UPDATE, SUBSCRIBE, NOTIFY\r\n", "", tag)
 }
 
 fn sip_cseq_valid(msg: string, is_response: int) -> int {

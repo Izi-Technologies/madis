@@ -1,0 +1,347 @@
+// ============ RFC 3265 / RFC 6665 SIP Event Notification ============
+// Proxy-hosted event notifier for presence (RFC 3856) and
+// message-summary (RFC 3842). Gated behind SIP_EVENT_PACKAGES=1.
+
+fn event_package_enabled() -> int {
+    let v = str_to_lower(str_trim_space(env_get_or("SIP_EVENT_PACKAGES", "0")))
+    if str_eq(v, "1") || str_eq(v, "true") { return 1 }
+    return 0
+}
+
+fn event_package_list() -> string {
+    return str_to_lower(str_trim_space(env_get_or("SIP_EVENT_PACKAGE_LIST", "presence,message-summary")))
+}
+
+fn event_package_supported(pkg: string) -> int {
+    let list = event_package_list()
+    let parts = str_split(list, ",")
+    let p = str_to_lower(str_trim_space(pkg))
+    let mut i = 0
+    while i < len(parts) {
+        if str_eq(str_trim_space(parts[i]), p) { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+fn event_package_max_expires() -> int {
+    let mut v = 3600
+    match parse_int(env_get_or("SIP_EVENT_MAX_EXPIRES", "3600")) {
+        Ok(n) => { v = n }
+        Err(_) => {}
+    }
+    if v < 60 { v = 60 }
+    if v > 86400 { v = 86400 }
+    return v
+}
+
+fn event_package_allow_events_header() -> string {
+    return "Allow-Events: " + event_package_list() + "\r\n"
+}
+
+// --- Subscription storage ---
+// CMap keys:
+//   "evt_sub|<sub_key>"       → "<from_uri>\n<resource>\n<event>\n<expires_at>\n<from_tag>\n<to_tag>\n<call_id>\n<cseq>\n<contact>"
+//   "evt_sub_ring|<slot>"     → "<sub_key>"
+//   "evt_sub_seq"             → ring sequence counter
+// sub_key = sha256(call-id + from-tag) — unique per dialog
+
+fn event_package_sub_key(call_id: string, from_tag: string) -> string {
+    return sha256("madis.evt|" + call_id + "|" + from_tag)[0:32]
+}
+
+fn event_package_pack_sub(from_uri: string, resource: string, event: string, expires_at: int, from_tag: string, to_tag: string, call_id: string, cseq: int, contact: string) -> string {
+    return from_uri + "\n" + resource + "\n" + event + "\n" + string(expires_at) + "\n" + from_tag + "\n" + to_tag + "\n" + call_id + "\n" + string(cseq) + "\n" + contact
+}
+
+fn event_package_sub_field(packed: string, idx: int) -> string {
+    let parts = str_split(packed, "\n")
+    if idx < len(parts) { return parts[idx] }
+    return ""
+}
+
+fn event_package_store_sub(cache: CMap, sub_key: string, value: string) -> int {
+    let _ = bounded_cache_set(cache, "evt_sub_seq", "evt_sub_ring|", "evt_sub|" + sub_key, value, 16384)
+    return 0
+}
+
+fn event_package_del_sub(cache: CMap, sub_key: string) -> int {
+    let _ = cmap_del(cache, "evt_sub|" + sub_key)
+    return 0
+}
+
+fn event_package_get_sub(cache: CMap, sub_key: string) -> string {
+    let key = "evt_sub|" + sub_key
+    if cmap_has(cache, key) == 1 { return cmap_get(cache, key) }
+    return ""
+}
+
+// --- PIDF presence body ---
+
+fn event_package_pidf(resource: string, is_open: int) -> string {
+    let status = if is_open == 1 { "open" } else { "closed" }
+    return "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n"
+        + "<presence xmlns=\"urn:ietf:params:xml:ns:pidf\" entity=\"" + resource + "\">\r\n"
+        + "  <tuple id=\"madis\">\r\n"
+        + "    <status><basic>" + status + "</basic></status>\r\n"
+        + "  </tuple>\r\n"
+        + "</presence>"
+}
+
+fn event_package_mwi_body() -> string {
+    return "Messages-Waiting: no\r\n"
+}
+
+// Derive presence from registration state: if AOR has a live binding → open.
+fn event_package_presence_open(reg: CMap, resource: string) -> int {
+    // resource is a SIP URI like sip:user@domain — extract AOR
+    let aor = resource
+    let contact = registration_find(reg, aor)
+    if len(contact) > 0 { return 1 }
+    return 0
+}
+
+// --- Build NOTIFY request ---
+
+fn event_package_build_notify(call_id: string, from_hdr: string, to_hdr: string, event: string, sub_state: string, content_type: string, body: string, cseq: int, contact: string) -> string {
+    // NOTIFY is sent to the subscriber's Contact
+    let target = contact
+    let mut req = "NOTIFY " + target + " SIP/2.0\r\n"
+        + "From: " + to_hdr + "\r\n"
+        + "To: " + from_hdr + "\r\n"
+        + "Call-ID: " + call_id + "\r\n"
+        + "CSeq: " + string(cseq) + " NOTIFY\r\n"
+        + "Event: " + event + "\r\n"
+        + "Subscription-State: " + sub_state + "\r\n"
+        + "Max-Forwards: 70\r\n"
+    if len(body) > 0 {
+        req = req + "Content-Type: " + content_type + "\r\n"
+            + "Content-Length: " + string(len(body)) + "\r\n\r\n"
+            + body
+    } else {
+        req = req + "Content-Length: 0\r\n\r\n"
+    }
+    return req
+}
+
+fn event_package_content_type(event: string) -> string {
+    if str_eq(event, "presence") { return "application/pidf+xml" }
+    if str_eq(event, "message-summary") { return "application/simple-message-summary" }
+    return "text/plain"
+}
+
+fn event_package_body(event: string, reg: CMap, resource: string) -> string {
+    if str_eq(event, "presence") {
+        let is_open = event_package_presence_open(reg, resource)
+        return event_package_pidf(resource, is_open)
+    }
+    if str_eq(event, "message-summary") { return event_package_mwi_body() }
+    return ""
+}
+
+// --- Send NOTIFY for a subscription ---
+
+fn event_package_send_notify(cache: CMap, reg: CMap, sub_key: string, terminated: int) -> int {
+    let packed = event_package_get_sub(cache, sub_key)
+    if len(packed) == 0 { return 0 }
+    let from_uri = event_package_sub_field(packed, 0)
+    let resource = event_package_sub_field(packed, 1)
+    let event = event_package_sub_field(packed, 2)
+    let expires_at_s = event_package_sub_field(packed, 3)
+    let from_tag = event_package_sub_field(packed, 4)
+    let to_tag = event_package_sub_field(packed, 5)
+    let call_id = event_package_sub_field(packed, 6)
+    let mut cseq = 1
+    match parse_int(event_package_sub_field(packed, 7)) { Ok(v) => { cseq = v } Err(_) => {} }
+    let contact = event_package_sub_field(packed, 8)
+    cseq = cseq + 1
+
+    let mut sub_state = ""
+    if terminated == 1 {
+        sub_state = "terminated;reason=timeout"
+    } else {
+        let mut expires_at = 0
+        match parse_int(expires_at_s) { Ok(v) => { expires_at = v } Err(_) => {} }
+        let remaining = (expires_at - mono_ms()) / 1000
+        let rem = if remaining > 0 { remaining } else { 0 }
+        sub_state = "active;expires=" + string(rem)
+    }
+
+    let content_type = event_package_content_type(event)
+    let body = event_package_body(event, reg, resource)
+    let from_hdr = from_uri + ";tag=" + from_tag
+    let to_hdr = resource + ";tag=" + to_tag
+    let notify = event_package_build_notify(call_id, from_hdr, to_hdr, event, sub_state, content_type, body, cseq, contact)
+
+    // Update stored cseq
+    let mut update_expires = 0
+    if terminated == 0 {
+        match parse_int(expires_at_s) { Ok(v) => { update_expires = v } Err(_) => {} }
+    }
+    let updated = event_package_pack_sub(from_uri, resource, event, update_expires,
+        from_tag, to_tag, call_id, cseq, contact)
+    if terminated == 1 {
+        let _ = event_package_del_sub(cache, sub_key)
+    } else {
+        let _ = event_package_store_sub(cache, sub_key, updated)
+    }
+
+    // Send via UDP to the contact
+    let _ = sip_forward_target(contact, notify, "udp", cache, -1)
+    return 1
+}
+
+// --- Handle SUBSCRIBE request ---
+// Returns a SIP response string, or "" if not handled.
+
+fn event_package_handle_subscribe(data: string, dl: int, cache: CMap, reg: CMap) -> string {
+    if event_package_enabled() == 0 { return "" }
+    let event_hdr = str_trim_space(sip_header(data, "Event"))
+    if len(event_hdr) == 0 {
+        let tag = "evt-" + sha256("madis.489|" + sip_header(data, "Call-ID"))[0:16]
+        return sip_reply_with_to_tag(data, 489, "Bad Event", event_package_allow_events_header(), "", tag)
+    }
+    // Strip parameters from event header (e.g. "presence;id=xxx" → "presence")
+    let mut event = event_hdr
+    let semi = str_index(event, ";")
+    if semi >= 0 { event = event[0:semi] }
+    event = str_to_lower(str_trim_space(event))
+    if event_package_supported(event) == 0 {
+        // RFC 6665 §4.1.3: 489 with Allow-Events
+        let tag = "evt-" + sha256("madis.489|" + sip_header(data, "Call-ID"))[0:16]
+        return sip_reply_with_to_tag(data, 489, "Bad Event", event_package_allow_events_header(), "", tag)
+    }
+
+    let call_id = sip_header(data, "Call-ID")
+    let from = sip_header(data, "From")
+    let to = sip_header(data, "To")
+    let from_tag = sip_addr_tag(from)
+    let to_tag = sip_addr_tag(to)
+    let sub_key = event_package_sub_key(call_id, from_tag)
+
+    // Parse Expires
+    let mut expires = 3600
+    let exp_hdr = str_trim_space(sip_hdr(data, "Expires", dl))
+    if len(exp_hdr) > 0 {
+        match parse_int(exp_hdr) { Ok(v) => { expires = v } Err(_) => {} }
+    }
+
+    // Extract subscriber contact
+    let contact_hdr = str_trim_space(sip_header(data, "Contact"))
+    let mut subscriber_contact = contact_hdr
+    // Extract URI from angle brackets if present
+    let lt = str_index(subscriber_contact, "<")
+    if lt >= 0 {
+        let gt = str_index(subscriber_contact, ">")
+        if gt > lt { subscriber_contact = subscriber_contact[lt + 1:gt] }
+    }
+    if len(subscriber_contact) == 0 { subscriber_contact = sip_user(from) }
+
+    // Resource AOR from Request-URI
+    let resource = sip_request_uri(data)
+
+    // Parse CSeq number
+    let cseq_hdr = str_trim_space(sip_header(data, "CSeq"))
+    let mut cseq_num = 1
+    let space = str_index(cseq_hdr, " ")
+    if space > 0 {
+        match parse_int(cseq_hdr[0:space]) { Ok(v) => { cseq_num = v } Err(_) => {} }
+    }
+
+    // Unsubscribe
+    if expires == 0 {
+        let mut unsub_tag = to_tag
+        if len(unsub_tag) == 0 {
+            let existing = event_package_get_sub(cache, sub_key)
+            if len(existing) > 0 { unsub_tag = event_package_sub_field(existing, 5) }
+        }
+        if len(unsub_tag) == 0 { unsub_tag = "evt-" + sha256("madis.evt.tag|" + call_id)[0:16] }
+        // Send terminal NOTIFY then 200 OK
+        if len(event_package_get_sub(cache, sub_key)) > 0 {
+            let _ = event_package_send_notify(cache, reg, sub_key, 1)
+        }
+        return sip_reply_with_to_tag(data, 200, "OK", "Expires: 0\r\n", "", unsub_tag)
+    }
+
+    // Cap expires
+    let max_exp = event_package_max_expires()
+    if expires > max_exp { expires = max_exp }
+    if expires < 60 { expires = 60 }
+
+    // Generate or reuse To-tag for the dialog
+    let mut my_tag = to_tag
+    if len(my_tag) == 0 {
+        my_tag = "evt-" + sha256("madis.evt.tag|" + call_id + "|" + from_tag + "|" + base64_encode(random_bytes(8)))[0:24]
+    }
+
+    let expires_at = mono_ms() + expires * 1000
+    let packed = event_package_pack_sub(sip_user(from), resource, event, expires_at, from_tag, my_tag, call_id, cseq_num, subscriber_contact)
+    let _ = event_package_store_sub(cache, sub_key, packed)
+
+    // Send 200 OK with Expires
+    let resp = sip_reply_with_to_tag(data, 200, "OK", "Expires: " + string(expires) + "\r\n" + event_package_allow_events_header(), "", my_tag)
+
+    // Send initial NOTIFY with current state
+    let _ = event_package_send_notify(cache, reg, sub_key, 0)
+
+    return resp
+}
+
+// --- Notify all subscribers of an event ---
+// Call this when state changes (e.g. registration change for presence).
+
+fn event_package_notify(cache: CMap, reg: CMap, event: string, resource: string) -> int {
+    if event_package_enabled() == 0 { return 0 }
+    let now = mono_ms()
+    let mut notified = 0
+    let mut i = 0
+    while i < 16384 {
+        let ring_key = "evt_sub_ring|" + string(i)
+        if cmap_has(cache, ring_key) == 1 {
+            let sub_data_key = cmap_get(cache, ring_key)
+            if len(sub_data_key) > 0 && cmap_has(cache, sub_data_key) == 1 {
+                let packed = cmap_get(cache, sub_data_key)
+                let sub_event = event_package_sub_field(packed, 2)
+                let sub_resource = event_package_sub_field(packed, 1)
+                let mut expires_at = 0
+                match parse_int(event_package_sub_field(packed, 3)) { Ok(v) => { expires_at = v } Err(_) => {} }
+                if str_eq(sub_event, event) && str_eq(sub_resource, resource) && expires_at > now {
+                    // Extract sub_key from data key ("evt_sub|<key>" → "<key>")
+                    let sk = sub_data_key[8:]
+                    let _ = event_package_send_notify(cache, reg, sk, 0)
+                    notified = notified + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    return notified
+}
+
+// --- Expiry sweep (called from heartbeat loop) ---
+
+fn event_package_sweep(cache: CMap, reg: CMap) -> int {
+    if event_package_enabled() == 0 { return 0 }
+    let now = mono_ms()
+    let mut cleaned = 0
+    let mut i = 0
+    while i < 16384 {
+        let ring_key = "evt_sub_ring|" + string(i)
+        if cmap_has(cache, ring_key) == 1 {
+            let sub_data_key = cmap_get(cache, ring_key)
+            if len(sub_data_key) > 0 && cmap_has(cache, sub_data_key) == 1 {
+                let packed = cmap_get(cache, sub_data_key)
+                let mut expires_at = 0
+                match parse_int(event_package_sub_field(packed, 3)) { Ok(v) => { expires_at = v } Err(_) => {} }
+                if expires_at > 0 && expires_at <= now {
+                    let sk = sub_data_key[8:]
+                    let _ = event_package_send_notify(cache, reg, sk, 1)
+                    cleaned = cleaned + 1
+                }
+            }
+        }
+        i = i + 1
+        if cleaned >= 256 { break }
+    }
+    return cleaned
+}

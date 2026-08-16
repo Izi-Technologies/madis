@@ -1,0 +1,110 @@
+// RFC 5923 — SIP connection reuse for TLS.
+// Gated behind SIP_TLS_REUSE=1 (default off).
+//
+// Alias tracking: when an inbound TLS client sends Via: ...;alias, the proxy
+// records the server-pool handle so it can send requests BACK over that same
+// connection, avoiding a new TLS handshake.
+
+fn tls_reuse_enabled() -> int {
+    let v = str_to_lower(str_trim_space(env_get_or("SIP_TLS_REUSE", "0")))
+    if str_eq(v, "1") || str_eq(v, "true") || str_eq(v, "yes") { return 1 }
+    return 0
+}
+
+// Check if a Via header contains the ";alias" parameter (RFC 5923 §3).
+fn tls_reuse_via_has_alias(via: string) -> int {
+    let low = str_to_lower(via)
+    // ;alias can appear anywhere in the Via parameters
+    let p = str_index(low, ";alias")
+    if p < 0 { return 0 }
+    // Make sure it's the full token, not ";alias-something"
+    let after = p + 6
+    if after >= len(low) { return 1 }
+    let c = int(low[after])
+    // Valid terminators: semicolon, comma, space, tab, CR, LF, or '='
+    // RFC 5923 says ;alias has no value, but be lenient
+    if c == 59 || c == 44 || c == 32 || c == 9 || c == 13 || c == 10 { return 1 }
+    return 0
+}
+
+// Register an inbound TLS connection as reusable for the given Via host:port.
+// The cache key is "tls_alias|<host>:<port>" -> handle (as string).
+// ponytail: bounded to 4096 aliases; no per-domain cert validation on
+// server-pool handles — upgrade if tls_server_pool_peer_cn becomes available.
+fn tls_reuse_register_alias(cache: CMap, via_host: string, via_port: int, handle: int) -> int {
+    if tls_reuse_enabled() == 0 { return 0 }
+    if len(via_host) == 0 || handle < 0 { return 0 }
+    let key = "tls_alias|" + via_host + ":" + string(via_port)
+    cmap_set(cache, key, string(handle))
+    let _ = bounded_cache_set(cache, "tls_alias_seq", "tls_alias_ring|", key, string(handle), 4096)
+    return 1
+}
+
+// Lookup a reusable inbound connection for a target host:port.
+// Returns the server-pool handle or -1 if none cached.
+fn tls_reuse_lookup(cache: CMap, host: string, port: int) -> int {
+    if tls_reuse_enabled() == 0 { return -1 }
+    let key = "tls_alias|" + host + ":" + string(port)
+    if cmap_has(cache, key) == 0 { return -1 }
+    let mut handle = -1
+    match parse_int(cmap_get(cache, key)) { Ok(v) => { handle = v } Err(_) => {} }
+    return handle
+}
+
+// Remove alias entries for a connection that has closed.
+fn tls_reuse_clear(cache: CMap, handle: int) -> int {
+    // Scan is O(n) but bounded to 4096 and runs only on conn close.
+    // ponytail: linear scan over alias ring, reverse-index if volume matters.
+    let mut seq = 0
+    if cmap_has(cache, "tls_alias_seq") == 1 {
+        match parse_int(cmap_get(cache, "tls_alias_seq")) { Ok(v) => { seq = v } Err(_) => {} }
+    }
+    let handle_str = string(handle)
+    let mut i = 0
+    while i < seq && i < 4096 {
+        let ring_key = "tls_alias_ring|" + string(i)
+        if cmap_has(cache, ring_key) == 1 {
+            let alias_key = cmap_get(cache, ring_key)
+            if cmap_has(cache, alias_key) == 1 && str_eq(cmap_get(cache, alias_key), handle_str) {
+                let _ = cmap_del(cache, alias_key)
+            }
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// Add ";alias" to the topmost Via when the proxy sends a request over TLS
+// and wants the remote side to reuse the connection back (RFC 5923 §5).
+// Finds the first Via header line and appends ;alias to the first value.
+fn tls_reuse_add_via_alias(msg: string) -> string {
+    if tls_reuse_enabled() == 0 { return msg }
+    let first = str_index(msg, "\r\n")
+    if first < 0 { return msg }
+    let mut i = first + 2
+    while i < len(msg) {
+        let rel_end = str_index(msg[i:], "\r\n")
+        if rel_end < 0 { return msg }
+        let end = i + rel_end
+        if end == i { return msg }
+        let line = msg[i:end]
+        let low = str_to_lower(line)
+        let mut value_start = -1
+        if str_has_prefix(low, "via:") { value_start = 4 }
+        if str_has_prefix(low, "v:") { value_start = 2 }
+        if value_start >= 0 {
+            let value = line[value_start:]
+            if tls_reuse_via_has_alias(value) == 1 { return msg }
+            // Insert ;alias after the first Via value (before comma if multi-value)
+            let comma = str_index(value, ",")
+            if comma >= 0 {
+                let new_line = line[0:value_start] + str_trim_space(value[0:comma]) + ";alias," + value[comma + 1:]
+                return msg[0:i] + new_line + "\r\n" + msg[end + 2:]
+            }
+            let new_line = line + ";alias"
+            return msg[0:i] + new_line + "\r\n" + msg[end + 2:]
+        }
+        i = end + 2
+    }
+    return msg
+}
