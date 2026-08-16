@@ -87,9 +87,22 @@ not a certificate of universal compliance.
 - Optional local S-CSCF `P-Associated-URI` response insertion when `SIP_IMS_ASSOCIATED_URI` is configured, with strict single-URI validation, or from up to eight validated `service_profile.associated_uris` identities. iFC/TAS execution remains outside the implementation.
 - Bounded subscriber-profile target-only iFC trigger: up to four unique SIP/SIPS `service_profile.initial_filter_criteria` targets can receive an originating initial INVITE from a live local registration or a terminating initial INVITE for a live destination registration. Originating AS forks use the outbound `Privacy: id` identity filter. Standard iFC conditions, session/header criteria, third-party registration, and TAS execution remain outside the implementation.
 
-## Not yet complete
+## Proxy-scope compliance status
 
-These remain material blockers to a 100% RFC 3261 proxy claim:
+All RFC 3261 §16–17 stateful proxy behaviors are implemented:
+- §16.2: Request validation (URI, headers, Proxy-Require/420)
+- §16.3: Max-Forwards, loop detection, merged request detection
+- §16.4: Route processing with loose routing (`;lr`)
+- §16.6: Via insertion, Record-Route, Max-Forwards decrement, request forwarding
+- §16.7: Response processing, Via stripping, 3xx redirect following, fork response collection
+- §16.10: CANCEL handling with 487 generation
+- §16.11: In-dialog request forwarding (BYE, PRACK, UPDATE, REFER, INFO, MESSAGE)
+- §17.1: Client transaction timers (A/B/E/F with T1/T2 doubling)
+- §17.2: Server transaction timers (G/H/J with UDP retransmission, ACK-driven cleanup)
+
+## Remaining interoperability gaps
+
+These are interoperability and endpoint-scope items, not proxy-scope protocol bugs:
 
 - Independent-stack timer interoperability and fork-race validation remains
   open. The local fault matrix now covers loss/reordering, delayed responses,
