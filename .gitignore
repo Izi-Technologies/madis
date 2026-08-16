@@ -44,3 +44,4 @@ madis.env
 .vscode/
 .idea/
 apps/madis-billing/node_modules/
+tests/maf_headers_test.c
