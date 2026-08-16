@@ -3,9 +3,7 @@
 // Verification: ES256, RS256, HS256 (lab), and JWKS with iat freshness.
 // HS256 is lab-only and does not comply with RFC 8225.
 
-// base64url is a Mako 0.5.5 builtin. PASSporT signing still uses C bridge
-// until Mako adds jwt_sign_passport or jwt_sign_custom.
-extern "C" fn madis_passport_sign(payload: string, key: string, cert_url: string) -> string;
+// All STIR/SHAKEN functions use Mako 0.5.5 builtins — no C bridge needed.
 
 // PASSporT JSON claims (RFC 8225 §5)
 fn shaken_passport_payload(orig_tn: string, dest_tn: string, attest: string, origid: string, iat: int) -> string {
@@ -146,8 +144,9 @@ fn shaken_sign_cfg(orig_tn: string, dest_tn: string, attest: string, cert_url: s
 
     let mut token = ""
     if str_eq(str_to_lower(cfg[4]), "es256") {
-        // RFC 8225 compliant: PASSporT header with x5u via C bridge
-        token = madis_passport_sign(payload, material, info)
+        // RFC 8225 compliant: PASSporT header with x5u
+        let passport_header = "{\"alg\":\"ES256\",\"ppt\":\"shaken\",\"typ\":\"passport\",\"x5u\":\"" + info + "\"}"
+        token = jwt_sign_es256_header(payload, material, passport_header)
     } else {
         // HS256 lab mode — non-compliant, for testing only
         token = jwt_sign(payload, material)

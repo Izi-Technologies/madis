@@ -283,21 +283,21 @@ fn sip_client_txn_tick(cache: CMap, out_fd: int) -> int {
     let now = mono_ms()
     let mut acted = 0
     let owner_s = string(out_fd)
-    let mut start = madis_cmap_get_i64(cache, "client_scan|", owner_s, 0)
+    let mut start = cmap_get_int2(cache, "client_scan|", owner_s, 0)
     let mut scanned = 0
     // Sweep a quarter of the 8192-slot ring per 50 ms tick. This keeps timer
     // latency below one sweep while avoiding a full-ring map walk on every
     // packet-heavy worker loop.
     while scanned < 2048 {
         let slot = (start + scanned) - ((start + scanned) / 8192) * 8192
-        if madis_cmap_has3i(cache, "client_ring|", "", slot) == 1 {
-            let key = madis_cmap_get3i(cache, "client_ring|", "", slot)
-            if len(key) > 2 && madis_cmap_has2(cache, "client_req|", key) == 1 {
-                let owner = madis_cmap_get_i64(cache, "client_owner|", key, -1)
+        if cmap_has3i(cache, "client_ring|", "", slot) == 1 {
+            let key = cmap_get3i(cache, "client_ring|", "", slot)
+            if len(key) > 2 && cmap_has2(cache, "client_req|", key) == 1 {
+                let owner = cmap_get_int2(cache, "client_owner|", key, -1)
                 if owner == out_fd {
-                    let expiry = madis_cmap_get_i64(cache, "client_exp|", key, 0)
+                    let expiry = cmap_get_int2(cache, "client_exp|", key, 0)
                     if expiry > 0 && now >= expiry {
-                        let req = madis_cmap_get2(cache, "client_req|", key)
+                        let req = cmap_get2(cache, "client_req|", key)
                         if str_eq(madis_method(req), "CANCEL") {
                             let _ = sip_client_txn_cleanup(key, cache)
                             scanned = scanned + 1
@@ -324,7 +324,7 @@ fn sip_client_txn_tick(cache: CMap, out_fd: int) -> int {
                         }
                         let timeout_resp = sip_reply(req, timeout_code, timeout_reason, "", "")
                         let mut selected_timeout = timeout_resp
-                        if len(branch) > 0 && madis_cmap_has2(cache, "fork_branch|", branch) == 1 {
+                        if len(branch) > 0 && cmap_has2(cache, "fork_branch|", branch) == 1 {
                             selected_timeout = sip_fork_collect_response(timeout_resp, cache)
                         }
                         if len(selected_timeout) > 0 {
@@ -336,14 +336,14 @@ fn sip_client_txn_tick(cache: CMap, out_fd: int) -> int {
                         let _ = sip_client_txn_cleanup(key, cache)
                         acted = acted + 1
                     } else {
-                        let transport = madis_cmap_get2(cache, "client_transport|", key)
+                        let transport = cmap_get2(cache, "client_transport|", key)
                         if str_eq(transport, "udp") {
-                            let next = madis_cmap_get_i64(cache, "client_next|", key, 0)
+                            let next = cmap_get_int2(cache, "client_next|", key, 0)
                             if next > 0 && now >= next {
-                                let req = madis_cmap_get2(cache, "client_req|", key)
-                                let target = madis_cmap_get2(cache, "client_target|", key)
+                                let req = cmap_get2(cache, "client_req|", key)
+                                let target = cmap_get2(cache, "client_target|", key)
                                 let _ = sip_resend_target(target, req, transport, cache, out_fd)
-                                let mut attempt = madis_cmap_get_i64(cache, "client_attempt|", key, 0)
+                                let mut attempt = cmap_get_int2(cache, "client_attempt|", key, 0)
                                 attempt = attempt + 1
                                 let mut interval = sip_t1_ms()
                                 let mut i = 0
@@ -353,8 +353,8 @@ fn sip_client_txn_tick(cache: CMap, out_fd: int) -> int {
                                     if interval > sip_t2_ms() { interval = sip_t2_ms() }
                                     i = i + 1
                                 }
-                                madis_cmap_set_i64(cache, "client_attempt|", key, attempt)
-                                madis_cmap_set_i64(cache, "client_next|", key, now + interval)
+                                cmap_set_int2(cache, "client_attempt|", key, attempt)
+                                cmap_set_int2(cache, "client_next|", key, now + interval)
                                 acted = acted + 1
                             }
                         }
@@ -364,7 +364,7 @@ fn sip_client_txn_tick(cache: CMap, out_fd: int) -> int {
         }
         scanned = scanned + 1
     }
-    madis_cmap_set_i64(cache, "client_scan|", owner_s, (start + 2048) - ((start + 2048) / 8192) * 8192)
+    cmap_set_int2(cache, "client_scan|", owner_s, (start + 2048) - ((start + 2048) / 8192) * 8192)
     return acted
 }
 
@@ -2988,7 +2988,7 @@ fn main() {
                 if bind_wildcard == 1 {
                     udp_fd = nb_udp_bind_reuseport(udp_port)
                 } else {
-                    udp_fd = madis_udp_bind_reuseport_addr(bind_ip, udp_port)
+                    udp_fd = nb_udp_bind_reuseport_addr(bind_ip, udp_port)
                 }
                 if udp_fd >= 0 { let _ = io_set_nonblocking(udp_fd, 1) }
             } else {
