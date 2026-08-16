@@ -633,8 +633,6 @@ MADIS_VERSION="${MADIS_VERSION:-0.1.0}"
 
 info "Copying source files to $MADIS_INSTALL_DIR..."
 cp "$SCRIPT_DIR"/*.mko "$MADIS_INSTALL_DIR/" 2>/dev/null || true
-if [ -f "$SCRIPT_DIR/madis_memory.c" ]; then
-    cp "$SCRIPT_DIR/madis_memory.c" "$MADIS_INSTALL_DIR/madis_memory.c"
 fi
 for support_dir in api sdk; do
     if [ -d "$SCRIPT_DIR/$support_dir" ]; then
@@ -685,7 +683,7 @@ elif [ -f "$MADIS_INSTALL_DIR/main.mko" ]; then
     cc -std=c11 -O3 -DNDEBUG -w \
         -I"$MADIS_MAKO_RUNTIME" -I/usr/include/postgresql \
         -DMAKO_HAS_OPENSSL -DMAKO_USE_OPENSSL -DMAKO_HAS_LIBPQ \
-        "$MADIS_INSTALL_DIR/main.c" "$MADIS_INSTALL_DIR/madis_memory.c" \
+        "$MADIS_INSTALL_DIR/main.c" \
         -o "$MADIS_INSTALL_DIR/madis" -pthread -lm -ldl -lresolv -lssl -lcrypto -lpq
     chmod +x "$MADIS_INSTALL_DIR/madis"
     rm -f "$MADIS_INSTALL_DIR/main.c" "$MADIS_INSTALL_DIR/.mako-ignored" "$emit_log"

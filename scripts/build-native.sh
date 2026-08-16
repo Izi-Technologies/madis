@@ -70,6 +70,6 @@ CC_ARGS=(-std=c11 -O3 -DNDEBUG -w "${NATIVE_CFLAGS[@]}"
 LD_ARGS=("${NATIVE_LDFLAGS[@]}")
 if [[ -n "$EXTRA_CFLAGS" ]]; then CC_ARGS+=("${EXTRA_CFLAGS_ARGS[@]}"); fi
 if [[ -n "$EXTRA_LDFLAGS" ]]; then LD_ARGS+=("${EXTRA_LDFLAGS_ARGS[@]}"); fi
-"$CC_BIN" "${CC_ARGS[@]}" "$GENERATED" "$ROOT/madis_memory.c" -o "$OUTPUT" "${LD_ARGS[@]}"
+"$CC_BIN" "${CC_ARGS[@]}" "$GENERATED" -o "$OUTPUT" "${LD_ARGS[@]}"
 
 echo "Built $OUTPUT with Mako 0.5.0"

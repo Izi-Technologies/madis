@@ -17,7 +17,6 @@ MAKO_RUNTIME=/path/to/mako/runtime \
 ## Contract tests (with native bridge)
 
 `tests/proxy_state_test.mko` and any suite pulling `rfc.mko` transaction ticks
-need `madis_memory.c` linked. Prefer:
 
 ```sh
 ./scripts/test.sh tests
@@ -31,7 +30,6 @@ The CI script runs:
 
 - Mako syntax checks and lint for `main.mko` and `admin/main.mko`.
 - All repository Mako test files.
-- Native SIP worker and WebUI links, including the `madis_memory.c` bridge.
 - JSON-schema parsing, shell syntax validation, and Python SDK compilation.
 - MAF Python SDK contract tests, JavaScript route/header tests when Node is
   installed, and Go SDK route/header tests when Go is installed.
@@ -190,7 +188,6 @@ For the opt-in local RTPEngine control-path check:
 
 ```sh
 SIP_RTPENGINE_TEST_NETWORK=1 \
-  /path/to/mako test tests/rtpengine_test.mko --native-source madis_memory.c
 ```
 
 This verifies the Madis UDP client against a test responder in the same process boundary; it is not evidence of RTP, ICE, DTLS-SRTP, endpoint, or production RTPEngine interoperability.
@@ -260,7 +257,6 @@ is linked explicitly with Mako 0.5.0:
 
 ```sh
 MAKO_RUNTIME=/path/to/mako/runtime \
-  mako test tests --native-source madis_memory.c
 ```
 
 `tests/capacity_test.mko` covers the configurable call/dialog state budget and

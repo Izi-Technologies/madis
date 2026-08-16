@@ -20,8 +20,8 @@ RUN if [ -f /src/main ]; then \
             test -s /src/main.c || (cat /tmp/mako-build.log && exit 1); \
         fi; \
         cc -std=c11 -O3 -DNDEBUG -w -I"$MAKO_RUNTIME" -I/usr/include/postgresql \
-            -DMAKO_HAS_OPENSSL -DMAKO_USE_OPENSSL -DMAKO_HAS_LIBPQ -DMADIS_TLS_BRIDGE \
-            /src/main.c /src/madis_memory.c -o /src/madis \
+            -DMAKO_HAS_OPENSSL -DMAKO_USE_OPENSSL -DMAKO_HAS_LIBPQ \
+            /src/main.c -o /src/madis \
             -pthread -lm -ldl -lresolv -lssl -lcrypto -lpq; \
     else \
         echo "No pre-built binary and no Mako compiler found." && \

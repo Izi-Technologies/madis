@@ -47,16 +47,8 @@ for include_dir in \
   if [[ -d "$include_dir" ]]; then NATIVE_CFLAGS+=("-I$include_dir"); fi
 done
 
-# Mako 0.5.0 is native-first by default; MADIS contract tests use the C bridge.
-# Compile the test bridge once and pass it through the supported linker
-# environment so local and GitHub Actions use the same test invocation.
-"$CC_BIN" -std=c11 -O2 -DNDEBUG -w "${NATIVE_CFLAGS[@]}" \
-  -c "$ROOT/madis_memory.c" -o "$BUILD_DIR/madis_memory.o"
-TEST_LDFLAGS="$BUILD_DIR/madis_memory.o"
-if [[ -n "${MAKO_LDFLAGS:-}" ]]; then
-  TEST_LDFLAGS="$TEST_LDFLAGS $MAKO_LDFLAGS"
-fi
-MAKO_LDFLAGS="$TEST_LDFLAGS" run_mako test tests --backend c
+# Pure Mako — no C bridge needed.
+run_mako test tests --backend c
 
 build_native() {
   local source="$1"

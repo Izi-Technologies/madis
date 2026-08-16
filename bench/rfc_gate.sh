@@ -8,7 +8,7 @@ cd "$ROOT"
 
 MAKO_RUNTIME="$RUNTIME" "$MAKO" check --no-incremental main.mko
 MAKO_RUNTIME="$RUNTIME" "$MAKO" lint main.mko
-MAKO_RUNTIME="$RUNTIME" "$MAKO" test tests --backend c --native-source "$ROOT/madis_memory.c"
+MAKO_RUNTIME="$RUNTIME" "$MAKO" test tests --backend c"
 MAKO_BIN="$MAKO" MAKO_RUNTIME="$RUNTIME" "$ROOT/scripts/build-native.sh" main.mko main
 
 python3 bench/transport_matrix.py --binary ./main --base-port 18560
