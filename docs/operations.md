@@ -115,6 +115,31 @@ period controlled by `SIP_SHUTDOWN_DRAIN_MS` (default 5000, clamped
 cleaning registrations. If the active call count reaches zero before the timer
 expires, drain exits early. After drain the worker begins server shutdown.
 
+## Event package subscription sweep
+
+When `SIP_EVENT_PACKAGES=1`, the heartbeat cycle sweeps expired event
+subscriptions from the in-memory state. No operator action is required beyond
+enabling the feature.
+
+## Session timer refresh tick
+
+When `SIP_IMS_SESSION_TIMERS=1` and the proxy is the negotiated refresher, a
+periodic tick generates re-INVITE requests at 50% of the `Session-Expires`
+interval for active sessions.
+
+## SIPp interop test runner
+
+The `bench/run_interop.sh` script automates the SIPp interop scenarios in
+`bench/interop_*.xml`:
+
+```sh
+MADIS_BIN=/path/to/madis ./bench/run_interop.sh
+```
+
+Available scenarios: fork/cancel, non-2xx ACK, CANCEL/487, timer retransmit,
+PRACK, and digest auth. These are regression checks against SIPp, not a
+certification of universal interoperability.
+
 ## Registration keepalive
 
 `SIP_KEEPALIVE=1` (default) enables periodic OPTIONS keepalive probes to

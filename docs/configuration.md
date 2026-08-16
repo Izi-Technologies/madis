@@ -257,7 +257,13 @@ Additional IMS control env:
 | `SIP_IMS_ICID_GEN_ADDR` | origin host | ICID generator address |
 | `SIP_IMS_SESSION_REFRESHER` | `endpoint` | `proxy` stores UAS refresher ownership |
 | `SIP_IMS_ASSERT_IDENTITY` | `0` | Generate PAI on trusted egress |
-| `SIP_TRUSTED_DOMAINS` | *(empty)* | Comma-separated trust domain list for RFC 3325 privacy forwarding |
+| `SIP_TRUSTED_DOMAINS` | *(empty)* | Comma-separated trust domain list for RFC 3325 identity generation and privacy forwarding |
+| `SIP_EVENT_PACKAGES` | `0` | Set to `1` to enable RFC 3265/6665 SUBSCRIBE/NOTIFY event package handling |
+| `SIP_EVENT_PACKAGE_LIST` | `presence,message-summary` | Comma-separated list of accepted event packages |
+| `SIP_EVENT_MAX_EXPIRES` | `3600` | Maximum subscription expiry in seconds |
+| `SIP_TLS_REUSE` | `0` | Set to `1` to enable RFC 5923 inbound TLS connection reuse via Via `;alias` |
+| `SIP_OUTBOUND` | `0` | Set to `1` to enable RFC 5626 outbound flow tokens (`+sip.instance`, `reg-id`, flow token Path URI) |
+| `STIR_SHAKEN_IAT_MAX_AGE` | `60` | Maximum age in seconds for PASSporT `iat` freshness validation |
 | `SIP_IMS_IPSEC_EXPORT` | `0` | Export SA JSON for external IPsec (requires store-keys) |
 | `SIP_IMS_IPSEC_SPI_BASE` | `1000` | Base SPI for exported SA pair |
 | `SIP_IMS_IPSEC_PORT_C` / `PORT_S` | `5060` / `5061` | Client/server protected ports |

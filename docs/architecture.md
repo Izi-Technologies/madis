@@ -27,7 +27,7 @@ The worker owns:
 - Database-backed routes, dispatch groups, dialplans, gateways, access control, security bans, header rules, ANI ranges, and optional B2BUA policy.
 - Bounded CDR/outbox writes, optional preauthorization, metrics, and worker-local health/state endpoints.
 
-The main modular entry point is [`../main.mko`](../main.mko). It pulls parser, header, authentication, registration, routing, transport, billing, charging, application, module, and operations components. [`../sipproxy_full.mko`](../sipproxy_full.mko) is a legacy monolithic reference and is not the deployment target.
+The main modular entry point is [`../main.mko`](../main.mko). It pulls parser, header, authentication, registration, routing, transport, billing, charging, application, module, event package, TLS reuse, outbound, and operations components. The codebase is pure Mako with no C bridge code. [`../sipproxy_full.mko`](../sipproxy_full.mko) is a legacy monolithic reference and is not the deployment target.
 
 ## Request path
 
@@ -39,6 +39,9 @@ For an inbound SIP message, the worker broadly:
 4. Processes REGISTER, dialog requests, responses, routing, dispatch, dialplan, and optional charging policy.
 5. Resolves the next hop using explicit transport policy and RFC 3263-style DNS selection where configured.
 6. Sends the message, updates bounded state and metrics, and emits lifecycle/billing records where enabled.
+7. For SUBSCRIBE requests with `SIP_EVENT_PACKAGES=1`, the event package notifier manages subscription state and generates NOTIFY for presence and message-summary packages.
+8. With `SIP_TLS_REUSE=1`, inbound TLS connections with Via `;alias` are cached for outbound reuse.
+9. With `SIP_OUTBOUND=1`, outbound flow tokens route requests through established flows using `+sip.instance` and `reg-id`.
 
 The exact behavior is implemented in [`../parser.mko`](../parser.mko), [`../rfc.mko`](../rfc.mko), [`../routing.mko`](../routing.mko), [`../registration.mko`](../registration.mko), [`../transport.mko`](../transport.mko), [`../stream.mko`](../stream.mko), and [`../main.mko`](../main.mko). The known protocol gaps are in [`../RFC_COMPLIANCE.md`](../RFC_COMPLIANCE.md).
 

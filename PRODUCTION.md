@@ -28,7 +28,9 @@ systemd units, and an example configuration file. Dependencies: `libssl3`,
 For source builds, the supported entrypoint is `main.mko`. It pulls the modular
 SIP, state, transport, routing, media, security, and operations modules.
 `sipproxy_full.mko` is a legacy reference archive and is not part of the
-supported build.
+supported build. The codebase is pure Mako with no C bridge code; all
+CMap composite-key, UDP reuseport, TLS server pool, base64url, and JWT custom
+header support are Mako builtins. Tests run without linking any C code.
 
 ## Operational endpoints
 
@@ -127,6 +129,43 @@ and valid `Content-Length` for POST bodies, and applies an Origin/Host check
 when browsers send an `Origin` header. Login-failure, session, and admin-side
 cache state are bounded; use a reverse proxy for TLS, authentication policy,
 rate limiting, and public exposure.
+
+## Event packages (RFC 3265/6665)
+
+Set `SIP_EVENT_PACKAGES=1` to enable SUBSCRIBE/NOTIFY handling with presence
+and message-summary event packages. `SIP_EVENT_PACKAGE_LIST` (comma-separated,
+default `presence,message-summary`) controls which packages are accepted.
+`SIP_EVENT_MAX_EXPIRES` (default 3600) bounds subscription lifetime. Expired
+subscriptions are swept during the heartbeat cycle.
+
+## TLS connection reuse (RFC 5923)
+
+Set `SIP_TLS_REUSE=1` to enable inbound TLS connection reuse via the Via
+`;alias` parameter. When a TLS client includes `;alias`, subsequent requests
+to that client reuse the inbound connection instead of opening a new outbound
+connection.
+
+## Outbound flow tokens (RFC 5626)
+
+Set `SIP_OUTBOUND=1` to enable RFC 5626 outbound support. The proxy processes
+`+sip.instance` and `reg-id` Contact parameters, generates flow token Path
+URIs, and routes subsequent requests through the established flow.
+
+## Session timer refresh (RFC 4028)
+
+With `SIP_IMS_SESSION_TIMERS=1`, the proxy negotiates refresher ownership and
+generates re-INVITE refresh requests at 50% of the negotiated
+`Session-Expires` interval. Set `SIP_IMS_SESSION_REFRESHER` to `endpoint` or
+`proxy` to control refresher preference.
+
+## STIR/SHAKEN compliance
+
+The STIR/SHAKEN implementation includes PASSporT header generation with
+`ppt`/`typ`/`x5u` fields (via the `jwt_sign_es256_header` Mako builtin),
+`iat` freshness checking (`STIR_SHAKEN_IAT_MAX_AGE`), orig/dest TN validation
+against From and R-URI, x5u certificate fetch from the Identity `info`
+parameter, and Date header insertion on signed messages. Review certificate
+custody, attestation policy, and carrier interoperability before enabling.
 
 ## Mako runtime prerequisites
 

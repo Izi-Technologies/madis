@@ -4,7 +4,7 @@ The opt-in session-timer worker regression additionally verifies a `422 Min-SE` 
 
 The opt-in worker-backed two-subscriber IMS smoke runs the worker against the lab HSS with TLS Cx/AKA **and** the fail-closed HTTPS subscriber-authorization boundary (ephemeral certificates, bearer token), then exercises authenticated REGISTER retransmission replay, initial-INVITE forwarding, in-dialog `UPDATE` and re-INVITE offer/answer exchanges through the RTP sidecar, and authenticated INVITE cancellation with downstream `487 Request Terminated` handling. Separate opt-in cases provision two target-only iFC application branches and verify a reliable `183 Session Progress`/PRACK exchange with To-tag routing, downstream `200 OK` acknowledgement, CANCEL cleanup after one branch answers, and a correlated `408 Request Timeout` when an INVITE receives no final response.
 
-Madis builds and tests with Mako **0.5.0** and a matching runtime directory. Mako 0.5.0 is native-first, so the contract suite selects its C backend explicitly while production C emission remains exercised. MADIS supplies an explicit `SO_REUSEPORT` bridge for multi-worker UDP. Do not mix a different compiler/runtime pair with generated C.
+Madis builds and tests with Mako **0.5.0** and a matching runtime directory. Mako 0.5.0 is native-first, so the contract suite selects its C backend explicitly while production C emission remains exercised. The codebase is pure Mako with no C bridge code; tests run without linking any C. Do not mix a different compiler/runtime pair with generated C.
 
 ## Local CI
 
@@ -14,7 +14,7 @@ MAKO_RUNTIME=/path/to/mako/runtime \
   ./scripts/ci.sh
 ```
 
-## Contract tests (with native bridge)
+## Contract tests
 
 `tests/proxy_state_test.mko` and any suite pulling `rfc.mko` transaction ticks
 
@@ -24,7 +24,7 @@ MAKO_RUNTIME=/path/to/mako/runtime \
 ./scripts/test.sh tests/proxy_state_test.mko
 ```
 
-Plain `mako test tests` without `MAKO_LDFLAGS` will fail to link `madis_cmap_*`.
+The current suite totals **101 tests** (45 Mako + 56 Python MAF).
 
 The CI script runs:
 
@@ -157,7 +157,23 @@ worker or database.
 | `tests/maf_contract_test.mko` | All MAF routes, auth scopes, idempotency parsing, body limits, and inbound control boundaries. |
 | `tests/ops_test.mko` | Admin token comparison and runtime configuration reload invalidation. |
 | `tests/rfc3261_abnf_test.mko` | Compact headers, quoted values, continuation, Via grammar, and Proxy-Require. |
+| `tests/outbound_test.mko` | RFC 5626 outbound flow tokens, `+sip.instance`/`reg-id` processing, and flow token Path URI generation. |
 | `tests/rfc3263_test.mko` | NAPTR/SRV ordering, transport selection, IPv6 targets, and port validation. |
+
+## SIPp interop scenarios
+
+The `bench/` directory contains SIPp XML scenarios for protocol interoperability
+regression:
+
+- `interop_fork_cancel.xml` — forked INVITE with CANCEL cleanup.
+- `interop_non2xx_ack.xml` — non-2xx INVITE with ACK generation.
+- `interop_cancel_487.xml` — CANCEL with 487 Request Terminated.
+- `interop_timer_retransmit.xml` — transaction timer retransmission.
+- `interop_prack.xml` — reliable provisional response with PRACK.
+- `interop_auth_digest.xml` — digest authentication challenge/response.
+
+Run all scenarios with `bench/run_interop.sh`. These are automated regression
+checks, not a certification of independent-stack interoperability.
 
 ## Protocol and load gates
 

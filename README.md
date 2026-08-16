@@ -6,20 +6,20 @@ This README is an orientation guide, not a complete feature matrix. The linked d
 
 ## Version
 
-**v0.5.0** — requires Mako 0.5.0+.
+**v0.5.0** — requires Mako 0.5.0+. Pure Mako: zero `extern "C"` functions, no C bridge code.
 
 ## Current implementation
 
 - SIP UDP, TCP, TLS, WS, and WSS listeners with registration, digest authentication, transactions, dialogs, retransmission handling, routing, forking, dispatch, dialplans, and response routing. Multiplexed TCP/WSS workers with serial TLS handshakes and `SO_REUSEPORT` multi-worker scaling. PROXY protocol v1 support for HAProxy deployments.
-- RFC 3261 compliance improvements: To-tag on all responses, CANCEL→487 generation, 3xx redirect following, and in-dialog REFER/INFO/MESSAGE forwarding. RFC 5626 outbound keepalive.
+- RFC 3261 compliance improvements: To-tag on all responses, CANCEL→487 generation, 3xx redirect following, and in-dialog REFER/INFO/MESSAGE forwarding. RFC 5626 outbound flow tokens with `+sip.instance`, `reg-id`, and flow token Path URI. RFC 3265/6665 event packages (SUBSCRIBE/NOTIFY with presence and message-summary). RFC 5923 TLS connection reuse with Via `;alias`. RFC 4028 session timer refresh with re-INVITE generation at 50% interval. RFC 3325 P-Asserted-Identity insertion with anonymous From support.
 - Security hardening: per-method rate limits, digest URI validation, nonce-count monotonicity, registration enumeration detection, DNS rebinding guard, per-IP connection limits, constant-time digest comparison, and progressive authentication delay.
 - PostgreSQL-backed registrations, routing policy, access control, security state, CDRs, and a durable billing-event outbox.
 - A standalone authenticated WebUI and versioned machine API under `/admin/api/v1/`.
 - Optional RTPEngine-ng control messages for bounded SDP offer/answer/delete operations, with WebRTC bridge support (auto-detect ICE/DTLS SDP). The SIP worker does not own RTP, RTCP, ICE, DTLS-SRTP, codecs, recording, or media policy.
 - Cluster call state replication via `SIP_CLUSTER_CALLS`.
 - Prometheus labeled metrics (per-method, per-response-code, per-transport) and graceful shutdown with connection drain.
-- MAF SDKs in Python, Go, TypeScript, and Erlang with 56 contract tests. MAF event subscriptions with bearer-authenticated WebSocket, call-scoped filtering, and heartbeat.
-- Selected Diameter RFC 6733/RFC 8506, IMS Cx/Sh, HEPv3, STIR/SHAKEN, charging, and signed external-application contracts. These are bounded integration surfaces, not complete relay, policy, media, or carrier platforms.
+- MAF SDKs in Python, Go, TypeScript, and Erlang with 56 contract tests. SIPp interop scenarios covering fork/cancel, non-2xx ACK, CANCEL/487, timer retransmit, PRACK, and digest auth. MAF event subscriptions with bearer-authenticated WebSocket, call-scoped filtering, and heartbeat.
+- Selected Diameter RFC 6733/RFC 8506, IMS Cx/Sh, HEPv3, STIR/SHAKEN (PASSporT header with `ppt`/`typ`/`x5u`, `iat` freshness check, orig/dest TN validation, x5u certificate fetch, Date header on signed messages), charging, and signed external-application contracts. These are bounded integration surfaces, not complete relay, policy, media, or carrier platforms.
 - A bounded IMS voice profile: role-aware P-/I-/S-CSCF REGISTER and initial-INVITE handling, selected Cx/AKA authorization, HTTPS subscriber authorization, durable IMS registration lifecycle (IMPI/IMPU, Path, Service-Route, S-CSCF binding, restart hydration, and Path-aware MT routing), dynamic flow-token refresh/cleanup when enabled, session-timer validation plus negotiated response headers, trusted identity/privacy filtering, P-Associated-URI handling, target-only subscriber iFC application targets, and terminating P-Charging-Vector validation.
 
 ## IMS lab profile
@@ -325,7 +325,7 @@ The machine API is served by the standalone WebUI at `/admin/api/v1/`. Bearer-to
 
 ## Build and test
 
-The supported source entry point is [`main.mko`](main.mko). [`sipproxy_full.mko`](sipproxy_full.mko) is a legacy monolithic reference and is not the deployment target. Builds and CI require Mako `0.5.0` with its matching runtime; do not mix compiler/runtime versions when generating native C.
+The supported source entry point is [`main.mko`](main.mko). [`sipproxy_full.mko`](sipproxy_full.mko) is a legacy monolithic reference and is not the deployment target. The codebase is pure Mako with no C bridge code; all composite-key maps, UDP reuseport, TLS server pool, base64url, and JWT custom header support are Mako builtins. Tests run without linking any C code. Builds and CI require Mako `0.5.0` with its matching runtime; do not mix compiler/runtime versions when generating native C.
 
 ```sh
 MAKO_BIN=/path/to/mako \
@@ -337,4 +337,4 @@ MAKO_RUNTIME=/path/to/mako/runtime \
   ./scripts/ci.sh
 ```
 
-The CI script checks Mako syntax/lint, Mako tests, native links, schemas, shell syntax, Python SDK compilation, and the default HSS/media adapter tests. It does not replace external SIP, IMS, Diameter, media, or carrier interoperability testing. See [`docs/testing.md`](docs/testing.md) for opt-in wire, worker-backed, Docker, load, and recovery checks.
+The CI script checks Mako syntax/lint, Mako tests, native links, schemas, shell syntax, Python SDK compilation, and the default HSS/media adapter tests. The current suite totals 101 tests (45 Mako + 56 Python MAF). It does not replace external SIP, IMS, Diameter, media, or carrier interoperability testing. See [`docs/testing.md`](docs/testing.md) for opt-in wire, worker-backed, Docker, load, and recovery checks.

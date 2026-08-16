@@ -85,6 +85,7 @@ not a certificate of universal compliance.
 - Optional P-CSCF `Path` insertion for forwarded REGISTER requests when `SIP_IMS_PATH` is configured, with strict single-URI validation and replacement of UE-supplied Path headers. Dynamic Path discovery, flow-token management, and multi-hop profile-derived routes remain outside the implementation.
 - Optional local S-CSCF `Service-Route` response insertion when `SIP_IMS_SERVICE_ROUTE` is configured, with strict single-URI validation. Subscriber-profile-derived route sets and third-party registration remain outside the implementation.
 - Optional local S-CSCF `P-Associated-URI` response insertion when `SIP_IMS_ASSOCIATED_URI` is configured, with strict single-URI validation, or from up to eight validated `service_profile.associated_uris` identities. iFC/TAS execution remains outside the implementation.
+- STIR/SHAKEN PASSporT compliance: `ppt`/`typ`/`x5u` header fields via the `jwt_sign_es256_header` Mako builtin, `iat` freshness checking (`STIR_SHAKEN_IAT_MAX_AGE`), orig/dest TN validation against From and R-URI, x5u certificate fetch from the Identity `info` parameter, and Date header insertion on signed messages.
 - Bounded subscriber-profile target-only iFC trigger: up to four unique SIP/SIPS `service_profile.initial_filter_criteria` targets can receive an originating initial INVITE from a live local registration or a terminating initial INVITE for a live destination registration. Originating AS forks use the outbound `Privacy: id` identity filter. Standard iFC conditions, session/header criteria, third-party registration, and TAS execution remain outside the implementation.
 
 ## Proxy-scope compliance status
@@ -118,24 +119,41 @@ These are interoperability and endpoint-scope items, not proxy-scope protocol bu
 - DNS failure injection and long-duration resource/leak monitoring still need
   external transport fixtures. The local TLS matrix now uses a temporary CA
   with certificate verification enabled, including SNI and hostname rejection.
-- RFC 4028 endpoint behavior remains open: Madis does not generate refresh
-  requests, negotiate refresher ownership across a dialog, or provide a full
-  external-stack session-timer interoperability matrix.
-- Full IMS identity/privacy behavior remains open: Madis does not generate
-  asserted identities, rewrite From for anonymity, or provide independent
-  RFC 3325/RFC 8224 interoperability coverage.
+- RFC 4028 endpoint interoperability remains open: Madis now generates refresh
+  re-INVITEs at 50% of the negotiated interval and negotiates refresher
+  ownership, but a full external-stack session-timer interoperability matrix
+  has not been completed.
+- Full IMS identity/privacy behavior remains open: Madis now generates
+  P-Asserted-Identity and supports anonymous From via RFC 3325, but
+  independent RFC 3325/RFC 8224 interoperability coverage has not been
+  completed.
 - WSS outbound now uses bounded persistent associations with idle expiry,
   readiness polling, RFC 6455 control-frame handling, response routing, and
   ACK/BYE reuse. The local fixture proves an INVITE/180/200/ACK/BYE dialog on
   one CA-validated connection, but independent WebRTC/SIP stack coverage and
   WebRTC media conformance remain separate requirements.
 
+The following extension families have been implemented with opt-in
+configuration but require independent conformance suites before full
+compliance can be claimed:
+
+- **RFC 3265/6665** (event packages): SUBSCRIBE/NOTIFY with presence and
+  message-summary via `SIP_EVENT_PACKAGES=1` (`event_package.mko`).
+- **RFC 3325** (identity): P-Asserted-Identity insertion and anonymous From
+  via `SIP_TRUSTED_DOMAINS` and `SIP_IMS_ASSERT_IDENTITY=1`.
+- **RFC 4028** (session timers): refresher negotiation and re-INVITE
+  generation at 50% interval via `SIP_IMS_SESSION_TIMERS=1`.
+- **RFC 5626** (outbound): `+sip.instance`, `reg-id`, and flow token Path
+  URI via `SIP_OUTBOUND=1` (`outbound.mko`).
+- **RFC 5923** (TLS connection reuse): Via `;alias` inbound connection reuse
+  via `SIP_TLS_REUSE=1` (`tls_reuse.mko`).
+
 The following extension families remain explicitly outside the supported
 surface and require implementation plus separate conformance suites before
 they can be claimed: RFC 3262 reliable provisional-response generation and
-endpoint RSeq/RAck conformance, RFC 3264 (offer/answer),
-RFC 3265/RFC 6665 (event packages), RFC 3325/RFC 8224 (identity), RFC 5626
-(outbound), and RFC 5923 (SIPS/TLS connection reuse).
+endpoint RSeq/RAck conformance and RFC 3264 (offer/answer).
+
+All extension modules are pure Mako with no C bridge code.
 
 ## Verification gate
 
