@@ -23,6 +23,7 @@ pull . "./security.mko"
 pull . "./rtpengine.mko"
 pull . "./stream.mko"
 pull . "./registration.mko"
+pull . "./outbound.mko"
 pull . "./transport.mko"
 pull . "./b2bua.mko"
 pull . "./app_gateway.mko"
@@ -569,6 +570,8 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
             }
         }
         response_data = ims_session_timer_apply_response(cache, sip_header(response_input, "Call-ID"), downstream_request, response_data)
+        // RFC 4028 §10: record session interval from 2xx for refresh tracking.
+        let _ = ims_session_timer_bind_from_response(cache, sip_header(response_input, "Call-ID"), downstream_request, response_data)
         let mut resp = sip_strip_top_via(response_data)
         if len(sip_header(resp, "Via")) == 0 { return "" }
         resp = nat_fix_sdp(resp, len(resp), public_ip)
@@ -921,12 +924,23 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
             }
             let mut role_msg = msg
             if str_eq(ims_role, "pcscf") {
+                // RFC 5626 §5.2: outbound flow token Path when enabled.
+                let ob_token = outbound_process_register(cache, contact, ip, source_port, tr)
+                if len(ob_token) > 0 {
+                    let ob_proxy = env_get_or("SIP_PUBLIC_IP", node_id + "." + realm)
+                    let ob_path = outbound_path_uri(ob_token, ob_proxy)
+                    if len(ob_path) > 0 {
+                        role_msg = ims_path_apply_value(msg, ob_path)
+                    }
+                }
+                if str_eq(role_msg, msg) {
                 // Dynamic Path with flow token when enabled; else static Path.
                 let dyn_path = ims_flow_register_path(cache, data, ip, source_port, tr, 3600)
                 if len(dyn_path) > 0 {
                     role_msg = ims_path_apply_value(msg, dyn_path)
                 } else {
                     role_msg = ims_path_apply(msg)
+                }
                 }
                 if str_eq(role_msg, "__IMS_PATH_INVALID__") {
                     return sip_resp(500, "IMS Path Misconfigured", data, dl, "ims-path")
@@ -1119,7 +1133,7 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
                         let _ = registration_remove(reg, aor, addr)
                         let _ = registration_db_remove(db, db_ok, aor, addr)
                     } else {
-                        let stored = registration_store(reg, aor, addr, tr, item_exp, ip, port)
+                        let stored = outbound_store_binding(reg, aor, addr, tr, item_exp, ip, port, item, cache)
                         if stored < 0 { return sip_resp(400, "Bad Request", data, dl, "registration-size") }
                         let _ = registration_db_upsert(db, db_ok, aor, addr, tr, node_id, item_exp, ip, port)
                         life_contact = addr
@@ -1201,6 +1215,8 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
         } else if len(configured_associated_uri) > 0 {
             extra = extra + "P-Associated-URI: <" + configured_associated_uri + ">\r\n"
         }
+        // RFC 5626 §5.1: advertise outbound support in 200 OK
+        extra = outbound_add_supported(extra)
         return sip_reply_with_to_tag(data, 200, "OK", extra, "", "r" + string(now_ms()))
 
     } else {
@@ -1281,6 +1297,8 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
         msg = ims_pcv_apply_originating(msg, cid)
         msg = ims_identity_assert_apply(msg, "sip:" + from_user + "@" + from_domain)
         let _ = ims_session_timer_bind_from_request(cache, cid, msg)
+        // §7.1: ensure refresher= is present before forwarding
+        msg = ims_session_timer_ensure_refresher(msg)
 
         // P-/I-CSCF roles route the initial terminating session toward the
         // next IMS role before dialplan, application, charging, or local
@@ -1531,6 +1549,17 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
                     }
                     term_target = life_parts[0]
                     if len(life_parts) >= 2 && len(life_parts[1]) > 0 { term_tr = life_parts[1] }
+                }
+            }
+            // RFC 5626 §5.3: if Path has a flow token, route through the
+            // original transport connection instead of resolving Contact.
+            let ob_path = ims_lifecycle_path(ims_lifecycle_find_resolved(reg, aor))
+            let ob_conn = outbound_resolve_flow(cache, ob_path)
+            if len(ob_conn) > 0 {
+                let ob_parts = str_split(ob_conn, "|")
+                if len(ob_parts) >= 3 {
+                    term_target = ob_parts[0] + ":" + ob_parts[1]
+                    term_tr = str_to_lower(ob_parts[2])
                 }
             }
             term_msg = ims_pcv_apply_terminating(term_msg)
@@ -3161,6 +3190,9 @@ fn main() {
             let _ = cluster_call_sync(calls, cache, hb_db, hb_db_ok, hb_node_id)
             // RFC 5626 outbound keepalive for NAT-traversed registrations.
             let _ = registration_keepalive_tick(reg, cache)
+            // RFC 4028 §10: generate refresh re-INVITEs for sessions where
+            // the proxy is the negotiated refresher.
+            let _ = ims_session_timer_refresh_tick(cache, node_addr, udp_port, "udp")
 
             slog("[" + hb_node_id + "] regs=" + string(cmap_len(reg)) + " calls=" + string(cmap_len(calls)) + " cache=" + string(cmap_len(cache)))
         }

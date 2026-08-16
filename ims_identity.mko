@@ -1,10 +1,8 @@
-// Opt-in IMS asserted-identity and privacy boundary.
+// Opt-in IMS asserted-identity and privacy boundary (RFC 3325).
 //
 // P-Asserted-Identity and P-Preferred-Identity are trusted-network headers.
-// This module deliberately does not invent an asserted identity or implement
-// full RFC 3325/RFC 8224 semantics. It only validates one asserted identity
-// from an already trusted source and removes spoofable identity headers from
-// untrusted ingress.
+// This module implements RFC 3325 identity assertion generation, privacy
+// handling, and trust domain forwarding policy. Gated by SIP_IMS_IDENTITY_POLICY=1.
 
 fn ims_identity_policy_requested() -> int {
     let value = str_to_lower(str_trim_space(env_get_or("SIP_IMS_IDENTITY_POLICY", "0")))
@@ -46,13 +44,12 @@ fn ims_identity_privacy_id(msg: string) -> int {
     return sip_header_token_present(sip_header(msg, "Privacy"), "id")
 }
 
-// Apply only the identity portion of Privacy. The From header is not rewritten
-// here because that requires an endpoint/dialog policy and a generated Contact.
+// Apply identity privacy on egress. Delegates to ims_identity_egress which is
+// trust-domain-aware: strips PAI and anonymises From only outside the trust
+// domain. Falls back to unconditional strip when SIP_TRUSTED_DOMAINS is unset.
 fn ims_identity_apply_privacy(msg: string) -> string {
     if ims_identity_policy_enabled() == 0 || ims_identity_privacy_id(msg) == 0 { return msg }
-    let mut result = hdr_remove(msg, "P-Asserted-Identity")
-    result = hdr_remove(result, "P-Preferred-Identity")
-    return result
+    return ims_identity_egress(msg)
 }
 
 // Optional PAI generation for trusted egress (SIP_IMS_ASSERT_IDENTITY=1).
@@ -77,5 +74,147 @@ fn ims_identity_assert_apply(msg: string, public_identity: string) -> string {
     if ims_identity_privacy_id(msg) == 1 { return msg }
     let mut result = hdr_remove(msg, "P-Asserted-Identity")
     result = hdr_add(result, "P-Asserted-Identity", "<" + value + ">")
+    return result
+}
+
+// ---------------------------------------------------------------------------
+// RFC 3325 §4 — Identity assertion generation
+// ---------------------------------------------------------------------------
+// Extract the URI from a name-addr or addr-spec header value.
+// "<sip:alice@example.com>;tag=x" → "sip:alice@example.com"
+// "sip:alice@example.com;tag=x"   → "sip:alice@example.com"
+fn ims_identity_extract_uri(header_value: string) -> string {
+    let v = str_trim_space(header_value)
+    let lt = str_index(v, "<")
+    if lt >= 0 {
+        let gt = str_index(v, ">")
+        if gt <= lt { return "" }
+        return str_trim_space(v[lt + 1:gt])
+    }
+    // addr-spec: strip parameters
+    let semi = str_index(v, ";")
+    if semi >= 0 { return str_trim_space(v[0:semi]) }
+    return v
+}
+
+// Generate P-Asserted-Identity from an authenticated source's From header.
+// Called after ingress validation for requests from trusted/authenticated peers
+// that do not already carry a PAI.
+fn ims_identity_generate(msg: string, trusted: int) -> string {
+    if ims_identity_policy_enabled() == 0 { return msg }
+    if trusted == 0 { return msg }
+    // Already has a valid PAI from upstream — keep it.
+    if madis_header_count(msg, "P-Asserted-Identity") == 1 { return msg }
+    // Honour P-Preferred-Identity if present and valid: use it as the asserted URI.
+    let mut uri = ""
+    if madis_header_count(msg, "P-Preferred-Identity") == 1 {
+        let ppi = sip_header(msg, "P-Preferred-Identity")
+        if len(ppi) > 0 && sip_name_addr_valid(ppi) == 1 {
+            uri = ims_identity_extract_uri(ppi)
+        }
+    }
+    // Fall back to the From header URI.
+    if len(uri) == 0 {
+        let from = sip_header(msg, "From")
+        if len(from) == 0 { return msg }
+        uri = ims_identity_extract_uri(from)
+    }
+    if len(uri) == 0 { return msg }
+    if not str_has_prefix(str_to_lower(uri), "sip:") && not str_has_prefix(str_to_lower(uri), "sips:") { return msg }
+    if sip_name_addr_valid("<" + uri + ">") == 0 { return msg }
+    return hdr_add(msg, "P-Asserted-Identity", "<" + uri + ">")
+}
+
+// ---------------------------------------------------------------------------
+// RFC 3325 §5 — Trust domain and privacy-aware forwarding
+// ---------------------------------------------------------------------------
+// SIP_TRUSTED_DOMAINS: comma-separated list of domains within the trust boundary.
+fn ims_identity_trusted_domains() -> string {
+    return str_to_lower(str_trim_space(env_get_or("SIP_TRUSTED_DOMAINS", "")))
+}
+
+fn ims_identity_domain_trusted(domain: string) -> int {
+    let domains = ims_identity_trusted_domains()
+    if len(domains) == 0 { return 0 }
+    let d = str_to_lower(str_trim_space(domain))
+    if len(d) == 0 { return 0 }
+    // Walk comma-separated list.
+    let mut rest = domains
+    while len(rest) > 0 {
+        let comma = str_index(rest, ",")
+        let mut entry = rest
+        if comma >= 0 {
+            entry = rest[0:comma]
+            rest = rest[comma + 1:]
+        } else {
+            rest = ""
+        }
+        entry = str_trim_space(entry)
+        if len(entry) > 0 && str_eq(entry, d) { return 1 }
+    }
+    return 0
+}
+
+// Determine the target domain from the Request-URI of the outbound message.
+fn ims_identity_target_domain(msg: string) -> string {
+    let ruri = sip_request_uri(msg)
+    if len(ruri) == 0 { return "" }
+    return str_to_lower(sip_uri_host(ruri))
+}
+
+// Apply RFC 3325 privacy and trust domain policy on egress.
+// - Privacy: id + forwarding outside trust domain → strip PAI, anonymise From.
+// - Privacy: id + forwarding inside trust domain  → keep PAI, keep From.
+// - No Privacy: id → pass PAI through.
+fn ims_identity_egress(msg: string) -> string {
+    if ims_identity_policy_enabled() == 0 { return msg }
+    if ims_identity_privacy_id(msg) == 0 { return msg }
+    let target = ims_identity_target_domain(msg)
+    // Within trust domain: keep PAI so downstream trusted elements can use it.
+    if len(target) > 0 && ims_identity_domain_trusted(target) == 1 { return msg }
+    // Outside trust domain: strip PAI/PPI and anonymise From (RFC 3325 §5).
+    let mut result = hdr_remove(msg, "P-Asserted-Identity")
+    result = hdr_remove(result, "P-Preferred-Identity")
+    // Rewrite From to anonymous URI, preserving the tag.
+    let from = sip_header(result, "From")
+    if len(from) > 0 {
+        let tag = sip_addr_tag(from)
+        let mut anon = "<sip:anonymous@anonymous.invalid>"
+        if len(tag) > 0 { anon = anon + ";tag=" + tag }
+        result = hdr_set(result, "From", anon)
+    }
+    return result
+}
+
+// ---------------------------------------------------------------------------
+// RFC 3325 §7 — Connected identity for mid-dialog messages
+// ---------------------------------------------------------------------------
+// For mid-dialog requests (re-INVITE, UPDATE) from a trusted source, update
+// PAI if the authenticated identity has changed (e.g. after transfer).
+fn ims_identity_connected(msg: string, trusted: int, current_identity: string) -> string {
+    if ims_identity_policy_enabled() == 0 { return msg }
+    if trusted == 0 { return msg }
+    // Only mid-dialog methods that can carry identity updates.
+    let method = madis_method(msg)
+    if not str_eq(method, "INVITE") && not str_eq(method, "UPDATE") { return msg }
+    // Must have a To tag to be mid-dialog.
+    let to_tag = sip_addr_tag(sip_header(msg, "To"))
+    if len(to_tag) == 0 { return msg }
+    if len(current_identity) == 0 { return msg }
+    // Normalise to a sip: URI.
+    let mut uri = current_identity
+    if not str_has_prefix(str_to_lower(uri), "sip:") && not str_has_prefix(str_to_lower(uri), "sips:") {
+        uri = "sip:" + uri
+    }
+    if sip_name_addr_valid("<" + uri + ">") == 0 { return msg }
+    // Check whether existing PAI already matches — skip rewrite if so.
+    if madis_header_count(msg, "P-Asserted-Identity") == 1 {
+        let existing = ims_identity_extract_uri(sip_header(msg, "P-Asserted-Identity"))
+        if str_eq(str_to_lower(existing), str_to_lower(uri)) { return msg }
+    }
+    // Privacy: id suppresses connected identity assertion.
+    if ims_identity_privacy_id(msg) == 1 { return msg }
+    let mut result = hdr_remove(msg, "P-Asserted-Identity")
+    result = hdr_add(result, "P-Asserted-Identity", "<" + uri + ">")
     return result
 }

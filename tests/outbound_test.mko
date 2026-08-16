@@ -1,0 +1,95 @@
+// RFC 5626 outbound flow-token tests.
+pull . "../main.mko"
+
+fn TestOutboundInstanceIdExtraction() {
+    let c1 = "<sip:bob@192.0.2.4>;+sip.instance=\"<urn:uuid:00000000-0000-1000-8000-aabbccddeeff>\";reg-id=1"
+    assert_eq_str(outbound_instance_id(c1), "<urn:uuid:00000000-0000-1000-8000-aabbccddeeff>")
+    assert_eq_str(outbound_reg_id(c1), "1")
+
+    let c2 = "<sip:alice@10.0.0.1>"
+    assert_eq_str(outbound_instance_id(c2), "")
+    assert_eq_str(outbound_reg_id(c2), "")
+
+    // Unquoted instance
+    let c3 = "<sip:bob@10.0.0.1>;+sip.instance=urn:x:test;reg-id=42"
+    assert_eq_str(outbound_instance_id(c3), "urn:x:test")
+    assert_eq_str(outbound_reg_id(c3), "42")
+}
+
+fn TestOutboundFlowTokenMintResolve() {
+    let _ = env_set("SIP_OUTBOUND", "1")
+    let cache = cmap_new()
+    let token = outbound_flow_token_mint(cache, "192.0.2.10", 5060, "UDP")
+    assert_eq(if len(token) >= 8 { 1 } else { 0 }, 1)
+
+    let conn = outbound_flow_token_resolve(cache, token)
+    assert_eq_str(conn, "192.0.2.10|5060|UDP")
+
+    // Clear
+    assert_eq(outbound_flow_token_clear(cache, token), 1)
+    assert_eq_str(outbound_flow_token_resolve(cache, token), "")
+    let _ = env_set("SIP_OUTBOUND", "0")
+}
+
+fn TestOutboundPathUri() {
+    let uri = outbound_path_uri("abcdef0123456789abcdef0123456789", "pcscf.example.com")
+    assert_eq_str(uri, "sip:abcdef0123456789abcdef0123456789@pcscf.example.com;lr;ob")
+    assert_eq_str(outbound_path_uri("", "host"), "")
+    assert_eq_str(outbound_path_uri("tok", ""), "")
+}
+
+fn TestOutboundTokenFromUri() {
+    let token = outbound_token_from_uri("sip:abcdef0123456789abcdef0123456789@pcscf.example.com;lr;ob")
+    assert_eq_str(token, "abcdef0123456789abcdef0123456789")
+    // Too short
+    assert_eq_str(outbound_token_from_uri("sip:abc@host"), "")
+    // No @
+    assert_eq_str(outbound_token_from_uri("sip:noat"), "")
+}
+
+fn TestOutboundProcessRegisterGated() {
+    let _ = env_set("SIP_OUTBOUND", "0")
+    let cache = cmap_new()
+    let contact = "<sip:bob@192.0.2.4>;+sip.instance=\"<urn:uuid:test>\";reg-id=1"
+    assert_eq_str(outbound_process_register(cache, contact, "192.0.2.4", 5060, "UDP"), "")
+
+    let _ = env_set("SIP_OUTBOUND", "1")
+    let token = outbound_process_register(cache, contact, "192.0.2.4", 5060, "UDP")
+    assert_eq(if len(token) >= 8 { 1 } else { 0 }, 1)
+
+    // No instance = no token
+    let plain = "<sip:alice@10.0.0.1>"
+    assert_eq_str(outbound_process_register(cache, plain, "10.0.0.1", 5060, "UDP"), "")
+    let _ = env_set("SIP_OUTBOUND", "0")
+}
+
+fn TestOutboundResolveFlow() {
+    let _ = env_set("SIP_OUTBOUND", "1")
+    let cache = cmap_new()
+    let token = outbound_flow_token_mint(cache, "192.0.2.10", 5060, "TCP")
+    let path = outbound_path_uri(token, "pcscf.example.com")
+    let conn = outbound_resolve_flow(cache, path)
+    assert_eq_str(conn, "192.0.2.10|5060|TCP")
+    let _ = env_set("SIP_OUTBOUND", "0")
+}
+
+fn TestOutboundAddSupported() {
+    let _ = env_set("SIP_OUTBOUND", "1")
+    let extra = outbound_add_supported("Contact: <sip:bob@x>\r\n")
+    assert_eq(if str_index(extra, "Supported: outbound") >= 0 { 1 } else { 0 }, 1)
+
+    let _ = env_set("SIP_OUTBOUND", "0")
+    let noop = outbound_add_supported("Contact: <sip:bob@x>\r\n")
+    assert_eq(if str_index(noop, "Supported: outbound") >= 0 { 0 } else { 1 }, 1)
+}
+
+fn TestOutboundBindingExtendedFields() {
+    let value = outbound_registration_value("sip:bob@10.0.0.1", "TCP", 1000000, "10.0.0.1", 5060, "<urn:uuid:test>", "1")
+    assert_eq_str(outbound_binding_instance(value), "<urn:uuid:test>")
+    assert_eq_str(outbound_binding_reg_id(value), "1")
+
+    // Standard value has no extended fields
+    let std = registration_value("sip:bob@10.0.0.1", "TCP", 1000000, "10.0.0.1", 5060)
+    assert_eq_str(outbound_binding_instance(std), "")
+    assert_eq_str(outbound_binding_reg_id(std), "")
+}

@@ -128,9 +128,17 @@ fn sip_resp(st: int, reason: string, msg: string, n: int, tag: string) -> string
     return sip_reply(msg, st, reason, "", "")
 }
 
+// RFC 5626 §5.1: inline check so parser.mko is self-contained for tests.
+fn sip_outbound_supported_header(headers: string) -> string {
+    let v = str_to_lower(str_trim_space(env_get_or("SIP_OUTBOUND", "0")))
+    if str_eq(v, "1") || str_eq(v, "true") { return headers + "Supported: outbound\r\n" }
+    return headers
+}
+
 fn sip_options_response(msg: string) -> string {
-    let allow = "Allow: INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, PRACK, UPDATE\r\n"
+    let mut allow = "Allow: INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, PRACK, UPDATE\r\n"
         + "Accept: application/sdp, application/pidf+xml, application/simple-message-summary\r\n"
+    allow = sip_outbound_supported_header(allow)
     // RFC 3261 §8.2.6.2: all non-100 responses MUST have a To-tag.
     let tag = "opt-" + sha256("madis.options|" + sip_header(msg, "Call-ID"))[0:16]
     return sip_reply_with_to_tag(msg, 200, "OK", allow, "", tag)

@@ -257,6 +257,7 @@ Additional IMS control env:
 | `SIP_IMS_ICID_GEN_ADDR` | origin host | ICID generator address |
 | `SIP_IMS_SESSION_REFRESHER` | `endpoint` | `proxy` stores UAS refresher ownership |
 | `SIP_IMS_ASSERT_IDENTITY` | `0` | Generate PAI on trusted egress |
+| `SIP_TRUSTED_DOMAINS` | *(empty)* | Comma-separated trust domain list for RFC 3325 privacy forwarding |
 | `SIP_IMS_IPSEC_EXPORT` | `0` | Export SA JSON for external IPsec (requires store-keys) |
 | `SIP_IMS_IPSEC_SPI_BASE` | `1000` | Base SPI for exported SA pair |
 | `SIP_IMS_IPSEC_PORT_C` / `PORT_S` | `5060` / `5061` | Client/server protected ports |

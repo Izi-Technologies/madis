@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE scenario SYSTEM "sipp.dtd">
+
+<!-- RFC 3261 Section 17.1.1.3: Non-2xx ACK generation.
+     UAC sends INVITE through proxy, UAS responds 486 Busy Here.
+     Proxy generates ACK toward UAS (hop-by-hop) and forwards 486 to UAC.
+     UAC then ACKs the 486 back to proxy. -->
+
+<scenario name="Interop: non-2xx ACK generation">
+
+  <!-- UAC sends INVITE -->
+  <send retrans="500">
+    <![CDATA[
+
+      INVITE sip:busy@[remote_ip]:[remote_port] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      From: sipp <sip:sipp@[local_ip]:[local_port]>;tag=[pid]SIPpTag00[call_number]
+      To: busy <sip:busy@[remote_ip]:[remote_port]>
+      Call-ID: [call_id]
+      CSeq: 1 INVITE
+      Contact: sip:sipp@[local_ip]:[local_port]
+      Max-Forwards: 70
+      Subject: Interop non-2xx ACK test
+      Content-Type: application/sdp
+      Content-Length: [len]
+
+      v=0
+      o=bench 53655765 2353687637 IN IP[local_ip_type] [local_ip]
+      s=-
+      c=IN IP[media_ip_type] [media_ip]
+      t=0 0
+      m=audio [media_port] RTP/AVP 0
+      a=rtpmap:0 PCMU/8000
+
+    ]]>
+  </send>
+
+  <recv response="100" optional="true" />
+
+  <!-- Expect 486 Busy Here forwarded by proxy -->
+  <recv response="486" rtd="true" />
+
+  <!-- UAC ACKs the 486 (end-to-end for non-2xx) -->
+  <send>
+    <![CDATA[
+
+      ACK sip:busy@[remote_ip]:[remote_port] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      From: sipp <sip:sipp@[local_ip]:[local_port]>;tag=[pid]SIPpTag00[call_number]
+      To: busy <sip:busy@[remote_ip]:[remote_port]>[peer_tag_param]
+      Call-ID: [call_id]
+      CSeq: 1 ACK
+      Max-Forwards: 70
+      Content-Length: 0
+
+    ]]>
+  </send>
+</scenario>

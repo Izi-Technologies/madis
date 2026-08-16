@@ -1,9 +1,12 @@
-// RFC 4028 request-side session-timer boundary.
+// RFC 4028 session-timer boundary.
 //
-// This module validates the bounded syntax Madis understands for INVITE and
-// UPDATE requests. It does not generate refresh requests or act as an
-// endpoint/UAS timer state machine; those responsibilities remain with the
-// dialog endpoints or a dedicated session service.
+// Request-side: validates Session-Expires / Min-SE on INVITE and UPDATE,
+// generates 422 when the interval is too small, caps intervals, and applies
+// Session-Expires to responses.
+//
+// Refresh generation (§10): when the proxy is the negotiated refresher
+// (SIP_IMS_SESSION_REFRESHER=proxy), tracks session intervals and generates
+// mid-dialog re-INVITEs at 50 % of the Session-Expires interval.
 
 fn ims_session_timer_requested() -> int {
     let value = str_to_lower(str_trim_space(env_get_or("SIP_IMS_SESSION_TIMERS", "0")))
@@ -184,9 +187,17 @@ fn ims_session_timer_request_check(msg: string) -> int {
     return 1
 }
 
+// Refresher preference for outbound Session-Expires (§7.1).
+// SIP_IMS_SESSION_REFRESHER: "uas" (default) or "uac".
+fn ims_session_timer_preferred_refresher() -> string {
+    let v = str_to_lower(str_trim_space(env_get_or("SIP_IMS_SESSION_REFRESHER", "uas")))
+    if str_eq(v, "uac") { return "uac" }
+    return "uas"
+}
+
 // Refresher ownership: endpoint (default) or proxy when SIP_IMS_SESSION_REFRESHER=proxy.
 fn ims_session_timer_refresher_mode() -> string {
-    let v = str_to_lower(str_trim_space(env_get_or("SIP_IMS_SESSION_REFRESHER", "endpoint")))
+    let v = str_to_lower(str_trim_space(env_get_or("SIP_IMS_SESSION_REFRESHER", "uas")))
     if str_eq(v, "proxy") || str_eq(v, "uas") { return "proxy" }
     return "endpoint"
 }
@@ -313,4 +324,189 @@ fn ims_session_glare_begin(cache: CMap, call_id: string) -> int {
 fn ims_session_glare_end(cache: CMap, call_id: string) -> int {
     let _ = cmap_del(cache, ims_session_glare_key(call_id))
     return 1
+}
+
+// ---------------------------------------------------------------------------
+// §7.1  Refresher negotiation on forwarded INVITE
+// ---------------------------------------------------------------------------
+
+// Ensure Session-Expires carries a refresher= parameter before the proxy
+// forwards an INVITE. If the header already contains a refresher parameter
+// it is left untouched; otherwise the proxy's preferred refresher is added.
+fn ims_session_timer_ensure_refresher(msg: string) -> string {
+    if ims_session_timer_enabled() == 0 { return msg }
+    if madis_header_count(msg, "Session-Expires") != 1 { return msg }
+    let raw = sip_header(msg, "Session-Expires")
+    let existing = ims_session_timer_refresher_from_header(raw)
+    if len(existing) > 0 { return msg }
+    let pref = ims_session_timer_preferred_refresher()
+    let new_val = raw + ";refresher=" + pref
+    return hdr_set(msg, "Session-Expires", new_val)
+}
+
+// ---------------------------------------------------------------------------
+// §10  Refresh timer tracking — dialog state for re-INVITE generation
+// ---------------------------------------------------------------------------
+
+// Store minimal dialog state needed to build a refresh re-INVITE.
+// Key: ims-se-dlg|<call_id>  Value: from\nto\nruri\ncseq_num
+fn ims_session_timer_dlg_key(call_id: string) -> string {
+    return "ims-se-dlg|" + call_id
+}
+
+fn ims_session_timer_store_dialog(cache: CMap, call_id: string, request: string, response: string) -> int {
+    if ims_session_timer_enabled() == 0 { return 0 }
+    if len(call_id) < 1 || len(call_id) > 256 { return 0 }
+    let from_hdr = sip_header(request, "From")
+    let to_hdr = sip_header(response, "To")
+    let ruri = sip_request_uri(request)
+    let cseq = sip_cseq_number(request)
+    if len(from_hdr) == 0 || len(to_hdr) == 0 || len(ruri) == 0 || len(cseq) == 0 { return 0 }
+    // \n as field separator (never appears in SIP header values)
+    let value = from_hdr + "\n" + to_hdr + "\n" + ruri + "\n" + cseq
+    cmap_set(cache, ims_session_timer_dlg_key(call_id), value)
+    return 1
+}
+
+fn ims_session_timer_clear_dialog(cache: CMap, call_id: string) -> int {
+    let _ = cmap_del(cache, ims_session_timer_dlg_key(call_id))
+    return 1
+}
+
+// Bind session timer state from a 2xx response containing Session-Expires.
+// Called on the response path to update the refresh deadline.
+fn ims_session_timer_bind_from_response(cache: CMap, call_id: string, request: string, response: string) -> int {
+    if ims_session_timer_enabled() == 0 { return 0 }
+    if sip_status_code(response) < 200 || sip_status_code(response) >= 300 { return 0 }
+    // Use Session-Expires from the response if present, else from the request.
+    let mut se_hdr = ""
+    if madis_header_count(response, "Session-Expires") >= 1 {
+        se_hdr = sip_header(response, "Session-Expires")
+    } else if madis_header_count(request, "Session-Expires") >= 1 {
+        se_hdr = sip_header(request, "Session-Expires")
+    }
+    if len(se_hdr) == 0 { return 0 }
+    let seconds = ims_session_timer_session_expires(se_hdr)
+    if seconds < 0 { return 0 }
+    let refresher = ims_session_timer_refresher_from_header(se_hdr)
+    let bound = ims_session_timer_bind(cache, call_id, seconds, refresher)
+    if bound == 1 {
+        let _ = ims_session_timer_store_dialog(cache, call_id, request, response)
+    }
+    return bound
+}
+
+// ---------------------------------------------------------------------------
+// §10  Build a refresh re-INVITE
+// ---------------------------------------------------------------------------
+
+// Increment a decimal CSeq string by 1.
+fn ims_session_timer_next_cseq(cache: CMap, call_id: string, stored_cseq: string) -> string {
+    let key = "ims-se-cseq|" + call_id
+    let mut current = 0
+    match parse_int(stored_cseq) { Ok(v) => { current = v } Err(_) => {} }
+    if cmap_has(cache, key) == 1 {
+        match parse_int(cmap_get(cache, key)) { Ok(v) => { if v > current { current = v } } Err(_) => {} }
+    }
+    current = current + 1
+    cmap_set(cache, key, string(current))
+    return string(current)
+}
+
+fn ims_session_timer_build_refresh(cache: CMap, call_id: string, seconds: int, refresher: string) -> string {
+    let dlg_key = ims_session_timer_dlg_key(call_id)
+    if cmap_has(cache, dlg_key) == 0 { return "" }
+    let dlg = cmap_get(cache, dlg_key)
+    let parts = str_split(dlg, "\n")
+    if len(parts) < 4 { return "" }
+    let from_hdr = parts[0]
+    let to_hdr = parts[1]
+    let ruri = parts[2]
+    let stored_cseq = parts[3]
+    let cseq = ims_session_timer_next_cseq(cache, call_id, stored_cseq)
+    return "INVITE " + ruri + " SIP/2.0\r\n"
+        + "From: " + from_hdr + "\r\n"
+        + "To: " + to_hdr + "\r\n"
+        + "Call-ID: " + call_id + "\r\n"
+        + "CSeq: " + cseq + " INVITE\r\n"
+        + "Session-Expires: " + string(seconds) + ";refresher=" + refresher + "\r\n"
+        + "Max-Forwards: 70\r\n"
+        + "Content-Length: 0\r\n\r\n"
+}
+
+// ---------------------------------------------------------------------------
+// Heartbeat tick: scan sessions approaching expiry, send refresh re-INVITEs
+// ---------------------------------------------------------------------------
+
+// ponytail: scans up to 256 ring slots per tick (1 s period). With 65536
+// capacity that's a full sweep every ~256 s — well under the 90 s minimum
+// session interval. Upgrade to targeted timer wheel if > 10K concurrent
+// session-timer dialogs.
+fn ims_session_timer_refresh_tick(cache: CMap, ip: string, port: int, tr: string) -> int {
+    if ims_session_timer_enabled() == 0 { return 0 }
+    if not str_eq(ims_session_timer_refresher_mode(), "proxy") { return 0 }
+    let now = mono_ms()
+    let mut start = 0
+    if cmap_has(cache, "ims_se_scan") == 1 {
+        match parse_int(cmap_get(cache, "ims_se_scan")) { Ok(v) => { start = v } Err(_) => {} }
+    }
+    let mut refreshed = 0
+    let mut i = 0
+    while i < 256 {
+        let slot = (start + i) - ((start + i) / 65536) * 65536
+        let ring_key = "ims_se_ring|" + string(slot)
+        if cmap_has(cache, ring_key) == 1 {
+            let se_key = cmap_get(cache, ring_key)
+            if len(se_key) > 0 && cmap_has(cache, se_key) == 1 {
+                let value = cmap_get(cache, se_key)
+                let vparts = str_split(value, "|")
+                if len(vparts) >= 3 {
+                    let mut seconds = 0
+                    let mut expires_at = 0
+                    match parse_int(vparts[0]) { Ok(v) => { seconds = v } Err(_) => {} }
+                    match parse_int(vparts[1]) { Ok(v) => { expires_at = v } Err(_) => {} }
+                    let r = vparts[2]
+                    // Only refresh if proxy is the refresher (uas role)
+                    if str_eq(r, "uas") && seconds > 0 && expires_at > 0 {
+                        // RFC 4028 §10: send refresh at 50% of interval
+                        let half_ms = seconds * 500
+                        let refresh_at = expires_at - half_ms
+                        if now >= refresh_at && now < expires_at {
+                            // Extract call-id from key "ims-se|<call_id>"
+                            let prefix_len = 7  // len("ims-se|")
+                            if len(se_key) > prefix_len {
+                                let cid = se_key[prefix_len:]
+                                // Guard: only refresh once per interval
+                                let guard_key = "ims-se-sent|" + cid
+                                if cmap_has(cache, guard_key) == 0 {
+                                    let reinvite = ims_session_timer_build_refresh(cache, cid, seconds, r)
+                                    if len(reinvite) > 0 {
+                                        let target = if cmap_has(cache, "dialog_dst|" + cid) == 1 { cmap_get(cache, "dialog_dst|" + cid) } else { "" }
+                                        if len(target) > 0 {
+                                            let fwd = proxy_hop_via(reinvite, ip, port, tr)
+                                            let _ = sip_forward_target(target, fwd, sip_transport_param(target, "udp"), cache, -1)
+                                            // Re-bind with fresh deadline
+                                            let _ = ims_session_timer_bind(cache, cid, seconds, r)
+                                            cmap_set(cache, guard_key, string(now))
+                                            refreshed = refreshed + 1
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // Clear guard once we're past the old expiry window
+                        if now >= expires_at {
+                            let prefix_len2 = 7
+                            if len(se_key) > prefix_len2 {
+                                let _ = cmap_del(cache, "ims-se-sent|" + se_key[prefix_len2:])
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    cmap_set(cache, "ims_se_scan", string(start + 256))
+    return refreshed
 }

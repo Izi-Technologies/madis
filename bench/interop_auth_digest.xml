@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE scenario SYSTEM "sipp.dtd">
+
+<!-- RFC 3261 Section 22 / RFC 2617: Digest authentication flow.
+     UAC sends REGISTER without credentials.
+     Proxy/registrar responds 401 with WWW-Authenticate challenge.
+     UAC resends REGISTER with Authorization header.
+     Registrar verifies and responds 200 OK. -->
+
+<scenario name="Interop: digest authentication">
+
+  <!-- First REGISTER without credentials -->
+  <send retrans="500">
+    <![CDATA[
+
+      REGISTER sip:[remote_ip]:[remote_port] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      From: <sip:authuser@[remote_ip]>;tag=[pid]SIPpTag00[call_number]
+      To: <sip:authuser@[remote_ip]>
+      Call-ID: [call_id]
+      CSeq: 1 REGISTER
+      Contact: <sip:authuser@[local_ip]:[local_port]>
+      Expires: 3600
+      Max-Forwards: 70
+      Content-Length: 0
+
+    ]]>
+  </send>
+
+  <!-- Expect 401 Unauthorized with WWW-Authenticate -->
+  <recv response="401" auth="true">
+    <action>
+      <ereg regexp="nonce=\"([^\"]*)\"" search_in="msg" assign_to="nonce_val" />
+    </action>
+  </recv>
+
+  <!-- Re-REGISTER with digest credentials -->
+  <send retrans="500">
+    <![CDATA[
+
+      REGISTER sip:[remote_ip]:[remote_port] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      From: <sip:authuser@[remote_ip]>;tag=[pid]SIPpTag00[call_number]
+      To: <sip:authuser@[remote_ip]>
+      Call-ID: [call_id]
+      CSeq: 2 REGISTER
+      Contact: <sip:authuser@[local_ip]:[local_port]>
+      Expires: 3600
+      Max-Forwards: 70
+      [authentication username=authuser password=secret]
+      Content-Length: 0
+
+    ]]>
+  </send>
+
+  <!-- Expect 200 OK after successful auth -->
+  <recv response="200" rtd="true" />
+</scenario>

@@ -1,0 +1,218 @@
+// RFC 5626 Outbound flow-token tracking.
+//
+// Gated by SIP_OUTBOUND=1 (default off). Extends registration bindings with
+// +sip.instance and reg-id from Contact parameters, generates flow tokens
+// encoding the transport connection identity, and routes terminating requests
+// through the original flow.
+
+fn outbound_enabled() -> int {
+    let v = str_to_lower(str_trim_space(env_get_or("SIP_OUTBOUND", "0")))
+    return if str_eq(v, "1") || str_eq(v, "true") || str_eq(v, "yes") { 1 } else { 0 }
+}
+
+// --- §4.1  Extract +sip.instance from a Contact value ---
+// Returns the quoted instance ID or empty string.
+// Contact: <sip:bob@192.0.2.4>;+sip.instance="<urn:uuid:xxx>"
+fn outbound_instance_id(contact: string) -> string {
+    let low = str_to_lower(contact)
+    let marker = "+sip.instance="
+    let at = str_index(low, marker)
+    if at < 0 { return "" }
+    let rest = contact[at + len(marker):]
+    if len(rest) == 0 { return "" }
+    // Value is typically quoted: "..."
+    if int(rest[0]) == 34 {
+        let end = str_index(rest[1:], "\"")
+        if end < 0 { return "" }
+        let val = rest[1:end + 1]
+        if len(val) == 0 || len(val) > 256 { return "" }
+        return val
+    }
+    // Unquoted token
+    let mut end = 0
+    while end < len(rest) {
+        let c = int(rest[end])
+        if c == 59 || c == 44 || c == 62 || c == 32 || c == 9 { break }
+        end = end + 1
+    }
+    if end == 0 || end > 256 { return "" }
+    return rest[0:end]
+}
+
+// --- §4.1  Extract reg-id from a Contact value ---
+fn outbound_reg_id(contact: string) -> string {
+    let low = str_to_lower(contact)
+    let marker = "reg-id="
+    let at = str_index(low, marker)
+    if at < 0 { return "" }
+    let rest = contact[at + len(marker):]
+    let mut end = 0
+    while end < len(rest) {
+        let c = int(rest[end])
+        if c < 48 || c > 57 { break }
+        end = end + 1
+    }
+    if end == 0 || end > 10 { return "" }
+    return rest[0:end]
+}
+
+// --- Extended binding value ---
+// Appends instance-id and reg-id to the standard registration value.
+// Format: contact|transport|expires_at|ip|port|instance_id|reg_id
+fn outbound_registration_value(contact: string, transport: string, expires_at: int, ip: string, port: int, instance_id: string, reg_id: string) -> string {
+    return registration_value(contact, transport, expires_at, ip, port) + "|" + instance_id + "|" + reg_id
+}
+
+// Parse instance-id from an extended binding value (field 5).
+fn outbound_binding_instance(value: string) -> string {
+    let parts = str_split(value, "|")
+    if len(parts) < 6 { return "" }
+    return parts[5]
+}
+
+// Parse reg-id from an extended binding value (field 6).
+fn outbound_binding_reg_id(value: string) -> string {
+    let parts = str_split(value, "|")
+    if len(parts) < 7 { return "" }
+    return parts[6]
+}
+
+// --- §5.2  Flow token generation ---
+// Encodes source transport identity as a hex flow token for Path URI.
+// Token format: sha256(secret|ip|port|transport)[0:32]
+// The CMap stores token -> "ip|port|transport" for reverse lookup.
+fn outbound_flow_token_mint(cache: CMap, ip: string, port: int, transport: string) -> string {
+    if len(ip) < 1 || port < 1 { return "" }
+    let seed = "rfc5626.flow|" + ip + "|" + string(port) + "|" + transport + "|" + string(now_ms())
+    let token = sha256(seed)[0:32]
+    let conn_val = ip + "|" + string(port) + "|" + transport
+    cmap_set(cache, "ob-flow|" + token, conn_val)
+    // Reverse: conn -> token (latest wins for re-registration)
+    cmap_set(cache, "ob-conn|" + conn_val, token)
+    return token
+}
+
+// Look up connection identity from a flow token.
+// Returns "ip|port|transport" or empty.
+fn outbound_flow_token_resolve(cache: CMap, token: string) -> string {
+    if len(token) == 0 || len(token) > 64 { return "" }
+    let key = "ob-flow|" + token
+    if cmap_has(cache, key) == 0 { return "" }
+    return cmap_get(cache, key)
+}
+
+// Remove a flow token (e.g. on de-registration).
+fn outbound_flow_token_clear(cache: CMap, token: string) -> int {
+    if len(token) == 0 { return 0 }
+    let key = "ob-flow|" + token
+    if cmap_has(cache, key) == 0 { return 0 }
+    let conn = cmap_get(cache, key)
+    let _ = cmap_del(cache, key)
+    if len(conn) > 0 {
+        let rev = "ob-conn|" + conn
+        if cmap_has(cache, rev) == 1 && str_eq(cmap_get(cache, rev), token) {
+            let _ = cmap_del(cache, rev)
+        }
+    }
+    return 1
+}
+
+// Build Path header URI with flow token: sip:<token>@<proxy>;lr;ob
+fn outbound_path_uri(token: string, proxy_host: string) -> string {
+    if len(token) == 0 || len(proxy_host) == 0 { return "" }
+    return "sip:" + token + "@" + proxy_host + ";lr;ob"
+}
+
+// Extract flow token from a Path/Route URI user part.
+// URI: sip:<flow-token>@proxy;lr;ob  ->  <flow-token>
+fn outbound_token_from_uri(uri: string) -> string {
+    let low = str_to_lower(uri)
+    let mut start = 0
+    if str_has_prefix(low, "sip:") { start = 4 }
+    else if str_has_prefix(low, "sips:") { start = 5 }
+    else { return "" }
+    let at = str_index(uri[start:], "@")
+    if at < 0 { return "" }
+    let token = uri[start:start + at]
+    if len(token) < 8 || len(token) > 64 { return "" }
+    return token
+}
+
+// --- §5.2  REGISTER processing: store outbound info + mint flow token ---
+// Called after authentication succeeds, before registration_store.
+// Returns the flow token (for Path insertion) or empty if outbound not active.
+fn outbound_process_register(cache: CMap, contact: string, ip: string, port: int, transport: string) -> string {
+    if outbound_enabled() == 0 { return "" }
+    let instance = outbound_instance_id(contact)
+    if len(instance) == 0 { return "" }
+    // §4.1: outbound requires +sip.instance; reg-id is optional but expected
+    return outbound_flow_token_mint(cache, ip, port, transport)
+}
+
+// --- Store extended binding with instance/reg-id ---
+fn outbound_store_binding(reg: CMap, aor: string, contact_addr: string, transport: string, expires_s: int, ip: string, port: int, contact_raw: string, cache: CMap) -> int {
+    if outbound_enabled() == 0 {
+        return registration_store(reg, aor, contact_addr, transport, expires_s, ip, port)
+    }
+    let instance = outbound_instance_id(contact_raw)
+    let regid = outbound_reg_id(contact_raw)
+    if len(instance) == 0 {
+        // No outbound params — standard store
+        return registration_store(reg, aor, contact_addr, transport, expires_s, ip, port)
+    }
+    // Store with extended fields. We use registration_store for the slot
+    // mechanics, then overwrite the value with the extended format.
+    let stored = registration_store(reg, aor, contact_addr, transport, expires_s, ip, port)
+    if stored < 0 { return stored }
+    // Now find the slot we just wrote and extend it
+    let prefix = "reg|" + aor + "|"
+    let expires_at = now_ms() + expires_s * 1000
+    let extended = outbound_registration_value(contact_addr, transport, expires_at, ip, port, instance, regid)
+    let mut i = 0
+    while i < 8 {
+        let key = prefix + string(i)
+        if cmap_has(reg, key) == 1 {
+            let current = cmap_get(reg, key)
+            if registration_matches(current, contact_addr) == 1 {
+                cmap_set(reg, key, extended)
+                cmap_set(reg, aor, extended)
+                break
+            }
+        }
+        i = i + 1
+    }
+    // Map instance+reg-id to flow token for routing
+    let flow_key = "ob-inst|" + aor + "|" + instance
+    if len(regid) > 0 {
+        let conn_val = ip + "|" + string(port) + "|" + transport
+        let rev_key = "ob-conn|" + conn_val
+        if cmap_has(cache, rev_key) == 1 {
+            cmap_set(cache, flow_key + "|" + regid, cmap_get(cache, rev_key))
+        }
+    }
+    return stored
+}
+
+// --- §5.3  Flow token routing ---
+// For terminating requests: resolve the flow token from the stored Path to
+// find the original transport connection. Returns "ip|port|transport" or "".
+fn outbound_resolve_flow(cache: CMap, path_uri: string) -> string {
+    if outbound_enabled() == 0 { return "" }
+    let token = outbound_token_from_uri(path_uri)
+    if len(token) == 0 { return "" }
+    return outbound_flow_token_resolve(cache, token)
+}
+
+// --- Supported/Require header helpers ---
+
+// Add "outbound" to Supported header in a response.
+fn outbound_add_supported(extra: string) -> string {
+    if outbound_enabled() == 0 { return extra }
+    return extra + "Supported: outbound\r\n"
+}
+
+// Check if the REGISTER Contact has outbound params.
+fn outbound_contact_has_outbound(contact: string) -> int {
+    if len(outbound_instance_id(contact)) == 0 { return 0 }
+    return 1
+}

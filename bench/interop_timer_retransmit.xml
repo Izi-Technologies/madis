@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE scenario SYSTEM "sipp.dtd">
+
+<!-- RFC 3261 Section 17.1.1.2: Timer A UDP retransmission.
+     UAC sends INVITE via UDP. UAS (or proxy) should retransmit
+     per Timer A doubling (T1=500ms → 1s → 2s …).
+     This scenario is a UAS that delays its 200 OK by 2 seconds
+     to force at least one proxy retransmit, then verifies duplicate
+     handling by accepting the 200. -->
+
+<scenario name="Interop: UDP Timer A retransmission (UAS side)">
+
+  <!-- Receive the INVITE (first or retransmitted) -->
+  <recv request="INVITE" crlf="true" />
+
+  <!-- Send 100 Trying immediately to stop UAC retransmits,
+       but proxy-to-UAS leg may still retransmit if we don't answer -->
+  <send>
+    <![CDATA[
+
+      SIP/2.0 100 Trying
+      [last_Via:]
+      From: [last_From:]
+      To: [last_To:]
+      Call-ID: [last_Call-ID:]
+      CSeq: [last_CSeq:]
+      Content-Length: 0
+
+    ]]>
+  </send>
+
+  <!-- Delay to force proxy retransmission on its UAS-facing leg -->
+  <pause milliseconds="2000" />
+
+  <!-- Absorb any retransmitted INVITEs during the pause -->
+  <recv request="INVITE" optional="true" />
+  <recv request="INVITE" optional="true" />
+  <recv request="INVITE" optional="true" />
+
+  <!-- Now send 200 OK -->
+  <send retrans="500">
+    <![CDATA[
+
+      SIP/2.0 200 OK
+      [last_Via:]
+      From: [last_From:]
+      To: [last_To:];tag=[pid]SIPpTag01[call_number]
+      Call-ID: [last_Call-ID:]
+      CSeq: [last_CSeq:]
+      Contact: <sip:[local_ip]:[local_port]>
+      Content-Length: 0
+
+    ]]>
+  </send>
+
+  <!-- Receive ACK -->
+  <recv request="ACK" optional="true" timeout="5000" />
+
+  <!-- Receive BYE -->
+  <recv request="BYE" optional="true" timeout="10000" />
+
+  <send>
+    <![CDATA[
+
+      SIP/2.0 200 OK
+      [last_Via:]
+      From: [last_From:]
+      To: [last_To:]
+      Call-ID: [last_Call-ID:]
+      CSeq: [last_CSeq:]
+      Content-Length: 0
+
+    ]]>
+  </send>
+</scenario>

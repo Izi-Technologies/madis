@@ -1,5 +1,4 @@
-// RFC 4028 request-side validation tests. Endpoint refresh behavior remains
-// outside this proxy boundary.
+// RFC 4028 session-timer tests: validation, negotiation, and refresh generation.
 pull . "../main.mko"
 
 fn ims_timer_test_request_with_second_min(session: string, min_se: string, second_min: string) -> string {
@@ -102,5 +101,95 @@ fn TestIMSSessionTimerRefresherOwnershipModes() {
     let _ = env_set("SIP_IMS_SESSION_REFRESHER", "unexpected")
     assert_eq_str(ims_session_timer_refresher_mode(), "endpoint")
     let _ = env_set("SIP_IMS_SESSION_TIMERS", "0")
-    let _ = env_set("SIP_IMS_SESSION_REFRESHER", "endpoint")
+    let _ = env_set("SIP_IMS_SESSION_REFRESHER", "uas")
+}
+
+fn TestIMSSessionTimerPreferredRefresher() {
+    let _ = env_set("SIP_IMS_SESSION_REFRESHER", "uas")
+    assert_eq_str(ims_session_timer_preferred_refresher(), "uas")
+    let _ = env_set("SIP_IMS_SESSION_REFRESHER", "uac")
+    assert_eq_str(ims_session_timer_preferred_refresher(), "uac")
+    let _ = env_set("SIP_IMS_SESSION_REFRESHER", "bogus")
+    assert_eq_str(ims_session_timer_preferred_refresher(), "uas")
+    let _ = env_set("SIP_IMS_SESSION_REFRESHER", "uas")
+}
+
+fn TestIMSSessionTimerEnsureRefresher() {
+    let _ = env_set("SIP_IMS_SESSION_TIMERS", "1")
+    let _ = env_set("SIP_IMS_SESSION_REFRESHER", "uas")
+    // No refresher param → proxy adds one
+    let msg_no_r = ims_timer_test_request("1800", "")
+    let patched = ims_session_timer_ensure_refresher(msg_no_r)
+    assert(str_contains(patched, "refresher=uas"))
+    // Already has refresher=uac → left alone
+    let msg_has_r = ims_timer_test_request("1800;refresher=uac", "")
+    let unchanged = ims_session_timer_ensure_refresher(msg_has_r)
+    assert(str_contains(unchanged, "refresher=uac"))
+    assert_eq(if str_contains(unchanged, "refresher=uas") { 1 } else { 0 }, 0)
+    let _ = env_set("SIP_IMS_SESSION_TIMERS", "0")
+}
+
+fn TestIMSSessionTimerBindFromResponse() {
+    let _ = env_set("SIP_IMS_SESSION_TIMERS", "1")
+    let _ = env_set("SIP_IMS_SESSION_REFRESHER", "uas")
+    let cache = cmap_new()
+    let request = ims_timer_test_request("1800;refresher=uas", "")
+    let response = "SIP/2.0 200 OK\r\nVia: SIP/2.0/UDP 192.0.2.20:5060;branch=z9hG4bK-resp2\r\n"
+        + "From: <sip:a@example.com>;tag=timer-a\r\n"
+        + "To: <sip:b@example.com>;tag=timer-b\r\n"
+        + "Call-ID: cid-resp-bind\r\n"
+        + "CSeq: 1 INVITE\r\n"
+        + "Session-Expires: 1800;refresher=uas\r\n"
+        + "Content-Length: 0\r\n\r\n"
+    assert_eq(ims_session_timer_bind_from_response(cache, "cid-resp-bind", request, response), 1)
+    let value = ims_session_timer_lookup(cache, "cid-resp-bind")
+    assert(str_contains(value, "1800"))
+    assert(str_contains(value, "|uas"))
+    // Dialog state stored
+    assert_eq(cmap_has(cache, ims_session_timer_dlg_key("cid-resp-bind")), 1)
+    // Non-2xx → no bind
+    let resp_100 = "SIP/2.0 100 Trying\r\nContent-Length: 0\r\n\r\n"
+    assert_eq(ims_session_timer_bind_from_response(cache, "cid-100", request, resp_100), 0)
+    let _ = env_set("SIP_IMS_SESSION_TIMERS", "0")
+}
+
+fn TestIMSSessionTimerBuildRefresh() {
+    let _ = env_set("SIP_IMS_SESSION_TIMERS", "1")
+    let _ = env_set("SIP_IMS_SESSION_REFRESHER", "uas")
+    let cache = cmap_new()
+    let request = ims_timer_test_request("1800;refresher=uas", "")
+    let response = "SIP/2.0 200 OK\r\nVia: SIP/2.0/UDP 192.0.2.20:5060;branch=z9hG4bK-build\r\n"
+        + "From: <sip:a@example.com>;tag=timer-a\r\n"
+        + "To: <sip:b@example.com>;tag=timer-b\r\n"
+        + "Call-ID: cid-build\r\n"
+        + "CSeq: 1 INVITE\r\n"
+        + "Session-Expires: 1800;refresher=uas\r\n"
+        + "Content-Length: 0\r\n\r\n"
+    let _ = ims_session_timer_bind_from_response(cache, "cid-build", request, response)
+    let reinvite = ims_session_timer_build_refresh(cache, "cid-build", 1800, "uas")
+    assert(len(reinvite) > 0)
+    assert(str_contains(reinvite, "INVITE sip:b@example.com SIP/2.0"))
+    assert(str_contains(reinvite, "Call-ID: cid-build"))
+    assert(str_contains(reinvite, "Session-Expires: 1800;refresher=uas"))
+    assert(str_contains(reinvite, "CSeq: 2 INVITE"))
+    // No dialog stored → empty
+    assert_eq(len(ims_session_timer_build_refresh(cache, "cid-missing", 1800, "uas")), 0)
+    let _ = env_set("SIP_IMS_SESSION_TIMERS", "0")
+}
+
+fn TestIMSSessionTimerRefreshTickNoOp() {
+    let _ = env_set("SIP_IMS_SESSION_TIMERS", "1")
+    let _ = env_set("SIP_IMS_SESSION_REFRESHER", "uas")
+    let cache = cmap_new()
+    // Empty cache → no refreshes, no crash
+    assert_eq(ims_session_timer_refresh_tick(cache, "127.0.0.1", 5060, "udp"), 0)
+    // Disabled → 0
+    let _ = env_set("SIP_IMS_SESSION_TIMERS", "0")
+    assert_eq(ims_session_timer_refresh_tick(cache, "127.0.0.1", 5060, "udp"), 0)
+    // Endpoint mode → 0
+    let _ = env_set("SIP_IMS_SESSION_TIMERS", "1")
+    let _ = env_set("SIP_IMS_SESSION_REFRESHER", "uac")
+    assert_eq(ims_session_timer_refresh_tick(cache, "127.0.0.1", 5060, "udp"), 0)
+    let _ = env_set("SIP_IMS_SESSION_TIMERS", "0")
+    let _ = env_set("SIP_IMS_SESSION_REFRESHER", "uas")
 }
