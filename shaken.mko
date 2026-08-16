@@ -3,10 +3,9 @@
 // Verification: ES256, RS256, HS256 (lab), and JWKS with iat freshness.
 // HS256 is lab-only and does not comply with RFC 8225.
 
-// C bridge for PASSporT-compliant JWT signing and base64url
+// base64url is a Mako 0.5.5 builtin. PASSporT signing still uses C bridge
+// until Mako adds jwt_sign_passport or jwt_sign_custom.
 extern "C" fn madis_passport_sign(payload: string, key: string, cert_url: string) -> string;
-extern "C" fn madis_base64url_encode(data: string) -> string;
-extern "C" fn madis_base64url_decode(data: string) -> string;
 
 // PASSporT JSON claims (RFC 8225 §5)
 fn shaken_passport_payload(orig_tn: string, dest_tn: string, attest: string, origid: string, iat: int) -> string {

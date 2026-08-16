@@ -1,6 +1,8 @@
 // ============ RFC 3261 COMPLIANCE ============
 // Policy-layer helpers; parse/hop IDs use platform sip_* builtins.
 
+// CMap composite-key helpers — C bridge concatenates prefix+suffix into one
+// key with zero heap allocation. Mako's cmap_has2 has different semantics.
 extern "C" fn madis_cmap_has2(cache: CMap, prefix: string, suffix: string) -> int;
 extern "C" fn madis_cmap_get2(cache: CMap, prefix: string, suffix: string) -> string;
 extern "C" fn madis_cmap_get_i64(cache: CMap, prefix: string, suffix: string, fallback: int) -> int;
@@ -8,7 +10,7 @@ extern "C" fn madis_cmap_has3i(cache: CMap, prefix: string, middle: string, suff
 extern "C" fn madis_cmap_get3i(cache: CMap, prefix: string, middle: string, suffix: int) -> string;
 extern "C" fn madis_cmap_del3i(cache: CMap, prefix: string, middle: string, suffix: int) -> int;
 extern "C" fn madis_cmap_set_i64(cache: CMap, prefix: string, suffix: string, value: int);
-extern "C" fn madis_udp_bind_reuseport(port: int) -> int;
+// UDP reuseport addr variant still needs C bridge.
 extern "C" fn madis_udp_bind_reuseport_addr(ip: string, port: int) -> int;
 
 // --- Max-Forwards (Section 16.6 step 3) ---

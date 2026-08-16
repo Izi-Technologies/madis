@@ -2361,23 +2361,15 @@ fn tls_apply_sni(srv: TlsServer, spec: string) -> int {
     return 0
 }
 
-// Server-side TLS C bridge (madis_memory.c).
-// tls_server_reload is now a Mako 0.5.4 builtin — no C bridge needed.
-extern "C" fn madis_tls_srv_accept(srv: TlsServer, fd: int) -> int;
-extern "C" fn madis_tls_srv_fd(handle: int) -> int;
-extern "C" fn madis_tls_srv_handshake(handle: int) -> int;
-extern "C" fn madis_tls_srv_read(handle: int, max: int) -> string;
-extern "C" fn madis_tls_srv_write(handle: int, data: string) -> int;
-extern "C" fn madis_tls_srv_close(handle: int) -> int;
-
+// Server-side TLS uses Mako 0.5.5 builtins — no C bridge needed.
 fn tls_srv_cleanup(handle: int, el: EvLoop, tls_handles: map[string]int, buffers: map[string]string, peers: map[string]string, peer_ports: map[string]int, tls_states: map[string]int, cache: CMap) -> int {
-    let tls_fd = madis_tls_srv_fd(handle)
+    let tls_fd = tls_server_pool_fd(handle)
     if tls_fd >= 0 { let _ = evloop_del(el, tls_fd) }
     let fd_key = string(tls_fd)
     let _ = ims_flow_clear_conn(cache, peers[fd_key], peer_ports[fd_key], "TLS")
     let _ = proxy_conn_decr(cache, "TLS")
     if len(peers[fd_key]) > 0 { let _ = sip_per_ip_conn_release(cache, peers[fd_key]) }
-    let _ = madis_tls_srv_close(handle)
+    let _ = tls_server_pool_close(handle)
     delete(tls_handles, fd_key)
     delete(buffers, fd_key)
     delete(peers, fd_key)
@@ -2442,20 +2434,20 @@ fn tls_worker(fd: int, srv: TlsServer, port: int, reg: CMap, calls: CMap, cache:
                                 }
                             }
                         }
-                        let handle = madis_tls_srv_accept(srv, c)
+                        let handle = tls_server_pool_accept(srv, c)
                         if handle < 0 {
                             let _ = sip_per_ip_conn_release(cache, peer_ip)
                             let _ = tcp_close(c)
                         } else {
-                            let tls_fd = madis_tls_srv_fd(handle)
+                            let tls_fd = tls_server_pool_fd(handle)
                             let fk = string(tls_fd)
                             buffers[fk] = ""
                             peers[fk] = peer_ip
                             peer_ports[fk] = pp_port
-                            tls_states[fk] = 0
+                            tls_states[fk] = 1
                             tls_handles[fk] = handle
                             let _ = proxy_conn_incr(cache, "TLS")
-                            let _ = evloop_add(el, tls_fd, 3)
+                            let _ = evloop_add(el, tls_fd, 1)
                         }
                     }
                     accepted = accepted + 1
@@ -2463,16 +2455,8 @@ fn tls_worker(fd: int, srv: TlsServer, port: int, reg: CMap, calls: CMap, cache:
             } else if event_fd >= 0 {
                 let fd_key = string(event_fd)
                 let handle = tls_handles[fd_key]
-                if tls_states[fd_key] == 0 {
-                    let hs = madis_tls_srv_handshake(handle)
-                    if hs == 1 {
-                        tls_states[fd_key] = 1
-                        let _ = evloop_mod(el, event_fd, 1)
-                    } else if hs < 0 {
-                        let _ = tls_srv_cleanup(handle, el, tls_handles, buffers, peers, peer_ports, tls_states, cache)
-                    }
-                } else {
-                    let raw = madis_tls_srv_read(handle, 65536)
+                {
+                    let raw = tls_server_pool_read(handle, 65536)
                     let mut close_conn = 0
                     if len(raw) == 0 { close_conn = 1 }
                     if close_conn == 0 {
@@ -2495,7 +2479,7 @@ fn tls_worker(fd: int, srv: TlsServer, port: int, reg: CMap, calls: CMap, cache:
                                     if sip_is_response(msg) == 1 {
                                         let _ = sip_forward_reply(reply, cache, forward_fd)
                                     } else {
-                                        let tw_n = madis_tls_srv_write(handle, reply)
+                                        let tw_n = tls_server_pool_write(handle, reply)
                                         if tw_n < len(reply) { close_conn = 1 }
                                     }
                                 }
@@ -3002,7 +2986,7 @@ fn main() {
             let mut udp_fd = -1
             if requested_udp_workers > 1 {
                 if bind_wildcard == 1 {
-                    udp_fd = madis_udp_bind_reuseport(udp_port)
+                    udp_fd = nb_udp_bind_reuseport(udp_port)
                 } else {
                     udp_fd = madis_udp_bind_reuseport_addr(bind_ip, udp_port)
                 }
