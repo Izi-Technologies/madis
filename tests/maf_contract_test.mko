@@ -29,6 +29,11 @@ fn tbl_query_param(db: SqlDB, ok: int, sql: string, param: string, max: int) []s
     return rows
 }
 
+// Stub: tbl_query lives in admin/pages.mko, called by maf_api.mko
+fn tbl_query(db: SqlDB, ok: int, sql: string, max: int) -> []string {
+    return make([]string, 0, 0)
+}
+
 fn TestMafEveryHttpRouteIsAllowlisted() {
     assert_eq(maf_api_route("POST", "/admin/api/v1/maf/calls"), 1)
     assert_eq(maf_api_route("GET", "/admin/api/v1/maf/calls/call-12345678"), 2)

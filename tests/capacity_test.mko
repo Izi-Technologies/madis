@@ -6,7 +6,7 @@ fn TestCallStateCapacityDefaultsAndClamps() {
     let _ = env_set("SIP_CALL_STATE_CAPACITY", "1")
     assert_eq(sip_call_state_capacity(), 16384)
     let _ = env_set("SIP_CALL_STATE_CAPACITY", "999999999")
-    assert_eq(sip_call_state_capacity(), 1048576)
+    assert_eq(sip_call_state_capacity(), 2097152)
 }
 
 fn TestCallStateUpdatesExistingRecord() {

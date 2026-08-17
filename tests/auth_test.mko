@@ -3,6 +3,9 @@ pull . "../parser.mko"
 pull . "../nat.mko"
 pull . "../auth.mko"
 
+// Stub: hdr_set lives in headers.mko, pulled indirectly via nat.mko
+fn hdr_set(msg: string, name: string, value: string) -> string { return msg }
+
 fn TestDigestQopAuthKnownAnswer() {
     let ha1 = "939e7578ed9e3c518a452acee763bce9"
     let response = digest_response_ha1_qop(

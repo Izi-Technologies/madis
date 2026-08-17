@@ -6,6 +6,9 @@ pull . "../auth.mko"
 pull . "../security.mko"
 pull . "../stream.mko"
 
+// Stub: hdr_set lives in headers.mko, pulled indirectly via nat.mko
+fn hdr_set(msg: string, name: string, value: string) -> string { return msg }
+
 // --- Proxy Protocol v1 parsing ---
 
 fn TestProxyProtocolV1Tcp4() {

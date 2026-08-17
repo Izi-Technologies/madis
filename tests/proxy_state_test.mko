@@ -5,6 +5,9 @@ pull . "../rfc.mko"
 pull . "../registration.mko"
 pull . "../headers.mko"
 
+// Stub: is_private_ip lives in nat.mko, called by registration.mko
+fn is_private_ip(ip: string) -> int { return 0 }
+
 fn proxy_test_register_message(contact: string, expires: string) -> string {
     let headers = "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bKtest\r\n"
         + "From: <sip:alice@example.com>;tag=from1\r\n"

@@ -1,6 +1,9 @@
 // Tests for stream transport: framing, PROXY protocol, peer parsing.
 pull . "../stream.mko"
 
+// Stub: bounded_cache_set lives in auth.mko, called by stream.mko
+fn bounded_cache_set(cache: CMap, seq_key: string, ring_prefix: string, key: string, value: string, capacity: int) -> int { return 0 }
+
 // --- Peer address parsing ---
 
 fn TestPeerSplitIPv4() {

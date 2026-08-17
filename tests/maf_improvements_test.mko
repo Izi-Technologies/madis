@@ -40,6 +40,11 @@ fn tbl_query_param(db: SqlDB, ok: int, sql: string, param: string, max: int) []s
     return make([]string, 0, 0)
 }
 
+// Stub: tbl_query lives in admin/pages.mko, called by maf_api.mko
+fn tbl_query(db: SqlDB, ok: int, sql: string, max: int) -> []string {
+    return make([]string, 0, 0)
+}
+
 // --- JSON escape dedup ---
 
 fn TestMafHeadersJsonEscapeDelegates() {
