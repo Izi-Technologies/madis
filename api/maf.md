@@ -243,6 +243,10 @@ curl -X POST "$MAF_BASE_URL/api/v1/maf/gateways" \
   -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
   -H "Content-Type: application/json" \
   --data '{"name":"carrier-a","address":"10.0.1.100","port":5060,"transport":"UDP"}'
+
+# Delete a gateway
+curl -X DELETE "$MAF_BASE_URL/api/v1/maf/gateways/7" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN"
 ```
 
 ### DIDs (inbound numbers)
@@ -257,6 +261,10 @@ curl -X POST "$MAF_BASE_URL/api/v1/maf/dids" \
   -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
   -H "Content-Type: application/json" \
   --data '{"number":"+15551234567","destination_user":"alice","description":"Main line"}'
+
+# Delete a DID
+curl -X DELETE "$MAF_BASE_URL/api/v1/maf/dids/42" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN"
 ```
 
 ### Dispatch sets (load balancing)
@@ -274,6 +282,126 @@ curl -X POST "$MAF_BASE_URL/api/v1/maf/dispatch-sets" \
 ```
 
 Algorithms: `round-robin`, `weight`, `priority`, `hash`, `hash-user`, `broadcast`.
+
+### Dialplan management
+
+CRUD for tenant-scoped dialplans (number translation, prefix stripping, etc.):
+
+```sh
+curl "$MAF_BASE_URL/api/v1/maf/dialplans" \
+  -H "Authorization: Bearer $SIP_MAF_API_READ_TOKEN"
+
+curl -X POST "$MAF_BASE_URL/api/v1/maf/dialplans" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"name":"strip-plus1","match_prefix":"+1","strip_digits":2,"prepend":"1"}'
+
+curl -X DELETE "$MAF_BASE_URL/api/v1/maf/dialplans/42" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN"
+```
+
+### IP auth management
+
+Manage IP-based authentication entries (trusted peers, carrier IPs):
+
+```sh
+curl "$MAF_BASE_URL/api/v1/maf/ip-auth" \
+  -H "Authorization: Bearer $SIP_MAF_API_READ_TOKEN"
+
+curl -X POST "$MAF_BASE_URL/api/v1/maf/ip-auth" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"ip":"10.0.1.100","description":"Carrier A trunk"}'
+
+curl -X DELETE "$MAF_BASE_URL/api/v1/maf/ip-auth/7" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN"
+```
+
+### Access control
+
+List and create access control entries (allow/deny rules by IP or subnet):
+
+```sh
+curl "$MAF_BASE_URL/api/v1/maf/access-control" \
+  -H "Authorization: Bearer $SIP_MAF_API_READ_TOKEN"
+
+curl -X POST "$MAF_BASE_URL/api/v1/maf/access-control" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"rule":"allow","source":"10.0.0.0/8","description":"Internal network"}'
+```
+
+### Global header rules
+
+Manage header manipulation rules applied globally (before per-call policies):
+
+```sh
+curl "$MAF_BASE_URL/api/v1/maf/header-rules" \
+  -H "Authorization: Bearer $SIP_MAF_API_READ_TOKEN"
+
+curl -X POST "$MAF_BASE_URL/api/v1/maf/header-rules" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"action":"remove","name":"X-Debug","direction":"outbound"}'
+```
+
+### Billing event outbox
+
+Read pending billing events and acknowledge processing. Events stay in the
+outbox until acknowledged, ensuring at-least-once delivery to billing systems:
+
+```sh
+curl "$MAF_BASE_URL/api/v1/maf/billing/events" \
+  -H "Authorization: Bearer $SIP_MAF_API_READ_TOKEN"
+
+curl -X POST "$MAF_BASE_URL/api/v1/maf/billing/events/ack" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"event_ids":["evt_01J...","evt_01K..."]}'
+```
+
+### Security audit events
+
+Read security audit events (auth failures, ban triggers, rate limit hits):
+
+```sh
+curl "$MAF_BASE_URL/api/v1/maf/security/events" \
+  -H "Authorization: Bearer $SIP_MAF_API_READ_TOKEN"
+```
+
+### ANI groups
+
+Manage ANI (caller ID) groups for routing rule matching:
+
+```sh
+curl "$MAF_BASE_URL/api/v1/maf/ani-groups" \
+  -H "Authorization: Bearer $SIP_MAF_API_READ_TOKEN"
+
+curl -X POST "$MAF_BASE_URL/api/v1/maf/ani-groups" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"name":"vip-callers","numbers":["+15551234567","+15559876543"]}'
+```
+
+### Active calls
+
+List all active (non-ended) calls across the tenant:
+
+```sh
+curl "$MAF_BASE_URL/api/v1/maf/calls/active" \
+  -H "Authorization: Bearer $SIP_MAF_API_READ_TOKEN"
+```
+
+### Dispatch membership
+
+Add a gateway to an existing dispatch set:
+
+```sh
+curl -X POST "$MAF_BASE_URL/api/v1/maf/dispatch-members" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"dispatch_set_id":3,"gateway_id":7,"weight":100,"priority":1}'
+```
 
 ### Cluster health
 
@@ -390,8 +518,10 @@ POST   /admin/api/v1/maf/routing/rules                   — create routing rule
 DELETE /admin/api/v1/maf/routing/rules/{id}               — delete routing rule
 GET    /admin/api/v1/maf/gateways                         — list gateways
 POST   /admin/api/v1/maf/gateways                        — create/update gateway
+DELETE /admin/api/v1/maf/gateways/{id}                    — delete gateway
 GET    /admin/api/v1/maf/dids                             — list DIDs
 POST   /admin/api/v1/maf/dids                            — create/update DID
+DELETE /admin/api/v1/maf/dids/{id}                        — delete DID
 GET    /admin/api/v1/maf/dispatch-sets                    — list dispatch sets
 POST   /admin/api/v1/maf/dispatch-sets                   — create dispatch set
 GET    /admin/api/v1/maf/cluster                          — cluster health
@@ -400,6 +530,23 @@ POST   /admin/api/v1/maf/config                          — set config
 GET    /admin/api/v1/maf/events                           — event replay
 POST   /admin/api/v1/maf/events                          — publish custom event
 GET    /admin/api/v1/maf/events/ws                        — WebSocket subscription
+GET    /admin/api/v1/maf/dialplans                        — list dialplans
+POST   /admin/api/v1/maf/dialplans                       — create dialplan
+DELETE /admin/api/v1/maf/dialplans/{id}                   — delete dialplan
+GET    /admin/api/v1/maf/ip-auth                          — list IP auth entries
+POST   /admin/api/v1/maf/ip-auth                         — create IP auth
+DELETE /admin/api/v1/maf/ip-auth/{id}                     — delete IP auth
+GET    /admin/api/v1/maf/access-control                   — list access control
+POST   /admin/api/v1/maf/access-control                  — create ACL entry
+GET    /admin/api/v1/maf/header-rules                     — list global header rules
+POST   /admin/api/v1/maf/header-rules                    — create header rule
+GET    /admin/api/v1/maf/billing/events                   — pending billing events
+POST   /admin/api/v1/maf/billing/events/ack              — acknowledge billing event
+GET    /admin/api/v1/maf/security/events                  — security audit events
+GET    /admin/api/v1/maf/ani-groups                       — list ANI groups
+POST   /admin/api/v1/maf/ani-groups                      — create ANI group
+GET    /admin/api/v1/maf/calls/active                     — active (non-ended) calls
+POST   /admin/api/v1/maf/dispatch-members                — add gateway to dispatch set
 ```
 
 ## Authentication and tenant scoping
@@ -423,11 +570,13 @@ All MAF resources are scoped to the configured tenant (`SIP_MAF_TENANT`):
 | Resource | Tenant-scoped | Notes |
 | --- | --- | --- |
 | Calls, channels, bridges, media, events, commands | Yes | Per-call state |
-| Routing rules, gateways, DIDs, dispatch sets | Yes | Infrastructure per tenant |
+| Routing rules, gateways, DIDs, dispatch sets, dispatch members | Yes | Infrastructure per tenant |
+| Dialplans, IP auth, access control, header rules, ANI groups | Yes | Infrastructure per tenant |
+| Billing events | Yes | Per-tenant outbox |
 | Registrations, presence | Yes | Per-tenant registration bindings |
 | Config | Yes | Per-tenant config keys |
 | Cluster nodes | No | Platform-level health monitoring |
-| Security bans | No | Platform-level; IP bans protect all tenants |
+| Security bans, security audit events | No | Platform-level; protect all tenants |
 | CDR | No | Filterable by call_id; shared audit trail |
 
 A MAF read token in tenant A cannot see tenant B's gateways, routing rules,
@@ -694,8 +843,10 @@ body limit, 16-512 char token validation.
 | | Delete rule | `delete_routing_rule()` | `DeleteRoutingRule()` | `deleteRoutingRule()` | `deleteRoutingRule()` | `delete_routing_rule/3` |
 | **Infra** | Gateways | `gateways()` | `Gateways()` | `gateways()` | `gateways()` | `gateways/2` |
 | | Create GW | `create_gateway()` | `CreateGateway()` | `createGateway()` | `createGateway()` | `create_gateway/3` |
+| | Delete GW | `delete_gateway()` | `DeleteGateway()` | `deleteGateway()` | `deleteGateway()` | `delete_gateway/3` |
 | | DIDs | `dids()` | `DIDs()` | `dids()` | `dids()` | `dids/2` |
 | | Create DID | `create_did()` | `CreateDID()` | `createDID()` | `createDID()` | `create_did/3` |
+| | Delete DID | `delete_did()` | `DeleteDID()` | `deleteDID()` | `deleteDID()` | `delete_did/3` |
 | | Dispatch sets | `dispatch_sets()` | `DispatchSets()` | `dispatchSets()` | `dispatchSets()` | `dispatch_sets/2` |
 | | Create set | `create_dispatch_set()` | `CreateDispatchSet()` | `createDispatchSet()` | `createDispatchSet()` | `create_dispatch_set/3` |
 | **Cluster** | Nodes | `cluster()` | `Cluster()` | `cluster()` | `cluster()` | `cluster/2` |
@@ -703,6 +854,23 @@ body limit, 16-512 char token validation.
 | | Set | `set_config()` | `SetConfig()` | `setConfig()` | `setConfig()` | `set_config/3` |
 | **Charging** | Authorize | `charge_authorize()` | `ChargeAuthorize()` | `chargeAuthorize()` | `chargeAuthorize()` | `charge_authorize/3` |
 | | Deny | `charge_deny()` | `ChargeDeny()` | `chargeDeny()` | `chargeDeny()` | `charge_deny/3` |
+| **Dialplans** | List | `dialplans()` | `Dialplans()` | `dialplans()` | `dialplans()` | `dialplans/2` |
+| | Create | `create_dialplan()` | `CreateDialplan()` | `createDialplan()` | `createDialplan()` | `create_dialplan/3` |
+| | Delete | `delete_dialplan()` | `DeleteDialplan()` | `deleteDialplan()` | `deleteDialplan()` | `delete_dialplan/3` |
+| **IP Auth** | List | `ip_auth()` | `IPAuth()` | `ipAuth()` | `ipAuth()` | `ip_auth/2` |
+| | Create | `create_ip_auth()` | `CreateIPAuth()` | `createIPAuth()` | `createIPAuth()` | `create_ip_auth/3` |
+| | Delete | `delete_ip_auth()` | `DeleteIPAuth()` | `deleteIPAuth()` | `deleteIPAuth()` | `delete_ip_auth/3` |
+| **ACL** | List | `access_control()` | `AccessControl()` | `accessControl()` | `accessControl()` | `access_control/2` |
+| | Create | `create_acl()` | `CreateACL()` | `createACL()` | `createACL()` | `create_acl/3` |
+| **Headers** | Global rules | `header_rules()` | `HeaderRules()` | `headerRules()` | `headerRules()` | `header_rules/2` |
+| | Create rule | `create_header_rule()` | `CreateHeaderRule()` | `createHeaderRule()` | `createHeaderRule()` | `create_header_rule/3` |
+| **Billing** | Events | `billing_events()` | `BillingEvents()` | `billingEvents()` | `billingEvents()` | `billing_events/2` |
+| | Acknowledge | `ack_billing_event()` | `AckBillingEvent()` | `ackBillingEvent()` | `ackBillingEvent()` | `ack_billing_event/3` |
+| **Security** | Audit events | `security_events()` | `SecurityEvents()` | `securityEvents()` | `securityEvents()` | `security_events/2` |
+| **ANI** | List groups | `ani_groups()` | `ANIGroups()` | `aniGroups()` | `aniGroups()` | `ani_groups/2` |
+| | Create group | `create_ani_group()` | `CreateANIGroup()` | `createANIGroup()` | `createANIGroup()` | `create_ani_group/3` |
+| **Calls** | Active | `active_calls()` | `ActiveCalls()` | `activeCalls()` | `activeCalls()` | `active_calls/2` |
+| **Dispatch** | Add member | `create_dispatch_member()` | `CreateDispatchMember()` | `createDispatchMember()` | `createDispatchMember()` | `create_dispatch_member/3` |
 | **Events** | Publish | `publish_event()` | `PublishEvent()` | `publishEvent()` | `publishEvent()` | `publish_event/5` |
 | | List | `events()` | `Events()` | `events()` | `events()` | `events/3` |
 | | Subscribe | `subscribe()` | `Subscribe()` | `subscribe()` | `subscribe()` | — (use events/5) |
@@ -710,7 +878,7 @@ body limit, 16-512 char token validation.
 
 ### Contract tests
 
-56 Python tests in `sdk/maf/tests/` validate the SDK-to-OpenAPI contract:
+58 route handlers served by the admin process. 56 Python tests in `sdk/maf/tests/` validate the SDK-to-OpenAPI contract:
 
 - **OpenAPI contract** — route coverage, required fields, enum consistency, body limits, auth headers
 - **Command lifecycle** — state machine (accepted→processing→completed|failed), staleness, idempotency

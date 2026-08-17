@@ -307,6 +307,74 @@ class MadisMaf:
         return self._request("POST",
                              f"/api/v1/maf/calls/{quote(call_id, safe='')}/charge-deny")
 
+    def delete_did(self, did_id: int) -> object:
+        return self._request("DELETE", f"/api/v1/maf/dids/{did_id}")
+
+    def delete_gateway(self, gateway_id: int) -> object:
+        return self._request("DELETE", f"/api/v1/maf/gateways/{gateway_id}")
+
+    def dialplans(self) -> object:
+        return self._request("GET", "/api/v1/maf/dialplans")
+
+    def create_dialplan(self, **kwargs) -> object:
+        return self._request("POST", "/api/v1/maf/dialplans", body=kwargs)
+
+    def delete_dialplan(self, dialplan_id: int) -> object:
+        return self._request("DELETE", f"/api/v1/maf/dialplans/{dialplan_id}")
+
+    def ip_auth(self) -> object:
+        return self._request("GET", "/api/v1/maf/ip-auth")
+
+    def create_ip_auth(self, ip: str, description: str = "") -> object:
+        return self._request("POST", "/api/v1/maf/ip-auth",
+                             body={"ip": ip, "description": description})
+
+    def delete_ip_auth(self, ip_auth_id: int) -> object:
+        return self._request("DELETE", f"/api/v1/maf/ip-auth/{ip_auth_id}")
+
+    def access_control(self) -> object:
+        return self._request("GET", "/api/v1/maf/access-control")
+
+    def create_access_control(self, rule: str, source: str,
+                              description: str = "") -> object:
+        return self._request("POST", "/api/v1/maf/access-control",
+                             body={"rule": rule, "source": source,
+                                   "description": description})
+
+    def header_rules(self) -> object:
+        return self._request("GET", "/api/v1/maf/header-rules")
+
+    def create_header_rule(self, action: str, name: str, **kwargs) -> object:
+        return self._request("POST", "/api/v1/maf/header-rules",
+                             body={"action": action, "name": name, **kwargs})
+
+    def billing_events(self) -> object:
+        return self._request("GET", "/api/v1/maf/billing/events")
+
+    def billing_ack(self, event_ids: list[str]) -> object:
+        return self._request("POST", "/api/v1/maf/billing/events/ack",
+                             body={"event_ids": event_ids})
+
+    def security_events(self) -> object:
+        return self._request("GET", "/api/v1/maf/security/events")
+
+    def ani_groups(self) -> object:
+        return self._request("GET", "/api/v1/maf/ani-groups")
+
+    def create_ani_group(self, name: str, numbers: list[str]) -> object:
+        return self._request("POST", "/api/v1/maf/ani-groups",
+                             body={"name": name, "numbers": numbers})
+
+    def active_calls(self) -> object:
+        return self._request("GET", "/api/v1/maf/calls/active")
+
+    def create_dispatch_member(self, dispatch_set_id: int, gateway_id: int,
+                               weight: int = 100, priority: int = 1) -> object:
+        return self._request("POST", "/api/v1/maf/dispatch-members",
+                             body={"dispatch_set_id": dispatch_set_id,
+                                   "gateway_id": gateway_id,
+                                   "weight": weight, "priority": priority})
+
     def events(self, cursor: int = 0, event_type: str | None = None,
                limit: int = 100) -> object:
         query: dict[str, object] = {"cursor": max(cursor, 0),

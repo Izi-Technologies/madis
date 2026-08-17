@@ -527,6 +527,24 @@ paths:
                 description: {type: string, maxLength: 512}
       responses:
         '201': {description: DID created}
+  /api/v1/maf/dids/{did_id}:
+    delete:
+      operationId: deleteDID
+      summary: Delete a DID
+      security: [{mafBearerAuth: []}]
+      parameters:
+        - {name: did_id, in: path, required: true, schema: {type: integer}}
+      responses:
+        '200': {description: DID deleted}
+  /api/v1/maf/gateways/{gateway_id}:
+    delete:
+      operationId: deleteGateway
+      summary: Delete a gateway
+      security: [{mafBearerAuth: []}]
+      parameters:
+        - {name: gateway_id, in: path, required: true, schema: {type: integer}}
+      responses:
+        '200': {description: Gateway deleted}
   /api/v1/maf/dispatch-sets:
     get:
       operationId: listDispatchSets
@@ -583,6 +601,209 @@ paths:
       responses:
         '200': {description: Config updated}
         '403': {description: Key not in MAF allowlist}
+  /api/v1/maf/dialplans:
+    get:
+      operationId: listDialplans
+      summary: List dialplans
+      security: [{mafBearerAuth: []}]
+      responses:
+        '200': {description: Dialplan list}
+    post:
+      operationId: createDialplan
+      summary: Create a dialplan
+      security: [{mafBearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: {type: string, minLength: 1, maxLength: 128}
+                match_prefix: {type: string, maxLength: 64}
+                strip_digits: {type: integer, minimum: 0, maximum: 32}
+                prepend: {type: string, maxLength: 64}
+                description: {type: string, maxLength: 512}
+      responses:
+        '201': {description: Dialplan created}
+  /api/v1/maf/dialplans/{dialplan_id}:
+    delete:
+      operationId: deleteDialplan
+      summary: Delete a dialplan
+      security: [{mafBearerAuth: []}]
+      parameters:
+        - {name: dialplan_id, in: path, required: true, schema: {type: integer}}
+      responses:
+        '200': {description: Dialplan deleted}
+  /api/v1/maf/ip-auth:
+    get:
+      operationId: listIPAuth
+      summary: List IP auth entries
+      security: [{mafBearerAuth: []}]
+      responses:
+        '200': {description: IP auth list}
+    post:
+      operationId: createIPAuth
+      summary: Create an IP auth entry
+      security: [{mafBearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ip]
+              properties:
+                ip: {type: string, minLength: 1, maxLength: 128}
+                description: {type: string, maxLength: 512}
+      responses:
+        '201': {description: IP auth entry created}
+  /api/v1/maf/ip-auth/{ip_auth_id}:
+    delete:
+      operationId: deleteIPAuth
+      summary: Delete an IP auth entry
+      security: [{mafBearerAuth: []}]
+      parameters:
+        - {name: ip_auth_id, in: path, required: true, schema: {type: integer}}
+      responses:
+        '200': {description: IP auth entry deleted}
+  /api/v1/maf/access-control:
+    get:
+      operationId: listAccessControl
+      summary: List access control entries
+      security: [{mafBearerAuth: []}]
+      responses:
+        '200': {description: Access control list}
+    post:
+      operationId: createAccessControl
+      summary: Create an access control entry
+      security: [{mafBearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rule, source]
+              properties:
+                rule: {type: string, enum: [allow, deny]}
+                source: {type: string, minLength: 1, maxLength: 256}
+                description: {type: string, maxLength: 512}
+      responses:
+        '201': {description: ACL entry created}
+  /api/v1/maf/header-rules:
+    get:
+      operationId: listHeaderRules
+      summary: List global header rules
+      security: [{mafBearerAuth: []}]
+      responses:
+        '200': {description: Header rules list}
+    post:
+      operationId: createHeaderRule
+      summary: Create a global header rule
+      security: [{mafBearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action, name]
+              properties:
+                action: {type: string, enum: [add, set, remove, rename, copy, move]}
+                name: {type: string, minLength: 1, maxLength: 128}
+                value: {type: string, maxLength: 4096}
+                direction: {type: string, enum: [inbound, outbound, both], default: both}
+      responses:
+        '201': {description: Header rule created}
+  /api/v1/maf/billing/events:
+    get:
+      operationId: listBillingEvents
+      summary: List pending billing events
+      security: [{mafBearerAuth: []}]
+      responses:
+        '200': {description: Billing event list}
+  /api/v1/maf/billing/events/ack:
+    post:
+      operationId: ackBillingEvent
+      summary: Acknowledge billing events
+      security: [{mafBearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [event_ids]
+              properties:
+                event_ids:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items: {type: string, maxLength: 128}
+      responses:
+        '200': {description: Events acknowledged}
+  /api/v1/maf/security/events:
+    get:
+      operationId: listSecurityEvents
+      summary: List security audit events
+      security: [{mafBearerAuth: []}]
+      responses:
+        '200': {description: Security event list}
+  /api/v1/maf/ani-groups:
+    get:
+      operationId: listANIGroups
+      summary: List ANI groups
+      security: [{mafBearerAuth: []}]
+      responses:
+        '200': {description: ANI group list}
+    post:
+      operationId: createANIGroup
+      summary: Create an ANI group
+      security: [{mafBearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, numbers]
+              properties:
+                name: {type: string, minLength: 1, maxLength: 128}
+                numbers:
+                  type: array
+                  minItems: 1
+                  maxItems: 1000
+                  items: {type: string, maxLength: 64}
+      responses:
+        '201': {description: ANI group created}
+  /api/v1/maf/calls/active:
+    get:
+      operationId: listActiveCalls
+      summary: List active (non-ended) calls
+      security: [{mafBearerAuth: []}]
+      responses:
+        '200': {description: Active call list}
+  /api/v1/maf/dispatch-members:
+    post:
+      operationId: createDispatchMember
+      summary: Add a gateway to a dispatch set
+      security: [{mafBearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [dispatch_set_id, gateway_id]
+              properties:
+                dispatch_set_id: {type: integer}
+                gateway_id: {type: integer}
+                weight: {type: integer, minimum: 1, maximum: 1000, default: 100}
+                priority: {type: integer, minimum: 1, maximum: 9999, default: 1}
+      responses:
+        '201': {description: Dispatch member added}
 components:
   securitySchemes:
     mafBearerAuth:
