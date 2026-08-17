@@ -37,6 +37,16 @@ fn bencode_dict_5(k1: string, v1: string, k2: string, v2: string, k3: string, v3
 fn bencode_str(s: string) string { return s }
 fn bencode_get(resp: string, key: string) string { return "" }
 fn cached_env(cache: CMap, cache_key: string, env_key: string, fallback: string) string { return env_get_or(env_key, fallback) }
+fn shaken_identity_token(identity: string) string { return "" }
+fn shaken_identity_info(identity: string) string { return "" }
+fn shaken_identity_alg(identity: string) string { return "" }
+fn shaken_attest_from_payload(payload: string) string { return "" }
+fn shaken_orig_from_payload(payload: string) string { return "" }
+fn shaken_dest_from_payload(payload: string) string { return "" }
+fn shaken_iat_from_payload(payload: string) int { return 0 }
+fn jwt_payload(token: string) string { return "" }
+fn maf_identity_apply(cache: CMap, call_id: string, msg: string) string { return msg }
+fn time_format(ms: int) string { return "" }
 pull . "../headers.mko"
 pull . "../maf_headers.mko"
 pull . "../maf_worker.mko"
