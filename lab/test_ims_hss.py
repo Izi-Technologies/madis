@@ -862,7 +862,7 @@ class HssAdminCrudHttpTests(unittest.TestCase):
         self.server.server_close()
         self.thread.join(timeout=2.0)
 
-    def _request(self, method: str, path: str, body: dict | None = None, token: str | None = None) -> tuple[int, Any]:
+    def _request(self, method: str, path: str, body: dict | None = None, token: str | None = None):
         data = json.dumps(body).encode("utf-8") if body is not None else None
         headers = {"Content-Type": "application/json"}
         if token is not None:
