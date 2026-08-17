@@ -18,6 +18,26 @@ fn sip_forward_reply(reply: string, cache: CMap, out_fd: int) int { return 1 }
 fn module_gateway_call(msg: string, ip: string, port: int, tr: string, event: string, module: string, operation: string, payload: string) string { return "__MODULE_FAIL__" }
 fn module_gateway_command_valid(raw: string, msg: string, event: string, module: string, operation: string, payload: string, for_response: int) int { return 0 }
 fn module_gateway_action(raw: string, msg: string, event: string, module: string, operation: string, payload: string) string { return "fail" }
+fn nat_detected(msg: string, source_ip: string) int { return 0 }
+fn nat_fix_message(msg: string, source_ip: string, source_port: int, public_ip: string) string { return msg }
+fn nat_fix_sdp(msg: string, msglen: int, source_ip: string) string { return msg }
+fn is_private_ip(ip: string) int { return 0 }
+fn registration_nat_target(value: string) string { return "" }
+fn proxy_hop(msg: string, ip: string, port: int, tr: string) string { return msg }
+fn b2bua_enabled() int { return 0 }
+fn b2bua_prepare_invite(msg: string, target: string, tr: string, addr: string, tr2: string, cache: CMap) string { return "" }
+fn b2bua_lookup_in(msg: string, cache: CMap) string { return "" }
+fn b2bua_cleanup(key: string, cache: CMap) int { return 0 }
+fn sql_like_escape(s: string) string { return s }
+fn rtp_config(db: SqlDB, db_ok: int, cache: CMap) []string { let r = make([]string, 3); r[0] = "0"; r[1] = ""; r[2] = "0"; return r }
+fn rtp_delete_cache(cache: CMap, host: string, port: int, cid: string) int { return 0 }
+fn rtp_send_call(cache: CMap, cid: string, cmd: string, host: string, port: int) string { return "" }
+fn rtp_policy_flags() string { return "" }
+fn bencode_dict_4(k1: string, v1: string, k2: string, v2: string, k3: string, v3: string, k4: string, v4: string) string { return "" }
+fn bencode_dict_5(k1: string, v1: string, k2: string, v2: string, k3: string, v3: string, k4: string, v4: string, k5: string, v5: string) string { return "" }
+fn bencode_str(s: string) string { return s }
+fn bencode_get(resp: string, key: string) string { return "" }
+fn cached_env(cache: CMap, cache_key: string, env_key: string, fallback: string) string { return env_get_or(env_key, fallback) }
 pull . "../headers.mko"
 pull . "../maf_headers.mko"
 pull . "../maf_worker.mko"
