@@ -190,11 +190,11 @@ fn resolve_dispatch_set(db: SqlDB, set_name: string, from_user: string, call_id:
             let pipe1 = str_index(cached, "|")
             if pipe1 > 0 {
                 match parse_int(cached[0:pipe1]) { Ok(v) => { set_id = v } Err(_) => {} }
-                let rest = cached[pipe1 + 1:]
+                let rest = "" + cached[pipe1 + 1:]
                 let pipe2 = str_index(rest, "|")
                 if pipe2 >= 0 {
-                    algo = rest[0:pipe2]
-                    member_csv = rest[pipe2 + 1:]
+                    algo = "" + rest[0:pipe2]
+                    member_csv = "" + rest[pipe2 + 1:]
                 }
             }
         }
