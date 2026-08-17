@@ -790,7 +790,10 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         // Validate rule_id is numeric
         let mut rid_ok = 1
         let mut ri = 0
-        while ri < len(rule_id) { if int(rule_id[ri]) < 48 || int(rule_id[ri]) > 57 { rid_ok = 0 }; ri = ri + 1 }
+        while ri < len(rule_id) {
+            if int(rule_id[ri]) < 48 || int(rule_id[ri]) > 57 { rid_ok = 0 }
+            ri = ri + 1
+        }
         if rid_ok == 0 { return maf_api_error(400, "rule ID must be numeric") }
         let tenant = maf_api_tenant()
         let _ = sql_exec_str4(db, "DELETE FROM routing_rules WHERE id = $1::int AND tenant_id = $2", rule_id, tenant, "", "")
