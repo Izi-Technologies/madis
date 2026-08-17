@@ -328,8 +328,8 @@ fn sip_transaction_fresh(txn_key: string, cache: CMap) -> int {
         }
     }
 
-    let _ = cmap_del(cache, response_key)
-    let _ = cmap_del(cache, stamp_key)
+    let _ = cmap_del(cache, "txn|" + txn_key)
+    let _ = cmap_del(cache, "txn_ts|" + txn_key)
     let _ = cmap_del(cache, "txn_exp|" + txn_key)
     return 0
 }
