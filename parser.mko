@@ -123,8 +123,10 @@ fn sip_strip_top_via(msg: string) -> string {
 
 // Proxy hop: top Via + Record-Route (RFC 3261 §16.6)
 fn proxy_hop(msg: string, ip: string, port: int, tr: string) -> string {
+    // RFC 7118 §5.1: Record-Route uses "ws" for both ws and wss
+    let rr_tr = if str_eq(str_to_upper(tr), "WSS") { "ws" } else { tr }
     let mut out = sip_insert_via(msg, sip_via_value_rport(tr, ip, port, sip_branch()))
-    out = sip_prepend_header(out, "Record-Route", sip_record_route(ip, port, tr))
+    out = sip_prepend_header(out, "Record-Route", sip_record_route(ip, port, rr_tr))
     return out
 }
 
@@ -152,7 +154,7 @@ fn sip_outbound_supported_header(headers: string) -> string {
 fn sip_options_response(msg: string) -> string {
     let mut allow = "Allow: INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, PRACK, UPDATE, SUBSCRIBE, NOTIFY\r\n"
         + "Accept: application/sdp, application/pidf+xml, application/simple-message-summary\r\n"
-        + "Supported: eventlist\r\n"
+        + "Supported: eventlist, 100rel\r\n"
     let evt_on = str_to_lower(str_trim_space(env_get_or("SIP_EVENT_PACKAGES", "0")))
     if str_eq(evt_on, "1") || str_eq(evt_on, "true") {
         allow = allow + "Allow-Events: " + str_to_lower(str_trim_space(env_get_or("SIP_EVENT_PACKAGE_LIST", "presence,message-summary"))) + "\r\n"

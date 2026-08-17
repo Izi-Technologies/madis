@@ -260,7 +260,8 @@ fn event_package_handle_subscribe(data: string, dl: int, cache: CMap, reg: CMap)
         if len(event_package_get_sub(cache, sub_key)) > 0 {
             let _ = event_package_send_notify(cache, reg, sub_key, 1)
         }
-        return sip_reply_with_to_tag(data, 200, "OK", "Expires: 0\r\n", "", unsub_tag)
+        let unsub_contact = "Contact: <sip:" + env_get_or("SIP_HOST", "127.0.0.1") + ":" + env_get_or("SIP_PORT", "5060") + ";transport=udp>\r\n"
+        return sip_reply_with_to_tag(data, 200, "OK", "Expires: 0\r\n" + unsub_contact, "", unsub_tag)
     }
 
     // Cap expires
@@ -278,11 +279,12 @@ fn event_package_handle_subscribe(data: string, dl: int, cache: CMap, reg: CMap)
     let packed = event_package_pack_sub(sip_user(from), resource, event, expires_at, from_tag, my_tag, call_id, cseq_num, subscriber_contact)
     let _ = event_package_store_sub(cache, sub_key, packed)
 
-    // Send 200 OK with Expires
-    let resp = sip_reply_with_to_tag(data, 200, "OK", "Expires: " + string(expires) + "\r\n" + event_package_allow_events_header(), "", my_tag)
+    // Send 200 OK with Expires and Contact (RFC 6665 §4.1.2)
+    let proxy_contact = "Contact: <sip:" + env_get_or("SIP_HOST", "127.0.0.1") + ":" + env_get_or("SIP_PORT", "5060") + ";transport=udp>\r\n"
+    let resp = sip_reply_with_to_tag(data, 200, "OK", "Expires: " + string(expires) + "\r\n" + proxy_contact + event_package_allow_events_header(), "", my_tag)
 
-    // Send initial NOTIFY with current state
-    let _ = event_package_send_notify(cache, reg, sub_key, 0)
+    // Defer initial NOTIFY so 200 OK is sent first (RFC 6665 §4.2.2)
+    cmap_set(cache, "evt_pending_notify|" + sub_key, "1")
 
     return resp
 }
@@ -316,6 +318,31 @@ fn event_package_notify(cache: CMap, reg: CMap, event: string, resource: string)
         i = i + 1
     }
     return notified
+}
+
+// --- Flush pending NOTIFYs (called from heartbeat/worker after response sent) ---
+
+fn event_package_flush_pending(cache: CMap, reg: CMap) -> int {
+    if event_package_enabled() == 0 { return 0 }
+    let mut flushed = 0
+    let mut i = 0
+    while i < 16384 {
+        let ring_key = "evt_sub_ring|" + string(i)
+        if cmap_has(cache, ring_key) == 1 {
+            let sub_data_key = cmap_get(cache, ring_key)
+            if len(sub_data_key) > 0 && cmap_has(cache, sub_data_key) == 1 {
+                let sk = sub_data_key[8:]
+                let pending_key = "evt_pending_notify|" + sk
+                if cmap_has(cache, pending_key) == 1 {
+                    let _ = cmap_del(cache, pending_key)
+                    let _ = event_package_send_notify(cache, reg, sk, 0)
+                    flushed = flushed + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    return flushed
 }
 
 // --- Expiry sweep (called from heartbeat loop) ---

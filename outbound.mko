@@ -81,6 +81,11 @@ fn outbound_binding_reg_id(value: string) -> string {
 // Encodes source transport identity as a hex flow token for Path URI.
 // Token format: sha256(secret|ip|port|transport)[0:32]
 // The CMap stores token -> "ip|port|transport" for reverse lookup.
+// ponytail: flow tokens live in CMap only — lost on restart. The underlying
+// transport connection is gone too, so persisting tokens would not help.
+// Clients recover via keepalive failure detection or re-REGISTER timer
+// (RFC 5626 §4.4.1). No DB persistence needed unless connection resumption
+// (DTLS, TLS session tickets) is added.
 fn outbound_flow_token_mint(cache: CMap, ip: string, port: int, transport: string) -> string {
     if len(ip) < 1 || port < 1 { return "" }
     let seed = "rfc5626.flow|" + ip + "|" + string(port) + "|" + transport + "|" + string(now_ms())

@@ -1117,7 +1117,8 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
                     return sip_resp(400, "Bad Request", data, dl, "regexp")
                 }
                 if item_exp > 0 && item_exp < registration_min_expires() {
-                    return sip_reply(data, 423, "Interval Too Brief", "Min-Expires: " + string(registration_min_expires()) + "\r\n", "")
+                    let tag_423 = "reg-" + sha256("madis.423|" + sip_header(data, "Call-ID"))[0:16]
+                    return sip_reply_with_to_tag(data, 423, "Interval Too Brief", "Min-Expires: " + string(registration_min_expires()) + "\r\n", "", tag_423)
                 }
                 if str_eq(item, "*") {
                     if len(contact_items) != 1 || item_exp != 0 {
@@ -3308,6 +3309,8 @@ fn main() {
             let _ = ims_session_timer_refresh_tick(cache, node_addr, udp_port, "udp")
             // RFC 6665: expire stale event subscriptions and send terminal NOTIFYs.
             let _ = event_package_sweep(cache, reg)
+            // Flush deferred NOTIFYs (sent after 200 OK per RFC 6665 §4.2.2)
+            let _ = event_package_flush_pending(cache, reg)
 
             slog("[" + hb_node_id + "] regs=" + string(cmap_len(reg)) + " calls=" + string(cmap_len(calls)) + " cache=" + string(cmap_len(cache)))
         }
