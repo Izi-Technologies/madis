@@ -73,7 +73,13 @@ fn registration_cx_assignment_type(reg: CMap, aor: string, contact: string, msg:
 }
 
 fn registration_value(contact: string, transport: string, expires_at: int, ip: string, port: int) -> string {
-    return contact + "|" + transport + "|" + string(expires_at) + "|" + ip + "|" + string(port)
+    // Strip pipe from contact URI — it's the field delimiter. A pipe in a
+    // SIP URI is technically invalid per RFC 3261 ABNF but some UAs send it.
+    // Sanitizing here protects all downstream parsers (registration_live,
+    // registration_matches, registration_nat_target, contact binding parse).
+    let mut safe_contact = contact
+    if str_index(safe_contact, "|") >= 0 { safe_contact = str_replace(safe_contact, "|", "") }
+    return safe_contact + "|" + transport + "|" + string(expires_at) + "|" + ip + "|" + string(port)
 }
 
 fn registration_live(value: string) -> int {
@@ -94,6 +100,44 @@ fn registration_live(value: string) -> int {
     }
     if expires_at <= now_ms() { return 0 }
     return 1
+}
+
+// Resolve the forwarding target from a binding. For NATted endpoints where
+// the Contact URI contains a private IP but the binding recorded a public
+// transport source, use the source IP:port instead. This handles UDP NAT
+// traversal for UAs that did not use RFC 5626 outbound.
+// Returns "host:port" suitable for sip_forward_target.
+fn registration_nat_target(value: string) -> string {
+    // Format: contact|transport|expires_at|ip|port[|instance|regid]
+    let p1 = str_index(value, "|")
+    if p1 < 0 { return "" }
+    let contact_uri = value[0:p1]
+    let contact_host = sip_uri_host(contact_uri)
+    // If Contact host is not private, no NAT rewrite needed
+    if is_private_ip(contact_host) == 0 { return "" }
+    // Extract binding source IP (field 3) and port (field 4)
+    let rest1 = value[p1 + 1:]
+    let p2 = str_index(rest1, "|")
+    if p2 < 0 { return "" }
+    let rest2 = rest1[p2 + 1:]
+    let p3 = str_index(rest2, "|")
+    if p3 < 0 { return "" }
+    let rest3 = rest2[p3 + 1:]
+    let p4 = str_index(rest3, "|")
+    let mut src_ip = ""
+    let mut src_port = ""
+    if p4 >= 0 {
+        src_ip = rest3[0:p4]
+        src_port = rest3[p4 + 1:]
+        // src_port may have more fields after it
+        let p5 = str_index(src_port, "|")
+        if p5 >= 0 { src_port = src_port[0:p5] }
+    } else {
+        src_ip = rest3
+    }
+    if len(src_ip) == 0 || is_private_ip(src_ip) == 1 { return "" }
+    if len(src_port) == 0 || str_eq(src_port, "0") { return "" }
+    return src_ip + ":" + src_port
 }
 
 fn registration_matches(value: string, contact: string) -> int {
@@ -191,7 +235,7 @@ fn registration_track_aor(reg: CMap, aor: string) -> int {
     let first_slot = "reg|" + aor + "|0"
     if cmap_has(reg, first_slot) == 1 { return 1 }
     let seq = cmap_incr(reg, "reg_aor_seq", 1)
-    let capacity = 16384
+    let capacity = 65536
     let slot = seq - (seq / capacity) * capacity
     let ring_key = "reg_aor_ring|" + string(slot)
     if cmap_has(reg, ring_key) == 1 {
@@ -206,7 +250,11 @@ fn registration_store(reg: CMap, aor: string, contact: string, transport: string
     if len(aor) == 0 || len(aor) > 512 || len(contact) == 0 || len(contact) > 2048 { return -1 }
     if len(transport) > 16 || len(ip) > 128 || port < 0 || port > 65535 { return -1 }
     let _ = registration_track_aor(reg, aor)
-    let expires_at = now_ms() + expires_s * 1000
+    // Clamp expires_s to prevent overflow on 32-bit (defensive; max_expires already caps at 86400)
+    let mut safe_exp = expires_s
+    if safe_exp < 0 { safe_exp = 0 }
+    if safe_exp > 86400 { safe_exp = 86400 }
+    let expires_at = now_ms() + safe_exp * 1000
     let value = registration_value(contact, transport, expires_at, ip, port)
     let prefix = "reg|" + aor + "|"
     let mut slot = -1

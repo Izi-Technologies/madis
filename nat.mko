@@ -2,38 +2,42 @@
 // Via NAT: platform sip_msg_fix_top_via / sip_via_response_* (RFC 3261 + 3581).
 // SDP: platform sdp_* builtins; avoid shadowing sdp_media_port / sdp_connection_addr.
 
-// Check if IP is private (RFC 1918 / RFC 6598)
+// Check if IP is private (RFC 1918 / RFC 6598 / RFC 4193 IPv6 ULA)
 fn is_private_ip(ip: string) -> int {
     if str_has_prefix(ip, "10.") { return 1 }
     if str_has_prefix(ip, "192.168.") { return 1 }
     if str_has_prefix(ip, "127.") { return 1 }
-    // 172.16.0.0 - 172.31.255.255
+    if str_eq(ip, "::1") { return 1 }
+    // 172.16.0.0 - 172.31.255.255 (no str_split allocation)
     if str_has_prefix(ip, "172.") {
-        let parts = str_split(ip, ".")
-        if len(parts) >= 2 {
-            let mut octet2 = 0
-            match parse_int(parts[1]) {
-                Ok(v) => { octet2 = v }
-                Err(_) => { return 0 }
-            }
-            if octet2 >= 16 {
-                if octet2 <= 31 { return 1 }
+        let dot2 = str_index(ip[4:], ".")
+        if dot2 > 0 {
+            match parse_int(ip[4:4 + dot2]) {
+                Ok(v) => { if v >= 16 && v <= 31 { return 1 } }
+                Err(_) => {}
             }
         }
     }
-    // 100.64.0.0/10 (CGNAT)
+    // 100.64.0.0/10 (CGNAT / RFC 6598)
     if str_has_prefix(ip, "100.") {
-        let parts = str_split(ip, ".")
-        if len(parts) >= 2 {
-            let mut octet2 = 0
-            match parse_int(parts[1]) {
-                Ok(v) => { octet2 = v }
-                Err(_) => { return 0 }
-            }
-            if octet2 >= 64 {
-                if octet2 <= 127 { return 1 }
+        let dot2 = str_index(ip[4:], ".")
+        if dot2 > 0 {
+            match parse_int(ip[4:4 + dot2]) {
+                Ok(v) => { if v >= 64 && v <= 127 { return 1 } }
+                Err(_) => {}
             }
         }
+    }
+    // 169.254.0.0/16 (link-local)
+    if str_has_prefix(ip, "169.254.") { return 1 }
+    // IPv6 ULA fd00::/8 and link-local fe80::/10 — byte check, no str_to_lower
+    if len(ip) >= 2 {
+        let i0 = int(ip[0])
+        let i1 = int(ip[1])
+        // 'f'/'F' followed by 'd'/'D' = fd (ULA)
+        if (i0 == 102 || i0 == 70) && (i1 == 100 || i1 == 68) { return 1 }
+        // 'f'/'F' followed by 'e'/'E' then '8' '0' = fe80 (link-local)
+        if (i0 == 102 || i0 == 70) && (i1 == 101 || i1 == 69) && len(ip) >= 4 && int(ip[2]) == 56 && int(ip[3]) == 48 { return 1 }
     }
     return 0
 }
@@ -56,16 +60,51 @@ fn msg_headers_only(msg: string, msglen: int) -> string {
     return msg
 }
 
-// Rebuild message with new body and updated Content-Length
+// Rebuild message with new body and updated Content-Length.
+// Case-insensitive Content-Length lookup without allocating str_to_lower of
+// the entire header block.
 fn msg_set_body(msg: string, new_body: string) -> string {
     let headers = msg_headers_only(msg, len(msg))
     let new_cl = string(len(new_body))
     let mut updated = headers
-    let cl_idx = str_index(str_to_lower(headers), "content-length:")
+    let mut cl_idx = -1
+    // Scan for Content-Length: or l: (compact form) case-insensitively
+    let hlen = len(headers)
+    let mut si = 0
+    while si < hlen {
+        // Only check at start of line (i==0 or preceded by \n)
+        if si == 0 || (si > 0 && int(headers[si - 1]) == 10) {
+            // Check "Content-Length:" (15 chars) case-insensitively via first 2 chars
+            if si + 15 <= hlen {
+                let h0 = int(headers[si])
+                let h1 = int(headers[si + 1])
+                if (h0 == 67 || h0 == 99) && (h1 == 79 || h1 == 111) {
+                    // Probable match — verify with str_to_lower on just this candidate
+                    if str_eq(str_to_lower(headers[si:si + 15]), "content-length:") {
+                        cl_idx = si
+                        break
+                    }
+                }
+            }
+            // Check "l:" compact form (RFC 3261 §7.3.1)
+            if cl_idx < 0 && si + 2 <= hlen {
+                let h0 = int(headers[si])
+                let h1 = int(headers[si + 1])
+                if (h0 == 76 || h0 == 108) && h1 == 58 {
+                    cl_idx = si
+                    break
+                }
+            }
+        }
+        si = si + 1
+    }
     if cl_idx >= 0 {
-        let mut vs = cl_idx + 15
-        let hlen = len(headers)
-        if vs < hlen { if int(headers[vs]) == 32 { vs = vs + 1 } }
+        // Skip past the header name to the colon — we know the position
+        let mut vs = cl_idx
+        while vs < hlen && int(headers[vs]) != 58 { vs = vs + 1 }
+        vs = vs + 1  // skip the colon
+        // Skip optional whitespace after colon
+        while vs < hlen && (int(headers[vs]) == 32 || int(headers[vs]) == 9) { vs = vs + 1 }
         let mut ve = vs
         while ve < hlen {
             if int(headers[ve]) == 13 { break }
@@ -77,7 +116,57 @@ fn msg_set_body(msg: string, new_body: string) -> string {
     return updated + "\r\n\r\n" + new_body
 }
 
-// Full NAT traversal: rewrite private c= (and o= via string replace) with public/source IP
+// Detect NAT: compare Via sent-by address with actual packet source.
+// RFC 3261 §18.2.1: if received differs from sent-by, the UA is behind NAT.
+fn nat_detected(msg: string, source_ip: string) -> int {
+    let via = sip_header(msg, "Via")
+    if len(via) == 0 { return 0 }
+    let via_host = sip_via_host(via)
+    if len(via_host) == 0 { return 0 }
+    // If the Via sent-by IP differs from the packet source, there's a NAT
+    if not str_eq(via_host, source_ip) { return 1 }
+    // If the Via IP is private but the source is public, there's a NAT
+    if is_private_ip(via_host) == 1 && is_private_ip(source_ip) == 0 { return 1 }
+    return 0
+}
+
+// Rewrite Contact URI for NATted endpoints. When a UA behind NAT registers
+// or sends an INVITE, its Contact header contains a private IP that is
+// unreachable from the proxy's network. Replace it with the transport source.
+fn nat_fix_contact(msg: string, source_ip: string, source_port: int) -> string {
+    let contact = sip_header(msg, "Contact")
+    if len(contact) == 0 { return msg }
+    let addr = sip_contact_addr(contact)
+    if len(addr) == 0 { return msg }
+    let contact_host = sip_uri_host(addr)
+    if len(contact_host) == 0 { return msg }
+    // Only rewrite if the Contact contains a private/unreachable IP
+    if is_private_ip(contact_host) == 0 { return msg }
+    // Don't rewrite if the proxy itself is also private (same LAN)
+    if is_private_ip(source_ip) == 1 { return msg }
+    // Build the new Contact with the transport source address
+    let contact_user = sip_uri_user(addr)
+    let mut new_uri = "sip:"
+    if len(contact_user) > 0 { new_uri = new_uri + contact_user + "@" }
+    new_uri = new_uri + source_ip + ":" + string(source_port)
+    // Preserve transport parameter if present
+    let tp = str_index(str_to_lower(addr), "transport=")
+    if tp >= 0 {
+        let mut tp_end = tp + 10
+        while tp_end < len(addr) {
+            let c = int(addr[tp_end])
+            if c == 59 || c == 62 || c == 32 { break }
+            tp_end = tp_end + 1
+        }
+        new_uri = new_uri + ";transport=" + addr[tp + 10:tp_end]
+    }
+    // Replace the old URI in the Contact header value
+    return sip_replace_header(msg, "Contact", str_replace(contact, addr, new_uri))
+}
+
+// Full NAT traversal: rewrite private SDP c=/o= addresses with public IP.
+// Also handles per-media c= lines (RFC 4566 §5.7) when the session-level
+// c= is public but a media-level c= carries a private address.
 fn nat_fix_sdp(msg: string, msglen: int, source_ip: string) -> string {
     let _ = msglen
     let sdp = sip_body(msg)
@@ -94,12 +183,60 @@ fn nat_fix_sdp(msg: string, msglen: int, source_ip: string) -> string {
     if is_private_ip(source_ip) == 1 { return msg }
 
     let mut final_sdp = sdp_replace_connection_addr(sdp, source_ip)
-    // Origin line o= may still hold the private address
+    // Only replace private IP in o= (origin) lines — sdp_replace_connection_addr
+    // already handled all c= lines. Scan once without allocating an array.
     if str_contains(final_sdp, conn_ip) {
-        final_sdp = str_replace(final_sdp, conn_ip, source_ip)
+        // The remaining occurrences are in o= lines. Walk the SDP line by line
+        // using index scanning instead of str_split to avoid array allocation.
+        let mut result = str_builder()
+        let sdp_len = len(final_sdp)
+        let mut pos = 0
+        while pos < sdp_len {
+            let mut eol = str_index(final_sdp[pos:], "\r\n")
+            let mut line_end = if eol >= 0 { pos + eol } else { sdp_len }
+            let line = final_sdp[pos:line_end]
+            if str_has_prefix(line, "o=") && str_contains(line, conn_ip) {
+                builder_write(result, str_replace(line, conn_ip, source_ip))
+            } else {
+                builder_write(result, line)
+            }
+            if eol >= 0 {
+                builder_write(result, "\r\n")
+                pos = line_end + 2
+            } else {
+                pos = sdp_len
+            }
+        }
+        final_sdp = builder_string(result)
     }
 
     return msg_set_body(msg, final_sdp)
+}
+
+// Rewrite SDP media port 0 → hold detection. Some UAs behind NAT send
+// media port 0 in re-INVITE to signal hold but keep the private c= line.
+// The proxy must not NAT-rewrite a port-0 hold SDP because that would make
+// the hold look like an active media offer to the far end.
+fn nat_sdp_is_hold(sdp: string) -> int {
+    if len(sdp) == 0 { return 0 }
+    // A media line "m=audio 0 ..." means hold (RFC 3264 §8.4)
+    let mp = str_index(sdp, "m=audio 0 ")
+    if mp >= 0 { return 1 }
+    // sendonly/inactive also signal hold
+    if str_contains(sdp, "a=sendonly") { return 1 }
+    if str_contains(sdp, "a=inactive") { return 1 }
+    return 0
+}
+
+// Combined NAT fix for both SDP and Contact in a single pass.
+// Call on ingress requests from NATted endpoints.
+fn nat_fix_message(msg: string, source_ip: string, source_port: int, public_ip: string) -> string {
+    let mut out = msg
+    // Fix Contact URI for NATted endpoints
+    out = nat_fix_contact(out, source_ip, source_port)
+    // Fix SDP c=/o= lines
+    out = nat_fix_sdp(out, len(out), public_ip)
+    return out
 }
 
 // Ingress: add received= / rport= on top Via (RFC 3261 §18.2 + RFC 3581)

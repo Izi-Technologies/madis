@@ -209,33 +209,28 @@ fn rtp_policy_flags() -> string {
     return rtp_profile_flags()
 }
 
-// Send ng command to rtpengine and get response
+// Send ng command to rtpengine and get response.
+// Single attempt with evloop-based wait to avoid blocking the SIP worker.
+// Total worst-case latency: 50ms (down from 250ms).
 fn rtp_send(host: string, port: int, command: string) -> string {
     if len(host) == 0 || port <= 0 || port > 65535 || len(command) > 65500 { return "" }
-    // Use a non-blocking socket, bounded polling, and one retry. A lost
-    // response should fail media rewriting without parking a SIP worker for
-    // an unbounded interval.
-    let mut attempt = 0
-    while attempt < 2 {
-        let fd = nb_udp_bind(0)
-        if fd >= 0 {
-            let cookie = rtp_cookie()
-            let msg = cookie + " " + command
-            let _ = udp_send_to(fd, host, port, msg)
-            let deadline = mono_ms() + 125
-            let mut resp = ""
-            while mono_ms() < deadline {
-                resp = nb_udp_recv(fd)
-                if len(resp) > 0 { break }
-                sleep_ms(5)
-            }
-            let _ = udp_close(fd)
-            let prefix = cookie + " "
-            if str_has_prefix(resp, prefix) { return resp[len(prefix):] }
-        }
-        attempt = attempt + 1
-        if attempt < 2 { sleep_ms(10) }
-    }
+    let fd = nb_udp_bind(0)
+    if fd < 0 { return "" }
+    let cookie = rtp_cookie()
+    let msg = cookie + " " + command
+    let _ = udp_send_to(fd, host, port, msg)
+    // Use evloop for bounded wait instead of busy-loop sleep. This yields
+    // the thread to the OS scheduler instead of spinning.
+    let el = evloop_new()
+    let _ = evloop_add(el, fd, 1)
+    let ready = evloop_wait(el, 50)
+    let _ = evloop_close(el)
+    let mut resp = ""
+    if ready > 0 { resp = nb_udp_recv(fd) }
+    let _ = udp_close(fd)
+    if len(resp) == 0 { return "" }
+    let prefix = cookie + " "
+    if str_has_prefix(resp, prefix) { return resp[len(prefix):] }
     return ""
 }
 

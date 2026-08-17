@@ -125,7 +125,36 @@ fn maf_api_route(method: string, path: string) -> int {
     if str_eq(method, "POST") && len(maf_api_call_id(path, "bridges")) > 0 { return 6 }
     if str_eq(method, "POST") && len(maf_api_call_id(path, "media")) > 0 { return 7 }
     if str_eq(method, "POST") && len(maf_api_call_id(path, "headers")) > 0 { return 9 }
+    if str_eq(method, "POST") && len(maf_api_call_id(path, "transfer")) > 0 { return 10 }
+    if str_eq(method, "POST") && len(maf_api_call_id(path, "hold")) > 0 { return 11 }
+    if str_eq(method, "POST") && len(maf_api_call_id(path, "unhold")) > 0 { return 12 }
+    if str_eq(method, "POST") && len(maf_api_call_id(path, "dtmf")) > 0 { return 13 }
+    if str_eq(method, "POST") && len(maf_api_call_id(path, "route")) > 0 { return 14 }
+    if str_eq(method, "POST") && len(maf_api_call_id(path, "rtp")) > 0 { return 15 }
     if str_eq(method, "GET") && str_eq(path, "/admin/api/v1/maf/events") { return 8 }
+    if str_eq(method, "POST") && str_eq(path, "/admin/api/v1/maf/events") { return 16 }
+    if str_eq(method, "GET") && str_eq(path, "/admin/api/v1/maf/registrations") { return 17 }
+    if str_eq(method, "GET") && str_eq(path, "/admin/api/v1/maf/cdr") { return 18 }
+    if str_eq(method, "GET") && str_eq(path, "/admin/api/v1/maf/security/bans") { return 19 }
+    if str_eq(method, "POST") && str_eq(path, "/admin/api/v1/maf/security/bans") { return 20 }
+    if str_eq(method, "DELETE") && str_has_prefix(path, "/admin/api/v1/maf/security/bans/") { return 21 }
+    if str_eq(method, "GET") && len(maf_api_call_id(path, "sip")) > 0 { return 22 }
+    if str_eq(method, "GET") && str_eq(path, "/admin/api/v1/maf/presence") { return 23 }
+    if str_eq(method, "GET") && str_has_prefix(path, "/admin/api/v1/maf/presence/") { return 24 }
+    if str_eq(method, "GET") && str_eq(path, "/admin/api/v1/maf/routing/rules") { return 25 }
+    if str_eq(method, "POST") && str_eq(path, "/admin/api/v1/maf/routing/rules") { return 26 }
+    if str_eq(method, "DELETE") && str_has_prefix(path, "/admin/api/v1/maf/routing/rules/") { return 27 }
+    if str_eq(method, "GET") && str_eq(path, "/admin/api/v1/maf/gateways") { return 28 }
+    if str_eq(method, "POST") && str_eq(path, "/admin/api/v1/maf/gateways") { return 29 }
+    if str_eq(method, "GET") && str_eq(path, "/admin/api/v1/maf/dids") { return 30 }
+    if str_eq(method, "POST") && str_eq(path, "/admin/api/v1/maf/dids") { return 31 }
+    if str_eq(method, "GET") && str_eq(path, "/admin/api/v1/maf/dispatch-sets") { return 32 }
+    if str_eq(method, "POST") && str_eq(path, "/admin/api/v1/maf/dispatch-sets") { return 33 }
+    if str_eq(method, "GET") && str_eq(path, "/admin/api/v1/maf/cluster") { return 34 }
+    if str_eq(method, "GET") && str_eq(path, "/admin/api/v1/maf/config") { return 35 }
+    if str_eq(method, "POST") && str_eq(path, "/admin/api/v1/maf/config") { return 36 }
+    if str_eq(method, "POST") && len(maf_api_call_id(path, "charge")) > 0 { return 37 }
+    if str_eq(method, "POST") && len(maf_api_call_id(path, "charge-deny")) > 0 { return 38 }
     return 0
 }
 
@@ -134,7 +163,7 @@ fn maf_api_ws_route(method: string, path: string) -> int {
 }
 
 fn maf_api_write_required(kind: int) -> int {
-    return if kind == 1 || kind >= 3 && kind <= 7 || kind == 9 { 1 } else { 0 }
+    return if kind == 1 || kind >= 3 && kind <= 7 || kind == 9 || (kind >= 10 && kind <= 15) || kind == 20 || kind == 21 || kind == 26 || kind == 27 || kind == 29 || kind == 31 || kind == 33 || kind == 36 || kind == 37 || kind == 38 { 1 } else { 0 }
 }
 
 fn maf_api_bootstrap(db: SqlDB) -> int {
@@ -180,7 +209,11 @@ fn maf_api_call_resource(db: SqlDB, ok: int, tenant: string, call_id: string) ->
 
 fn maf_api_emit_event(db: SqlDB, ok: int, tenant: string, event_type: string, call_id: string, channel_id: string, payload: string, trace: string) -> int {
     if ok == 0 || len(event_type) == 0 || len(event_type) > 128 || len(payload) == 0 || len(payload) > 65536 { return -1 }
-    let event_id = sha256("madis.maf.event.v1|" + tenant + "|" + event_type + "|" + call_id + "|" + channel_id + "|" + trace + "|" + string(now_ms()))
+    // Reject payloads that could corrupt the packed JSONB document.
+    // The payload must be a valid JSON object or array.
+    let p0 = int(payload[0])
+    if p0 != 123 && p0 != 91 { return -1 }  // must start with { or [
+    let event_id = sha256("madis.maf.event.v1|" + tenant + "|" + event_type + "|" + call_id + "|" + channel_id + "|" + trace + "|" + string(now_ms()) + "|" + sha256(payload))
     let packed = "{\"event_id\":\"" + maf_api_json_escape(event_id) + "\",\"tenant_id\":\"" + maf_api_json_escape(tenant) + "\",\"event_type\":\"" + maf_api_json_escape(event_type) + "\",\"call_id\":\"" + maf_api_json_escape(call_id) + "\",\"channel_id\":\"" + maf_api_json_escape(channel_id) + "\",\"trace_id\":\"" + maf_api_json_escape(trace) + "\",\"payload\":" + payload + "}"
     return sql_exec_str4(db, "INSERT INTO maf_events (event_id, tenant_id, event_type, event_version, call_id, channel_id, payload_json, trace_id) SELECT $4::jsonb->>'event_id', $4::jsonb->>'tenant_id', $4::jsonb->>'event_type', 1, $4::jsonb->>'call_id', $4::jsonb->>'channel_id', $4::jsonb->'payload', $4::jsonb->>'trace_id' ON CONFLICT (event_id) DO NOTHING", "", "", "", packed)
 }
@@ -412,6 +445,12 @@ fn maf_api_command(db: SqlDB, ok: int, kind: int, raw: string, n: int, call_id: 
     if kind == 6 { operation = "calls.bridge" }
     if kind == 7 { operation = "calls.media" }
     if kind == 9 { operation = "calls.headers" }
+    if kind == 10 { operation = "calls.transfer" }
+    if kind == 11 { operation = "calls.hold" }
+    if kind == 12 { operation = "calls.unhold" }
+    if kind == 13 { operation = "calls.dtmf" }
+    if kind == 14 { operation = "calls.route" }
+    if kind == 15 { operation = "calls.rtp" }
     if kind == 4 {
         let code = json_get_int(body, "sip_code")
         if code != 0 && (code < 300 || code > 699) { return maf_api_error(400, "invalid sip_code") }
@@ -428,6 +467,42 @@ fn maf_api_command(db: SqlDB, ok: int, kind: int, raw: string, n: int, call_id: 
         let mut header_count = -1
         match parse_int(header_count_raw) { Ok(v) => { header_count = v } Err(_) => {} }
         if header_count < 1 || header_count > 32 { return maf_api_error(400, "headers must contain 1 to 32 operations") }
+    }
+    if kind == 10 {
+        let transfer_type = str_to_lower(str_trim_space(json_get_string(body, "type")))
+        if not str_eq(transfer_type, "blind") && not str_eq(transfer_type, "attended") { return maf_api_error(400, "type must be blind or attended") }
+        if str_eq(transfer_type, "blind") {
+            let target = json_get_string(body, "target")
+            if len(target) == 0 || len(target) > 512 { return maf_api_error(400, "target is required for blind transfer") }
+        }
+        if str_eq(transfer_type, "attended") {
+            let other_call_id = json_get_string(body, "other_call_id")
+            if len(other_call_id) == 0 || len(other_call_id) > 128 { return maf_api_error(400, "other_call_id is required for attended transfer") }
+            let target = json_get_string(body, "target")
+            if len(target) == 0 || len(target) > 512 { return maf_api_error(400, "target is required for attended transfer") }
+        }
+    }
+    if kind == 14 {
+        let route_target = json_get_string(body, "target")
+        if len(route_target) == 0 || len(route_target) > 512 { return maf_api_error(400, "target is required for routing") }
+    }
+    if kind == 15 {
+        let rtp_action = str_to_lower(str_trim_space(json_get_string(body, "action")))
+        if not str_eq(rtp_action, "offer") && not str_eq(rtp_action, "answer") && not str_eq(rtp_action, "delete") && not str_eq(rtp_action, "query") {
+            return maf_api_error(400, "action must be offer, answer, delete, or query")
+        }
+        if (str_eq(rtp_action, "offer") || str_eq(rtp_action, "answer")) && len(json_get_string(body, "sdp")) == 0 {
+            return maf_api_error(400, "sdp is required for offer/answer")
+        }
+    }
+    if kind == 13 {
+        let digit = str_trim_space(json_get_string(body, "digit"))
+        if len(digit) != 1 { return maf_api_error(400, "digit must be a single character (0-9, *, #, A-D)") }
+        let d = int(digit[0])
+        let valid_digit = (d >= 48 && d <= 57) || d == 42 || d == 35 || (d >= 65 && d <= 68) || (d >= 97 && d <= 100)
+        if not valid_digit { return maf_api_error(400, "digit must be 0-9, *, #, or A-D") }
+        let duration = json_get_int(body, "duration")
+        if duration != 0 && (duration < 50 || duration > 5000) { return maf_api_error(400, "duration must be 50..5000 ms") }
     }
     let idempotency = maf_api_command_id(raw, n, body)
     if maf_api_identifier_ok(idempotency, 8, 128) == 0 { return maf_api_error(400, "Idempotency-Key is required") }
@@ -465,7 +540,7 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         if len(resource) == 0 { return maf_api_error(404, "call not found") }
         return http_resp(200, "application/json", resource + "\n", "Cache-Control: no-store\r\n")
     }
-    if kind >= 3 && kind <= 7 || kind == 9 { return maf_api_command(db, ok, kind, raw, n, maf_api_call_id(path, if kind == 3 { "answer" } else if kind == 4 { "reject" } else if kind == 5 { "hangup" } else if kind == 6 { "bridges" } else if kind == 7 { "media" } else { "headers" })) }
+    if kind >= 3 && kind <= 7 || kind == 9 || (kind >= 10 && kind <= 15) { return maf_api_command(db, ok, kind, raw, n, maf_api_call_id(path, if kind == 3 { "answer" } else if kind == 4 { "reject" } else if kind == 5 { "hangup" } else if kind == 6 { "bridges" } else if kind == 7 { "media" } else if kind == 10 { "transfer" } else if kind == 11 { "hold" } else if kind == 12 { "unhold" } else if kind == 13 { "dtmf" } else if kind == 14 { "route" } else if kind == 15 { "rtp" } else { "headers" })) }
     if kind == 8 {
         if ok == 0 { return maf_api_error(503, "database unavailable") }
         let q = parse_query(raw, n)
@@ -475,6 +550,407 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         let call_id_filter = query_val(q, "call_id")
         if len(call_id_filter) > 0 && maf_api_identifier_ok(call_id_filter, 1, 128) == 0 { return maf_api_error(400, "invalid call_id") }
         return http_resp(200, "application/json", maf_api_events_filtered(db, ok, maf_api_tenant(), q), "Cache-Control: no-store\r\n")
+    }
+    // POST /admin/api/v1/maf/events — publish a custom application event
+    if kind == 16 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 2 { return maf_api_error(if scope == 0 { 401 } else { 403 }, "write scope required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        if maf_api_body_ok(raw, n, 1) == 0 { return maf_api_error(400, "application/json body required") }
+        let body = parse_body(raw, n)
+        let event_type = str_trim_space(json_get_string(body, "event_type"))
+        let call_id = str_trim_space(json_get_string(body, "call_id"))
+        let payload_raw = json_get_string(body, "payload")
+        if len(event_type) == 0 || len(event_type) > 128 { return maf_api_error(400, "event_type is required (1-128 chars)") }
+        // Application events must use the "app." prefix to avoid collision with system events
+        if not str_has_prefix(event_type, "app.") { return maf_api_error(400, "custom event_type must start with app.") }
+        // Validate call_id belongs to this tenant if provided
+        if len(call_id) > 0 {
+            if maf_api_identifier_ok(call_id, 1, 128) == 0 { return maf_api_error(400, "invalid call_id") }
+            let call_exists = sql_query_str2(db, "SELECT call_id FROM maf_calls WHERE tenant_id = $1 AND call_id = $2", tenant, call_id)
+            if len(call_exists) == 0 { return maf_api_error(404, "call not found") }
+        }
+        if maf_api_identifier_ok(event_type, 5, 128) == 0 { return maf_api_error(400, "invalid event_type") }
+        let mut payload = payload_raw
+        if len(payload) == 0 { payload = "{}" }
+        // Validate payload is a JSON object
+        if len(payload) > 0 && int(payload[0]) != 123 { return maf_api_error(400, "payload must be a JSON object") }
+        if len(payload) > 65536 { return maf_api_error(400, "payload exceeds 64KB limit") }
+        let tenant = maf_api_tenant()
+        let trace = sha256("madis.maf.app_event|" + tenant + "|" + event_type + "|" + string(now_ms()))[0:32]
+        let rc = maf_api_emit_event(db, ok, tenant, event_type, call_id, "", payload, trace)
+        if rc < 0 { return maf_api_error(500, "event could not be persisted") }
+        return http_resp(201, "application/json", "{\"ok\":true,\"event_type\":\"" + maf_api_json_escape(event_type) + "\",\"trace_id\":\"" + trace + "\"}\n", "Cache-Control: no-store\r\n")
+    }
+    // GET /admin/api/v1/maf/registrations — list active registrations
+    if kind == 17 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 1 { return maf_api_error(401, "authentication required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        let q = parse_query(raw, n)
+        let mut limit = 100
+        let raw_limit = query_val(q, "limit")
+        if len(raw_limit) > 0 { match parse_int(raw_limit) { Ok(v) => { limit = v } Err(_) => {} } }
+        if limit < 1 { limit = 1 }
+        if limit > 100 { limit = 100 }
+        let tenant = maf_api_tenant()
+        let aor_filter = query_val(q, "aor")
+        let mut param = ""
+        let mut sql = ""
+        if len(aor_filter) > 0 && maf_api_text_safe(aor_filter, 512) == 1 {
+            let packed_r = "{\"tenant_id\":\"" + maf_api_json_escape(tenant) + "\",\"aor\":\"" + maf_api_json_escape(aor_filter) + "\"}"
+            sql = "SELECT json_build_object('aor',aor,'contact',contact,'transport',transport,'source_ip',source_ip,'source_port',source_port,'expires_at',expires_at,'node_id',node_id,'updated_at',updated_at)::text FROM registration_bindings WHERE tenant_id = $1::jsonb->>'tenant_id' AND aor = $1::jsonb->>'aor' AND expires_at > NOW() ORDER BY updated_at DESC LIMIT " + string(limit)
+            param = packed_r
+        } else {
+            sql = "SELECT json_build_object('aor',aor,'contact',contact,'transport',transport,'source_ip',source_ip,'source_port',source_port,'expires_at',expires_at,'node_id',node_id,'updated_at',updated_at)::text FROM registration_bindings WHERE tenant_id = $1 AND expires_at > NOW() ORDER BY updated_at DESC LIMIT " + string(limit)
+            param = tenant
+        }
+        let rows = tbl_query_param(db, ok, sql, param, limit)
+        let mut out = "{\"schema\":\"madis.maf.registrations.v1\",\"registrations\":["
+        let mut i = 0
+        while i < len(rows) {
+            if i > 0 { out = out + "," }
+            out = out + rows[i]
+            i = i + 1
+        }
+        return http_resp(200, "application/json", out + "]}\n", "Cache-Control: no-store\r\n")
+    }
+    // GET /admin/api/v1/maf/cdr — call detail records
+    if kind == 18 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 1 { return maf_api_error(401, "authentication required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        let q = parse_query(raw, n)
+        let mut limit = 50
+        let raw_limit = query_val(q, "limit")
+        if len(raw_limit) > 0 { match parse_int(raw_limit) { Ok(v) => { limit = v } Err(_) => {} } }
+        if limit < 1 { limit = 1 }
+        if limit > 100 { limit = 100 }
+        let call_id_filter = query_val(q, "call_id")
+        let mut sql = "SELECT json_build_object('call_id',call_id,'caller',caller,'callee',callee,'status',status,'gateway',gateway,'source_ip',source_ip,'transport',transport,'sip_code',sip_code,'started_at',started_at,'ended_at',ended_at,'duration_sec',duration_sec)::text FROM cdr"
+        let mut param = ""
+        if len(call_id_filter) > 0 && maf_api_text_safe(call_id_filter, 512) == 1 {
+            sql = sql + " WHERE call_id = $1"
+            param = call_id_filter
+        }
+        sql = sql + " ORDER BY started_at DESC LIMIT " + string(limit)
+        let rows = if len(param) > 0 { tbl_query_param(db, ok, sql, param, limit) } else { tbl_query(db, ok, sql, limit) }
+        let mut out = "{\"schema\":\"madis.maf.cdr.v1\",\"records\":["
+        let mut i = 0
+        while i < len(rows) {
+            if i > 0 { out = out + "," }
+            out = out + rows[i]
+            i = i + 1
+        }
+        return http_resp(200, "application/json", out + "]}\n", "Cache-Control: no-store\r\n")
+    }
+    // GET /admin/api/v1/maf/security/bans — active bans
+    if kind == 19 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 1 { return maf_api_error(401, "authentication required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        let rows = tbl_query(db, ok, "SELECT json_build_object('source_ip',source_ip,'reason',reason,'ban_count',ban_count,'permanent',permanent,'expires_at',expires_at,'created_at',created_at)::text FROM security_bans WHERE permanent = true OR expires_at > NOW() ORDER BY created_at DESC", 100)
+        let mut out = "{\"schema\":\"madis.maf.bans.v1\",\"bans\":["
+        let mut i = 0
+        while i < len(rows) {
+            if i > 0 { out = out + "," }
+            out = out + rows[i]
+            i = i + 1
+        }
+        return http_resp(200, "application/json", out + "]}\n", "Cache-Control: no-store\r\n")
+    }
+    // POST /admin/api/v1/maf/security/bans — ban an IP
+    if kind == 20 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 2 { return maf_api_error(if scope == 0 { 401 } else { 403 }, "write scope required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        if maf_api_body_ok(raw, n, 1) == 0 { return maf_api_error(400, "application/json body required") }
+        let body = parse_body(raw, n)
+        let ban_ip = str_trim_space(json_get_string(body, "source_ip"))
+        if len(ban_ip) == 0 || len(ban_ip) > 128 { return maf_api_error(400, "source_ip required") }
+        let reason = json_get_string(body, "reason")
+        let permanent = json_get_string(body, "permanent")
+        let is_perm = if str_eq(permanent, "true") { "true" } else { "false" }
+        let mut duration = json_get_int(body, "duration_min")
+        if duration < 1 { duration = 60 }
+        if duration > 10080 { duration = 10080 }
+        let _ = sql_exec_str4(db, "INSERT INTO security_bans (source_ip, reason, permanent, expires_at) VALUES ($1, $2, $3::boolean, NOW() + ($4 || ' minutes')::interval) ON CONFLICT (source_ip) DO UPDATE SET reason = $2, permanent = $3::boolean, expires_at = NOW() + ($4 || ' minutes')::interval, ban_count = security_bans.ban_count + 1", ban_ip, reason, is_perm, string(duration))
+        return http_resp(201, "application/json", "{\"ok\":true,\"source_ip\":\"" + maf_api_json_escape(ban_ip) + "\"}\n", "Cache-Control: no-store\r\n")
+    }
+    // DELETE /admin/api/v1/maf/security/bans/{ip} — unban an IP
+    if kind == 21 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 2 { return maf_api_error(if scope == 0 { 401 } else { 403 }, "write scope required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        let ban_path_prefix = "/admin/api/v1/maf/security/bans/"
+        let unban_ip = path[len(ban_path_prefix):]
+        if len(unban_ip) == 0 || len(unban_ip) > 128 { return maf_api_error(400, "invalid IP") }
+        let _ = sql_exec_str4(db, "DELETE FROM security_bans WHERE source_ip = $1", unban_ip, "", "", "")
+        return http_resp(200, "application/json", "{\"ok\":true,\"removed\":\"" + maf_api_json_escape(unban_ip) + "\"}\n", "Cache-Control: no-store\r\n")
+    }
+    // GET /admin/api/v1/maf/calls/{call_id}/sip — SIP message inspection
+    if kind == 22 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 1 { return maf_api_error(401, "authentication required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        let sip_call_id = maf_api_call_id(path, "sip")
+        let tenant = maf_api_tenant()
+        let app_data = sql_query_str2(db, "SELECT application_data::text FROM maf_calls WHERE tenant_id = $1 AND call_id = $2", tenant, sip_call_id)
+        if len(app_data) == 0 { return maf_api_error(404, "call not found") }
+        return http_resp(200, "application/json", "{\"schema\":\"madis.maf.sip.v1\",\"call_id\":\"" + maf_api_json_escape(sip_call_id) + "\",\"sip\":" + app_data + "}\n", "Cache-Control: no-store\r\n")
+    }
+    // GET /admin/api/v1/maf/presence — list online AORs
+    if kind == 23 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 1 { return maf_api_error(401, "authentication required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        let q = parse_query(raw, n)
+        let mut limit = 100
+        let rl = query_val(q, "limit")
+        if len(rl) > 0 { match parse_int(rl) { Ok(v) => { limit = v } Err(_) => {} } }
+        if limit < 1 { limit = 1 }
+        if limit > 100 { limit = 100 }
+        let tenant = maf_api_tenant()
+        let rows = tbl_query_param(db, ok, "SELECT json_build_object('aor',aor,'contact_count',COUNT(*),'last_seen',MAX(updated_at))::text FROM registration_bindings WHERE tenant_id = $1 AND expires_at > NOW() GROUP BY aor ORDER BY aor LIMIT " + string(limit), tenant, limit)
+        let mut out = "{\"schema\":\"madis.maf.presence.v1\",\"users\":["
+        let mut i = 0
+        while i < len(rows) {
+            if i > 0 { out = out + "," }
+            out = out + rows[i]
+            i = i + 1
+        }
+        return http_resp(200, "application/json", out + "]}\n", "Cache-Control: no-store\r\n")
+    }
+    // GET /admin/api/v1/maf/presence/{aor} — single user presence
+    if kind == 24 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 1 { return maf_api_error(401, "authentication required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        let presence_prefix = "/admin/api/v1/maf/presence/"
+        let aor = path[len(presence_prefix):]
+        if len(aor) == 0 || len(aor) > 512 || maf_api_text_safe(aor, 512) == 0 { return maf_api_error(400, "invalid AOR") }
+        let tenant = maf_api_tenant()
+        let packed_p = "{\"tenant_id\":\"" + maf_api_json_escape(tenant) + "\",\"aor\":\"" + maf_api_json_escape(aor) + "\"}"
+        let contacts = tbl_query_param(db, ok, "SELECT json_build_object('contact',contact,'transport',transport,'source_ip',source_ip,'source_port',source_port,'expires_at',expires_at,'updated_at',updated_at)::text FROM registration_bindings WHERE tenant_id = $1::jsonb->>'tenant_id' AND aor = $1::jsonb->>'aor' AND expires_at > NOW() ORDER BY updated_at DESC", packed_p, 20)
+        let mut online = if len(contacts) > 0 { "true" } else { "false" }
+        let mut out = "{\"schema\":\"madis.maf.presence.v1\",\"aor\":\"" + maf_api_json_escape(aor) + "\",\"online\":" + online + ",\"contacts\":["
+        let mut i = 0
+        while i < len(contacts) {
+            if i > 0 { out = out + "," }
+            out = out + contacts[i]
+            i = i + 1
+        }
+        return http_resp(200, "application/json", out + "]}\n", "Cache-Control: no-store\r\n")
+    }
+    // GET /admin/api/v1/maf/routing/rules — list routing rules
+    if kind == 25 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 1 { return maf_api_error(401, "authentication required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        let tenant = maf_api_tenant()
+        let rows = tbl_query_param(db, ok, "SELECT json_build_object('id',id,'match_prefix',match_prefix,'match_caller',COALESCE(match_caller,''),'match_src_ip',COALESCE(match_src_ip,''),'match_time_start',COALESCE(match_time_start,''),'match_time_end',COALESCE(match_time_end,''),'match_day',COALESCE(match_day,''),'action',action,'priority',priority,'enabled',enabled,'description',COALESCE(description,''))::text FROM routing_rules WHERE tenant_id = $1 ORDER BY priority ASC, id ASC", tenant, 100)
+        let mut out = "{\"schema\":\"madis.maf.routing-rules.v1\",\"rules\":["
+        let mut i = 0
+        while i < len(rows) {
+            if i > 0 { out = out + "," }
+            out = out + rows[i]
+            i = i + 1
+        }
+        return http_resp(200, "application/json", out + "]}\n", "Cache-Control: no-store\r\n")
+    }
+    // POST /admin/api/v1/maf/routing/rules — create routing rule
+    if kind == 26 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 2 { return maf_api_error(if scope == 0 { 401 } else { 403 }, "write scope required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        if maf_api_body_ok(raw, n, 1) == 0 { return maf_api_error(400, "application/json body required") }
+        let body = parse_body(raw, n)
+        let prefix = json_get_string(body, "match_prefix")
+        let action = json_get_string(body, "action")
+        if len(action) == 0 || len(action) > 512 { return maf_api_error(400, "action is required") }
+        if len(prefix) > 64 { return maf_api_error(400, "match_prefix too long") }
+        let priority = json_get_int(body, "priority")
+        let mut pri = if priority > 0 { priority } else { 10 }
+        if pri > 9999 { pri = 9999 }
+        let desc = json_get_string(body, "description")
+        let tenant = maf_api_tenant()
+        let packed = "{\"tenant_id\":\"" + maf_api_json_escape(tenant) + "\",\"match_prefix\":\"" + maf_api_json_escape(prefix) + "\",\"match_caller\":\"" + maf_api_json_escape(json_get_string(body, "match_caller")) + "\",\"match_src_ip\":\"" + maf_api_json_escape(json_get_string(body, "match_src_ip")) + "\",\"match_time_start\":\"" + maf_api_json_escape(json_get_string(body, "match_time_start")) + "\",\"match_time_end\":\"" + maf_api_json_escape(json_get_string(body, "match_time_end")) + "\",\"match_day\":\"" + maf_api_json_escape(json_get_string(body, "match_day")) + "\",\"action\":\"" + maf_api_json_escape(action) + "\",\"priority\":" + string(pri) + ",\"description\":\"" + maf_api_json_escape(desc) + "\"}"
+        let rc = sql_exec_str4(db, "INSERT INTO routing_rules (tenant_id, match_prefix, match_caller, match_src_ip, match_time_start, match_time_end, match_day, action, priority, description) SELECT ($1::jsonb->>'tenant_id'), ($1::jsonb->>'match_prefix'), ($1::jsonb->>'match_caller'), ($1::jsonb->>'match_src_ip'), ($1::jsonb->>'match_time_start'), ($1::jsonb->>'match_time_end'), ($1::jsonb->>'match_day'), ($1::jsonb->>'action'), ($1::jsonb->>'priority')::int, ($1::jsonb->>'description')", packed, "", "", "")
+        if rc < 0 { return maf_api_error(500, "rule insert failed") }
+        return http_resp(201, "application/json", "{\"ok\":true}\n", "Cache-Control: no-store\r\n")
+    }
+    // DELETE /admin/api/v1/maf/routing/rules/{id} — delete routing rule
+    if kind == 27 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 2 { return maf_api_error(if scope == 0 { 401 } else { 403 }, "write scope required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        let rule_prefix = "/admin/api/v1/maf/routing/rules/"
+        let rule_id = path[len(rule_prefix):]
+        if len(rule_id) == 0 || len(rule_id) > 20 { return maf_api_error(400, "invalid rule ID") }
+        // Validate rule_id is numeric
+        let mut rid_ok = 1
+        let mut ri = 0
+        while ri < len(rule_id) { if int(rule_id[ri]) < 48 || int(rule_id[ri]) > 57 { rid_ok = 0 }; ri = ri + 1 }
+        if rid_ok == 0 { return maf_api_error(400, "rule ID must be numeric") }
+        let tenant = maf_api_tenant()
+        let _ = sql_exec_str4(db, "DELETE FROM routing_rules WHERE id = $1::int AND tenant_id = $2", rule_id, tenant, "", "")
+        return http_resp(200, "application/json", "{\"ok\":true}\n", "Cache-Control: no-store\r\n")
+    }
+    // GET /admin/api/v1/maf/gateways — list gateways
+    if kind == 28 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 1 { return maf_api_error(401, "authentication required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        let tenant = maf_api_tenant()
+        let rows = tbl_query_param(db, ok, "SELECT json_build_object('id',id,'name',name,'address',address,'port',port,'transport',transport,'max_channels',max_channels,'health_status',health_status,'enabled',enabled)::text FROM gateways WHERE tenant_id = $1 ORDER BY name", tenant, 100)
+        let mut out = "{\"schema\":\"madis.maf.gateways.v1\",\"gateways\":["
+        let mut i = 0
+        while i < len(rows) { if i > 0 { out = out + "," }; out = out + rows[i]; i = i + 1 }
+        return http_resp(200, "application/json", out + "]}\n", "Cache-Control: no-store\r\n")
+    }
+    // POST /admin/api/v1/maf/gateways — create/upsert gateway
+    if kind == 29 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 2 { return maf_api_error(if scope == 0 { 401 } else { 403 }, "write scope required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        if maf_api_body_ok(raw, n, 1) == 0 { return maf_api_error(400, "application/json body required") }
+        let body = parse_body(raw, n)
+        let name = json_get_string(body, "name")
+        let address = json_get_string(body, "address")
+        if len(name) == 0 || len(name) > 128 || len(address) == 0 || len(address) > 256 { return maf_api_error(400, "name and address required") }
+        let mut port = json_get_int(body, "port")
+        if port <= 0 || port > 65535 { port = 5060 }
+        let transport = json_get_string(body, "transport")
+        let tr = if len(transport) > 0 && len(transport) <= 8 { transport } else { "UDP" }
+        let tenant = maf_api_tenant()
+        let packed = "{\"tenant_id\":\"" + maf_api_json_escape(tenant) + "\",\"name\":\"" + maf_api_json_escape(name) + "\",\"address\":\"" + maf_api_json_escape(address) + "\",\"port\":" + string(port) + ",\"transport\":\"" + maf_api_json_escape(tr) + "\"}"
+        let rc = sql_exec_str4(db, "INSERT INTO gateways (tenant_id, name, address, port, transport) VALUES (($1::jsonb->>'tenant_id'), ($1::jsonb->>'name'), ($1::jsonb->>'address'), ($1::jsonb->>'port')::int, ($1::jsonb->>'transport')) ON CONFLICT (name) DO UPDATE SET address = ($1::jsonb->>'address'), port = ($1::jsonb->>'port')::int, transport = ($1::jsonb->>'transport')", packed, "", "", "")
+        if rc < 0 { return maf_api_error(500, "gateway upsert failed") }
+        return http_resp(201, "application/json", "{\"ok\":true,\"name\":\"" + maf_api_json_escape(name) + "\"}\n", "Cache-Control: no-store\r\n")
+    }
+    // GET /admin/api/v1/maf/dids — list DIDs
+    if kind == 30 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 1 { return maf_api_error(401, "authentication required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        let tenant = maf_api_tenant()
+        let rows = tbl_query_param(db, ok, "SELECT json_build_object('id',id,'number',number,'destination_user',destination_user,'description',COALESCE(description,''),'enabled',enabled)::text FROM dids WHERE tenant_id = $1 ORDER BY number", tenant, 100)
+        let mut out = "{\"schema\":\"madis.maf.dids.v1\",\"dids\":["
+        let mut i = 0
+        while i < len(rows) { if i > 0 { out = out + "," }; out = out + rows[i]; i = i + 1 }
+        return http_resp(200, "application/json", out + "]}\n", "Cache-Control: no-store\r\n")
+    }
+    // POST /admin/api/v1/maf/dids — create/upsert DID
+    if kind == 31 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 2 { return maf_api_error(if scope == 0 { 401 } else { 403 }, "write scope required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        if maf_api_body_ok(raw, n, 1) == 0 { return maf_api_error(400, "application/json body required") }
+        let body = parse_body(raw, n)
+        let number = json_get_string(body, "number")
+        let dest = json_get_string(body, "destination_user")
+        if len(number) == 0 || len(number) > 64 || len(dest) == 0 || len(dest) > 128 { return maf_api_error(400, "number and destination_user required") }
+        let desc = json_get_string(body, "description")
+        let tenant = maf_api_tenant()
+        let packed = "{\"tenant_id\":\"" + maf_api_json_escape(tenant) + "\",\"number\":\"" + maf_api_json_escape(number) + "\",\"destination_user\":\"" + maf_api_json_escape(dest) + "\",\"description\":\"" + maf_api_json_escape(desc) + "\"}"
+        let rc = sql_exec_str4(db, "INSERT INTO dids (tenant_id, number, destination_user, description) VALUES (($1::jsonb->>'tenant_id'), ($1::jsonb->>'number'), ($1::jsonb->>'destination_user'), ($1::jsonb->>'description')) ON CONFLICT (number) DO UPDATE SET destination_user = ($1::jsonb->>'destination_user'), description = ($1::jsonb->>'description')", packed, "", "", "")
+        if rc < 0 { return maf_api_error(500, "DID upsert failed") }
+        return http_resp(201, "application/json", "{\"ok\":true,\"number\":\"" + maf_api_json_escape(number) + "\"}\n", "Cache-Control: no-store\r\n")
+    }
+    // GET /admin/api/v1/maf/dispatch-sets — list dispatch sets
+    if kind == 32 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 1 { return maf_api_error(401, "authentication required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        let tenant = maf_api_tenant()
+        let rows = tbl_query_param(db, ok, "SELECT json_build_object('id',id,'name',name,'algorithm',algorithm,'enabled',enabled,'members',(SELECT COALESCE(json_agg(j),'[]'::json) FROM (SELECT json_build_object('gateway',(SELECT name FROM gateways WHERE id=dm.gateway_id),'priority',dm.priority,'weight',dm.weight,'enabled',dm.enabled) j FROM dispatch_members dm WHERE dm.set_id=dispatch_sets.id LIMIT 32) sub))::text FROM dispatch_sets WHERE tenant_id = $1 ORDER BY name", tenant, 50)
+        let mut out = "{\"schema\":\"madis.maf.dispatch-sets.v1\",\"sets\":["
+        let mut i = 0
+        while i < len(rows) { if i > 0 { out = out + "," }; out = out + rows[i]; i = i + 1 }
+        return http_resp(200, "application/json", out + "]}\n", "Cache-Control: no-store\r\n")
+    }
+    // POST /admin/api/v1/maf/dispatch-sets — create/upsert dispatch set
+    if kind == 33 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 2 { return maf_api_error(if scope == 0 { 401 } else { 403 }, "write scope required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        if maf_api_body_ok(raw, n, 1) == 0 { return maf_api_error(400, "application/json body required") }
+        let body = parse_body(raw, n)
+        let name = json_get_string(body, "name")
+        let algorithm = json_get_string(body, "algorithm")
+        if len(name) == 0 || len(name) > 128 { return maf_api_error(400, "name required") }
+        let algo = if len(algorithm) > 0 && len(algorithm) <= 32 { algorithm } else { "round-robin" }
+        let tenant = maf_api_tenant()
+        let packed = "{\"tenant_id\":\"" + maf_api_json_escape(tenant) + "\",\"name\":\"" + maf_api_json_escape(name) + "\",\"algorithm\":\"" + maf_api_json_escape(algo) + "\"}"
+        let rc = sql_exec_str4(db, "INSERT INTO dispatch_sets (tenant_id, name, algorithm) VALUES (($1::jsonb->>'tenant_id'), ($1::jsonb->>'name'), ($1::jsonb->>'algorithm')) ON CONFLICT (name) DO UPDATE SET algorithm = ($1::jsonb->>'algorithm')", packed, "", "", "")
+        if rc < 0 { return maf_api_error(500, "dispatch set upsert failed") }
+        return http_resp(201, "application/json", "{\"ok\":true,\"name\":\"" + maf_api_json_escape(name) + "\"}\n", "Cache-Control: no-store\r\n")
+    }
+    // GET /admin/api/v1/maf/cluster — cluster node health
+    if kind == 34 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 1 { return maf_api_error(401, "authentication required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        let tenant = maf_api_tenant()
+        let rows = tbl_query_param(db, ok, "SELECT json_build_object('id',id,'address',address,'port',port,'region',region,'status',status,'last_heartbeat',last_heartbeat,'started_at',started_at)::text FROM cluster_nodes WHERE tenant_id = $1 ORDER BY id", tenant, 50)
+        let mut out = "{\"schema\":\"madis.maf.cluster.v1\",\"nodes\":["
+        let mut i = 0
+        while i < len(rows) { if i > 0 { out = out + "," }; out = out + rows[i]; i = i + 1 }
+        return http_resp(200, "application/json", out + "]}\n", "Cache-Control: no-store\r\n")
+    }
+    // GET /admin/api/v1/maf/config — read config
+    if kind == 35 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 1 { return maf_api_error(401, "authentication required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        let tenant = maf_api_tenant()
+        let rows = tbl_query_param(db, ok, "SELECT json_build_object('key',key,'value',value,'description',COALESCE(description,''))::text FROM config WHERE tenant_id = $1 ORDER BY key", tenant, 200)
+        let mut out = "{\"schema\":\"madis.maf.config.v1\",\"config\":["
+        let mut i = 0
+        while i < len(rows) { if i > 0 { out = out + "," }; out = out + rows[i]; i = i + 1 }
+        return http_resp(200, "application/json", out + "]}\n", "Cache-Control: no-store\r\n")
+    }
+    // POST /admin/api/v1/maf/config — set config key
+    if kind == 36 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 2 { return maf_api_error(if scope == 0 { 401 } else { 403 }, "write scope required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        if maf_api_body_ok(raw, n, 1) == 0 { return maf_api_error(400, "application/json body required") }
+        let body = parse_body(raw, n)
+        let cfg_key = json_get_string(body, "key")
+        let cfg_value = json_get_string(body, "value")
+        if len(cfg_key) == 0 || len(cfg_key) > 128 || len(cfg_value) > 4096 { return maf_api_error(400, "key and value required") }
+        if maf_api_identifier_ok(cfg_key, 1, 128) == 0 { return maf_api_error(400, "invalid config key") }
+        // Allowlist: only permit config keys that are safe for MAF to modify.
+        // All other keys (TLS paths, credentials, DB URLs, etc.) are blocked.
+        let maf_cfg_ok = str_has_prefix(cfg_key, "rtpengine_") || str_has_prefix(cfg_key, "security_") || str_has_prefix(cfg_key, "stir_shaken_enabled") || str_has_prefix(cfg_key, "stir_shaken_attestation") || str_has_prefix(cfg_key, "stir_shaken_cert_url") || str_has_prefix(cfg_key, "stir_shaken_mode")
+        if not maf_cfg_ok { return maf_api_error(403, "config key not in MAF allowlist") }
+        let desc = json_get_string(body, "description")
+        let tenant = maf_api_tenant()
+        let packed = "{\"tenant_id\":\"" + maf_api_json_escape(tenant) + "\",\"key\":\"" + maf_api_json_escape(cfg_key) + "\",\"value\":\"" + maf_api_json_escape(cfg_value) + "\",\"description\":\"" + maf_api_json_escape(desc) + "\"}"
+        let rc = sql_exec_str4(db, "INSERT INTO config (tenant_id, key, value, description) VALUES (($1::jsonb->>'tenant_id'), ($1::jsonb->>'key'), ($1::jsonb->>'value'), ($1::jsonb->>'description')) ON CONFLICT (key) DO UPDATE SET value = ($1::jsonb->>'value'), description = COALESCE(NULLIF(($1::jsonb->>'description'),''), config.description)", packed, "", "", "")
+        if rc < 0 { return maf_api_error(500, "config update failed") }
+        return http_resp(200, "application/json", "{\"ok\":true,\"key\":\"" + maf_api_json_escape(cfg_key) + "\"}\n", "Cache-Control: no-store\r\n")
+    }
+    // POST /admin/api/v1/maf/calls/{call_id}/charge — authorize charge
+    if kind == 37 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 2 { return maf_api_error(if scope == 0 { 401 } else { 403 }, "write scope required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        let charge_call_id = maf_api_call_id(path, "charge")
+        let tenant = maf_api_tenant()
+        let _ = sql_exec_str4(db, "UPDATE maf_calls SET application_data = application_data || '{\"charge_authorized\":true}'::jsonb WHERE tenant_id = $1 AND call_id = $2", tenant, charge_call_id, "", "")
+        return http_resp(200, "application/json", "{\"ok\":true,\"call_id\":\"" + maf_api_json_escape(charge_call_id) + "\",\"charge\":\"authorized\"}\n", "Cache-Control: no-store\r\n")
+    }
+    // POST /admin/api/v1/maf/calls/{call_id}/charge-deny — deny charge
+    if kind == 38 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 2 { return maf_api_error(if scope == 0 { 401 } else { 403 }, "write scope required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        let deny_call_id = maf_api_call_id(path, "charge-deny")
+        let tenant = maf_api_tenant()
+        let _ = sql_exec_str4(db, "UPDATE maf_calls SET application_data = application_data || '{\"charge_authorized\":false}'::jsonb WHERE tenant_id = $1 AND call_id = $2", tenant, deny_call_id, "", "")
+        return http_resp(200, "application/json", "{\"ok\":true,\"call_id\":\"" + maf_api_json_escape(deny_call_id) + "\",\"charge\":\"denied\"}\n", "Cache-Control: no-store\r\n")
     }
     return maf_api_error(404, "not found")
 }

@@ -166,7 +166,10 @@ fn outbound_store_binding(reg: CMap, aor: string, contact_addr: string, transpor
     if stored < 0 { return stored }
     // Now find the slot we just wrote and extend it
     let prefix = "reg|" + aor + "|"
-    let expires_at = now_ms() + expires_s * 1000
+    let mut safe_exp_ob = expires_s
+    if safe_exp_ob < 0 { safe_exp_ob = 0 }
+    if safe_exp_ob > 86400 { safe_exp_ob = 86400 }
+    let expires_at = now_ms() + safe_exp_ob * 1000
     let extended = outbound_registration_value(contact_addr, transport, expires_at, ip, port, instance, regid)
     let mut i = 0
     while i < 8 {

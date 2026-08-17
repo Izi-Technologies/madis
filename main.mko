@@ -59,13 +59,24 @@ fn sip_target_authority(target: string) -> string {
         let gt = str_index(t, ">")
         if gt > lt { t = t[lt + 1:gt] }
     }
-    let low = str_to_lower(t)
-    if str_has_prefix(low, "sip:") { t = t[4:] }
-    if str_has_prefix(low, "sips:") { t = t[5:] }
-    if str_has_prefix(low, "tcp://") { t = t[6:] }
-    if str_has_prefix(low, "tls://") { t = t[6:] }
-    if str_has_prefix(low, "ws://") { t = t[5:] }
-    if str_has_prefix(low, "wss://") { t = t[6:] }
+    // Fast path: most URIs are lowercase. Only str_to_lower the scheme (≤6 bytes).
+    if str_has_prefix(t, "sip:") { t = t[4:] }
+    else if str_has_prefix(t, "sips:") { t = t[5:] }
+    else if str_has_prefix(t, "tcp://") { t = t[6:] }
+    else if str_has_prefix(t, "tls://") { t = t[6:] }
+    else if str_has_prefix(t, "ws://") { t = t[5:] }
+    else if str_has_prefix(t, "wss://") { t = t[6:] }
+    else if len(t) >= 4 {
+        let mut scheme_len = 6
+        if len(t) < 6 { scheme_len = len(t) }
+        let low = str_to_lower(t[0:scheme_len])
+        if str_has_prefix(low, "sip:") { t = t[4:] }
+        else if str_has_prefix(low, "sips:") { t = t[5:] }
+        else if str_has_prefix(low, "tcp://") { t = t[6:] }
+        else if str_has_prefix(low, "tls://") { t = t[6:] }
+        else if str_has_prefix(low, "ws://") { t = t[5:] }
+        else if str_has_prefix(low, "wss://") { t = t[6:] }
+    }
     let at = str_index(t, "@")
     if at >= 0 { t = t[at + 1:] }
     let semi = str_index(t, ";")
@@ -510,7 +521,7 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
                     early_target = cmap_get(cache, "dialog_dst|" + early_cid)
                 }
                 if len(early_target) > 0 {
-                    let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_dst|" + early_cid + "|" + early_to_tag, early_target, 65536)
+                    let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_dst|" + early_cid + "|" + early_to_tag, early_target, 131072)
                 }
             }
         }
@@ -518,8 +529,8 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
             if cmap_has(cache, "fork_branch|" + response_branch) == 1 {
                 let fork_cid = cmap_get(cache, "fork_branch|" + response_branch)
                 let fork_target = cmap_get(cache, "fork_target|" + fork_cid + "|" + response_branch)
-                let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_dst|" + fork_cid, fork_target, 65536)
-                let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_branch|" + fork_cid, response_branch, 65536)
+                let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_dst|" + fork_cid, fork_target, 131072)
+                let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_branch|" + fork_cid, response_branch, 131072)
                 if sip_fork_mark_selected(fork_cid, response_branch, cache) == 1 {
                     let _ = sip_send_fork_cancels(fork_cid, response_branch, cache, forward_fd)
                 }
@@ -584,7 +595,7 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
         let resp_code = string(sip_status_code(response_input))
         let resp_code_int = sip_status_code(response_input)
         if resp_code_int >= 300 && resp_code_int < 700 {
-            let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_non2xx|" + resp_cid, "1", 65536)
+            let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_non2xx|" + resp_cid, "1", 131072)
         }
         if resp_code_int >= 200 && resp_code_int < 300 {
             let _ = cmap_del(cache, "dialog_non2xx|" + resp_cid)
@@ -1273,7 +1284,7 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
         }
 
         let maf_inbound_mode = str_to_lower(env_get_or("SIP_MAF_INBOUND_MODE", "disabled"))
-        if ims_initial_dialog_request(data, dl) == 1 && str_eq(maf_inbound_mode, "control") {
+        if ims_initial_dialog_request(data, dl) == 1 && (str_eq(maf_inbound_mode, "control") || str_eq(maf_inbound_mode, "route")) {
             let maf_call_id = maf_worker_ingress_invite(db, db_ok, maf_worker_tenant(), data, ip, port, tr, cache)
             if len(maf_call_id) == 0 { return sip_resp(503, "MAF Inbound Unavailable", data, dl, "maf-inbound") }
             return sip_resp(100, "Trying", data, dl, "maf-inbound")
@@ -1485,13 +1496,21 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
                     return sip_resp(100, "Trying", data, dl, "ims-ifc")
                 }
                 let contact_info = did_contact
-                let contact_parts = str_split(contact_info, "|")
-                let contact_uri = contact_parts[0]
+                // Extract contact_uri and transport without str_split allocation
+                let cp1 = str_index(contact_info, "|")
+                let contact_uri = if cp1 >= 0 { contact_info[0:cp1] } else { contact_info }
                 let mut contact_tr = "udp"
-                if len(contact_parts) >= 2 { contact_tr = contact_parts[1] }
+                if cp1 >= 0 {
+                    let rest1 = contact_info[cp1 + 1:]
+                    let cp2 = str_index(rest1, "|")
+                    contact_tr = if cp2 >= 0 { rest1[0:cp2] } else { rest1 }
+                }
                 let mut term_msg = inv_msg
                 let mut term_target = contact_uri
                 let mut term_tr = contact_tr
+                // NAT: if Contact has private IP but binding has public source, use source
+                let did_nat = registration_nat_target(did_contact)
+                if len(did_nat) > 0 { term_target = did_nat }
                 // Prefer durable IMS Path so MT returns through the access edge.
                 let life_target = ims_lifecycle_mt_target_resolved(reg, did_aor)
                 if len(life_target) > 0 {
@@ -1512,7 +1531,7 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
                 term_msg = ims_pcv_apply_terminating(term_msg)
                 let fwd = nat_fix_sdp(proxy_hop(term_msg, ip, port, tr), len(term_msg), public_ip)
                 let _ = sip_forward_target(term_target, fwd, term_tr, cache, forward_fd)
-                let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_dst|" + cid, term_target, 65536)
+                let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_dst|" + cid, term_target, 131072)
                 return sip_resp(100, "Trying", data, dl, "")
             }
         }
@@ -1530,13 +1549,20 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
                 return sip_resp(100, "Trying", data, dl, "ims-ifc")
             }
             let contact_info = local_contact
-            let contact_parts = str_split(contact_info, "|")
-            let contact_uri = contact_parts[0]
+            let cp1 = str_index(contact_info, "|")
+            let contact_uri = if cp1 >= 0 { contact_info[0:cp1] } else { contact_info }
             let mut contact_tr = "udp"
-            if len(contact_parts) >= 2 { contact_tr = contact_parts[1] }
+            if cp1 >= 0 {
+                let rest1 = contact_info[cp1 + 1:]
+                let cp2 = str_index(rest1, "|")
+                contact_tr = if cp2 >= 0 { rest1[0:cp2] } else { rest1 }
+            }
             let mut term_msg = inv_msg
             let mut term_target = contact_uri
             let mut term_tr = contact_tr
+            // NAT: if Contact has private IP but binding has public source, use source
+            let local_nat = registration_nat_target(local_contact)
+            if len(local_nat) > 0 { term_target = local_nat }
             let life_target = ims_lifecycle_mt_target_resolved(reg, aor)
             if len(life_target) > 0 {
                 let life_parts = str_split(life_target, "|")
@@ -1567,7 +1593,7 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
             term_msg = ims_pcv_apply_terminating(term_msg)
             let fwd = nat_fix_sdp(proxy_hop(term_msg, ip, port, tr), len(term_msg), public_ip)
             let _ = sip_forward_target(term_target, fwd, term_tr, cache, forward_fd)
-            let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_dst|" + cid, term_target, 65536)
+            let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_dst|" + cid, term_target, 131072)
             return sip_resp(100, "Trying", data, dl, "")
         }
 
@@ -1878,13 +1904,16 @@ fn process_sip(data: string, dl: int, reg: CMap, calls: CMap, ip: string, port: 
     }
     hist_observe(0, elapsed)
     gauge_set(0, cmap_len(calls))
-    if is_resp == 0 {
-        let m = madis_method(data)
-        let _ = cmap_incr(cache, "prom|sip_requests|method=\"" + m + "\",transport=\"" + tr + "\"", 1)
-    }
-    if len(reply) > 0 {
-        let c = sip_status_code(reply)
-        if c > 0 { let _ = cmap_incr(cache, "prom|sip_responses|code=\"" + string(c) + "\",class=\"" + string(c / 100) + "xx\"", 1) }
+    // Only compute per-label prometheus counters when the admin metrics endpoint is active.
+    if cmap_has(cache, "_prom_active") == 1 {
+        if is_resp == 0 {
+            let m = madis_method(data)
+            let _ = cmap_incr(cache, "prom|sip_requests|method=\"" + m + "\",transport=\"" + tr + "\"", 1)
+        }
+        if len(reply) > 0 {
+            let c = sip_status_code(reply)
+            if c > 0 { let _ = cmap_incr(cache, "prom|sip_responses|code=\"" + string(c) + "\",class=\"" + string(c / 100) + "xx\"", 1) }
+        }
     }
     return reply
 }
@@ -2095,6 +2124,14 @@ fn sip_stream_poll(owner: int, reg: CMap, calls: CMap, db: SqlDB, db_ok: int, ca
 // transaction map and each connection's cleanup list are capped so a client
 // cannot retain state forever by keeping one stream open and sending unique
 // transactions.
+// RFC 7118 §5: track transport type alongside FD so responses use the
+// correct framing (WebSocket text frame vs raw TCP).
+fn sip_server_conn_track_transport(cache: CMap, txn: string, c: int, transport: string) -> int {
+    if len(txn) <= 2 { return 0 }
+    cmap_set(cache, "server_conn_tr|" + txn, transport)
+    return sip_server_conn_track(cache, txn, c)
+}
+
 fn sip_server_conn_track(cache: CMap, txn: string, c: int) -> int {
     if len(txn) <= 2 { return 0 }
     let seq = cmap_incr(cache, "server_conn_seq", 1)
@@ -2103,7 +2140,7 @@ fn sip_server_conn_track(cache: CMap, txn: string, c: int) -> int {
     let ring_key = "server_conn_ring|" + string(slot)
     if cmap_has(cache, ring_key) == 1 {
         let old = cmap_get(cache, ring_key)
-        if len(old) > 0 && not str_eq(old, txn) { let _ = cmap_del(cache, "server_conn|" + old) }
+        if len(old) > 0 && not str_eq(old, txn) { let _ = cmap_del(cache, "server_conn|" + old); let _ = cmap_del(cache, "server_conn_tr|" + old) }
     }
     cmap_set(cache, ring_key, txn)
     cmap_set(cache, "server_conn|" + txn, string(c))
@@ -2151,7 +2188,7 @@ fn udp_worker(id: int, fd: int, port: int, reg: CMap, calls: CMap, cache: CMap, 
     let mut last_txn_tick = mono_ms()
     let mut last_maf_poll = mono_ms()
     while shutdown_requested() == 0 {
-        let n = evloop_wait(el, 50)
+        let n = evloop_wait(el, 10)
         if n <= 0 {
             if shutdown_requested() == 1 { break }
             let _ = sip_stream_poll(fd, reg, calls, db, db_ok, cache, outbox, realm, nid, diameter_lock)
@@ -2194,7 +2231,7 @@ fn udp_worker(id: int, fd: int, port: int, reg: CMap, calls: CMap, cache: CMap, 
             ei = ei + 1
         }
         let tick_now = mono_ms()
-    if tick_now - last_txn_tick >= 50 {
+    if tick_now - last_txn_tick >= 25 {
             let _ = sip_stream_poll(fd, reg, calls, db, db_ok, cache, outbox, realm, nid, diameter_lock)
             let _ = sip_client_txn_tick(cache, fd)
             let _ = sip_server_txn_tick(cache, fd)
@@ -2281,7 +2318,7 @@ fn tcp_worker_multiplexed(fd: int, reg: CMap, calls: CMap, port: int, cache: CMa
     let pp_enabled = proxy_protocol_enabled()
 
     while shutdown_requested() == 0 {
-        let ready = evloop_wait(el, 50)
+        let ready = evloop_wait(el, 10)
         if ready < 0 { break }
         let mut event_i = 0
         while event_i < ready {
@@ -2359,7 +2396,7 @@ fn tcp_worker_multiplexed(fd: int, reg: CMap, calls: CMap, port: int, cache: CMa
                             }
                             let tcp_txn = sip_transaction_key(msg, len(msg))
                             if len(tcp_txn) > 2 {
-                                let _ = sip_server_conn_track(cache, tcp_txn, event_fd)
+                                let _ = sip_server_conn_track_transport(cache, tcp_txn, event_fd, "TCP")
                             }
  let reply = process_sip(msg, len(msg), reg, calls, peers[fd_key], port, peer_ports[fd_key], "TCP", forward_fd, db, db_ok, cache, outbox, realm, nid, diameter_lock)
                             if len(reply) > 0 {
@@ -2457,7 +2494,7 @@ fn tls_worker(fd: int, srv: TlsServer, port: int, reg: CMap, calls: CMap, cache:
     let pp_enabled = proxy_protocol_enabled()
 
     while shutdown_requested() == 0 {
-        let ready = evloop_wait(el, 50)
+        let ready = evloop_wait(el, 10)
         if ready < 0 { break }
         let mut event_i = 0
         while event_i < ready {
@@ -2531,7 +2568,7 @@ fn tls_worker(fd: int, srv: TlsServer, port: int, reg: CMap, calls: CMap, cache:
                                 if len(msg) == 0 { break }
                                 if sip_ingress_header_safe(msg, len(msg)) == 0 || sip_ok(msg) == 0 { budget = budget - 1; continue }
                                 let tls_txn = sip_transaction_key(msg, len(msg))
-                                if len(tls_txn) > 2 { let _ = sip_server_conn_track(cache, tls_txn, event_fd) }
+                                if len(tls_txn) > 2 { let _ = sip_server_conn_track_transport(cache, tls_txn, event_fd, "TLS") }
                                 // RFC 5923: register inbound TLS conn as reusable when Via has ;alias
                                 if sip_is_response(msg) == 0 && tls_reuse_enabled() == 1 {
                                     let alias_via = sip_header(msg, "Via")
@@ -2593,9 +2630,11 @@ fn tls_worker(fd: int, srv: TlsServer, port: int, reg: CMap, calls: CMap, cache:
 
 fn wss_cleanup_multiplexed(c: int, el: EvLoop, buffers: map[string]string, peers: map[string]string, peer_ports: map[string]int, ws_upgraded: map[string]int, cache: CMap) -> int {
     let _ = evloop_del(el, c)
-    let _ = proxy_conn_decr(cache, "WS")
+    let _ = proxy_conn_decr(cache, "WSS")
     let fd_key = string(c)
-    let _ = ims_flow_clear_conn(cache, peers[fd_key], peer_port(c), "WS")
+    let cleanup_ip = peers[fd_key]
+    if len(cleanup_ip) > 0 { let _ = sip_per_ip_conn_release(cache, cleanup_ip) }
+    let _ = ims_flow_clear_conn(cache, cleanup_ip, peer_port(c), "WSS")
     if ws_upgraded[fd_key] == 1 {
         let _ = ws_close(c)
     } else {
@@ -2626,7 +2665,7 @@ fn wss_worker(fd: int, port: int, reg: CMap, calls: CMap, cache: CMap, outbox: c
     let pp_enabled = proxy_protocol_enabled()
 
     while shutdown_requested() == 0 {
-        let ready = evloop_wait(el, 50)
+        let ready = evloop_wait(el, 10)
         if ready < 0 { break }
         let mut event_i = 0
         while event_i < ready {
@@ -2643,12 +2682,17 @@ fn wss_worker(fd: int, port: int, reg: CMap, calls: CMap, cache: CMap, outbox: c
                     } else {
                         let mut peer_ip = peer_host(c)
                         if len(peer_ip) == 0 { peer_ip = "0.0.0.0" }
+                        if sip_per_ip_conn_check(cache, peer_ip) == 0 {
+                            let _ = tcp_close(c)
+                            accepted = accepted + 1
+                            continue
+                        }
                         let fd_key = string(c)
                         buffers[fd_key] = ""
                         peers[fd_key] = peer_ip
                         peer_ports[fd_key] = peer_port(c)
                         ws_upgraded[fd_key] = 0
-                        let _ = proxy_conn_incr(cache, "WS")
+                        let _ = proxy_conn_incr(cache, "WSS")
                     }
                     accepted = accepted + 1
                 }
@@ -2697,10 +2741,15 @@ fn wss_worker(fd: int, port: int, reg: CMap, calls: CMap, cache: CMap, outbox: c
                     }
                     let ws_key = sip_header(upgrade, "Sec-WebSocket-Key")
                     let ws_acc = ws_accept_key(ws_key)
+                    // Echo Sec-WebSocket-Protocol: sip for SIP.js/JsSIP compatibility (RFC 7118)
+                    let ws_proto = sip_header(upgrade, "Sec-WebSocket-Protocol")
+                    let mut ws_proto_header = ""
+                    if str_contains(str_to_lower(ws_proto), "sip") { ws_proto_header = "Sec-WebSocket-Protocol: sip\r\n" }
                     let ws_reply = "HTTP/1.1 101 Switching Protocols\r\n"
                         + "Upgrade: websocket\r\n"
                         + "Connection: Upgrade\r\n"
-                        + "Sec-WebSocket-Accept: " + ws_acc + "\r\n\r\n"
+                        + "Sec-WebSocket-Accept: " + ws_acc + "\r\n"
+                        + ws_proto_header + "\r\n"
                     if tcp_write_all(event_fd, ws_reply) < 0 {
                         let _ = wss_cleanup_multiplexed(event_fd, el, buffers, peers, peer_ports, ws_upgraded, cache)
                         event_i = event_i + 1
@@ -2715,7 +2764,11 @@ fn wss_worker(fd: int, port: int, reg: CMap, calls: CMap, cache: CMap, outbox: c
                     if close_conn == 0 {
                         if sip_msg_complete(chunk) == 1 {
                             if sip_ingress_header_safe(chunk, len(chunk)) == 1 && sip_ok(chunk) == 1 {
- let reply = process_sip(chunk, len(chunk), reg, calls, peers[fd_key], port, peer_ports[fd_key], "WS", forward_fd, db, db_ok, cache, outbox, realm, nid, diameter_lock)
+                                // RFC 7118 §5: track this WSS connection so responses
+                                // route back through the WebSocket frame layer.
+                                let wss_txn = sip_transaction_key(chunk, len(chunk))
+                                if len(wss_txn) > 2 { let _ = sip_server_conn_track_transport(cache, wss_txn, event_fd, "WSS") }
+ let reply = process_sip(chunk, len(chunk), reg, calls, peers[fd_key], port, peer_ports[fd_key], "WSS", forward_fd, db, db_ok, cache, outbox, realm, nid, diameter_lock)
                                 if len(reply) > 0 {
                                     if sip_is_response(chunk) == 1 {
                                         let _ = sip_forward_reply(reply, cache, forward_fd)
@@ -2740,7 +2793,9 @@ fn wss_worker(fd: int, port: int, reg: CMap, calls: CMap, cache: CMap, outbox: c
                                         message_budget = message_budget - 1
                                         continue
                                     }
- let reply = process_sip(msg, len(msg), reg, calls, peers[fd_key], port, peer_ports[fd_key], "WS", forward_fd, db, db_ok, cache, outbox, realm, nid, diameter_lock)
+                                    let wss_buf_txn = sip_transaction_key(msg, len(msg))
+                                    if len(wss_buf_txn) > 2 { let _ = sip_server_conn_track_transport(cache, wss_buf_txn, event_fd, "WSS") }
+ let reply = process_sip(msg, len(msg), reg, calls, peers[fd_key], port, peer_ports[fd_key], "WSS", forward_fd, db, db_ok, cache, outbox, realm, nid, diameter_lock)
                                     if len(reply) > 0 {
                                         if sip_is_response(msg) == 1 {
                                             let _ = sip_forward_reply(reply, cache, forward_fd)
@@ -2996,6 +3051,18 @@ fn main() {
 
         // Index for routing rules
         let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_routing_rules_pri ON routing_rules (priority) WHERE enabled = true")
+
+        // Tenant scoping for MAF: add tenant_id to infrastructure tables
+        let _ = sql_exec_plain(db, "ALTER TABLE routing_rules ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default'")
+        let _ = sql_exec_plain(db, "ALTER TABLE gateways ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default'")
+        let _ = sql_exec_plain(db, "ALTER TABLE dids ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default'")
+        let _ = sql_exec_plain(db, "ALTER TABLE dispatch_sets ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default'")
+        let _ = sql_exec_plain(db, "ALTER TABLE registration_bindings ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default'")
+        let _ = sql_exec_plain(db, "ALTER TABLE config ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default'")
+        let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_routing_rules_tenant ON routing_rules (tenant_id, priority) WHERE enabled = true")
+        let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_gateways_tenant ON gateways (tenant_id, name)")
+        let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_dids_tenant ON dids (tenant_id, number)")
+        let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_dispatch_sets_tenant ON dispatch_sets (tenant_id, name)")
 
         let _ = ims_lifecycle_bootstrap(db)
         if cluster_call_state_enabled() == 1 { let _ = cluster_call_bootstrap(db) }

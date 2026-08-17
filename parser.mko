@@ -89,10 +89,24 @@ fn sip_strip_top_via(msg: string) -> string {
         let end = i + rel_end
         if end == i { return msg }
         let line = msg[i:end]
-        let low = str_to_lower(line)
         let mut value_start = -1
-        if str_has_prefix(low, "via:") { value_start = 4 }
-        if str_has_prefix(low, "v:") { value_start = 2 }
+        // Case-insensitive "Via:" / "v:" without str_to_lower allocation
+        if len(line) >= 4 {
+            let c0 = int(line[0])
+            let c1 = int(line[1])
+            let c2 = int(line[2])
+            let c3 = int(line[3])
+            if (c0 == 86 || c0 == 118) && (c1 == 73 || c1 == 105) && (c2 == 65 || c2 == 97) && c3 == 58 {
+                value_start = 4
+            }
+        }
+        if value_start < 0 && len(line) >= 2 {
+            let c0 = int(line[0])
+            let c1 = int(line[1])
+            if (c0 == 86 || c0 == 118) && c1 == 58 {
+                value_start = 2
+            }
+        }
         if value_start >= 0 {
             let value = line[value_start:]
             let comma = str_index(value, ",")

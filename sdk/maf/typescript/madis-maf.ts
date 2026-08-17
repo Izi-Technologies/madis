@@ -1,4 +1,4 @@
-export const MAF_VERSION = "0.5.0";
+export const MAF_VERSION = "0.7.0";
 
 const MAX_BODY = 65_536;
 const API = "/api/v1/maf";
@@ -33,6 +33,22 @@ export interface BridgeRequest {
   expected_version?: string;
   reason?: string;
   channel_ids: string[];
+  mode?: "bridge" | "conference";
+}
+
+export interface TransferRequest {
+  command_id?: string;
+  expected_version?: string;
+  target: string;
+  type: "blind" | "attended";
+  other_call_id?: string;
+}
+
+export interface DtmfRequest {
+  command_id?: string;
+  expected_version?: string;
+  digit: string;
+  duration?: number;
 }
 
 export interface MediaRequest {
@@ -97,7 +113,7 @@ export interface Call {
   schema: "madis.maf.call.v1";
   call_id: string;
   tenant_id?: string;
-  state: "created" | "ringing" | "answered" | "bridged" | "ending" | "ended" | "failed";
+  state: "created" | "ringing" | "answered" | "bridged" | "transferring" | "ending" | "ended" | "failed";
   version: string;
   channels?: Channel[];
   bridges?: Bridge[];
@@ -337,6 +353,186 @@ export class MadisMaf {
     );
   }
 
+  async transferCall(
+    callId: string,
+    target: string,
+    transferType: "blind" | "attended" = "blind",
+    otherCallId?: string,
+    idempotencyKey?: string,
+  ): Promise<CommandReceipt> {
+    const body: Record<string, unknown> = { target, type: transferType };
+    if (otherCallId !== undefined) body.other_call_id = otherCallId;
+    return this.command(
+      `${API}/calls/${encPath(callId)}/transfer`,
+      body,
+      idempotencyKey,
+    );
+  }
+
+  async holdCall(
+    callId: string,
+    idempotencyKey?: string,
+  ): Promise<CommandReceipt> {
+    return this.command(
+      `${API}/calls/${encPath(callId)}/hold`,
+      {},
+      idempotencyKey,
+    );
+  }
+
+  async unholdCall(
+    callId: string,
+    idempotencyKey?: string,
+  ): Promise<CommandReceipt> {
+    return this.command(
+      `${API}/calls/${encPath(callId)}/unhold`,
+      {},
+      idempotencyKey,
+    );
+  }
+
+  async sendDtmf(
+    callId: string,
+    digit: string,
+    duration = 250,
+    idempotencyKey?: string,
+  ): Promise<CommandReceipt> {
+    return this.command(
+      `${API}/calls/${encPath(callId)}/dtmf`,
+      { digit, duration },
+      idempotencyKey,
+    );
+  }
+
+  async rtpControl(
+    callId: string,
+    action: "offer" | "answer" | "delete" | "query",
+    opts?: { sdp?: string; from_tag?: string; to_tag?: string; flags?: string },
+    idempotencyKey?: string,
+  ): Promise<CommandReceipt> {
+    const body: Record<string, string> = { action };
+    if (opts?.sdp !== undefined) body.sdp = opts.sdp;
+    if (opts?.from_tag !== undefined) body.from_tag = opts.from_tag;
+    if (opts?.to_tag !== undefined) body.to_tag = opts.to_tag;
+    if (opts?.flags !== undefined) body.flags = opts.flags;
+    return this.command(
+      `${API}/calls/${encPath(callId)}/rtp`,
+      body,
+      idempotencyKey,
+    );
+  }
+
+  async routeCall(
+    callId: string,
+    target: string,
+    transport?: string,
+    idempotencyKey?: string,
+  ): Promise<CommandReceipt> {
+    const body: Record<string, string> = { target };
+    if (transport !== undefined) body.transport = transport;
+    return this.command(
+      `${API}/calls/${encPath(callId)}/route`,
+      body,
+      idempotencyKey,
+    );
+  }
+
+  async publishEvent(
+    eventType: string,
+    callId?: string,
+    payload?: Record<string, unknown> | string,
+  ): Promise<Record<string, unknown>> {
+    const body: Record<string, unknown> = { event_type: eventType };
+    if (callId !== undefined) body.call_id = callId;
+    if (payload !== undefined)
+      body.payload = typeof payload === "string" ? payload : JSON.stringify(payload);
+    return this.request("POST", `${API}/events`, body);
+  }
+
+  async registrations(aor?: string, limit = 100): Promise<Record<string, unknown>> {
+    const query: Record<string, string | number> = { limit: Math.min(Math.max(limit, 1), 100) };
+    if (aor !== undefined) query.aor = aor;
+    return this.request("GET", `${API}/registrations`, undefined, query);
+  }
+
+  async cdr(callId?: string, limit = 50): Promise<Record<string, unknown>> {
+    const query: Record<string, string | number> = { limit: Math.min(Math.max(limit, 1), 100) };
+    if (callId !== undefined) query.call_id = callId;
+    return this.request("GET", `${API}/cdr`, undefined, query);
+  }
+
+  async bans(): Promise<Record<string, unknown>> {
+    return this.request("GET", `${API}/security/bans`);
+  }
+
+  async banIP(sourceIP: string, opts?: { reason?: string; permanent?: boolean; duration_min?: number }): Promise<Record<string, unknown>> {
+    return this.request("POST", `${API}/security/bans`, {
+      source_ip: sourceIP,
+      reason: opts?.reason ?? "",
+      permanent: opts?.permanent ? "true" : "false",
+      duration_min: opts?.duration_min ?? 60,
+    });
+  }
+
+  async unbanIP(sourceIP: string): Promise<Record<string, unknown>> {
+    return this.request("DELETE", `${API}/security/bans/${encPath(sourceIP)}`);
+  }
+
+  async sipInspect(callId: string): Promise<Record<string, unknown>> {
+    return this.request("GET", `${API}/calls/${encPath(callId)}/sip`);
+  }
+
+  async presence(aor?: string, limit = 100): Promise<Record<string, unknown>> {
+    const q: Record<string, string | number> = { limit: Math.min(Math.max(limit, 1), 500) };
+    if (aor !== undefined) q.aor = aor;
+    return this.request("GET", `${API}/presence`, undefined, q);
+  }
+  async presenceUser(aor: string): Promise<Record<string, unknown>> {
+    return this.request("GET", `${API}/presence/${encPath(aor)}`);
+  }
+  async routingRules(): Promise<Record<string, unknown>> {
+    return this.request("GET", `${API}/routing/rules`);
+  }
+  async createRoutingRule(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.request("POST", `${API}/routing/rules`, body);
+  }
+  async deleteRoutingRule(ruleId: number | string): Promise<Record<string, unknown>> {
+    return this.request("DELETE", `${API}/routing/rules/${ruleId}`);
+  }
+  async gateways(): Promise<Record<string, unknown>> {
+    return this.request("GET", `${API}/gateways`);
+  }
+  async createGateway(name: string, address: string, port = 5060, transport = "UDP"): Promise<Record<string, unknown>> {
+    return this.request("POST", `${API}/gateways`, { name, address, port, transport });
+  }
+  async dids(): Promise<Record<string, unknown>> {
+    return this.request("GET", `${API}/dids`);
+  }
+  async createDID(number: string, destinationUser: string, description = ""): Promise<Record<string, unknown>> {
+    return this.request("POST", `${API}/dids`, { number, destination_user: destinationUser, description });
+  }
+  async dispatchSets(): Promise<Record<string, unknown>> {
+    return this.request("GET", `${API}/dispatch-sets`);
+  }
+  async createDispatchSet(name: string, algorithm = "round-robin"): Promise<Record<string, unknown>> {
+    return this.request("POST", `${API}/dispatch-sets`, { name, algorithm });
+  }
+  async cluster(): Promise<Record<string, unknown>> {
+    return this.request("GET", `${API}/cluster`);
+  }
+  async config(): Promise<Record<string, unknown>> {
+    return this.request("GET", `${API}/config`);
+  }
+  async setConfig(key: string, value: string, description = ""): Promise<Record<string, unknown>> {
+    return this.request("POST", `${API}/config`, { key, value, description });
+  }
+  async chargeAuthorize(callId: string): Promise<Record<string, unknown>> {
+    return this.request("POST", `${API}/calls/${encPath(callId)}/charge`);
+  }
+  async chargeDeny(callId: string): Promise<Record<string, unknown>> {
+    return this.request("POST", `${API}/calls/${encPath(callId)}/charge-deny`);
+  }
+
   async events(
     cursor = 0,
     eventType?: string,
@@ -348,5 +544,67 @@ export class MadisMaf {
     };
     if (eventType !== undefined) query.event_type = eventType;
     return this.request("GET", `${API}/events`, undefined, query);
+  }
+
+  /**
+   * Subscribe to events using HTTP long-poll with adaptive backoff.
+   * Yields events as an async iterable. For native WebSocket, use wsUrl().
+   */
+  async *subscribe(opts?: {
+    cursor?: number;
+    eventType?: string;
+    callId?: string;
+    pollMs?: number;
+    maxPollMs?: number;
+    signal?: AbortSignal;
+  }): AsyncGenerator<Record<string, unknown>> {
+    let cur = opts?.cursor ?? 0;
+    let interval = opts?.pollMs ?? 200;
+    const maxInterval = opts?.maxPollMs ?? 2000;
+    while (!opts?.signal?.aborted) {
+      try {
+        const query: Record<string, string | number> = { cursor: cur, limit: 100 };
+        if (opts?.eventType !== undefined) query.event_type = opts.eventType;
+        if (opts?.callId !== undefined) query.call_id = opts.callId;
+        const page = await this.request("GET", `${API}/events`, undefined, query);
+        const events = (page as Record<string, unknown>).events;
+        if (Array.isArray(events) && events.length > 0) {
+          interval = opts?.pollMs ?? 200;
+          for (const evt of events) yield evt as Record<string, unknown>;
+          const next = (page as Record<string, unknown>).next_cursor;
+          const n = typeof next === "string" ? parseInt(next, 10) : typeof next === "number" ? next : cur;
+          if (n > cur) cur = n;
+        } else {
+          interval = Math.min(interval * 2, maxInterval);
+        }
+      } catch {
+        interval = maxInterval;
+      }
+      await new Promise((r) => setTimeout(r, interval));
+    }
+  }
+
+  /**
+   * Build the WebSocket URL for direct connection.
+   *
+   * Usage (browser/Deno):
+   *   const ws = new WebSocket(client.wsUrl({ eventType: "call.answered" }));
+   *   ws.onmessage = (e) => console.log(JSON.parse(e.data));
+   *
+   * Usage (Node with ws package):
+   *   import WebSocket from "ws";
+   *   const ws = new WebSocket(client.wsUrl(), {
+   *     headers: { Authorization: `Bearer ${token}` }
+   *   });
+   */
+  wsUrl(opts?: { cursor?: number; eventType?: string; callId?: string }): string {
+    const base = this.baseUrl
+      .replace(/^https:\/\//, "wss://")
+      .replace(/^http:\/\//, "ws://");
+    const params = new URLSearchParams();
+    params.set("cursor", String(opts?.cursor ?? 0));
+    if (opts?.eventType !== undefined) params.set("event_type", opts.eventType);
+    if (opts?.callId !== undefined) params.set("call_id", opts.callId);
+    return `${base}${API}/events/ws?${params.toString()}`;
   }
 }

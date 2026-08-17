@@ -89,4 +89,4 @@ fi
 python3 -m unittest discover -s lab -p 'test_*.py'
 python3 -m unittest discover -s media -p 'test_*.py'
 
-echo "Madis CI checks passed with Mako 0.5.0"
+echo "Madis CI checks passed"

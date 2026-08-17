@@ -43,7 +43,7 @@ Use long, random values for every token. The installer generates these credentia
 | `SIP_UDP_PORT` | `5060` | UDP signaling listener. |
 | `SIP_TCP_PORT` | `SIP_UDP_PORT` | TCP signaling listener; defaults to the UDP port. |
 | `SIP_TLS_PORT` | `5061` | SIP over TLS listener. |
-| `SIP_WSS_PORT` | `8443` | Secure WebSocket SIP listener. |
+| `SIP_WSS_PORT` | `8443` | Secure WebSocket SIP listener (RFC 7118). Compatible with SIP.js, JsSIP, and other WebRTC SIP stacks. Echoes `Sec-WebSocket-Protocol: sip` subprotocol. |
 | `SIP_IPV6` | `1` | Enable IPv6 listeners where the host supports them. |
 | `SIP_REALM` | `madis.local` | Digest authentication realm. |
 | `SIP_DOMAIN` / `SIP_FQDN` | Empty | Domain identity fallbacks. |
@@ -155,7 +155,9 @@ Cluster INVITE fallback routes only through live `registration_bindings` rows wh
 | `SIP_MAF_API_TOKEN` | MAF write credential; also permits MAF reads. Keep separate from all admin, carrier, control, and worker credentials. |
 | `SIP_MAF_API_READ_TOKEN` | MAF read-only credential for call and event reads. |
 | `SIP_MAF_TENANT` | Tenant namespace bound to this admin process; defaults to `default`. |
-| `SIP_MAF_INBOUND_MODE` | Inbound MAF ownership mode. `disabled` preserves normal proxy routing; `control` publishes authenticated initial INVITEs as ringing MAF calls. |
+| `SIP_MAF_INBOUND_MODE` | Inbound MAF ownership mode. `disabled` (default) preserves normal proxy routing; `control` publishes authenticated initial INVITEs as ringing MAF calls; `route` intercepts INVITEs and requires SDK to route via `calls.route`. |
+| `SIP_MAF_DB_URL` | Separate PostgreSQL connection for MAF tables (calls, events, commands). Falls back to `SIP_DB_URL` if not set. Allows MAF state isolation or independent database scaling. |
+| `SIP_MAF_CONTACT_URI` | Override the Contact URI used in MAF-generated SIP responses. Defaults to `sip:madis@<SIP_PUBLIC_IP>`. |
 | `SIP_APP_URL`, `SIP_APP_TOKEN` | Optional signed live SIP application endpoint. Both must be configured to enable it. |
 | `SIP_APP_CA` | CA bundle for the application endpoint. |
 | `SIP_APP_TIMEOUT_MS` | Application decision timeout, clamped to 10–1000 ms. |

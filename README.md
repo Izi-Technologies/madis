@@ -6,11 +6,11 @@ This README is an orientation guide, not a complete feature matrix. The linked d
 
 ## Version
 
-**v0.5.0** — requires Mako 0.5.0+. Pure Mako: zero `extern "C"` functions, no C bridge code.
+**v0.7.0** — requires Mako 0.5.0+. Pure Mako: zero `extern "C"` functions, no C bridge code.
 
 ## Current implementation
 
-- SIP UDP, TCP, TLS, WS, and WSS listeners with registration, digest authentication, transactions, dialogs, retransmission handling, routing, forking, dispatch, dialplans, and response routing. Multiplexed TCP/WSS workers with serial TLS handshakes and `SO_REUSEPORT` multi-worker scaling. PROXY protocol v1 support for HAProxy deployments.
+- SIP UDP, TCP, TLS, and WSS (RFC 7118) listeners with registration, digest authentication, transactions, dialogs, retransmission handling, routing, forking, dispatch, dialplans, and response routing. Multiplexed TCP/TLS/WSS workers with `SO_REUSEPORT` multi-worker scaling. PROXY protocol v1 support for HAProxy deployments. Full SIP.js/JsSIP WebSocket compatibility with `Sec-WebSocket-Protocol: sip` subprotocol and transport-aware response routing.
 - RFC 3261 compliance improvements: To-tag on all responses, CANCEL→487 generation, 3xx redirect following, and in-dialog REFER/INFO/MESSAGE forwarding. RFC 5626 outbound flow tokens with `+sip.instance`, `reg-id`, and flow token Path URI. RFC 3265/6665 event packages (SUBSCRIBE/NOTIFY with presence and message-summary). RFC 5923 TLS connection reuse with Via `;alias`. RFC 4028 session timer refresh with re-INVITE generation at 50% interval. RFC 3325 P-Asserted-Identity insertion with anonymous From support.
 - Security hardening: per-method rate limits, digest URI validation, nonce-count monotonicity, registration enumeration detection, DNS rebinding guard, per-IP connection limits, constant-time digest comparison, and progressive authentication delay.
 - PostgreSQL-backed registrations, routing policy, access control, security state, CDRs, and a durable billing-event outbox.
@@ -18,7 +18,7 @@ This README is an orientation guide, not a complete feature matrix. The linked d
 - Optional RTPEngine-ng control messages for bounded SDP offer/answer/delete operations, with WebRTC bridge support (auto-detect ICE/DTLS SDP). The SIP worker does not own RTP, RTCP, ICE, DTLS-SRTP, codecs, recording, or media policy.
 - Cluster call state replication via `SIP_CLUSTER_CALLS`.
 - Prometheus labeled metrics (per-method, per-response-code, per-transport) and graceful shutdown with connection drain.
-- MAF SDKs in Python, Go, TypeScript, and Erlang with 56 contract tests. SIPp interop scenarios covering fork/cancel, non-2xx ACK, CANCEL/487, timer retransmit, PRACK, and digest auth. MAF event subscriptions with bearer-authenticated WebSocket, call-scoped filtering, and heartbeat.
+- MAF SDKs in Python, Go, TypeScript, JavaScript, and Erlang with 39 HTTP operations covering calls, routing, media, presence, security, infrastructure, config, charging, and events. Real-time event streaming via HTTP long-poll (`subscribe()`) and WebSocket (`ws_url()`). SIPp interop scenarios covering fork/cancel, non-2xx ACK, CANCEL/487, timer retransmit, PRACK, and digest auth.
 - Selected Diameter RFC 6733/RFC 8506, IMS Cx/Sh, HEPv3, STIR/SHAKEN (PASSporT header with `ppt`/`typ`/`x5u`, `iat` freshness check, orig/dest TN validation, x5u certificate fetch, Date header on signed messages), charging, and signed external-application contracts. These are bounded integration surfaces, not complete relay, policy, media, or carrier platforms.
 - A bounded IMS voice profile: role-aware P-/I-/S-CSCF REGISTER and initial-INVITE handling, selected Cx/AKA authorization, HTTPS subscriber authorization, durable IMS registration lifecycle (IMPI/IMPU, Path, Service-Route, S-CSCF binding, restart hydration, and Path-aware MT routing), dynamic flow-token refresh/cleanup when enabled, session-timer validation plus negotiated response headers, trusted identity/privacy filtering, P-Associated-URI handling, target-only subscriber iFC application targets, and terminating P-Charging-Vector validation.
 
@@ -76,8 +76,8 @@ curl -fsSL https://raw.githubusercontent.com/Izi-Technologies/madis/main/packagi
 Pin a specific version:
 
 ```sh
-sudo bash setup-apt.sh 0.5.0
-sudo bash setup-dnf.sh 0.5.0
+sudo bash setup-apt.sh 0.7.0
+sudo bash setup-dnf.sh 0.7.0
 ```
 
 After install, configure `/etc/madis/madis.env` (see the example at `/etc/madis/madis.env.example`) and start:
@@ -136,32 +136,52 @@ The standalone admin process currently exposes the documented MAF HTTP routes
 and the bearer-authenticated event WebSocket:
 
 ```text
-POST /admin/api/v1/maf/calls
-GET  /admin/api/v1/maf/calls/{call_id}
-POST /admin/api/v1/maf/calls/{call_id}/answer
-POST /admin/api/v1/maf/calls/{call_id}/reject
-POST /admin/api/v1/maf/calls/{call_id}/hangup
-POST /admin/api/v1/maf/calls/{call_id}/bridges
-POST /admin/api/v1/maf/calls/{call_id}/media
-POST /admin/api/v1/maf/calls/{call_id}/headers
-GET  /admin/api/v1/maf/events?cursor=...&event_type=...
-GET  /admin/api/v1/maf/events/ws?cursor=...&event_type=...
+POST   /admin/api/v1/maf/calls                          — create call
+GET    /admin/api/v1/maf/calls/{call_id}                 — get call
+POST   /admin/api/v1/maf/calls/{call_id}/answer          — answer
+POST   /admin/api/v1/maf/calls/{call_id}/reject          — reject
+POST   /admin/api/v1/maf/calls/{call_id}/hangup          — hangup
+POST   /admin/api/v1/maf/calls/{call_id}/route           — SDK routing
+POST   /admin/api/v1/maf/calls/{call_id}/bridges         — bridge
+POST   /admin/api/v1/maf/calls/{call_id}/transfer        — transfer
+POST   /admin/api/v1/maf/calls/{call_id}/hold            — hold
+POST   /admin/api/v1/maf/calls/{call_id}/unhold          — unhold
+POST   /admin/api/v1/maf/calls/{call_id}/dtmf            — DTMF
+POST   /admin/api/v1/maf/calls/{call_id}/media           — media
+POST   /admin/api/v1/maf/calls/{call_id}/headers         — headers
+POST   /admin/api/v1/maf/calls/{call_id}/rtp             — RTPEngine
+GET    /admin/api/v1/maf/calls/{call_id}/sip             — SIP inspect
+POST   /admin/api/v1/maf/calls/{call_id}/charge          — charge auth
+GET    /admin/api/v1/maf/registrations                    — registrations
+GET    /admin/api/v1/maf/presence                         — online users
+GET    /admin/api/v1/maf/cdr                              — CDR
+GET    /admin/api/v1/maf/security/bans                    — bans
+POST   /admin/api/v1/maf/security/bans                   — ban IP
+GET    /admin/api/v1/maf/routing/rules                    — routing rules
+POST   /admin/api/v1/maf/routing/rules                   — create rule
+GET    /admin/api/v1/maf/gateways                         — gateways
+GET    /admin/api/v1/maf/dids                             — DIDs
+GET    /admin/api/v1/maf/dispatch-sets                    — dispatch sets
+GET    /admin/api/v1/maf/cluster                          — cluster health
+GET    /admin/api/v1/maf/config                           — config
+GET    /admin/api/v1/maf/events                           — event replay
+POST   /admin/api/v1/maf/events                          — publish event
+GET    /admin/api/v1/maf/events/ws                        — WebSocket stream
 ```
 
-MAF mutating requests are asynchronous. A `202` response means that the
-command and its initial event were durably accepted by PostgreSQL; it does not
-mean that the SIP dialog has already changed. Use the call resource or event
-cursor to observe progress. The current SIP worker executes outbound
-`calls.create`, early-dialog reject/hangup as `CANCEL`, and confirmed-dialog
-hangup as `BYE`. Set `SIP_MAF_INBOUND_MODE=control` to publish authenticated
-initial INVITEs as ringing MAF calls; `calls.answer` then accepts a bounded
-`answer_sdp` and sends the validated `200 OK`. Bridge and media commands are
-accepted into the durable queue. Bridge commands create durable tenant-owned
-relationships after answer. Media commands dispatch to the configured signed
-`media` or `recording` module and fail explicitly when no safe backend accepts
-them. Per-call header policy is bounded and cannot alter framing, routing,
-authentication, or dialog identity headers. Commands are never reported
-successful without worker or module evidence.
+MAF provides 39 HTTP endpoints covering the full call lifecycle (create,
+answer, reject, hangup, route, bridge, transfer, hold, unhold, DTMF),
+media control (play/record/stop, RTPEngine offer/answer/delete), SIP message
+inspection (headers, SDP, STIR/SHAKEN attestation, NAT status), presence and
+registration awareness, CDR access, security (ban/unban), infrastructure CRUD
+(routing rules, gateways, DIDs, dispatch sets), cluster health, runtime config,
+charging authorization, and custom application events — all tenant-scoped
+with separate read/write bearer credentials.
+
+Set `SIP_MAF_INBOUND_MODE=route` for full SDK-controlled routing where the
+application decides where every call goes. Set `mode=b2bua` in the route
+request to terminate both SIP legs locally. RFC 7118 WebSocket transport is
+fully supported for SIP.js and JsSIP clients.
 
 MAF credentials are separate from admin, carrier, control, and SIP-worker
 credentials. Configure a write token, an optional read-only token, and the

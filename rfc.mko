@@ -64,7 +64,12 @@ fn sip_detect_loop(msg: string, n: int, our_ip: string, our_port: int) -> int {
     while i < n {
         if int(msg[i]) == 13 { break }
         if i + 4 < n {
-            if str_eq(str_to_lower(msg[i:i + 4]), "via:") {
+            // Case-insensitive "Via:" without str_to_lower allocation
+            let c0 = int(msg[i])
+            let c1 = int(msg[i + 1])
+            let c2 = int(msg[i + 2])
+            let c3 = int(msg[i + 3])
+            if (c0 == 86 || c0 == 118) && (c1 == 73 || c1 == 105) && (c2 == 65 || c2 == 97) && c3 == 58 {
                 let mut ve = i
                 while ve < n {
                     if int(msg[ve]) == 10 { ve = ve + 1; break }
@@ -106,7 +111,14 @@ fn sip_pop_route(msg: string, n: int) -> string {
     while i < n {
         if int(msg[i]) == 13 { break }
         if i + 6 < n {
-            if str_eq(str_to_lower(msg[i:i + 6]), "route:") {
+            // Case-insensitive "Route:" without str_to_lower allocation
+            let c0 = int(msg[i])
+            let c1 = int(msg[i + 1])
+            let c2 = int(msg[i + 2])
+            let c3 = int(msg[i + 3])
+            let c4 = int(msg[i + 4])
+            let c5 = int(msg[i + 5])
+            if (c0 == 82 || c0 == 114) && (c1 == 79 || c1 == 111) && (c2 == 85 || c2 == 117) && (c3 == 84 || c3 == 116) && (c4 == 69 || c4 == 101) && c5 == 58 {
                 let mut ve = i
                 while ve < n {
                     if int(msg[ve]) == 10 { ve = ve + 1; break }
@@ -283,9 +295,8 @@ fn sip_transaction_ttl_ms() -> int {
 }
 
 fn sip_transaction_expiry_ms(cache: CMap, txn_key: string) -> int {
-    let exp_key = "txn_exp|" + txn_key
-    if cmap_has(cache, exp_key) == 1 {
-        match parse_int(cmap_get(cache, exp_key)) {
+    if cmap_has2(cache, "txn_exp|", txn_key) == 1 {
+        match parse_int(cmap_get2(cache, "txn_exp|", txn_key)) {
             Ok(v) => { return v }
             Err(_) => {}
         }
@@ -294,15 +305,13 @@ fn sip_transaction_expiry_ms(cache: CMap, txn_key: string) -> int {
 }
 
 fn sip_transaction_fresh(txn_key: string, cache: CMap) -> int {
-    let response_key = "txn|" + txn_key
-    let stamp_key = "txn_ts|" + txn_key
-    if cmap_has(cache, response_key) == 0 || cmap_has(cache, stamp_key) == 0 {
+    if cmap_has2(cache, "txn|", txn_key) == 0 || cmap_has2(cache, "txn_ts|", txn_key) == 0 {
         return 0
     }
 
     let mut stamp = 0
     let mut parsed = 0
-    match parse_int(cmap_get(cache, stamp_key)) {
+    match parse_int(cmap_get2(cache, "txn_ts|", txn_key)) {
         Ok(v) => { stamp = v; parsed = 1 }
         Err(_) => {}
     }
@@ -348,9 +357,8 @@ fn sip_txn_begin(msg: string, cache: CMap) -> string {
         }
         cmap_set(cache, ring_key, key)
     }
-    let state_key = "txn_state|" + key
-    if cmap_has(cache, state_key) == 0 {
-        cmap_set(cache, state_key, "trying|" + string(mono_ms()))
+    if cmap_has2(cache, "txn_state|", key) == 0 {
+        cmap_set(cache, "txn_state|" + key, "trying|" + string(mono_ms()))
     }
     return key
 }
@@ -384,7 +392,7 @@ fn sip_store_txn(txn_key: string, response: string, cache: CMap) -> int {
 
 fn sip_get_txn_response(txn_key: string, cache: CMap) -> string {
     if sip_transaction_fresh(txn_key, cache) == 1 {
-        return cmap_get(cache, "txn|" + txn_key)
+        return cmap_get2(cache, "txn|", txn_key)
     }
     return ""
 }
@@ -419,13 +427,13 @@ fn rfc_bounded_state_set(store: CMap, index: CMap, seq_key: string, ring_prefix:
 // Refuse new records at the limit so an active dialog is never evicted merely
 // because traffic exceeded the configured memory budget.
 fn sip_call_state_capacity() -> int {
-    let mut capacity = 262144
-    match parse_int(env_get_or("SIP_CALL_STATE_CAPACITY", "262144")) {
+    let mut capacity = 524288
+    match parse_int(env_get_or("SIP_CALL_STATE_CAPACITY", "524288")) {
         Ok(value) => { capacity = value }
         Err(_) => {}
     }
     if capacity < 16384 { capacity = 16384 }
-    if capacity > 1048576 { capacity = 1048576 }
+    if capacity > 2097152 { capacity = 2097152 }
     return capacity
 }
 

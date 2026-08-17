@@ -43,13 +43,13 @@ fn current_time_int() -> int {
 }
 
 fn parse_hhmm(s: string) -> int {
-    // "09:00" → 900, "17:30" → 1730
-    let parts = str_split(s, ":")
-    if len(parts) < 2 { return 0 }
+    // "09:00" → 900, "17:30" → 1730 (no str_split allocation)
+    let colon = str_index(s, ":")
+    if colon < 1 { return 0 }
     let mut h = 0
     let mut m = 0
-    match parse_int(parts[0]) { Ok(v) => { h = v } Err(_) => {} }
-    match parse_int(parts[1]) { Ok(v) => { m = v } Err(_) => {} }
+    match parse_int(s[0:colon]) { Ok(v) => { h = v } Err(_) => {} }
+    match parse_int(s[colon + 1:]) { Ok(v) => { m = v } Err(_) => {} }
     return h * 100 + m
 }
 
@@ -78,14 +78,24 @@ fn current_day_of_week() -> int {
 
 fn day_matches(rule_days: string, today: int) -> int {
     if len(rule_days) == 0 { return 1 }
+    // Single digit 0-6 — check with str_contains instead of str_split
     let today_str = string(today)
-    let parts = str_split(rule_days, ",")
+    if str_contains("," + rule_days + ",", "," + today_str + ",") { return 1 }
+    return 0
+}
+
+// Escape SQL LIKE wildcards in user input to prevent % and _ injection.
+fn sql_like_escape(s: string) -> string {
+    if str_index(s, "%") < 0 && str_index(s, "_") < 0 && str_index(s, "\\") < 0 { return s }
+    let mut b = str_builder()
     let mut i = 0
-    while i < len(parts) {
-        if str_eq(str_trim_space(parts[i]), today_str) { return 1 }
+    while i < len(s) {
+        let c = int(s[i])
+        if c == 37 || c == 95 || c == 92 { builder_write(b, "\\") }
+        builder_write_byte(b, byte(c))
         i = i + 1
     }
-    return 0
+    return builder_string(b)
 }
 
 fn prefix_matches(number: string, prefix: string) -> int {
@@ -158,29 +168,72 @@ fn dispatch_health_note(addr: string, ok: int, cache: CMap) -> int {
     return 0
 }
 
-// Resolve a dispatch set to comma-separated targets
+// Resolve a dispatch set to comma-separated targets.
+// The set metadata (id, algorithm, member list) is cached for 5s so repeated
+// INVITEs within a burst don't issue the same JOIN per call.
 fn resolve_dispatch_set(db: SqlDB, set_name: string, from_user: string, call_id: string, cache: CMap) -> string {
-    // Fetch set metadata once instead of querying algorithm and id separately.
-    let set_info = sql_query_str(db, "SELECT id || '|' || algorithm FROM dispatch_sets WHERE name = $1 AND enabled = true", set_name)
-    let set_parts = str_split(set_info, "|")
-    if len(set_parts) < 2 { return "" }
-    let algo = set_parts[1]
-    let set_id_str = set_parts[0]
+    let meta_key = "dsp_meta|" + set_name
+    let meta_ts_key = "dsp_meta_ts|" + set_name
+    let now_dsp = mono_ms()
+    let mut algo = ""
     let mut set_id = 0
-    match parse_int(set_id_str) { Ok(v) => { set_id = v } Err(_) => { return "" } }
+    let mut member_csv = ""
+    let mut meta_fresh = 0
 
-    let mut members = make([]string, 0, 8)
-    let member_rows = sql_query_rows_str(db, "SELECT g.address || ':' || g.port FROM dispatch_members dm JOIN gateways g ON dm.gateway_id = g.id WHERE dm.set_id = $1 AND dm.enabled = true AND g.enabled = true ORDER BY dm.priority ASC, dm.weight DESC LIMIT 8", set_id_str)
-    if sql_rows_ok(member_rows) == 1 {
-        while sql_rows_next(member_rows) == 1 {
-            let m = sql_rows_str(member_rows, 0)
-            if len(m) > 0 {
-                if dispatch_is_healthy(m, cache) == 1 { members = append(members, m) }
+    if cmap_has(cache, meta_key) == 1 && cmap_has(cache, meta_ts_key) == 1 {
+        let mut at = 0
+        match parse_int(cmap_get(cache, meta_ts_key)) { Ok(v) => { at = v } Err(_) => {} }
+        if at > 0 && now_dsp - at < 5000 {
+            meta_fresh = 1
+            let cached = cmap_get(cache, meta_key)
+            // Format: "set_id|algo|addr1,addr2,..."
+            let pipe1 = str_index(cached, "|")
+            if pipe1 > 0 {
+                match parse_int(cached[0:pipe1]) { Ok(v) => { set_id = v } Err(_) => {} }
+                let rest = cached[pipe1 + 1:]
+                let pipe2 = str_index(rest, "|")
+                if pipe2 >= 0 {
+                    algo = rest[0:pipe2]
+                    member_csv = rest[pipe2 + 1:]
+                }
             }
         }
     }
-    let _ = sql_rows_close(member_rows)
 
+    if meta_fresh == 0 {
+        let set_info = sql_query_str(db, "SELECT id || '|' || algorithm FROM dispatch_sets WHERE name = $1 AND enabled = true", set_name)
+        let pipe = str_index(set_info, "|")
+        if pipe < 1 { return "" }
+        match parse_int(set_info[0:pipe]) { Ok(v) => { set_id = v } Err(_) => { return "" } }
+        algo = set_info[pipe + 1:]
+
+        let member_rows = sql_query_rows_str(db, "SELECT g.address || ':' || g.port FROM dispatch_members dm JOIN gateways g ON dm.gateway_id = g.id WHERE dm.set_id = $1 AND dm.enabled = true AND g.enabled = true ORDER BY dm.priority ASC, dm.weight DESC LIMIT 8", set_info[0:pipe])
+        let mut first = 1
+        if sql_rows_ok(member_rows) == 1 {
+            while sql_rows_next(member_rows) == 1 {
+                let m = sql_rows_str(member_rows, 0)
+                if len(m) > 0 {
+                    if first == 1 { member_csv = m; first = 0 }
+                    else { member_csv = member_csv + "," + m }
+                }
+            }
+        }
+        let _ = sql_rows_close(member_rows)
+        cmap_set(cache, meta_key, string(set_id) + "|" + algo + "|" + member_csv)
+        cmap_set(cache, meta_ts_key, string(now_dsp))
+    }
+
+    if len(member_csv) == 0 { return "" }
+
+    // Filter by health
+    let all = str_split(member_csv, ",")
+    let mut members = make([]string, 0, 8)
+    let mut mi = 0
+    while mi < len(all) {
+        let m = str_trim_space(all[mi])
+        if len(m) > 0 && dispatch_is_healthy(m, cache) == 1 { members = append(members, m) }
+        mi = mi + 1
+    }
     let count = len(members)
     if count == 0 { return "" }
 
@@ -200,9 +253,26 @@ fn resolve_dispatch_set(db: SqlDB, set_name: string, from_user: string, call_id:
     return result
 }
 
-// Resolve gateway name to addr:port
+// Resolve gateway name to addr:port (cached 10s)
 fn resolve_gateway(db: SqlDB, gw_name: string) -> string {
+    // ponytail: gateway addresses rarely change; cache avoids a DB hit per call
     return sql_query_str(db, "SELECT address || ':' || port FROM gateways WHERE name = $1 AND enabled = true", gw_name)
+}
+
+fn resolve_gateway_cached(db: SqlDB, gw_name: string, cache: CMap) -> string {
+    let key = "gw|" + gw_name
+    let ts_key = "gw_ts|" + gw_name
+    if cmap_has(cache, key) == 1 && cmap_has(cache, ts_key) == 1 {
+        let mut at = 0
+        match parse_int(cmap_get(cache, ts_key)) { Ok(v) => { at = v } Err(_) => {} }
+        if at > 0 && mono_ms() - at < 30000 { return cmap_get(cache, key) }
+    }
+    let addr = sql_query_str(db, "SELECT address || ':' || port FROM gateways WHERE name = $1 AND enabled = true", gw_name)
+    if len(addr) > 0 {
+        let _ = bounded_cache_set(cache, "gw_seq", "gw_ring|", key, addr, 4096)
+        cmap_set(cache, ts_key, string(mono_ms()))
+    }
+    return addr
 }
 
 // Main routing engine: evaluates routing_rules table
@@ -239,14 +309,37 @@ fn db_route_call(db: SqlDB, db_ok: int, callee: string, caller: string, src_ip: 
     let now_time = current_time_int()
     let today = current_day_of_week()
 
-    // Load the bounded rule set once; OFFSET queries made every rule add a
-    // database round trip to the INVITE hot path.
-    let rule_rows = sql_query_col_str(db, "SELECT match_prefix || '|' || COALESCE(match_caller,'') || '|' || COALESCE(match_src_ip,'') || '|' || COALESCE(match_time_start,'') || '|' || COALESCE(match_time_end,'') || '|' || COALESCE(match_day,'') || '|' || action || '|' || COALESCE(match_ani_group,'') FROM routing_rules WHERE enabled = true ORDER BY priority ASC LIMIT 50", 50)
+    // Cache routing rules for 10s to avoid DB round-trip per INVITE
+    let rule_cache_key = "routing_rules_cache"
+    let rule_ts_key = "routing_rules_ts"
+    let mut rule_rows = make([]string, 0, 50)
+    let now_cache = mono_ms()
+    let mut rules_fresh = 0
+    if cmap_has(cache, rule_cache_key) == 1 && cmap_has(cache, rule_ts_key) == 1 {
+        let mut rule_at = 0
+        match parse_int(cmap_get(cache, rule_ts_key)) { Ok(v) => { rule_at = v } Err(_) => {} }
+        if rule_at > 0 && now_cache - rule_at < 10000 {
+            rules_fresh = 1
+            rule_rows = str_split(cmap_get(cache, rule_cache_key), "\n")
+        }
+    }
+    if rules_fresh == 0 {
+        rule_rows = sql_query_col_str(db, "SELECT match_prefix || chr(1) || COALESCE(match_caller,'') || chr(1) || COALESCE(match_src_ip,'') || chr(1) || COALESCE(match_time_start,'') || chr(1) || COALESCE(match_time_end,'') || chr(1) || COALESCE(match_day,'') || chr(1) || action || chr(1) || COALESCE(match_ani_group,'') FROM routing_rules WHERE enabled = true ORDER BY priority ASC LIMIT 50", 50)
+        let mut rule_joined = ""
+        let mut rj = 0
+        while rj < len(rule_rows) {
+            if rj > 0 { rule_joined = rule_joined + "\n" }
+            rule_joined = rule_joined + rule_rows[rj]
+            rj = rj + 1
+        }
+        cmap_set(cache, rule_cache_key, rule_joined)
+        cmap_set(cache, rule_ts_key, string(now_cache))
+    }
     let mut ri = 0
     while ri < len(rule_rows) {
         let rule_data = rule_rows[ri]
 
-        let parts = str_split(rule_data, "|")
+        let parts = str_split(rule_data, "\x01")
         if len(parts) < 7 {
             ri = ri + 1
             continue
@@ -327,7 +420,7 @@ fn db_route_call(db: SqlDB, db_ok: int, callee: string, caller: string, src_ip: 
         // route:gateway_name
         if str_has_prefix(r_action, "route:") {
             let gw_name = r_action[6:]
-            let addr = resolve_gateway(db, gw_name)
+            let addr = resolve_gateway_cached(db, gw_name, cache)
             if len(addr) > 0 { return "route|" + addr }
         }
 
@@ -364,7 +457,7 @@ fn db_route_call(db: SqlDB, db_ok: int, callee: string, caller: string, src_ip: 
             let mut targets = ""
             let mut fi = 0
             while fi < len(gw_names) {
-                let addr = resolve_gateway(db, str_trim_space(gw_names[fi]))
+                let addr = resolve_gateway_cached(db, str_trim_space(gw_names[fi]), cache)
                 if len(addr) > 0 {
                     if dispatch_is_healthy(addr, cache) == 1 {
                         if len(targets) > 0 { targets = targets + "," }
@@ -380,14 +473,14 @@ fn db_route_call(db: SqlDB, db_ok: int, callee: string, caller: string, src_ip: 
         // separate from route/dispatch so ordinary rules remain proxy legs.
         if str_has_prefix(r_action, "b2bua:") {
             let spec = r_action[6:]
-            let mut target = resolve_gateway(db, spec)
+            let mut target = resolve_gateway_cached(db, spec, cache)
             if len(target) == 0 { target = spec }
             if len(target) > 0 { return "b2bua|" + target }
         }
 
         // lcr — least-cost routing: find cheapest gateway for this prefix
         if str_eq(r_action, "lcr") {
-            let addr = sql_query_str(db, "SELECT g.address || ':' || g.port FROM routes r JOIN gateways g ON r.gateway_id = g.id WHERE $1 LIKE r.prefix || '%' AND r.enabled = true AND g.enabled = true ORDER BY r.cost_per_min ASC, r.priority ASC LIMIT 1", callee)
+            let addr = sql_query_str(db, "SELECT g.address || ':' || g.port FROM routes r JOIN gateways g ON r.gateway_id = g.id WHERE $1 LIKE r.prefix || '%' AND r.enabled = true AND g.enabled = true ORDER BY r.cost_per_min ASC, r.priority ASC LIMIT 1", sql_like_escape(callee))
             if len(addr) > 0 { return "route|" + addr }
         }
 
@@ -395,13 +488,18 @@ fn db_route_call(db: SqlDB, db_ok: int, callee: string, caller: string, src_ip: 
         ri = ri + 1
     }
 
-    // No rule matched — try legacy prefix routing as fallback
-    let mut plen = len(callee)
-    while plen > 0 {
-        let pfx = callee[0:plen]
-        let gw = sql_query_str(db, "SELECT g.address || ':' || g.port FROM routes r JOIN gateways g ON r.gateway_id = g.id WHERE r.prefix = $1 AND r.enabled = true AND g.enabled = true ORDER BY r.priority ASC LIMIT 1", pfx)
-        if len(gw) > 0 { return "route|" + gw }
-        plen = plen - 1
+    // No rule matched — try legacy prefix routing as fallback.
+    // Use a single longest-prefix-match query instead of N queries.
+    let lpm_key = "lpm|" + callee
+    if cmap_has(cache, lpm_key) == 1 {
+        let cached_lpm = cmap_get(cache, lpm_key)
+        if len(cached_lpm) > 0 { return cached_lpm }
+    }
+    let gw = sql_query_str(db, "SELECT g.address || ':' || g.port FROM routes r JOIN gateways g ON r.gateway_id = g.id WHERE r.enabled = true AND g.enabled = true AND $1 LIKE r.prefix || '%' ORDER BY length(r.prefix) DESC, r.priority ASC LIMIT 1", sql_like_escape(callee))
+    if len(gw) > 0 {
+        let lpm_result = "route|" + gw
+        let _ = bounded_cache_set(cache, "lpm_seq", "lpm_ring|", lpm_key, lpm_result, 16384)
+        return lpm_result
     }
     // Default route
     let def = sql_query_str(db, "SELECT g.address || ':' || g.port FROM routes r JOIN gateways g ON r.gateway_id = g.id WHERE r.prefix = '*' AND r.enabled = true AND g.enabled = true ORDER BY r.priority ASC LIMIT 1", "")

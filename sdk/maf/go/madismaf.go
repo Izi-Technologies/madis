@@ -13,10 +13,11 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // MAFVersion is the protocol version sent as X-MAF-Version on every request.
-const MAFVersion = "0.5.0"
+const MAFVersion = "0.7.0"
 
 type Client struct {
 	BaseURL string
@@ -155,6 +156,124 @@ func (c *Client) Media(ctx context.Context, callID, operation, resource, idem st
 func (c *Client) SetHeaders(ctx context.Context, callID string, headers []map[string]any, idem string) (map[string]any, error) {
 	return c.command(ctx, callPath(callID, "/headers"), map[string]any{"headers": headers}, idem)
 }
+func (c *Client) TransferCall(ctx context.Context, callID, target, transferType, otherCallID, idem string) (map[string]any, error) {
+	body := map[string]any{"target": target, "type": transferType}
+	if otherCallID != "" {
+		body["other_call_id"] = otherCallID
+	}
+	return c.command(ctx, callPath(callID, "/transfer"), body, idem)
+}
+func (c *Client) HoldCall(ctx context.Context, callID, idem string) (map[string]any, error) {
+	return c.command(ctx, callPath(callID, "/hold"), map[string]any{}, idem)
+}
+func (c *Client) UnholdCall(ctx context.Context, callID, idem string) (map[string]any, error) {
+	return c.command(ctx, callPath(callID, "/unhold"), map[string]any{}, idem)
+}
+func (c *Client) SendDTMF(ctx context.Context, callID, digit string, duration int, idem string) (map[string]any, error) {
+	if duration <= 0 {
+		duration = 250
+	}
+	return c.command(ctx, callPath(callID, "/dtmf"), map[string]any{"digit": digit, "duration": duration}, idem)
+}
+func (c *Client) RTPControl(ctx context.Context, callID, action, sdp, fromTag, toTag, flags, idem string) (map[string]any, error) {
+	body := map[string]any{"action": action}
+	if sdp != "" { body["sdp"] = sdp }
+	if fromTag != "" { body["from_tag"] = fromTag }
+	if toTag != "" { body["to_tag"] = toTag }
+	if flags != "" { body["flags"] = flags }
+	return c.command(ctx, callPath(callID, "/rtp"), body, idem)
+}
+func (c *Client) RouteCall(ctx context.Context, callID, target, transport, idem string) (map[string]any, error) {
+	body := map[string]any{"target": target}
+	if transport != "" {
+		body["transport"] = transport
+	}
+	return c.command(ctx, callPath(callID, "/route"), body, idem)
+}
+func (c *Client) PublishEvent(ctx context.Context, eventType, callID, payload string) (map[string]any, error) {
+	body := map[string]any{"event_type": eventType}
+	if callID != "" { body["call_id"] = callID }
+	if payload != "" { body["payload"] = payload }
+	return c.request(ctx, "POST", "/api/v1/maf/events", body, nil)
+}
+func (c *Client) Registrations(ctx context.Context, aor string, limit int) (map[string]any, error) {
+	if limit < 1 { limit = 1 }
+	if limit > 100 { limit = 100 }
+	q := map[string]string{"limit": fmt.Sprintf("%d", limit)}
+	if aor != "" { q["aor"] = aor }
+	return c.request(ctx, "GET", "/api/v1/maf/registrations", nil, q)
+}
+func (c *Client) CDR(ctx context.Context, callID string, limit int) (map[string]any, error) {
+	if limit < 1 { limit = 1 }
+	if limit > 100 { limit = 100 }
+	q := map[string]string{"limit": fmt.Sprintf("%d", limit)}
+	if callID != "" { q["call_id"] = callID }
+	return c.request(ctx, "GET", "/api/v1/maf/cdr", nil, q)
+}
+func (c *Client) Bans(ctx context.Context) (map[string]any, error) {
+	return c.request(ctx, "GET", "/api/v1/maf/security/bans", nil, nil)
+}
+func (c *Client) BanIP(ctx context.Context, sourceIP, reason string, permanent bool, durationMin int) (map[string]any, error) {
+	perm := "false"
+	if permanent { perm = "true" }
+	return c.request(ctx, "POST", "/api/v1/maf/security/bans", map[string]any{"source_ip": sourceIP, "reason": reason, "permanent": perm, "duration_min": durationMin}, nil)
+}
+func (c *Client) UnbanIP(ctx context.Context, sourceIP string) (map[string]any, error) {
+	return c.request(ctx, "DELETE", "/api/v1/maf/security/bans/"+url.PathEscape(sourceIP), nil, nil)
+}
+func (c *Client) SIPInspect(ctx context.Context, callID string) (map[string]any, error) {
+	return c.request(ctx, "GET", callPath(callID, "/sip"), nil, nil)
+}
+func (c *Client) Presence(ctx context.Context, aor string, limit int) (map[string]any, error) {
+	q := map[string]string{"limit": fmt.Sprintf("%d", limit)}
+	if aor != "" { q["aor"] = aor }
+	return c.request(ctx, "GET", "/api/v1/maf/presence", nil, q)
+}
+func (c *Client) PresenceUser(ctx context.Context, aor string) (map[string]any, error) {
+	return c.request(ctx, "GET", "/api/v1/maf/presence/"+url.PathEscape(aor), nil, nil)
+}
+func (c *Client) RoutingRules(ctx context.Context) (map[string]any, error) {
+	return c.request(ctx, "GET", "/api/v1/maf/routing/rules", nil, nil)
+}
+func (c *Client) CreateRoutingRule(ctx context.Context, body map[string]any) (map[string]any, error) {
+	return c.request(ctx, "POST", "/api/v1/maf/routing/rules", body, nil)
+}
+func (c *Client) DeleteRoutingRule(ctx context.Context, ruleID string) (map[string]any, error) {
+	return c.request(ctx, "DELETE", "/api/v1/maf/routing/rules/"+url.PathEscape(ruleID), nil, nil)
+}
+func (c *Client) Gateways(ctx context.Context) (map[string]any, error) {
+	return c.request(ctx, "GET", "/api/v1/maf/gateways", nil, nil)
+}
+func (c *Client) CreateGateway(ctx context.Context, name, address string, port int, transport string) (map[string]any, error) {
+	return c.request(ctx, "POST", "/api/v1/maf/gateways", map[string]any{"name": name, "address": address, "port": port, "transport": transport}, nil)
+}
+func (c *Client) DIDs(ctx context.Context) (map[string]any, error) {
+	return c.request(ctx, "GET", "/api/v1/maf/dids", nil, nil)
+}
+func (c *Client) CreateDID(ctx context.Context, number, destinationUser, description string) (map[string]any, error) {
+	return c.request(ctx, "POST", "/api/v1/maf/dids", map[string]any{"number": number, "destination_user": destinationUser, "description": description}, nil)
+}
+func (c *Client) DispatchSets(ctx context.Context) (map[string]any, error) {
+	return c.request(ctx, "GET", "/api/v1/maf/dispatch-sets", nil, nil)
+}
+func (c *Client) CreateDispatchSet(ctx context.Context, name, algorithm string) (map[string]any, error) {
+	return c.request(ctx, "POST", "/api/v1/maf/dispatch-sets", map[string]any{"name": name, "algorithm": algorithm}, nil)
+}
+func (c *Client) Cluster(ctx context.Context) (map[string]any, error) {
+	return c.request(ctx, "GET", "/api/v1/maf/cluster", nil, nil)
+}
+func (c *Client) Config(ctx context.Context) (map[string]any, error) {
+	return c.request(ctx, "GET", "/api/v1/maf/config", nil, nil)
+}
+func (c *Client) SetConfig(ctx context.Context, key, value, description string) (map[string]any, error) {
+	return c.request(ctx, "POST", "/api/v1/maf/config", map[string]any{"key": key, "value": value, "description": description}, nil)
+}
+func (c *Client) ChargeAuthorize(ctx context.Context, callID string) (map[string]any, error) {
+	return c.request(ctx, "POST", callPath(callID, "/charge"), nil, nil)
+}
+func (c *Client) ChargeDeny(ctx context.Context, callID string) (map[string]any, error) {
+	return c.request(ctx, "POST", callPath(callID, "/charge-deny"), nil, nil)
+}
 func (c *Client) Events(ctx context.Context, cursor, limit int, eventType string) (map[string]any, error) {
 	if cursor < 0 {
 		cursor = 0
@@ -170,4 +289,51 @@ func (c *Client) Events(ctx context.Context, cursor, limit int, eventType string
 		q.Set("event_type", eventType)
 	}
 	return c.request(ctx, http.MethodGet, "/api/v1/maf/events", nil, q, "")
+}
+
+// Subscribe polls the /events endpoint and sends each event to the channel.
+// Blocks until ctx is cancelled. Uses adaptive backoff (50ms-2s).
+func (c *Client) Subscribe(ctx context.Context, cursor int, eventType, callID string, ch chan<- map[string]any) error {
+	cur := cursor
+	interval := 50 * time.Millisecond
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		q := url.Values{"cursor": {strconv.Itoa(cur)}, "limit": {"100"}}
+		if eventType != "" { q.Set("event_type", eventType) }
+		if callID != "" { q.Set("call_id", callID) }
+		page, err := c.request(ctx, "GET", "/api/v1/maf/events", nil, q, "")
+		if err != nil {
+			interval = 2 * time.Second
+			select { case <-ctx.Done(): return ctx.Err(); case <-time.After(interval): }
+			continue
+		}
+		events, _ := page["events"].([]any)
+		if len(events) > 0 {
+			interval = 50 * time.Millisecond
+			for _, e := range events {
+				if evt, ok := e.(map[string]any); ok {
+					select { case ch <- evt: case <-ctx.Done(): return ctx.Err() }
+				}
+			}
+			if next, ok := page["next_cursor"].(string); ok {
+				if n, err := strconv.Atoi(next); err == nil && n > cur { cur = n }
+			}
+		} else {
+			if interval < 2*time.Second { interval *= 2 }
+		}
+		select { case <-ctx.Done(): return ctx.Err(); case <-time.After(interval): }
+	}
+}
+
+// WSUrl builds the WebSocket URL for direct connection with gorilla/websocket or nhooyr.io/websocket.
+func (c *Client) WSUrl(cursor int, eventType, callID string) string {
+	base := strings.Replace(strings.Replace(c.baseURL, "https://", "wss://", 1), "http://", "ws://", 1)
+	q := url.Values{"cursor": {strconv.Itoa(cursor)}}
+	if eventType != "" { q.Set("event_type", eventType) }
+	if callID != "" { q.Set("call_id", callID) }
+	return base + "/api/v1/maf/events/ws?" + q.Encode()
 }

@@ -575,7 +575,10 @@ fn ims_lifecycle_store(reg: CMap, aor: string, private_identity: string, public_
         if ims_lifecycle_path_ok(path) == 0 { return 0 }
         if ims_lifecycle_path_trusted_at_rest(path) == 0 { safe_path = "" }
     }
-    let expires_at = now_ms() + expires_s * 1000
+    let mut safe_exp_ims = expires_s
+    if safe_exp_ims < 0 { safe_exp_ims = 0 }
+    if safe_exp_ims > 86400 { safe_exp_ims = 86400 }
+    let expires_at = now_ms() + safe_exp_ims * 1000
     let value = ims_lifecycle_encode(private_identity, public_identity, contact, transport, expires_at, ip, port, safe_path, service_route, server_name, "registered")
     if len(value) == 0 { return 0 }
     if ims_lifecycle_admit_aor(reg, aor) == 0 { return 0 }

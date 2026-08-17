@@ -104,7 +104,7 @@ fn db_dialplan(db: SqlDB, db_ok: int, caller: string, callee: string, direction:
     let key = "dp|" + direction + "|" + callee
     if cmap_has(cache, key) == 1 {
         let cached = cmap_get(cache, key)
-        let parts = str_split(cached, "|")
+        let parts = str_split(cached, "\x01")
         if len(parts) >= 2 {
             result[0] = parts[0]
             result[1] = parts[1]
@@ -112,24 +112,18 @@ fn db_dialplan(db: SqlDB, db_ok: int, caller: string, callee: string, direction:
         return result
     }
 
-    // Longest prefix match on dialplan
-    let mut plen = len(callee)
-    while plen > 0 {
-        let pfx = callee[0:plen]
-        // Bind prefix and direction separately and fetch both actions in one
-        // query. The old code bound the prefix to both placeholders, so a
-        // direction-specific rule could never match.
-        let actions = sql_query_str2(db, "SELECT COALESCE(callee_action,'') || '|' || COALESCE(caller_action,'') FROM dialplan WHERE match_prefix = $1 AND direction = $2 AND enabled = true ORDER BY priority ASC LIMIT 1", pfx, direction)
-        let action_parts = str_split(actions, "|")
+    // Longest prefix match — single query instead of N per digit
+    let actions = sql_query_str2(db, "SELECT COALESCE(callee_action,'') || chr(1) || COALESCE(caller_action,'') FROM dialplan WHERE direction = $2 AND enabled = true AND $1 LIKE match_prefix || '%' ORDER BY length(match_prefix) DESC, priority ASC LIMIT 1", sql_like_escape(callee), direction)
+    if len(actions) > 0 {
+        let action_parts = str_split(actions, "\x01")
         if len(action_parts) >= 1 && len(action_parts[0]) > 0 {
             result[0] = num_apply_chain(callee, action_parts[0])
             if len(action_parts) >= 2 {
                 if len(action_parts[1]) > 0 { result[1] = num_apply_chain(caller, action_parts[1]) }
             }
-            let _ = bounded_cache_set(cache, "dp_seq", "dp_ring|", key, result[0] + "|" + result[1], 16384)
+            let _ = bounded_cache_set(cache, "dp_seq", "dp_ring|", key, result[0] + "\x01" + result[1], 16384)
             return result
         }
-        plen = plen - 1
     }
 
     // Default rule (prefix = '*')
@@ -138,7 +132,7 @@ fn db_dialplan(db: SqlDB, db_ok: int, caller: string, callee: string, direction:
         result[0] = num_apply_chain(callee, def_action)
     }
 
-    let _ = bounded_cache_set(cache, "dp_seq", "dp_ring|", key, result[0] + "|" + result[1], 16384)
+    let _ = bounded_cache_set(cache, "dp_seq", "dp_ring|", key, result[0] + "\x01" + result[1], 16384)
     return result
 }
 

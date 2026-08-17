@@ -288,6 +288,7 @@ fn proxy_admin_worker(reg: CMap, calls: CMap, cache: CMap) -> int {
     // nonblocking so SIGTERM cannot strand this worker in accept.
     let _ = io_set_nonblocking(fd, 1)
     let _ = register_listener(fd)
+    cmap_set(cache, "_prom_active", "1")
     slog("  Admin:   http://127.0.0.1:" + string(port) + " (/healthz, /readyz, /metrics)")
     while shutdown_requested() == 0 {
         if io_read_ready(fd, 100) <= 0 { continue }

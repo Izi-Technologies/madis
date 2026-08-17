@@ -277,40 +277,53 @@ fn db_digest_valid(db: SqlDB, db_ok: int, msg: string, n: int, method: string, f
 fn db_ip_auth(db: SqlDB, db_ok: int, src_ip: string, cache: CMap) -> int {
     let key = "ipauth|" + src_ip
     if cmap_has(cache, key) == 1 {
-        if str_eq(cmap_get(cache, key), "1") { return 1 }
-        return 0
+        let cached = cmap_get(cache, key)
+        // Fast path: check first byte for 1/0 before parsing timestamp.
+        // Format: "1|<ms>" or "0|<ms>". First byte is the decision.
+        if len(cached) > 2 && int(cached[1]) == 124 {
+            let mut at = 0
+            match parse_int(cached[2:]) { Ok(v) => { at = v } Err(_) => {} }
+            if at > 0 && mono_ms() - at < 30000 {
+                return if int(cached[0]) == 49 { 1 } else { 0 }
+            }
+        }
     }
     // The local health/interop path is intentionally usable without a
     // database. Do not extend this exception to RFC1918/private networks.
     if str_eq(src_ip, "127.0.0.1") || str_eq(src_ip, "::1") {
-        let _ = bounded_cache_set(cache, "auth_ip_seq", "auth_ip_ring|", key, "1", 16384)
+        let _ = bounded_cache_set(cache, "auth_ip_seq", "auth_ip_ring|", key, "1|" + string(mono_ms()), 16384)
         return 1
     }
     if db_ok == 0 {
         // A database outage must fail closed. Private address space is not
         // proof of trust because a SIP listener may be reachable on a
         // routed or spoofable interface.
-        let _ = bounded_cache_set(cache, "auth_ip_seq", "auth_ip_ring|", key, "0", 16384)
+        let _ = bounded_cache_set(cache, "auth_ip_seq", "auth_ip_ring|", key, "0|" + string(mono_ms()), 16384)
         return 0
     }
 
     // Check ip_auth table
     let r = sql_query_str(db, "SELECT id FROM ip_auth WHERE ip_address = $1 AND enabled = true LIMIT 1", src_ip)
     if len(r) > 0 {
-        let _ = bounded_cache_set(cache, "auth_ip_seq", "auth_ip_ring|", key, "1", 16384)
+        let _ = bounded_cache_set(cache, "auth_ip_seq", "auth_ip_ring|", key, "1|" + string(mono_ms()), 16384)
         return 1
     }
-    // Check CIDR/subnet (simplified: check /24 by stripping last octet)
-    let dot_parts = str_split(src_ip, ".")
-    if len(dot_parts) == 4 {
-        let subnet = dot_parts[0] + "." + dot_parts[1] + "." + dot_parts[2] + ".0/24"
+    // Check CIDR/subnet — /24 by finding the last dot (no str_split)
+    let mut last_dot = -1
+    let mut di = len(src_ip) - 1
+    while di >= 0 {
+        if int(src_ip[di]) == 46 { last_dot = di; break }
+        di = di - 1
+    }
+    if last_dot > 0 {
+        let subnet = src_ip[0:last_dot] + ".0/24"
         let r2 = sql_query_str(db, "SELECT id FROM ip_auth WHERE ip_address = $1 AND enabled = true LIMIT 1", subnet)
-    if len(r2) > 0 {
-            let _ = bounded_cache_set(cache, "auth_ip_seq", "auth_ip_ring|", key, "1", 16384)
+        if len(r2) > 0 {
+            let _ = bounded_cache_set(cache, "auth_ip_seq", "auth_ip_ring|", key, "1|" + string(mono_ms()), 16384)
             return 1
         }
     }
-    let _ = bounded_cache_set(cache, "auth_ip_seq", "auth_ip_ring|", key, "0", 16384)
+    let _ = bounded_cache_set(cache, "auth_ip_seq", "auth_ip_ring|", key, "0|" + string(mono_ms()), 16384)
     return 0
 }
 

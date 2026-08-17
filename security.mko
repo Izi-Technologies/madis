@@ -24,8 +24,10 @@ fn sec_is_banned(db: SqlDB, db_ok: int, src_ip: string, cache: CMap) -> int {
     let r = sql_query_str(db, "SELECT CASE WHEN permanent THEN 'P' ELSE 'T' END FROM security_bans WHERE source_ip = $1 AND (permanent = true OR expires_at > NOW()) LIMIT 1", src_ip)
     if len(r) > 0 {
         if str_eq(r, "P") {
-            // Permanent bans stored outside the ring — immune to eviction.
-            cmap_set(cache, key, "1|" + string(now))
+            // Permanent bans use a dedicated large ring so they aren't evicted
+            // by transient ban churn, but still bounded to prevent memory growth
+            // from spoofed source IPs.
+            let _ = bounded_cache_set(cache, "pban_seq", "pban_ring|", key, "1|" + string(now), 131072)
         } else {
             let _ = bounded_cache_set(cache, "ban_seq", "ban_ring|", key, "1|" + string(now), 65536)
         }
@@ -139,12 +141,19 @@ fn sec_is_fraud_dest(dest: string, cache: CMap) -> int {
         let _ = bounded_cache_set(cache, "fraud_seq", "fraud_ring|", key, prefixes, 64)
     }
     if len(prefixes) == 0 { return 0 }
-    let parts = str_split(prefixes, ",")
-    let mut i = 0
-    while i < len(parts) {
-        let pfx = str_trim_space(parts[i])
-        if len(pfx) > 0 && str_has_prefix(dest, pfx) { return 1 }
-        i = i + 1
+    // Scan without str_split — walk comma-separated prefixes inline
+    let plen = len(prefixes)
+    let mut start = 0
+    while start < plen {
+        // Skip whitespace
+        while start < plen && (int(prefixes[start]) == 32 || int(prefixes[start]) == 9) { start = start + 1 }
+        let mut end = start
+        while end < plen && int(prefixes[end]) != 44 { end = end + 1 }
+        // Trim trailing whitespace
+        let mut te = end
+        while te > start && (int(prefixes[te - 1]) == 32 || int(prefixes[te - 1]) == 9) { te = te - 1 }
+        if te > start && str_has_prefix(dest, prefixes[start:te]) { return 1 }
+        start = end + 1
     }
     return 0
 }
@@ -154,7 +163,8 @@ fn sec_is_fraud_dest(dest: string, cache: CMap) -> int {
 fn sec_is_enum_scanner(src_ip: string, username: string, cache: CMap) -> int {
     // Sanitize early — before any cache write.
     let mut safe_user = username
-    if str_contains(safe_user, ",") { safe_user = str_split(safe_user, ",")[0] }
+    let comma_pos = str_index(safe_user, ",")
+    if comma_pos >= 0 { safe_user = safe_user[0:comma_pos] }
     if len(safe_user) > 128 { safe_user = safe_user[0:128] }
     let set_key = "enum_users|" + src_ip
     let ts_key = "enum_ts|" + src_ip
@@ -171,13 +181,20 @@ fn sec_is_enum_scanner(src_ip: string, username: string, cache: CMap) -> int {
     }
     let mut existing = ""
     if cmap_has(cache, set_key) == 1 { existing = cmap_get(cache, set_key) }
-    if not str_contains("," + existing + ",", "," + safe_user + ",") {
+    // Cap total size at 4KB — 20 usernames × 128 bytes = 2560, so 4096 is safe.
+    // Beyond this, stop appending and let the count check fire on what we have.
+    if not str_contains("," + existing + ",", "," + safe_user + ",") && len(existing) < 4096 {
         let updated = existing + "," + safe_user
         let _ = bounded_cache_set(cache, "enum_seq", "enum_ring|", set_key, updated, 16384)
         existing = updated
     }
-    // Count distinct users (comma-separated)
-    let count = len(str_split(existing, ","))
+    // Count distinct users — count commas + 1 without allocating an array
+    let mut count = 1
+    let mut ci = 0
+    while ci < len(existing) {
+        if int(existing[ci]) == 44 { count = count + 1 }
+        ci = ci + 1
+    }
     // 20+ distinct usernames from one IP in 60s = enumeration
     if count >= 20 { return 1 }
     return 0

@@ -4,21 +4,39 @@
 // a dead gateway cannot block a SIP worker indefinitely.
 
 fn sip_transport_param(target: string, fallback: string) -> string {
-    let low = str_to_lower(target)
-    let p = str_index(low, "transport=")
+    // Scan for "transport=" case-insensitively without lowering the whole URI.
+    // Most targets are <100 bytes; scan bytes for 't'/'T' then verify.
+    let tlen = len(target)
+    let mut p = -1
+    let mut si = 0
+    while si + 10 <= tlen {
+        let c = int(target[si])
+        if (c == 116 || c == 84) && str_eq(str_to_lower(target[si:si + 10]), "transport=") {
+            p = si
+            break
+        }
+        si = si + 1
+    }
     if p >= 0 {
         let start = p + 10
         let mut end = start
-        while end < len(target) {
+        while end < tlen {
             let c = int(target[end])
             if c == 59 || c == 62 || c == 32 || c == 9 { break }
             end = end + 1
         }
         if end > start { return str_to_lower(target[start:end]) }
     }
-    if str_has_prefix(low, "sips:") || str_has_prefix(low, "tls:") { return "tls" }
-    if str_has_prefix(low, "ws:") { return "ws" }
-    if str_has_prefix(low, "wss:") { return "wss" }
+    // Check scheme — only lowercase the first 5 bytes
+    if str_has_prefix(target, "sips:") || str_has_prefix(target, "tls:") { return "tls" }
+    if str_has_prefix(target, "ws:") { return "ws" }
+    if str_has_prefix(target, "wss:") { return "wss" }
+    if len(target) >= 5 {
+        let scheme = str_to_lower(target[0:5])
+        if str_has_prefix(scheme, "sips:") || str_has_prefix(scheme, "tls:") { return "tls" }
+        if str_has_prefix(scheme, "wss:") { return "wss" }
+        if str_has_prefix(scheme, "ws:") { return "ws" }
+    }
     return str_to_lower(fallback)
 }
 
@@ -45,10 +63,12 @@ fn sip_srv_service(target: string, transport: string) -> string {
     if sip_target_explicit_port(target) == 1 { return "" }
     let host = sip_target_host(target)
     if len(host) == 0 || parse_ip_ok(host) == 1 { return "" }
-    let low = str_to_lower(target)
     let tr = str_to_lower(transport)
-    if str_eq(tr, "tls") || str_eq(tr, "sips") || str_has_prefix(low, "sips:") || str_has_prefix(low, "tls://") {
-        return "_sips._tcp." + host
+    if str_eq(tr, "tls") || str_eq(tr, "sips") { return "_sips._tcp." + host }
+    if str_has_prefix(target, "sips:") || str_has_prefix(target, "tls://") { return "_sips._tcp." + host }
+    if len(target) >= 5 {
+        let scheme = str_to_lower(target[0:5])
+        if str_has_prefix(scheme, "sips:") { return "_sips._tcp." + host }
     }
     if str_eq(tr, "tcp") { return "_sip._tcp." + host }
     return "_sip._udp." + host
@@ -545,8 +565,8 @@ fn sip_forward_target(target: string, msg: string, transport: string, cache: CMa
         let cid = sip_header(msg, "Call-ID")
         let branch = sip_via_branch(sip_header(msg, "Via"))
         if len(cid) > 0 && len(branch) > 0 {
-            let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_dst|" + cid, target, 65536)
-            let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_branch|" + cid, branch, 65536)
+            let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_dst|" + cid, target, 131072)
+            let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_branch|" + cid, branch, 131072)
         }
     }
     if sent == 1 {
@@ -587,8 +607,16 @@ fn sip_forward_reply(reply: string, cache: CMap, out_fd: int) -> int {
             Err(_) => {}
         }
         if conn_fd >= 0 {
-            let sent_existing = tcp_write_all(conn_fd, reply)
-            if sent_existing >= 0 { return 1 }
+            // RFC 7118 §5: WebSocket connections must use frame-based send,
+            // not raw TCP write. Check the tracked transport type.
+            let conn_tr = cmap_get(cache, "server_conn_tr|" + txn_key)
+            if str_eq(conn_tr, "WSS") || str_eq(conn_tr, "WS") {
+                let ws_sent = ws_send_text(conn_fd, reply)
+                if ws_sent >= 0 { return 1 }
+            } else {
+                let sent_existing = tcp_write_all(conn_fd, reply)
+                if sent_existing >= 0 { return 1 }
+            }
         }
     }
     let host = proxy_reply_host(reply)

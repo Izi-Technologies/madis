@@ -143,7 +143,8 @@ fn sip_per_ip_conn_check(cache: CMap, ip: string) -> int {
         match parse_int(cmap_get(cache, key)) { Ok(v) => { count = v } Err(_) => {} }
     }
     if count >= sip_per_ip_conn_limit() { return 0 }
-    cmap_set(cache, key, string(count + 1))
+    // Use bounded ring so connection-scan from many IPs doesn't grow unbounded
+    let _ = bounded_cache_set(cache, "ipconn_seq", "ipconn_ring|", key, string(count + 1), 65536)
     return 1
 }
 
@@ -153,8 +154,12 @@ fn sip_per_ip_conn_release(cache: CMap, ip: string) -> int {
     if cmap_has(cache, key) == 1 {
         match parse_int(cmap_get(cache, key)) { Ok(v) => { count = v } Err(_) => {} }
     }
-    if count > 0 { count = count - 1 }
-    cmap_set(cache, key, string(count))
+    if count > 1 {
+        cmap_set(cache, key, string(count - 1))
+    } else {
+        // Clean up when no connections remain — prevents stale zero entries
+        let _ = cmap_del(cache, key)
+    }
     return 1
 }
 

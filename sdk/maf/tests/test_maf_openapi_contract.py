@@ -162,7 +162,37 @@ class OpenApiContractTests(unittest.TestCase):
         ("POST", "/api/v1/maf/calls/{call_id}/bridges"): "bridge_call",
         ("POST", "/api/v1/maf/calls/{call_id}/media"): "media",
         ("POST", "/api/v1/maf/calls/{call_id}/headers"): "set_headers",
+        ("POST", "/api/v1/maf/calls/{call_id}/transfer"): "transfer_call",
+        ("POST", "/api/v1/maf/calls/{call_id}/hold"): "hold_call",
+        ("POST", "/api/v1/maf/calls/{call_id}/unhold"): "unhold_call",
+        ("POST", "/api/v1/maf/calls/{call_id}/dtmf"): "send_dtmf",
+        ("POST", "/api/v1/maf/calls/{call_id}/route"): "route_call",
+        ("POST", "/api/v1/maf/calls/{call_id}/rtp"): "rtp_control",
+        ("GET", "/api/v1/maf/calls/{call_id}/sip"): "sip_inspect",
+        ("POST", "/api/v1/maf/calls/{call_id}/charge"): "charge_authorize",
+        ("POST", "/api/v1/maf/calls/{call_id}/charge-deny"): "charge_deny",
+        ("GET", "/api/v1/maf/registrations"): "registrations",
+        ("GET", "/api/v1/maf/presence"): "presence",
+        ("GET", "/api/v1/maf/presence/{aor}"): "presence_user",
+        ("GET", "/api/v1/maf/cdr"): "cdr",
+        ("GET", "/api/v1/maf/security/bans"): "bans",
+        ("POST", "/api/v1/maf/security/bans"): "ban_ip",
+        ("DELETE", "/api/v1/maf/security/bans/{source_ip}"): "unban_ip",
+        ("GET", "/api/v1/maf/routing/rules"): "routing_rules",
+        ("POST", "/api/v1/maf/routing/rules"): "create_routing_rule",
+        ("DELETE", "/api/v1/maf/routing/rules/{rule_id}"): "delete_routing_rule",
+        ("GET", "/api/v1/maf/gateways"): "gateways",
+        ("POST", "/api/v1/maf/gateways"): "create_gateway",
+        ("GET", "/api/v1/maf/dids"): "dids",
+        ("POST", "/api/v1/maf/dids"): "create_did",
+        ("GET", "/api/v1/maf/dispatch-sets"): "dispatch_sets",
+        ("POST", "/api/v1/maf/dispatch-sets"): "create_dispatch_set",
+        ("GET", "/api/v1/maf/cluster"): "cluster",
+        ("GET", "/api/v1/maf/config"): "config",
+        ("POST", "/api/v1/maf/config"): "set_config",
         ("GET", "/api/v1/maf/events"): "events",
+        ("POST", "/api/v1/maf/events"): "publish_event",
+        ("GET", "/api/v1/maf/events/ws"): "ws_url",
     }
 
     def test_every_openapi_route_has_sdk_method(self):
@@ -203,7 +233,7 @@ class OpenApiContractTests(unittest.TestCase):
 
     def test_call_state_enum(self):
         spec_enums = _extract_enum(self.spec, "Call:", "state")
-        expected = ["created", "ringing", "answered", "bridged", "ending", "ended", "failed"]
+        expected = ["created", "ringing", "answered", "bridged", "transferring", "ending", "ended", "failed"]
         self.assertEqual(spec_enums, expected)
         self.assertIn(MOCK_CALL["state"], spec_enums)
 
@@ -257,7 +287,7 @@ class OpenApiContractTests(unittest.TestCase):
         self.assertEqual(self.captured[0]["headers"]["X-maf-version"], MAF_VERSION)
 
     def test_maf_version_constant(self):
-        self.assertEqual(MAF_VERSION, "0.5.0")
+        self.assertEqual(MAF_VERSION, "0.7.0")
 
 
 if __name__ == "__main__":

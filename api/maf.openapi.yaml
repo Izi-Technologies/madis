@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: MADIS Application Fabric
-  version: 0.5.0
+  version: 0.7.0
   description: >-
     Language-neutral command and replayable event contract for external MADIS
     applications. The MAF HTTP routes in this document are served by the
@@ -163,6 +163,128 @@ paths:
         '403': {description: Scope or call policy denied the command}
         '404': {description: Call not found}
         '409': {description: Call state conflict}
+  /api/v1/maf/calls/{call_id}/transfer:
+    post:
+      operationId: transferCall
+      summary: Transfer a call (blind or attended)
+      security:
+        - mafBearerAuth: []
+      parameters:
+        - {$ref: '#/components/parameters/CallId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json: {schema: {$ref: '#/components/schemas/TransferRequest'}}
+      responses:
+        '202': {description: Command accepted, content: {application/json: {schema: {$ref: '#/components/schemas/CommandReceipt'}}}}
+        '401': {description: Authentication failed}
+        '403': {description: Scope or call policy denied the command}
+        '404': {description: Call not found}
+        '409': {description: Call state conflict}
+  /api/v1/maf/calls/{call_id}/hold:
+    post:
+      operationId: holdCall
+      summary: Place a call on hold
+      security:
+        - mafBearerAuth: []
+      parameters:
+        - {$ref: '#/components/parameters/CallId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: false
+        content:
+          application/json: {schema: {$ref: '#/components/schemas/CommandRequest'}}
+      responses:
+        '202': {description: Command accepted, content: {application/json: {schema: {$ref: '#/components/schemas/CommandReceipt'}}}}
+        '401': {description: Authentication failed}
+        '403': {description: Scope or call policy denied the command}
+        '404': {description: Call not found}
+        '409': {description: Call state conflict}
+  /api/v1/maf/calls/{call_id}/unhold:
+    post:
+      operationId: unholdCall
+      summary: Resume a held call
+      security:
+        - mafBearerAuth: []
+      parameters:
+        - {$ref: '#/components/parameters/CallId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: false
+        content:
+          application/json: {schema: {$ref: '#/components/schemas/CommandRequest'}}
+      responses:
+        '202': {description: Command accepted, content: {application/json: {schema: {$ref: '#/components/schemas/CommandReceipt'}}}}
+        '401': {description: Authentication failed}
+        '403': {description: Scope or call policy denied the command}
+        '404': {description: Call not found}
+        '409': {description: Call state conflict}
+  /api/v1/maf/calls/{call_id}/dtmf:
+    post:
+      operationId: sendDtmf
+      summary: Send a DTMF digit via SIP INFO
+      security:
+        - mafBearerAuth: []
+      parameters:
+        - {$ref: '#/components/parameters/CallId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json: {schema: {$ref: '#/components/schemas/DtmfRequest'}}
+      responses:
+        '202': {description: Command accepted, content: {application/json: {schema: {$ref: '#/components/schemas/CommandReceipt'}}}}
+        '401': {description: Authentication failed}
+        '403': {description: Scope or call policy denied the command}
+        '404': {description: Call not found}
+        '409': {description: Call state conflict}
+  /api/v1/maf/calls/{call_id}/route:
+    post:
+      operationId: routeCall
+      summary: Route an inbound call to a target
+      description: >-
+        SDK-controlled routing for inbound calls. Bypasses the built-in routing
+        engine and forwards the cached INVITE to the specified SIP URI. Requires
+        SIP_MAF_INBOUND_MODE=control or route.
+      security:
+        - mafBearerAuth: []
+      parameters:
+        - {$ref: '#/components/parameters/CallId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json: {schema: {$ref: '#/components/schemas/RouteRequest'}}
+      responses:
+        '202': {description: Command accepted, content: {application/json: {schema: {$ref: '#/components/schemas/CommandReceipt'}}}}
+        '401': {description: Authentication failed}
+        '403': {description: Scope or call policy denied the command}
+        '404': {description: Call not found}
+        '409': {description: Call state conflict}
+  /api/v1/maf/calls/{call_id}/rtp:
+    post:
+      operationId: rtpControl
+      summary: Control RTPEngine media relay
+      description: >-
+        Direct RTPEngine ng-protocol control. The SDK can trigger offer, answer,
+        delete, or query with per-call flag overrides (ICE, SRTP, DTLS, codec
+        strip, etc.). The rewritten SDP is cached for retrieval.
+      security:
+        - mafBearerAuth: []
+      parameters:
+        - {$ref: '#/components/parameters/CallId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json: {schema: {$ref: '#/components/schemas/RtpRequest'}}
+      responses:
+        '202': {description: Command accepted, content: {application/json: {schema: {$ref: '#/components/schemas/CommandReceipt'}}}}
+        '401': {description: Authentication failed}
+        '403': {description: Scope or call policy denied the command}
+        '404': {description: Call not found}
+        '409': {description: Call state conflict}
   /api/v1/maf/events:
     get:
       operationId: listEvents
@@ -182,6 +304,285 @@ paths:
         '200': {description: Event page, content: {application/json: {schema: {$ref: '#/components/schemas/EventPage'}}}}
         '401': {description: Authentication failed}
         '403': {description: Subscription policy denied the request}
+  /api/v1/maf/events/ws:
+    get:
+      operationId: subscribeEvents
+      summary: WebSocket event subscription (RFC 7118 compatible)
+      description: >-
+        Bearer-authenticated WebSocket upgrade. Echoes Sec-WebSocket-Protocol: sip.
+        Each text frame is a JSON event page. Supports call_id and event_type
+        filters. Adaptive poll with 30s heartbeat. Resume from next_cursor
+        on reconnect.
+      security: [{mafBearerAuth: []}]
+      parameters:
+        - {name: cursor, in: query, schema: {type: string}}
+        - {name: event_type, in: query, schema: {type: string, maxLength: 128}}
+        - {name: call_id, in: query, schema: {type: string, maxLength: 128}}
+      responses:
+        '101': {description: WebSocket upgrade successful}
+        '401': {description: Authentication failed}
+  /api/v1/maf/events:
+    post:
+      operationId: publishEvent
+      summary: Publish a custom application event
+      description: Custom events must use the app. prefix. Write scope required.
+      security: [{mafBearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [event_type]
+              properties:
+                event_type: {type: string, minLength: 5, maxLength: 128, pattern: '^app\.'}
+                call_id: {type: string, maxLength: 128}
+                payload: {type: string, maxLength: 65536}
+      responses:
+        '201': {description: Event published}
+        '401': {description: Authentication failed}
+        '403': {description: Write scope required}
+  /api/v1/maf/calls/{call_id}/sip:
+    get:
+      operationId: sipInspect
+      summary: Inspect SIP message details for a call
+      security: [{mafBearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CallId'}]
+      responses:
+        '200': {description: SIP details}
+        '404': {description: Call not found}
+  /api/v1/maf/calls/{call_id}/charge:
+    post:
+      operationId: chargeAuthorize
+      summary: Authorize a charge for a call
+      security: [{mafBearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CallId'}]
+      responses:
+        '200': {description: Charge authorized}
+  /api/v1/maf/calls/{call_id}/charge-deny:
+    post:
+      operationId: chargeDeny
+      summary: Deny a charge for a call
+      security: [{mafBearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CallId'}]
+      responses:
+        '200': {description: Charge denied}
+  /api/v1/maf/registrations:
+    get:
+      operationId: listRegistrations
+      summary: List active SIP registrations
+      security: [{mafBearerAuth: []}]
+      parameters:
+        - {name: aor, in: query, schema: {type: string, maxLength: 512}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 100}}
+      responses:
+        '200': {description: Registration list}
+  /api/v1/maf/presence:
+    get:
+      operationId: listPresence
+      summary: List online users
+      security: [{mafBearerAuth: []}]
+      parameters:
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 100}}
+      responses:
+        '200': {description: Presence list}
+  /api/v1/maf/presence/{aor}:
+    get:
+      operationId: getPresence
+      summary: Get presence for a specific user
+      security: [{mafBearerAuth: []}]
+      parameters:
+        - {name: aor, in: path, required: true, schema: {type: string, maxLength: 512}}
+      responses:
+        '200': {description: User presence}
+  /api/v1/maf/cdr:
+    get:
+      operationId: listCDR
+      summary: List call detail records
+      security: [{mafBearerAuth: []}]
+      parameters:
+        - {name: call_id, in: query, schema: {type: string, maxLength: 512}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}
+      responses:
+        '200': {description: CDR list}
+  /api/v1/maf/security/bans:
+    get:
+      operationId: listBans
+      summary: List active IP bans
+      security: [{mafBearerAuth: []}]
+      responses:
+        '200': {description: Ban list}
+    post:
+      operationId: banIP
+      summary: Ban an IP address
+      security: [{mafBearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [source_ip]
+              properties:
+                source_ip: {type: string, maxLength: 128}
+                reason: {type: string, maxLength: 512}
+                permanent: {type: string, enum: ["true", "false"], default: "false"}
+                duration_min: {type: integer, minimum: 1, maximum: 10080, default: 60}
+      responses:
+        '201': {description: IP banned}
+  /api/v1/maf/security/bans/{source_ip}:
+    delete:
+      operationId: unbanIP
+      summary: Remove an IP ban
+      security: [{mafBearerAuth: []}]
+      parameters:
+        - {name: source_ip, in: path, required: true, schema: {type: string, maxLength: 128}}
+      responses:
+        '200': {description: Ban removed}
+  /api/v1/maf/routing/rules:
+    get:
+      operationId: listRoutingRules
+      summary: List routing rules
+      security: [{mafBearerAuth: []}]
+      responses:
+        '200': {description: Routing rules list}
+    post:
+      operationId: createRoutingRule
+      summary: Create a routing rule
+      security: [{mafBearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                match_prefix: {type: string, maxLength: 64}
+                match_caller: {type: string, maxLength: 64}
+                match_src_ip: {type: string, maxLength: 128}
+                match_time_start: {type: string, maxLength: 5}
+                match_time_end: {type: string, maxLength: 5}
+                match_day: {type: string, maxLength: 32}
+                action: {type: string, maxLength: 512}
+                priority: {type: integer, minimum: 1, maximum: 9999, default: 10}
+                description: {type: string, maxLength: 512}
+      responses:
+        '201': {description: Rule created}
+  /api/v1/maf/routing/rules/{rule_id}:
+    delete:
+      operationId: deleteRoutingRule
+      summary: Delete a routing rule
+      security: [{mafBearerAuth: []}]
+      parameters:
+        - {name: rule_id, in: path, required: true, schema: {type: integer}}
+      responses:
+        '200': {description: Rule deleted}
+  /api/v1/maf/gateways:
+    get:
+      operationId: listGateways
+      summary: List gateways
+      security: [{mafBearerAuth: []}]
+      responses:
+        '200': {description: Gateway list}
+    post:
+      operationId: createGateway
+      summary: Create or update a gateway
+      security: [{mafBearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, address]
+              properties:
+                name: {type: string, minLength: 1, maxLength: 128}
+                address: {type: string, minLength: 1, maxLength: 256}
+                port: {type: integer, minimum: 1, maximum: 65535, default: 5060}
+                transport: {type: string, enum: [UDP, TCP, TLS], default: UDP}
+      responses:
+        '201': {description: Gateway created}
+  /api/v1/maf/dids:
+    get:
+      operationId: listDIDs
+      summary: List DID numbers
+      security: [{mafBearerAuth: []}]
+      responses:
+        '200': {description: DID list}
+    post:
+      operationId: createDID
+      summary: Create or update a DID mapping
+      security: [{mafBearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [number, destination_user]
+              properties:
+                number: {type: string, minLength: 1, maxLength: 64}
+                destination_user: {type: string, minLength: 1, maxLength: 128}
+                description: {type: string, maxLength: 512}
+      responses:
+        '201': {description: DID created}
+  /api/v1/maf/dispatch-sets:
+    get:
+      operationId: listDispatchSets
+      summary: List dispatch sets with members
+      security: [{mafBearerAuth: []}]
+      responses:
+        '200': {description: Dispatch set list}
+    post:
+      operationId: createDispatchSet
+      summary: Create a dispatch set
+      security: [{mafBearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: {type: string, minLength: 1, maxLength: 128}
+                algorithm: {type: string, enum: [round-robin, weight, priority, hash, hash-user, broadcast], default: round-robin}
+      responses:
+        '201': {description: Dispatch set created}
+  /api/v1/maf/cluster:
+    get:
+      operationId: listClusterNodes
+      summary: List cluster node health
+      security: [{mafBearerAuth: []}]
+      responses:
+        '200': {description: Cluster node list}
+  /api/v1/maf/config:
+    get:
+      operationId: listConfig
+      summary: Read runtime configuration
+      security: [{mafBearerAuth: []}]
+      responses:
+        '200': {description: Config key list}
+    post:
+      operationId: setConfig
+      summary: Set a configuration value
+      description: Only allowlisted keys (rtpengine_*, security_*, select stir_shaken_*) can be set via MAF.
+      security: [{mafBearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key, value]
+              properties:
+                key: {type: string, minLength: 1, maxLength: 128}
+                value: {type: string, maxLength: 4096}
+                description: {type: string, maxLength: 512}
+      responses:
+        '200': {description: Config updated}
+        '403': {description: Key not in MAF allowlist}
 components:
   securitySchemes:
     mafBearerAuth:
@@ -248,6 +649,7 @@ components:
               minItems: 2
               maxItems: 8
               items: {type: string, minLength: 8, maxLength: 128}
+            mode: {type: string, enum: [bridge, conference], default: bridge}
     MediaRequest:
       allOf:
         - {$ref: '#/components/schemas/CommandRequest'}
@@ -278,6 +680,42 @@ components:
         name: {type: string, minLength: 1, maxLength: 128}
         value: {type: string, maxLength: 4096}
         target: {type: string, maxLength: 128}
+    TransferRequest:
+      allOf:
+        - {$ref: '#/components/schemas/CommandRequest'}
+        - type: object
+          required: [target, type]
+          properties:
+            target: {type: string, minLength: 1, maxLength: 512}
+            type: {type: string, enum: [blind, attended]}
+            other_call_id: {type: string, minLength: 8, maxLength: 128, description: Required for attended transfer}
+    DtmfRequest:
+      allOf:
+        - {$ref: '#/components/schemas/CommandRequest'}
+        - type: object
+          required: [digit]
+          properties:
+            digit: {type: string, minLength: 1, maxLength: 1, pattern: '^[0-9*#A-Da-d]$'}
+            duration: {type: integer, minimum: 50, maximum: 5000, default: 250}
+    RouteRequest:
+      allOf:
+        - {$ref: '#/components/schemas/CommandRequest'}
+        - type: object
+          required: [target]
+          properties:
+            target: {type: string, minLength: 1, maxLength: 512, description: SIP URI to route the call to}
+            transport: {type: string, enum: [udp, tcp, tls, wss], description: Override outbound transport}
+    RtpRequest:
+      allOf:
+        - {$ref: '#/components/schemas/CommandRequest'}
+        - type: object
+          required: [action]
+          properties:
+            action: {type: string, enum: [offer, answer, delete, query]}
+            sdp: {type: string, maxLength: 32768, description: Required for offer/answer}
+            from_tag: {type: string, maxLength: 256, description: Required for offer/answer}
+            to_tag: {type: string, maxLength: 256, description: Required for answer}
+            flags: {type: string, maxLength: 512, description: RTPEngine ng-protocol flags override}
     CommandReceipt:
       type: object
       required: [schema, command_id, status, trace_id]
@@ -296,7 +734,7 @@ components:
         schema: {type: string, enum: [madis.maf.call.v1]}
         call_id: {type: string}
         tenant_id: {type: string}
-        state: {type: string, enum: [created, ringing, answered, bridged, ending, ended, failed]}
+        state: {type: string, enum: [created, ringing, answered, bridged, transferring, ending, ended, failed]}
         version: {type: string}
         channels: {type: array, items: {$ref: '#/components/schemas/Channel'}}
         bridges: {type: array, items: {$ref: '#/components/schemas/Bridge'}}
