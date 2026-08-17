@@ -194,85 +194,85 @@ func (c *Client) PublishEvent(ctx context.Context, eventType, callID, payload st
 	body := map[string]any{"event_type": eventType}
 	if callID != "" { body["call_id"] = callID }
 	if payload != "" { body["payload"] = payload }
-	return c.request(ctx, "POST", "/api/v1/maf/events", body, nil)
+	return c.request(ctx, "POST", "/api/v1/maf/events", body, nil, "")
 }
 func (c *Client) Registrations(ctx context.Context, aor string, limit int) (map[string]any, error) {
 	if limit < 1 { limit = 1 }
 	if limit > 100 { limit = 100 }
-	q := map[string]string{"limit": fmt.Sprintf("%d", limit)}
-	if aor != "" { q["aor"] = aor }
-	return c.request(ctx, "GET", "/api/v1/maf/registrations", nil, q)
+	q := url.Values{"limit": {strconv.Itoa(limit)}}
+	if aor != "" { q.Set("aor", aor) }
+	return c.request(ctx, "GET", "/api/v1/maf/registrations", nil, q, "")
 }
 func (c *Client) CDR(ctx context.Context, callID string, limit int) (map[string]any, error) {
 	if limit < 1 { limit = 1 }
 	if limit > 100 { limit = 100 }
-	q := map[string]string{"limit": fmt.Sprintf("%d", limit)}
-	if callID != "" { q["call_id"] = callID }
-	return c.request(ctx, "GET", "/api/v1/maf/cdr", nil, q)
+	q := url.Values{"limit": {strconv.Itoa(limit)}}
+	if callID != "" { q.Set("call_id", callID) }
+	return c.request(ctx, "GET", "/api/v1/maf/cdr", nil, q, "")
 }
 func (c *Client) Bans(ctx context.Context) (map[string]any, error) {
-	return c.request(ctx, "GET", "/api/v1/maf/security/bans", nil, nil)
+	return c.request(ctx, "GET", "/api/v1/maf/security/bans", nil, nil, "")
 }
 func (c *Client) BanIP(ctx context.Context, sourceIP, reason string, permanent bool, durationMin int) (map[string]any, error) {
 	perm := "false"
 	if permanent { perm = "true" }
-	return c.request(ctx, "POST", "/api/v1/maf/security/bans", map[string]any{"source_ip": sourceIP, "reason": reason, "permanent": perm, "duration_min": durationMin}, nil)
+	return c.request(ctx, "POST", "/api/v1/maf/security/bans", map[string]any{"source_ip": sourceIP, "reason": reason, "permanent": perm, "duration_min": durationMin}, nil, "")
 }
 func (c *Client) UnbanIP(ctx context.Context, sourceIP string) (map[string]any, error) {
-	return c.request(ctx, "DELETE", "/api/v1/maf/security/bans/"+url.PathEscape(sourceIP), nil, nil)
+	return c.request(ctx, "DELETE", "/api/v1/maf/security/bans/"+url.PathEscape(sourceIP), nil, nil, "")
 }
 func (c *Client) SIPInspect(ctx context.Context, callID string) (map[string]any, error) {
-	return c.request(ctx, "GET", callPath(callID, "/sip"), nil, nil)
+	return c.request(ctx, "GET", callPath(callID, "/sip"), nil, nil, "")
 }
 func (c *Client) Presence(ctx context.Context, aor string, limit int) (map[string]any, error) {
-	q := map[string]string{"limit": fmt.Sprintf("%d", limit)}
-	if aor != "" { q["aor"] = aor }
-	return c.request(ctx, "GET", "/api/v1/maf/presence", nil, q)
+	q := url.Values{"limit": {strconv.Itoa(limit)}}
+	if aor != "" { q.Set("aor", aor) }
+	return c.request(ctx, "GET", "/api/v1/maf/presence", nil, q, "")
 }
 func (c *Client) PresenceUser(ctx context.Context, aor string) (map[string]any, error) {
-	return c.request(ctx, "GET", "/api/v1/maf/presence/"+url.PathEscape(aor), nil, nil)
+	return c.request(ctx, "GET", "/api/v1/maf/presence/"+url.PathEscape(aor), nil, nil, "")
 }
 func (c *Client) RoutingRules(ctx context.Context) (map[string]any, error) {
-	return c.request(ctx, "GET", "/api/v1/maf/routing/rules", nil, nil)
+	return c.request(ctx, "GET", "/api/v1/maf/routing/rules", nil, nil, "")
 }
 func (c *Client) CreateRoutingRule(ctx context.Context, body map[string]any) (map[string]any, error) {
-	return c.request(ctx, "POST", "/api/v1/maf/routing/rules", body, nil)
+	return c.request(ctx, "POST", "/api/v1/maf/routing/rules", body, nil, "")
 }
 func (c *Client) DeleteRoutingRule(ctx context.Context, ruleID string) (map[string]any, error) {
-	return c.request(ctx, "DELETE", "/api/v1/maf/routing/rules/"+url.PathEscape(ruleID), nil, nil)
+	return c.request(ctx, "DELETE", "/api/v1/maf/routing/rules/"+url.PathEscape(ruleID), nil, nil, "")
 }
 func (c *Client) Gateways(ctx context.Context) (map[string]any, error) {
-	return c.request(ctx, "GET", "/api/v1/maf/gateways", nil, nil)
+	return c.request(ctx, "GET", "/api/v1/maf/gateways", nil, nil, "")
 }
 func (c *Client) CreateGateway(ctx context.Context, name, address string, port int, transport string) (map[string]any, error) {
-	return c.request(ctx, "POST", "/api/v1/maf/gateways", map[string]any{"name": name, "address": address, "port": port, "transport": transport}, nil)
+	return c.request(ctx, "POST", "/api/v1/maf/gateways", map[string]any{"name": name, "address": address, "port": port, "transport": transport}, nil, "")
 }
 func (c *Client) DIDs(ctx context.Context) (map[string]any, error) {
-	return c.request(ctx, "GET", "/api/v1/maf/dids", nil, nil)
+	return c.request(ctx, "GET", "/api/v1/maf/dids", nil, nil, "")
 }
 func (c *Client) CreateDID(ctx context.Context, number, destinationUser, description string) (map[string]any, error) {
-	return c.request(ctx, "POST", "/api/v1/maf/dids", map[string]any{"number": number, "destination_user": destinationUser, "description": description}, nil)
+	return c.request(ctx, "POST", "/api/v1/maf/dids", map[string]any{"number": number, "destination_user": destinationUser, "description": description}, nil, "")
 }
 func (c *Client) DispatchSets(ctx context.Context) (map[string]any, error) {
-	return c.request(ctx, "GET", "/api/v1/maf/dispatch-sets", nil, nil)
+	return c.request(ctx, "GET", "/api/v1/maf/dispatch-sets", nil, nil, "")
 }
 func (c *Client) CreateDispatchSet(ctx context.Context, name, algorithm string) (map[string]any, error) {
-	return c.request(ctx, "POST", "/api/v1/maf/dispatch-sets", map[string]any{"name": name, "algorithm": algorithm}, nil)
+	return c.request(ctx, "POST", "/api/v1/maf/dispatch-sets", map[string]any{"name": name, "algorithm": algorithm}, nil, "")
 }
 func (c *Client) Cluster(ctx context.Context) (map[string]any, error) {
-	return c.request(ctx, "GET", "/api/v1/maf/cluster", nil, nil)
+	return c.request(ctx, "GET", "/api/v1/maf/cluster", nil, nil, "")
 }
 func (c *Client) Config(ctx context.Context) (map[string]any, error) {
-	return c.request(ctx, "GET", "/api/v1/maf/config", nil, nil)
+	return c.request(ctx, "GET", "/api/v1/maf/config", nil, nil, "")
 }
 func (c *Client) SetConfig(ctx context.Context, key, value, description string) (map[string]any, error) {
-	return c.request(ctx, "POST", "/api/v1/maf/config", map[string]any{"key": key, "value": value, "description": description}, nil)
+	return c.request(ctx, "POST", "/api/v1/maf/config", map[string]any{"key": key, "value": value, "description": description}, nil, "")
 }
 func (c *Client) ChargeAuthorize(ctx context.Context, callID string) (map[string]any, error) {
-	return c.request(ctx, "POST", callPath(callID, "/charge"), nil, nil)
+	return c.request(ctx, "POST", callPath(callID, "/charge"), nil, nil, "")
 }
 func (c *Client) ChargeDeny(ctx context.Context, callID string) (map[string]any, error) {
-	return c.request(ctx, "POST", callPath(callID, "/charge-deny"), nil, nil)
+	return c.request(ctx, "POST", callPath(callID, "/charge-deny"), nil, nil, "")
 }
 func (c *Client) Events(ctx context.Context, cursor, limit int, eventType string) (map[string]any, error) {
 	if cursor < 0 {
