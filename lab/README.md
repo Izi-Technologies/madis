@@ -14,6 +14,41 @@ opaque XRES values for the repository's selected `Digest-AKAv1-MD5` lab
 profile. It does not implement Milenage/TUAK, durable secret protection, full
 Sh user data, Diameter relay/failover, or carrier policy.
 
+### Supported Diameter commands
+
+| Command | Code | Direction | Description |
+| --- | --- | --- | --- |
+| CER/CEA | 257 | Both | Capabilities exchange |
+| DWR/DWA | 280 | Both | Device watchdog |
+| UAR/UAA | 300 | Cx | User authorization |
+| SAR/SAA | 301 | Cx | Server assignment (returns User-Data XML profile) |
+| LIR/LIA | 302 | Cx | Location info |
+| MAR/MAA | 303 | Cx | Multimedia auth (multi-vector, AUTS resync) |
+| RTR | 304 | Cx push | Registration termination (HSS → proxy) |
+| PPR | 305 | Cx push | Push profile update (HSS → proxy) |
+| UDR/UDA | 306 | Sh | User data read |
+| PUR/PUA | 307 | Sh | Profile update |
+| SNR/SNA | 308 | Sh | Subscribe notifications |
+| PNA | 309 | Sh | Push notification ack |
+
+### Subscriber CRUD API
+
+All admin endpoints require `Authorization: Bearer <token>`:
+
+```
+GET    /admin/subscribers                          — list all
+GET    /admin/subscribers/{public_identity}         — get one
+POST   /admin/subscribers                          — create
+PUT    /admin/subscribers/{public_identity}         — update
+DELETE /admin/subscribers/{public_identity}         — remove
+POST   /admin/subscribers/{public_identity}/enable  — re-enable
+POST   /admin/subscribers/{public_identity}/disable — disable
+POST   /admin/rtr                                  — trigger RTR push
+POST   /admin/ppr                                  — trigger PPR push
+```
+
+XRES is never returned in any API response.
+
 ### Cx MAR multi-vector and AUTS (lab)
 
 - **Number-Of-Auth-Items** (AVP 607, 1–5): MAA returns that many
