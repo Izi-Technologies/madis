@@ -24,6 +24,7 @@ import http.server
 import ipaddress
 import json
 import os
+import re
 import secrets
 import socket
 import ssl
@@ -32,6 +33,7 @@ import sys
 import threading
 from dataclasses import dataclass, field
 from typing import Any, Iterable
+from urllib.parse import unquote
 
 
 MAX_DIAMETER = 1 << 20
@@ -41,10 +43,24 @@ MAX_SUBSCRIBERS = 10000
 MAX_DIAMETER_CONNECTIONS = 256
 DIAMETER_IO_TIMEOUT = 5.0
 CX_APPLICATION = 16777216
+SH_APPLICATION = 16777217
 THREEGPP_VENDOR = 10415
 RESULT_SUCCESS = 2001
 RESULT_UNKNOWN_USER = 5001
 RESULT_UNSUPPORTED = 3001
+
+RTR_PERMANENT_TERMINATION = 0
+RTR_NEW_SERVER_ASSIGNED = 1
+RTR_SERVER_CHANGE = 2
+RTR_REMOVE_SCSCF = 3
+RTR_REASON_NAMES = {
+    "PERMANENT_TERMINATION": RTR_PERMANENT_TERMINATION,
+    "NEW_SERVER_ASSIGNED": RTR_NEW_SERVER_ASSIGNED,
+    "SERVER_CHANGE": RTR_SERVER_CHANGE,
+    "REMOVE_SCSCF": RTR_REMOVE_SCSCF,
+}
+
+_ADMIN_SUB_RE = re.compile(r"^/admin/subscribers/(.+?)(?:/(enable|disable))?$")
 
 
 class DiameterError(ValueError):
@@ -318,6 +334,68 @@ class HssStore:
         item = self.find(public, private)
         return item if item is not None and item.enabled else None
 
+    def list_all(self) -> list[Subscriber]:
+        with self._lock:
+            return list(self._items.values())
+
+    def update(self, public: str, updates: dict[str, Any]) -> Subscriber | None:
+        with self._lock:
+            sub = self.find(public)
+            if sub is None:
+                return None
+            if "assigned_server_name" in updates:
+                sub.assigned_server_name = _identity_field(updates, "assigned_server_name", 2048)
+            if "service_profile" in updates:
+                sub.service_profile = _profile(updates["service_profile"])
+            if "enabled" in updates:
+                if not isinstance(updates["enabled"], bool):
+                    raise ValueError("enabled must be boolean")
+                sub.enabled = updates["enabled"]
+            return sub
+
+    def remove(self, public: str) -> bool:
+        with self._lock:
+            for (pub, priv) in list(self._items):
+                if pub == public:
+                    del self._items[(pub, priv)]
+                    return True
+            return False
+
+    def set_enabled(self, public: str, enabled: bool) -> Subscriber | None:
+        with self._lock:
+            sub = self.find(public)
+            if sub is None:
+                return None
+            sub.enabled = enabled
+            return sub
+
+
+def _subscriber_json(sub: Subscriber) -> dict[str, Any]:
+    """Subscriber as JSON-safe dict.  Never includes XRES."""
+    return {
+        "public_identity": sub.public_identity,
+        "private_identity": sub.private_identity,
+        "assigned_server_name": sub.assigned_server_name,
+        "enabled": sub.enabled,
+        "service_profile": sub.service_profile,
+    }
+
+
+def _subscriber_profile_xml(sub: Subscriber) -> str:
+    """Minimal IMS Cx XML for User-Data AVP in SAR answers."""
+    lines = ['<?xml version="1.0" encoding="UTF-8"?>']
+    lines.append("<IMSSubscription>")
+    lines.append(f"  <PublicIdentity><Identity>{sub.public_identity}</Identity></PublicIdentity>")
+    lines.append("  <ServiceProfile>")
+    lines.append(f"    <PublicIdentity><Identity>{sub.public_identity}</Identity></PublicIdentity>")
+    for uri in sub.service_profile.get("associated_uris", []):
+        lines.append(f"    <PublicIdentity><Identity>{uri}</Identity></PublicIdentity>")
+    for ifc in sub.service_profile.get("initial_filter_criteria", []):
+        lines.append(f"    <InitialFilterCriteria>{ifc}</InitialFilterCriteria>")
+    lines.append("  </ServiceProfile>")
+    lines.append("</IMSSubscription>")
+    return "\n".join(lines)
+
 
 class HssApplication:
     def __init__(self, store: HssStore, *, origin_host: str, origin_realm: str) -> None:
@@ -329,6 +407,11 @@ class HssApplication:
         # Lab AUTS resync requires the UE/S-CSCF to present a RAND we issued.
         self._last_rand: dict[str, bytes] = {}
         self._rand_lock = threading.RLock()
+        self._hop_counter = 0
+        self._hop_lock = threading.Lock()
+        # Sh notification subscriptions: (public_identity, data_ref) -> set of service_indications
+        self._sh_subscriptions: dict[tuple[str, int], set[str]] = {}
+        self._sh_lock = threading.Lock()
 
     def _common_body(self, request: DiameterMessage, result: int) -> bytes:
         session_id = request.find(263)
@@ -362,6 +445,7 @@ class HssApplication:
         body += _avp_text(269, "madis-lab-hss")
         body += _avp_u32(258, 4)
         body += _vsa(CX_APPLICATION)
+        body += _vsa(SH_APPLICATION)
         return build_message(flags=request.flags & 0x7F, command=257, application=0, hop_by_hop=request.hop_by_hop, end_to_end=request.end_to_end, body=body)
 
     @staticmethod
@@ -455,6 +539,105 @@ class HssApplication:
         # Normal vector fetch.
         return self._answer(request, RESULT_SUCCESS, self._issue_vectors(private, item.xres, count))
 
+    def _next_hop(self) -> int:
+        with self._hop_lock:
+            self._hop_counter += 1
+            return self._hop_counter
+
+    @staticmethod
+    def _profile_to_xml(profile: dict[str, Any]) -> bytes:
+        """Wrap subscriber profile JSON in a minimal XML envelope."""
+        parts = ['<?xml version="1.0" encoding="UTF-8"?><Sh-Data>']
+        for key, values in profile.items():
+            parts.append(f"<{key}>")
+            if isinstance(values, list):
+                for v in values:
+                    parts.append(f"<item>{v}</item>")
+            else:
+                parts.append(str(values))
+            parts.append(f"</{key}>")
+        parts.append("</Sh-Data>")
+        return "".join(parts).encode("utf-8")
+
+    def send_rtr(self, public_identity: str, private_identity: str, reason: int, peer_conn: socket.socket) -> None:
+        """Build and send an RTR (command 304) to a connected Diameter peer."""
+        hop = self._next_hop()
+        session_id = f"{self.origin_host};rtr;{hop}"
+        reason_info = {v: k for k, v in RTR_REASON_NAMES.items()}.get(reason, "PERMANENT_TERMINATION")
+        dereg_reason = _avp_u32(616, reason, vendor=THREEGPP_VENDOR) + _vendor_text(617, reason_info)
+        body = _avp_text(263, session_id)
+        body += _avp_u32(277, 1)  # Auth-Session-State: NO_STATE_MAINTAINED
+        body += _avp_text(264, self.origin_host)
+        body += _avp_text(296, self.origin_realm)
+        body += _avp_text(1, private_identity)  # User-Name
+        body += _vendor_text(601, public_identity)  # Public-Identity
+        body += _vendor_grouped(615, dereg_reason)  # Deregistration-Reason
+        msg = build_message(flags=0xC0, command=304, application=CX_APPLICATION, hop_by_hop=hop, end_to_end=hop, body=body)
+        peer_conn.sendall(msg)
+
+    def send_ppr(self, public_identity: str, private_identity: str, profile: dict[str, Any], peer_conn: socket.socket) -> None:
+        """Build and send a PPR (command 305) to a connected Diameter peer."""
+        hop = self._next_hop()
+        session_id = f"{self.origin_host};ppr;{hop}"
+        body = _avp_text(263, session_id)
+        body += _avp_u32(277, 1)  # Auth-Session-State: NO_STATE_MAINTAINED
+        body += _avp_text(264, self.origin_host)
+        body += _avp_text(296, self.origin_realm)
+        body += _avp_text(1, private_identity)  # User-Name
+        body += _vendor_text(601, public_identity)  # Public-Identity
+        body += _vendor_bytes(606, self._profile_to_xml(profile))  # User-Data
+        msg = build_message(flags=0xC0, command=305, application=CX_APPLICATION, hop_by_hop=hop, end_to_end=hop, body=body)
+        peer_conn.sendall(msg)
+
+    def _handle_sh(self, request: DiameterMessage) -> bytes:
+        """Handle Sh interface commands (UDR 306, PUR 307, SNR 308, PNA 309)."""
+        public = _safe_ascii(request.find(601, THREEGPP_VENDOR), 2048)
+        private = _safe_ascii(request.find(1), 1024)
+        item = self.store.find(public) if public else None
+
+        if request.command == 306:  # UDR — User-Data-Request
+            if item is None:
+                return self._answer(request, RESULT_UNKNOWN_USER)
+            xml = self._profile_to_xml(item.service_profile)
+            return self._answer(request, RESULT_SUCCESS, _vendor_bytes(606, xml))
+
+        if request.command == 307:  # PUR — Profile-Update-Request
+            if item is None:
+                return self._answer(request, RESULT_UNKNOWN_USER)
+            user_data = request.find(606, THREEGPP_VENDOR)
+            if user_data is None or len(user_data) > MAX_PROFILE_BYTES:
+                return self._answer(request, RESULT_UNSUPPORTED)
+            # Accept the update: parse XML-wrapped profile or store raw.
+            # For lab purposes, try to extract JSON from a simple XML wrapper.
+            try:
+                text = user_data.decode("utf-8")
+                # Minimal: if it looks like JSON, parse and validate it.
+                if text.strip().startswith("{"):
+                    profile = _profile(json.loads(text))
+                    item.service_profile.update(profile)
+                # Otherwise accept as opaque update (lab no-op on profile fields).
+            except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+                return self._answer(request, RESULT_UNSUPPORTED)
+            return self._answer(request, RESULT_SUCCESS)
+
+        if request.command == 308:  # SNR — Subscribe-Notifications-Request
+            if item is None:
+                return self._answer(request, RESULT_UNKNOWN_USER)
+            data_ref_raw = request.find(703, THREEGPP_VENDOR)
+            data_ref = struct.unpack("!I", data_ref_raw)[0] if data_ref_raw and len(data_ref_raw) == 4 else 0
+            svc_ind = _safe_ascii(request.find(704, THREEGPP_VENDOR), 256)
+            key = (public, data_ref)
+            with self._sh_lock:
+                subs = self._sh_subscriptions.setdefault(key, set())
+                if svc_ind:
+                    subs.add(svc_ind)
+            return self._answer(request, RESULT_SUCCESS)
+
+        if request.command == 309:  # PNA — Push-Notification-Answer
+            return self._answer(request, RESULT_SUCCESS)
+
+        return self._answer(request, RESULT_UNSUPPORTED)
+
     def handle(self, raw: bytes) -> bytes:
         try:
             request = parse_message(raw)
@@ -468,7 +651,11 @@ class HssApplication:
             return self._cea(request)
         if request.command == 280 and request.application == 0 and request.flags & 0x80:
             return self._answer(request, RESULT_SUCCESS)
-        if not request.flags & 0x80 or request.application != CX_APPLICATION:
+        if not request.flags & 0x80:
+            return self._answer(request, RESULT_UNSUPPORTED)
+        if request.application == SH_APPLICATION and request.command in (306, 307, 308, 309):
+            return self._handle_sh(request)
+        if request.application != CX_APPLICATION:
             return self._answer(request, RESULT_UNSUPPORTED)
         public, private, requested_server = self._identity(request)
         item = self.store.authorize(public, private) if private else self.store.find(public)
@@ -476,8 +663,13 @@ class HssApplication:
             return self._answer(request, RESULT_UNKNOWN_USER)
         if request.command in (300, 301) and requested_server and requested_server != item.assigned_server_name:
             return self._answer(request, RESULT_UNKNOWN_USER)
-        if request.command in (300, 301):
+        if request.command == 300:
             return self._answer(request, RESULT_SUCCESS, _vendor_text(602, item.assigned_server_name))
+        if request.command == 301:
+            # SAR: return server name + User-Data profile XML
+            extra = _vendor_text(602, item.assigned_server_name)
+            extra += _vendor_bytes(606, _subscriber_profile_xml(item).encode("utf-8"))
+            return self._answer(request, RESULT_SUCCESS, extra)
         if request.command == 302:
             return self._answer(request, RESULT_SUCCESS, _vendor_text(602, item.assigned_server_name))
         if request.command == 303:
@@ -497,6 +689,8 @@ class DiameterServer:
         self._listener: socket.socket | None = None
         self.bound_port = 0
         self._stop = threading.Event()
+        self._peers: list[socket.socket] = []
+        self._peers_lock = threading.Lock()
 
     def _client(self, conn: socket.socket) -> None:
         if not self._slots.acquire(blocking=False):
@@ -507,6 +701,8 @@ class DiameterServer:
             if self.tls_context is not None:
                 conn = self.tls_context.wrap_socket(conn, server_side=True)
                 conn.settimeout(DIAMETER_IO_TIMEOUT)
+            with self._peers_lock:
+                self._peers.append(conn)
             while not self._stop.is_set():
                 try:
                     request = _frame_read(conn)
@@ -519,10 +715,41 @@ class DiameterServer:
                     except OSError:
                         return
         finally:
+            with self._peers_lock:
+                try:
+                    self._peers.remove(conn)
+                except ValueError:
+                    pass
             try:
                 conn.close()
             finally:
                 self._slots.release()
+
+    def push_rtr(self, public_identity: str, private_identity: str, reason: int) -> int:
+        """Send RTR to all connected peers. Returns number of peers notified."""
+        with self._peers_lock:
+            peers = list(self._peers)
+        sent = 0
+        for peer in peers:
+            try:
+                self.application.send_rtr(public_identity, private_identity, reason, peer)
+                sent += 1
+            except OSError:
+                pass
+        return sent
+
+    def push_ppr(self, public_identity: str, private_identity: str, profile: dict[str, Any]) -> int:
+        """Send PPR to all connected peers. Returns number of peers notified."""
+        with self._peers_lock:
+            peers = list(self._peers)
+        sent = 0
+        for peer in peers:
+            try:
+                self.application.send_ppr(public_identity, private_identity, profile, peer)
+                sent += 1
+            except OSError:
+                pass
+        return sent
 
     def serve_forever(self) -> None:
         family = socket.AF_INET6 if ":" in self.host else socket.AF_INET
@@ -617,7 +844,7 @@ class SubscriberHandler(http.server.BaseHTTPRequestHandler):
             return None
         return value if isinstance(value, dict) else None
 
-    def _send_json(self, status: int, value: dict[str, Any]) -> None:
+    def _send_json(self, status: int, value: dict[str, Any] | list[dict[str, Any]]) -> None:
         body = json.dumps(value, separators=(",", ":"), ensure_ascii=True).encode("ascii") + b"\n"
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
@@ -626,9 +853,33 @@ class SubscriberHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _admin_match(self) -> tuple[str, str] | None:
+        """Parse /admin/subscribers/{identity}[/action].  Returns (identity, action) or None."""
+        m = _ADMIN_SUB_RE.match(self.path)
+        if m is None:
+            return None
+        return unquote(m.group(1)), m.group(2) or ""
+
     def do_GET(self) -> None:  # noqa: N802
         if self.path in ("/healthz", "/readyz"):
             self._send_json(200, {"ready": True})
+            return
+        if self.path == "/admin/subscribers":
+            if not self._authorized():
+                self._send_json(401, {"ok": False, "error": "authorization token required"})
+                return
+            self._send_json(200, [_subscriber_json(s) for s in self.server.store.list_all()])
+            return
+        parsed = self._admin_match()
+        if parsed is not None and parsed[1] == "":
+            if not self._authorized():
+                self._send_json(401, {"ok": False, "error": "authorization token required"})
+                return
+            sub = self.server.store.find(parsed[0])
+            if sub is None:
+                self._send_json(404, {"ok": False, "error": "not found"})
+                return
+            self._send_json(200, _subscriber_json(sub))
             return
         self._send_json(404, {"ok": False, "error": "not found"})
 
@@ -659,15 +910,124 @@ class SubscriberHandler(http.server.BaseHTTPRequestHandler):
                 return
             self._send_json(201, {"ok": True, "provisioned": True})
             return
+        if self.path == "/admin/subscribers":
+            if not self._authorized():
+                self._send_json(401, {"ok": False, "error": "authorization token required"})
+                return
+            request = self._json_body()
+            if request is None:
+                self._send_json(400, {"ok": False, "error": "bounded JSON body required"})
+                return
+            try:
+                sub = self.server.store.provision(request)
+            except ValueError as exc:
+                self._send_json(400, {"ok": False, "error": str(exc)})
+                return
+            self._send_json(201, _subscriber_json(sub))
+            return
+        parsed = self._admin_match()
+        if parsed is not None and parsed[1] in ("enable", "disable"):
+            if not self._authorized():
+                self._send_json(401, {"ok": False, "error": "authorization token required"})
+                return
+            enabled = parsed[1] == "enable"
+            sub = self.server.store.set_enabled(parsed[0], enabled)
+            if sub is None:
+                self._send_json(404, {"ok": False, "error": "not found"})
+                return
+            self._send_json(200, _subscriber_json(sub))
+            return
+        if self.path == "/admin/rtr":
+            if not self._authorized(provisioning=True):
+                self._send_json(401, {"ok": False, "error": "provisioning token required"})
+                return
+            request = self._json_body()
+            if request is None:
+                self._send_json(400, {"ok": False, "error": "bounded JSON body required"})
+                return
+            public = request.get("public_identity")
+            private = request.get("private_identity", "")
+            reason_name = request.get("reason", "PERMANENT_TERMINATION")
+            if not isinstance(public, str) or not isinstance(private, str) or not isinstance(reason_name, str):
+                self._send_json(400, {"ok": False, "error": "invalid RTR fields"})
+                return
+            reason = RTR_REASON_NAMES.get(reason_name)
+            if reason is None:
+                self._send_json(400, {"ok": False, "error": "invalid reason code"})
+                return
+            ds = self.server.diameter_server
+            if ds is None:
+                self._send_json(503, {"ok": False, "error": "no diameter server"})
+                return
+            sent = ds.push_rtr(public, private, reason)
+            self._send_json(200, {"ok": True, "peers_notified": sent})
+            return
+        if self.path == "/admin/ppr":
+            if not self._authorized(provisioning=True):
+                self._send_json(401, {"ok": False, "error": "provisioning token required"})
+                return
+            request = self._json_body()
+            if request is None:
+                self._send_json(400, {"ok": False, "error": "bounded JSON body required"})
+                return
+            public = request.get("public_identity")
+            private = request.get("private_identity", "")
+            profile = request.get("profile")
+            if not isinstance(public, str) or not isinstance(private, str) or not isinstance(profile, dict):
+                self._send_json(400, {"ok": False, "error": "invalid PPR fields"})
+                return
+            ds = self.server.diameter_server
+            if ds is None:
+                self._send_json(503, {"ok": False, "error": "no diameter server"})
+                return
+            sent = ds.push_ppr(public, private, profile)
+            self._send_json(200, {"ok": True, "peers_notified": sent})
+            return
+        self._send_json(404, {"ok": False, "error": "not found"})
+
+    def do_PUT(self) -> None:  # noqa: N802
+        parsed = self._admin_match()
+        if parsed is not None and parsed[1] == "":
+            if not self._authorized():
+                self._send_json(401, {"ok": False, "error": "authorization token required"})
+                return
+            request = self._json_body()
+            if request is None:
+                self._send_json(400, {"ok": False, "error": "bounded JSON body required"})
+                return
+            try:
+                sub = self.server.store.update(parsed[0], request)
+            except ValueError as exc:
+                self._send_json(400, {"ok": False, "error": str(exc)})
+                return
+            if sub is None:
+                self._send_json(404, {"ok": False, "error": "not found"})
+                return
+            self._send_json(200, _subscriber_json(sub))
+            return
+        self._send_json(404, {"ok": False, "error": "not found"})
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        parsed = self._admin_match()
+        if parsed is not None and parsed[1] == "":
+            if not self._authorized():
+                self._send_json(401, {"ok": False, "error": "authorization token required"})
+                return
+            if not self.server.store.remove(parsed[0]):
+                self._send_json(404, {"ok": False, "error": "not found"})
+                return
+            self._send_json(200, {"ok": True, "deleted": True})
+            return
         self._send_json(404, {"ok": False, "error": "not found"})
 
 
 class SubscriberHTTPServer(http.server.ThreadingHTTPServer):
-    def __init__(self, address: tuple[str, int], store: HssStore, http_token: str, provision_token: str) -> None:
+    def __init__(self, address: tuple[str, int], store: HssStore, http_token: str, provision_token: str, diameter_server: DiameterServer | None = None) -> None:
         super().__init__(address, SubscriberHandler)
         self.store = store
         self.http_token = http_token
         self.provision_token = provision_token
+        self.diameter_server = diameter_server
         self.daemon_threads = True
         self.block_on_close = False
 
@@ -739,7 +1099,7 @@ def main(argv: list[str] | None = None) -> int:
         diameter = DiameterServer(application, args.diameter_host, args.diameter_port, _tls_context(args.diameter_cert, args.diameter_key), args.diameter_max_connections)
         diameter_thread = threading.Thread(target=diameter.serve_forever, daemon=True)
         diameter_thread.start()
-        http_server = SubscriberHTTPServer((args.http_host, args.http_port), store, http_token, provision_token)
+        http_server = SubscriberHTTPServer((args.http_host, args.http_port), store, http_token, provision_token, diameter)
         http_tls = _tls_context(args.http_cert, args.http_key)
         if http_tls is not None:
             http_server.socket = http_tls.wrap_socket(http_server.socket, server_side=True)

@@ -17,6 +17,7 @@ import unittest
 try:
     from .ims_hss import (
         CX_APPLICATION,
+        SH_APPLICATION,
         HssApplication,
         HssStore,
         DiameterServer,
@@ -24,9 +25,14 @@ try:
         RESULT_SUCCESS,
         RESULT_UNKNOWN_USER,
         THREEGPP_VENDOR,
+        RTR_PERMANENT_TERMINATION,
+        RTR_REASON_NAMES,
+        _avp,
         _avp_text,
         _avp_u32,
         _parse_avps,
+        _subscriber_json,
+        _subscriber_profile_xml,
         _vendor_bytes,
         _vendor_grouped,
         _vendor_text,
@@ -38,6 +44,7 @@ try:
 except ImportError:
     from ims_hss import (
         CX_APPLICATION,
+        SH_APPLICATION,
         HssApplication,
         HssStore,
         DiameterServer,
@@ -45,9 +52,14 @@ except ImportError:
         RESULT_SUCCESS,
         RESULT_UNKNOWN_USER,
         THREEGPP_VENDOR,
+        RTR_PERMANENT_TERMINATION,
+        RTR_REASON_NAMES,
+        _avp,
         _avp_text,
         _avp_u32,
         _parse_avps,
+        _subscriber_json,
+        _subscriber_profile_xml,
         _vendor_bytes,
         _vendor_grouped,
         _vendor_text,
@@ -573,6 +585,378 @@ class HssHttpsWireTests(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(document["decision"], "allow")
         self.assertNotIn("xres", document)
+
+
+class HssRtrPprTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.store = HssStore()
+        self.store.provision(
+            {
+                "public_identity": "sip:alice@example.com",
+                "private_identity": "alice@example.com",
+                "assigned_server_name": "sip:scscf.example.com",
+                "xres_base64": base64.b64encode(b"xres-alice").decode("ascii"),
+                "service_profile": {"associated_uris": ["sip:alice@example.com"]},
+            }
+        )
+        self.app = HssApplication(self.store, origin_host="hss.lab.local", origin_realm="example.com")
+
+    def test_rtr_sent_to_connected_peer(self) -> None:
+        server_sock, client_sock = socket.socketpair()
+        try:
+            self.app.send_rtr("sip:alice@example.com", "alice@example.com", RTR_PERMANENT_TERMINATION, server_sock)
+            client_sock.settimeout(2.0)
+            header = b""
+            while len(header) < 20:
+                header += client_sock.recv(20 - len(header))
+            length = int.from_bytes(header[1:4], "big")
+            rest = b""
+            while len(rest) < length - 20:
+                rest += client_sock.recv(length - 20 - len(rest))
+            msg = parse_message(header + rest)
+            self.assertEqual(msg.command, 304)
+            self.assertTrue(msg.flags & 0x80)  # Request bit set
+            self.assertEqual(msg.application, CX_APPLICATION)
+            self.assertEqual(msg.find(1), b"alice@example.com")  # User-Name
+            self.assertEqual(msg.find(601, THREEGPP_VENDOR), b"sip:alice@example.com")
+            # Deregistration-Reason grouped AVP present
+            dereg = msg.find(615, THREEGPP_VENDOR)
+            self.assertIsNotNone(dereg)
+            nested = _parse_avps(dereg)
+            reason_code = next(a for a in nested if a.code == 616 and a.vendor == THREEGPP_VENDOR)
+            self.assertEqual(struct.unpack("!I", reason_code.value)[0], RTR_PERMANENT_TERMINATION)
+        finally:
+            server_sock.close()
+            client_sock.close()
+
+    def test_ppr_sent_to_connected_peer(self) -> None:
+        server_sock, client_sock = socket.socketpair()
+        try:
+            profile = {"associated_uris": ["sip:alice@example.com"]}
+            self.app.send_ppr("sip:alice@example.com", "alice@example.com", profile, server_sock)
+            client_sock.settimeout(2.0)
+            header = b""
+            while len(header) < 20:
+                header += client_sock.recv(20 - len(header))
+            length = int.from_bytes(header[1:4], "big")
+            rest = b""
+            while len(rest) < length - 20:
+                rest += client_sock.recv(length - 20 - len(rest))
+            msg = parse_message(header + rest)
+            self.assertEqual(msg.command, 305)
+            self.assertTrue(msg.flags & 0x80)  # Request bit set
+            self.assertEqual(msg.find(1), b"alice@example.com")
+            user_data = msg.find(606, THREEGPP_VENDOR)
+            self.assertIsNotNone(user_data)
+            self.assertIn(b"Sh-Data", user_data)
+        finally:
+            server_sock.close()
+            client_sock.close()
+
+
+class HssShInterfaceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.store = HssStore()
+        self.store.provision(
+            {
+                "public_identity": "sip:alice@example.com",
+                "private_identity": "alice@example.com",
+                "assigned_server_name": "sip:scscf.example.com",
+                "xres_base64": base64.b64encode(b"xres-alice").decode("ascii"),
+                "service_profile": {"associated_uris": ["sip:alice@example.com"]},
+            }
+        )
+        self.app = HssApplication(self.store, origin_host="hss.lab.local", origin_realm="example.com")
+
+    def sh_request(self, command: int, body: bytes) -> bytes:
+        return build_message(flags=0x80, command=command, application=SH_APPLICATION, hop_by_hop=11, end_to_end=22, body=body)
+
+    def test_sh_udr_returns_profile(self) -> None:
+        body = _avp_text(263, "sh-session-udr") + _avp_text(1, "alice@example.com") + _vendor_text(601, "sip:alice@example.com")
+        response = parse_message(self.app.handle(self.sh_request(306, body)))
+        self.assertEqual(response.find(268), RESULT_SUCCESS.to_bytes(4, "big"))
+        user_data = response.find(606, THREEGPP_VENDOR)
+        self.assertIsNotNone(user_data)
+        self.assertIn(b"Sh-Data", user_data)
+        self.assertIn(b"sip:alice@example.com", user_data)
+
+    def test_sh_pur_updates_profile(self) -> None:
+        new_profile = json.dumps({"associated_uris": ["sip:alice@example.com", "sip:alice2@example.com"]}).encode("utf-8")
+        body = _avp_text(263, "sh-session-pur") + _avp_text(1, "alice@example.com") + _vendor_text(601, "sip:alice@example.com") + _vendor_bytes(606, new_profile)
+        response = parse_message(self.app.handle(self.sh_request(307, body)))
+        self.assertEqual(response.find(268), RESULT_SUCCESS.to_bytes(4, "big"))
+        # Verify the profile was updated via a subsequent UDR.
+        udr_body = _avp_text(263, "sh-session-udr2") + _avp_text(1, "alice@example.com") + _vendor_text(601, "sip:alice@example.com")
+        udr_response = parse_message(self.app.handle(self.sh_request(306, udr_body)))
+        user_data = udr_response.find(606, THREEGPP_VENDOR)
+        self.assertIsNotNone(user_data)
+        self.assertIn(b"sip:alice2@example.com", user_data)
+
+
+@unittest.skipUnless(os.environ.get("IMS_HSS_TEST_NETWORK") == "1", "set IMS_HSS_TEST_NETWORK=1 for listener tests")
+class HssAdminEndpointTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.store = HssStore()
+        self.store.provision(
+            {
+                "public_identity": "sip:alice@example.com",
+                "private_identity": "alice@example.com",
+                "assigned_server_name": "sip:scscf.example.com",
+                "xres_base64": base64.b64encode(b"xres-alice").decode("ascii"),
+            }
+        )
+        app = HssApplication(self.store, origin_host="hss.lab.local", origin_realm="example.com")
+        self.diameter = DiameterServer(app, "127.0.0.1", 0)
+        self.diameter_thread = threading.Thread(target=self.diameter.serve_forever, daemon=True)
+        self.diameter_thread.start()
+        deadline = time.monotonic() + 2.0
+        while self.diameter.bound_port == 0 and time.monotonic() < deadline:
+            time.sleep(0.001)
+        self.http_server = SubscriberHTTPServer(("127.0.0.1", 0), self.store, "", "provision-token-1234", self.diameter)
+        self.http_thread = threading.Thread(target=self.http_server.serve_forever, daemon=True)
+        self.http_thread.start()
+
+    def tearDown(self) -> None:
+        self.http_server.shutdown()
+        self.http_server.server_close()
+        self.http_thread.join(timeout=2.0)
+        self.diameter.close()
+        self.diameter_thread.join(timeout=2.0)
+
+    def admin_post(self, path: str, document: dict[str, object]) -> tuple[int, dict[str, object]]:
+        body = json.dumps(document).encode("utf-8")
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{self.http_server.server_address[1]}{path}",
+            data=body,
+            headers={"Content-Type": "application/json", "Authorization": "Bearer provision-token-1234"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=2.0) as response:
+            return response.status, json.loads(response.read())
+
+    def test_rtr_http_endpoint(self) -> None:
+        status, response = self.admin_post("/admin/rtr", {
+            "public_identity": "sip:alice@example.com",
+            "private_identity": "alice@example.com",
+            "reason": "PERMANENT_TERMINATION",
+        })
+        self.assertEqual(status, 200)
+        self.assertTrue(response["ok"])
+        self.assertIn("peers_notified", response)
+
+    def test_ppr_http_endpoint(self) -> None:
+        status, response = self.admin_post("/admin/ppr", {
+            "public_identity": "sip:alice@example.com",
+            "private_identity": "alice@example.com",
+            "profile": {"associated_uris": ["sip:alice@example.com"]},
+        })
+        self.assertEqual(status, 200)
+        self.assertTrue(response["ok"])
+        self.assertIn("peers_notified", response)
+
+
+class HssSubscriberCrudTests(unittest.TestCase):
+    """Unit tests for subscriber CRUD on HssStore and JSON helper."""
+
+    def setUp(self) -> None:
+        self.store = HssStore()
+        self.alice = self.store.provision(
+            {
+                "public_identity": "sip:alice@example.com",
+                "private_identity": "alice@example.com",
+                "assigned_server_name": "sip:scscf.example.com",
+                "xres_base64": base64.b64encode(b"xres-alice").decode("ascii"),
+                "service_profile": {"associated_uris": ["sip:alice@example.com"]},
+            }
+        )
+
+    def test_subscriber_crud_lifecycle(self) -> None:
+        # Create
+        sub = self.store.provision(
+            {
+                "public_identity": "sip:bob@example.com",
+                "private_identity": "bob@example.com",
+                "assigned_server_name": "sip:scscf.example.com",
+                "xres_base64": base64.b64encode(b"xres-bob").decode("ascii"),
+            }
+        )
+        self.assertEqual(sub.public_identity, "sip:bob@example.com")
+        # Read
+        found = self.store.find("sip:bob@example.com")
+        self.assertIsNotNone(found)
+        self.assertEqual(found.public_identity, "sip:bob@example.com")
+        # Update
+        updated = self.store.update("sip:bob@example.com", {"assigned_server_name": "sip:scscf2.example.com"})
+        self.assertIsNotNone(updated)
+        self.assertEqual(updated.assigned_server_name, "sip:scscf2.example.com")
+        # Delete
+        self.assertTrue(self.store.remove("sip:bob@example.com"))
+        self.assertIsNone(self.store.find("sip:bob@example.com"))
+
+    def test_subscriber_list(self) -> None:
+        self.store.provision(
+            {
+                "public_identity": "sip:bob@example.com",
+                "private_identity": "bob@example.com",
+                "assigned_server_name": "sip:scscf.example.com",
+                "xres_base64": base64.b64encode(b"xres-bob").decode("ascii"),
+            }
+        )
+        all_subs = self.store.list_all()
+        self.assertEqual(len(all_subs), 2)
+        identities = {s.public_identity for s in all_subs}
+        self.assertIn("sip:alice@example.com", identities)
+        self.assertIn("sip:bob@example.com", identities)
+
+    def test_subscriber_enable_disable(self) -> None:
+        sub = self.store.set_enabled("sip:alice@example.com", False)
+        self.assertIsNotNone(sub)
+        self.assertFalse(sub.enabled)
+        # Disabled subscriber is not authorized
+        self.assertIsNone(self.store.authorize("sip:alice@example.com", "alice@example.com"))
+        # Re-enable
+        sub = self.store.set_enabled("sip:alice@example.com", True)
+        self.assertTrue(sub.enabled)
+        self.assertIsNotNone(self.store.authorize("sip:alice@example.com", "alice@example.com"))
+
+    def test_crud_never_returns_xres(self) -> None:
+        doc = _subscriber_json(self.alice)
+        self.assertNotIn("xres", doc)
+        self.assertNotIn("xres_base64", doc)
+        serialized = json.dumps(doc)
+        self.assertNotIn("xres-alice", serialized)
+
+    def test_sar_returns_user_data_profile(self) -> None:
+        app = HssApplication(self.store, origin_host="hss.lab.local", origin_realm="example.com")
+        body = _avp_text(263, "session;alice") + _avp_text(1, "alice@example.com") + _vendor_text(601, "sip:alice@example.com") + _vendor_text(602, "sip:scscf.example.com")
+        raw = build_message(flags=0x80, command=301, application=CX_APPLICATION, hop_by_hop=11, end_to_end=22, body=body)
+        response = parse_message(app.handle(raw))
+        self.assertEqual(response.find(268), RESULT_SUCCESS.to_bytes(4, "big"))
+        # Server-Name present
+        self.assertEqual(response.find(602, THREEGPP_VENDOR), b"sip:scscf.example.com")
+        # User-Data AVP (code 606, vendor 10415) present with XML profile
+        user_data = response.find(606, THREEGPP_VENDOR)
+        self.assertIsNotNone(user_data)
+        xml = user_data.decode("utf-8")
+        self.assertIn("<IMSSubscription>", xml)
+        self.assertIn("<ServiceProfile>", xml)
+        self.assertIn("sip:alice@example.com", xml)
+        # Must not contain XRES
+        self.assertNotIn("xres", xml.lower())
+
+
+@unittest.skipUnless(os.environ.get("IMS_HSS_TEST_NETWORK") == "1", "set IMS_HSS_TEST_NETWORK=1 for listener tests")
+class HssAdminCrudHttpTests(unittest.TestCase):
+    """HTTP-level tests for the /admin/subscribers CRUD API."""
+
+    def setUp(self) -> None:
+        self.store = HssStore()
+        self.token = "admin-test-token-1234"
+        self.server = SubscriberHTTPServer(("127.0.0.1", 0), self.store, self.token, "provision-token-1234")
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
+
+    def tearDown(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2.0)
+
+    def _request(self, method: str, path: str, body: dict | None = None, token: str | None = None) -> tuple[int, Any]:
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+        headers = {"Content-Type": "application/json"}
+        if token is not None:
+            headers["Authorization"] = f"Bearer {token}"
+        req = urllib.request.Request(self.base + path, data=data, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=2.0) as resp:
+                return resp.status, json.loads(resp.read())
+        except urllib.error.HTTPError as exc:
+            result = json.loads(exc.read()) if exc.readable() else {}
+            exc.close()
+            return exc.code, result
+
+    def _provision_alice(self) -> None:
+        self._request("POST", "/admin/subscribers", {
+            "public_identity": "sip:alice@example.com",
+            "private_identity": "alice@example.com",
+            "assigned_server_name": "sip:scscf.example.com",
+            "xres_base64": base64.b64encode(b"xres-alice").decode("ascii"),
+            "service_profile": {"associated_uris": ["sip:alice@example.com"]},
+        }, self.token)
+
+    def test_subscriber_crud_lifecycle(self) -> None:
+        # Create
+        status, doc = self._request("POST", "/admin/subscribers", {
+            "public_identity": "sip:bob@example.com",
+            "private_identity": "bob@example.com",
+            "assigned_server_name": "sip:scscf.example.com",
+            "xres_base64": base64.b64encode(b"xres-bob").decode("ascii"),
+        }, self.token)
+        self.assertEqual(status, 201)
+        self.assertEqual(doc["public_identity"], "sip:bob@example.com")
+        # Read
+        status, doc = self._request("GET", "/admin/subscribers/sip:bob@example.com", token=self.token)
+        self.assertEqual(status, 200)
+        self.assertEqual(doc["public_identity"], "sip:bob@example.com")
+        # Update
+        status, doc = self._request("PUT", "/admin/subscribers/sip:bob@example.com", {
+            "assigned_server_name": "sip:scscf2.example.com",
+        }, self.token)
+        self.assertEqual(status, 200)
+        self.assertEqual(doc["assigned_server_name"], "sip:scscf2.example.com")
+        # Delete
+        status, doc = self._request("DELETE", "/admin/subscribers/sip:bob@example.com", token=self.token)
+        self.assertEqual(status, 200)
+        self.assertTrue(doc["ok"])
+        # Confirm gone
+        status, _ = self._request("GET", "/admin/subscribers/sip:bob@example.com", token=self.token)
+        self.assertEqual(status, 404)
+
+    def test_subscriber_list(self) -> None:
+        self._provision_alice()
+        status, doc = self._request("GET", "/admin/subscribers", token=self.token)
+        self.assertEqual(status, 200)
+        self.assertIsInstance(doc, list)
+        self.assertEqual(len(doc), 1)
+        self.assertEqual(doc[0]["public_identity"], "sip:alice@example.com")
+
+    def test_subscriber_enable_disable(self) -> None:
+        self._provision_alice()
+        # Disable
+        status, doc = self._request("POST", "/admin/subscribers/sip:alice@example.com/disable", token=self.token)
+        self.assertEqual(status, 200)
+        self.assertFalse(doc["enabled"])
+        # Enable
+        status, doc = self._request("POST", "/admin/subscribers/sip:alice@example.com/enable", token=self.token)
+        self.assertEqual(status, 200)
+        self.assertTrue(doc["enabled"])
+
+    def test_crud_requires_auth_token(self) -> None:
+        self._provision_alice()
+        # No token -> 401 for each verb
+        for method, path in [
+            ("GET", "/admin/subscribers"),
+            ("GET", "/admin/subscribers/sip:alice@example.com"),
+            ("POST", "/admin/subscribers"),
+            ("PUT", "/admin/subscribers/sip:alice@example.com"),
+            ("DELETE", "/admin/subscribers/sip:alice@example.com"),
+            ("POST", "/admin/subscribers/sip:alice@example.com/enable"),
+        ]:
+            body = {"public_identity": "sip:x@example.com", "private_identity": "x@example.com", "assigned_server_name": "sip:s.example.com", "xres_base64": base64.b64encode(b"x").decode()} if method in ("POST", "PUT") else None
+            status, _ = self._request(method, path, body=body)
+            self.assertEqual(status, 401, f"{method} {path} should require auth")
+
+    def test_crud_never_returns_xres(self) -> None:
+        self._provision_alice()
+        for method, path in [
+            ("GET", "/admin/subscribers"),
+            ("GET", "/admin/subscribers/sip:alice@example.com"),
+        ]:
+            status, doc = self._request(method, path, token=self.token)
+            self.assertEqual(status, 200)
+            serialized = json.dumps(doc)
+            self.assertNotIn("xres", serialized)
 
 
 if __name__ == "__main__":
