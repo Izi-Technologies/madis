@@ -561,6 +561,7 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         let event_type = str_trim_space(json_get_string(body, "event_type"))
         let call_id = str_trim_space(json_get_string(body, "call_id"))
         let payload_raw = json_get_string(body, "payload")
+        let tenant = maf_api_tenant()
         if len(event_type) == 0 || len(event_type) > 128 { return maf_api_error(400, "event_type is required (1-128 chars)") }
         // Application events must use the "app." prefix to avoid collision with system events
         if not str_has_prefix(event_type, "app.") { return maf_api_error(400, "custom event_type must start with app.") }
@@ -576,7 +577,6 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         // Validate payload is a JSON object
         if len(payload) > 0 && int(payload[0]) != 123 { return maf_api_error(400, "payload must be a JSON object") }
         if len(payload) > 65536 { return maf_api_error(400, "payload exceeds 64KB limit") }
-        let tenant = maf_api_tenant()
         let trace = sha256("madis.maf.app_event|" + tenant + "|" + event_type + "|" + string(now_ms()))[0:32]
         let rc = maf_api_emit_event(db, ok, tenant, event_type, call_id, "", payload, trace)
         if rc < 0 { return maf_api_error(500, "event could not be persisted") }
