@@ -299,11 +299,11 @@ fn sip_client_txn_tick(cache: CMap, out_fd: int) -> int {
     let owner_s = string(out_fd)
     let mut start = cmap_get_int2(cache, "client_scan|", owner_s, 0)
     let mut scanned = 0
-    // Sweep a quarter of the 8192-slot ring per 50 ms tick. This keeps timer
+    // Sweep a quarter of the 16384-slot ring per 50 ms tick. This keeps timer
     // latency below one sweep while avoiding a full-ring map walk on every
     // packet-heavy worker loop.
-    while scanned < 2048 {
-        let slot = (start + scanned) - ((start + scanned) / 8192) * 8192
+    while scanned < 4096 {
+        let slot = (start + scanned) - ((start + scanned) / 16384) * 16384
         if cmap_has3i(cache, "client_ring|", "", slot) == 1 {
             let key = cmap_get3i(cache, "client_ring|", "", slot)
             if len(key) > 2 && cmap_has2(cache, "client_req|", key) == 1 {
@@ -378,7 +378,7 @@ fn sip_client_txn_tick(cache: CMap, out_fd: int) -> int {
         }
         scanned = scanned + 1
     }
-    cmap_set_int2(cache, "client_scan|", owner_s, (start + 2048) - ((start + 2048) / 8192) * 8192)
+    cmap_set_int2(cache, "client_scan|", owner_s, (start + 4096) - ((start + 4096) / 16384) * 16384)
     return acted
 }
 
@@ -401,6 +401,14 @@ fn app_command_apply(msg: string, raw: string) -> string {
     let updated = app_gateway_apply_headers(msg, raw)
     if sip_validate_message(updated, len(updated)) == 0 { return "__APP_INVALID_MESSAGE__" }
     return updated
+}
+
+// Cache env values that never change at runtime — env_get_or is not free at 10K+ CPS.
+fn cached_env(cache: CMap, cache_key: string, env_key: string, fallback: string) -> string {
+    if cmap_has(cache, cache_key) == 1 { return cmap_get(cache, cache_key) }
+    let v = env_get_or(env_key, fallback)
+    cmap_set(cache, cache_key, v)
+    return v
 }
 
 fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, port: int, source_port: int, tr: string, forward_fd: int, db: SqlDB, db_ok: int, cache: CMap, realm: string, node_id: string, diameter_lock: Mutex) -> string {
@@ -915,8 +923,8 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
         let aor = sip_user(to) + "@" + sip_domain(to)
         let ims_private_identity = from_user + "@" + from_domain
         let ims_public_identity = "sip:" + aor
-        let ims_visited_network = env_get_or("SIP_IMS_VISITED_NETWORK", realm)
-        let ims_server_name = env_get_or("SIP_IMS_SERVER_NAME", "sip:" + node_id + "." + realm)
+        let ims_visited_network = cached_env(cache, "_ims_visited", "SIP_IMS_VISITED_NETWORK", realm)
+        let ims_server_name = cached_env(cache, "_ims_server", "SIP_IMS_SERVER_NAME", "sip:" + node_id + "." + realm)
 
         // Keep the three CSCF responsibilities explicit even when they share
         // one worker binary. P-/I-CSCF roles forward REGISTER and never run
@@ -1056,7 +1064,7 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
         let mut reg_app_raw = app_gateway_call(msg, ip, port, tr, "request")
         let mut reg_app_id = app_gateway_request_id_for(msg, "request")
         let mut reg_app_action = app_gateway_action(reg_app_raw, reg_app_id, 0)
-        let mut reg_command_token = env_get_or("SIP_APP_TOKEN", "")
+        let mut reg_command_token = cached_env(cache, "_app_token", "SIP_APP_TOKEN", "")
         if str_eq(reg_app_action, "module") && app_gateway_command_valid(reg_app_raw, reg_app_id, 0) == 1 {
             let module_name = json_get_string(reg_app_raw, "module")
             let module_operation = json_get_string(reg_app_raw, "operation")
@@ -1069,7 +1077,7 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
             reg_app_raw = module_raw
             reg_app_id = module_id
             reg_app_action = module_action
-            reg_command_token = env_get_or("SIP_MODULE_TOKEN", "")
+            reg_command_token = cached_env(cache, "_mod_token", "SIP_MODULE_TOKEN", "")
         }
         if str_eq(reg_app_action, "fail") { return sip_resp(503, "Service Unavailable", data, dl, "app") }
         if str_eq(reg_app_action, "drop") { return "" }
@@ -1137,7 +1145,7 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
                         else { 0 }
                     if contact_ok == 0 {
                         // Allow override for legitimate third-party registration
-                        let allow_foreign = env_get_or("SIP_ALLOW_FOREIGN_CONTACT", "0")
+                        let allow_foreign = cached_env(cache, "_allow_foreign", "SIP_ALLOW_FOREIGN_CONTACT", "0")
                         if not str_eq(allow_foreign, "1") {
                             return sip_resp(403, "Forbidden", data, dl, "contact-mismatch")
                         }
@@ -1283,7 +1291,7 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
             let _ = sec_auth_fail_clear(ip, cache)
         }
 
-        let maf_inbound_mode = str_to_lower(env_get_or("SIP_MAF_INBOUND_MODE", "disabled"))
+        let maf_inbound_mode = if cmap_has(cache, "_maf_mode") == 1 { cmap_get(cache, "_maf_mode") } else { let v = str_to_lower(env_get_or("SIP_MAF_INBOUND_MODE", "disabled")); cmap_set(cache, "_maf_mode", v); v }
         if ims_initial_dialog_request(data, dl) == 1 && (str_eq(maf_inbound_mode, "control") || str_eq(maf_inbound_mode, "route")) {
             let maf_call_id = maf_worker_ingress_invite(db, db_ok, maf_worker_tenant(), data, ip, port, tr, cache)
             if len(maf_call_id) == 0 { return sip_resp(503, "MAF Inbound Unavailable", data, dl, "maf-inbound") }
@@ -1393,7 +1401,7 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
         let mut inv_app_raw = app_gateway_call(msg, ip, port, tr, "request")
         let mut inv_app_id = app_gateway_request_id_for(msg, "request")
         let mut inv_app_action = app_gateway_action(inv_app_raw, inv_app_id, 0)
-        let mut inv_command_token = env_get_or("SIP_APP_TOKEN", "")
+        let mut inv_command_token = cached_env(cache, "_app_token", "SIP_APP_TOKEN", "")
         if str_eq(inv_app_action, "module") && app_gateway_command_valid(inv_app_raw, inv_app_id, 0) == 1 {
             let module_name = json_get_string(inv_app_raw, "module")
             let module_operation = json_get_string(inv_app_raw, "operation")
@@ -1406,7 +1414,7 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
             inv_app_raw = module_raw
             inv_app_id = module_id
             inv_app_action = module_action
-            inv_command_token = env_get_or("SIP_MODULE_TOKEN", "")
+            inv_command_token = cached_env(cache, "_mod_token", "SIP_MODULE_TOKEN", "")
         }
         if str_eq(inv_app_action, "fail") { return sip_resp(503, "Service Unavailable", data, dl, "app") }
         if str_eq(inv_app_action, "drop") { return "" }
@@ -1711,7 +1719,7 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
     let mut other_app_raw = app_gateway_call(msg, ip, port, tr, "request")
     let mut other_app_id = app_gateway_request_id_for(msg, "request")
     let mut other_app_action = app_gateway_action(other_app_raw, other_app_id, 0)
-    let mut other_command_token = env_get_or("SIP_APP_TOKEN", "")
+    let mut other_command_token = cached_env(cache, "_app_token", "SIP_APP_TOKEN", "")
     if str_eq(other_app_action, "module") && app_gateway_command_valid(other_app_raw, other_app_id, 0) == 1 {
         let module_name = json_get_string(other_app_raw, "module")
         let module_operation = json_get_string(other_app_raw, "operation")
@@ -1724,7 +1732,7 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
         other_app_raw = module_raw
         other_app_id = module_id
         other_app_action = module_action
-        other_command_token = env_get_or("SIP_MODULE_TOKEN", "")
+        other_command_token = cached_env(cache, "_mod_token", "SIP_MODULE_TOKEN", "")
     }
     if str_eq(other_app_action, "fail") { return sip_resp(503, "Service Unavailable", data, dl, "app") }
     if str_eq(other_app_action, "drop") { return "" }

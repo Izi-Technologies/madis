@@ -342,7 +342,7 @@ fn sip_txn_begin(msg: string, cache: CMap) -> string {
     // than normal concurrent in-flight transactions.
     let seq = cmap_incr(cache, "txn_seq", 1)
     if seq >= 0 {
-        let slot = seq - (seq / 8192) * 8192
+        let slot = seq - (seq / 16384) * 16384
         let ring_key = "txn_ring|" + string(slot)
         if cmap_has(cache, ring_key) == 1 {
             let old = cmap_get(cache, ring_key)
@@ -515,7 +515,7 @@ fn sip_server_txn_record(request: string, response: string, ip: string, port: in
     if len(key) <= 2 { return 0 }
     let seq = cmap_incr(cache, "server_seq", 1)
     if seq < 0 { return 0 }
-    let slot = seq - (seq / 8192) * 8192
+    let slot = seq - (seq / 16384) * 16384
     let ring_key = "server_ring|" + string(slot)
     if cmap_has(cache, ring_key) == 1 {
         let old = cmap_get(cache, ring_key)
@@ -588,7 +588,7 @@ fn sip_server_txn_tick(cache: CMap, owner: int) -> int {
     let now = mono_ms()
     let mut acted = 0
     // ACKs are queued by owner so an incremental transaction sweep does not
-    // make a completed INVITE wait for the 8192-slot cursor to wrap.
+    // make a completed INVITE wait for the 16384-slot cursor to wrap.
     let owner_s = string(owner)
     let mut ack_start = cmap_get_int2(cache, "server_ack_scan|", owner_s, 0)
     let ack_end = cmap_get_int2(cache, "server_ack_seq|", owner_s, 0)
@@ -609,8 +609,8 @@ fn sip_server_txn_tick(cache: CMap, owner: int) -> int {
     cmap_set_int2(cache, "server_ack_scan|", owner_s, ack_start)
     let mut start = cmap_get_int2(cache, "server_scan|", owner_s, 0)
     let mut scanned = 0
-    while scanned < 2048 {
-        let slot = (start + scanned) - ((start + scanned) / 8192) * 8192
+    while scanned < 4096 {
+        let slot = (start + scanned) - ((start + scanned) / 16384) * 16384
         if cmap_has3i(cache, "server_ring|", "", slot) == 1 {
             let key = cmap_get3i(cache, "server_ring|", "", slot)
             if len(key) > 2 && cmap_has2(cache, "server_resp|", key) == 1 {
@@ -656,7 +656,7 @@ fn sip_server_txn_tick(cache: CMap, owner: int) -> int {
         }
         scanned = scanned + 1
     }
-    cmap_set_int2(cache, "server_scan|", owner_s, (start + 2048) - ((start + 2048) / 8192) * 8192)
+    cmap_set_int2(cache, "server_scan|", owner_s, (start + 4096) - ((start + 4096) / 16384) * 16384)
     return acted
 }
 
@@ -728,7 +728,7 @@ fn sip_client_txn_record(msg: string, target: string, transport: string, owner: 
 
     let seq = cmap_incr(cache, "client_seq", 1)
     if seq < 0 { return 0 }
-    let slot = seq - (seq / 8192) * 8192
+    let slot = seq - (seq / 16384) * 16384
     let ring_key = "client_ring|" + string(slot)
     if cmap_has(cache, ring_key) == 1 {
         let old = cmap_get(cache, ring_key)

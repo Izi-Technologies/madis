@@ -37,6 +37,49 @@ state.
 | `calls.headers` | Set per-call SIP header policy (add/set/remove/copy/move) |
 | `calls.rtp` | Direct RTPEngine control: offer, answer, delete, query |
 
+### Custom SIP headers (X-headers, UUI, etc.)
+
+The `calls.headers` operation lets SDKs add, set, remove, copy, or move any
+non-protected SIP header. This includes:
+
+- **X-headers**: `X-Customer-ID`, `X-Billing-Code`, `X-Route-Tag`, etc.
+- **User-to-User** (RFC 7433): UUI data passed end-to-end
+- **P-Early-Media** (RFC 5009): early media policy
+- **Reason** (RFC 3326): call release cause
+- **Alert-Info**: distinctive ringing
+- **Diversion** (RFC 5806): call forwarding history
+- Any RFC-compliant header that is not in the protected list
+
+**Protected headers** (cannot be modified — proxy/dialog integrity):
+`Via`, `Route`, `Record-Route`, `Path`, `Content-Length`, `Content-Type`,
+`Max-Forwards`, `Call-ID`, `CSeq`, `From`, `To`, `Contact`, `Authorization`,
+`Proxy-Authorization`, `WWW-Authenticate`, `Proxy-Authenticate`
+
+Example — add User-to-User and a custom billing header:
+
+```sh
+curl -X POST "$MAF_BASE_URL/api/v1/maf/calls/$CALL_ID/headers" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: headers-$CALL_ID" \
+  --data '{
+    "headers": [
+      {"action": "add", "name": "User-to-User", "value": "323435363738;encoding=hex"},
+      {"action": "add", "name": "X-Billing-Code", "value": "acct-12345"},
+      {"action": "set", "name": "Alert-Info", "value": "<http://example.com/ring.wav>"},
+      {"action": "remove", "name": "P-Early-Media"},
+      {"action": "add", "name": "Reason", "value": "SIP;cause=302;text=\"Moved\"", "method": "BYE", "direction": "outbound"}
+    ]
+  }'
+```
+
+Header policies are:
+- **Per-call**: scoped to one MAF call, not global
+- **Method-filtered**: apply only to specific SIP methods (`*` = all)
+- **Direction-filtered**: `inbound`, `outbound`, or `both`
+- **Priority-ordered**: applied in the order specified
+- **Bounded**: max 32 operations per call, 4KB per value, 128-byte names
+
 ### SDK-controlled routing
 
 With `SIP_MAF_INBOUND_MODE=control` or `SIP_MAF_INBOUND_MODE=route`, an
