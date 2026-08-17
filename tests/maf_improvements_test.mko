@@ -43,7 +43,7 @@ fn b2bua_prepare_invite(msg: string, target: string, tr: string, addr: string, t
 fn b2bua_lookup_in(msg: string, cache: CMap) string { return "" }
 fn b2bua_cleanup(key: string, cache: CMap) int { return 0 }
 fn sql_like_escape(s: string) string { return s }
-fn rtp_config(db: SqlDB, db_ok: int, cache: CMap) []string { let r = make([]string, 3); r[0] = "0"; r[1] = ""; r[2] = "0"; return r }
+fn rtp_config(db: SqlDB, db_ok: int, cache: CMap) []string { let mut r = make([]string, 3, 3); r[0] = "0"; r[1] = ""; r[2] = "0"; return r }
 fn rtp_delete_cache(cache: CMap, host: string, port: int, cid: string) int { return 0 }
 fn rtp_send_call(cache: CMap, cid: string, cmd: string, host: string, port: int) string { return "" }
 fn rtp_policy_flags() string { return "" }
