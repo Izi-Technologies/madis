@@ -633,7 +633,6 @@ MADIS_VERSION="${MADIS_VERSION:-0.1.0}"
 
 info "Copying source files to $MADIS_INSTALL_DIR..."
 cp "$SCRIPT_DIR"/*.mko "$MADIS_INSTALL_DIR/" 2>/dev/null || true
-fi
 for support_dir in api sdk; do
     if [ -d "$SCRIPT_DIR/$support_dir" ]; then
         cp -r "$SCRIPT_DIR/$support_dir" "$MADIS_INSTALL_DIR/"
