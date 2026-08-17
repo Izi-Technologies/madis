@@ -17,6 +17,21 @@ fn shaken_identity_token(identity: string) -> string {
     return identity[0:semi]
 }
 
+// Extract ;alg= from Identity header parameters
+fn shaken_identity_alg(identity: string) -> string {
+    let idx = str_index(str_to_lower(identity), ";alg=")
+    if idx < 0 { return "" }
+    let start = idx + 5
+    let mut end = start
+    while end < len(identity) {
+        let c = int(identity[end])
+        if c == 59 || c == 32 || c == 9 { break }
+        end = end + 1
+    }
+    if end > start { return identity[start:end] }
+    return ""
+}
+
 // Extract info=<url> from Identity header parameters
 fn shaken_identity_info(identity: string) -> string {
     let idx = str_index(str_to_lower(identity), "info=<")
@@ -208,13 +223,20 @@ fn shaken_verify_cfg(msg: string, msglen: int, cfg: []string, cache: CMap) -> st
     } else if str_eq(mode, "jwks") {
         if len(jwks) > 0 { if jwt_verify_jwks(token, jwks) == 1 { ok = 1 } }
     } else {
-        // auto: try strongest configured material first
-        if len(jwks) > 0 { if jwt_verify_jwks(token, jwks) == 1 { ok = 1 } }
-        if ok == 0 && len(pubkey) > 0 {
-            if jwt_verify_es256(token, pubkey) == 1 { ok = 1 }
-            if ok == 0 { if jwt_verify_rs256(token, pubkey) == 1 { ok = 1 } }
+        // auto: respect the alg declared in the Identity header to prevent
+        // HS256 downgrade attacks. Only fall back to HS256 if explicitly
+        // declared — never as a silent cascade from ES256 failure.
+        let declared_alg = str_to_lower(str_trim_space(shaken_identity_alg(identity)))
+        if str_eq(declared_alg, "hs256") {
+            if len(secret) > 0 { if jwt_verify(token, secret) == 1 { ok = 1 } }
+        } else {
+            // ES256/RS256/JWKS — never fall back to HS256
+            if len(jwks) > 0 { if jwt_verify_jwks(token, jwks) == 1 { ok = 1 } }
+            if ok == 0 && len(pubkey) > 0 {
+                if jwt_verify_es256(token, pubkey) == 1 { ok = 1 }
+                if ok == 0 { if jwt_verify_rs256(token, pubkey) == 1 { ok = 1 } }
+            }
         }
-        if ok == 0 && len(secret) > 0 { if jwt_verify(token, secret) == 1 { ok = 1 } }
     }
 
     if ok == 0 { return "" }

@@ -906,12 +906,20 @@ fn maf_worker_identity(db: SqlDB, ok: int, tenant: string, call_id: string, requ
         if len(identity_value) == 0 || len(identity_value) > 4096 {
             return "invalid_identity|identity header value required (max 4KB)"
         }
+        // Reject CRLF/null — prevents SIP header injection via Identity value
+        if maf_worker_text_safe(identity_value, 4096) == 0 {
+            return "invalid_identity|identity must not contain CR, LF, or null bytes"
+        }
         // Validate it looks like a JWT;info=<url>;alg=...;ppt=shaken
         if str_index(identity_value, ";info=<") < 0 || str_index(identity_value, ";ppt=shaken") < 0 {
             return "invalid_identity|identity must contain ;info=<url>;ppt=shaken"
         }
-        let attest = str_to_upper(str_trim_space(json_get_string(request, "attest")))
-        let attestation = if str_eq(attest, "A") || str_eq(attest, "B") || str_eq(attest, "C") { attest } else { "C" }
+        // Derive attestation from the JWT payload, not client-supplied value.
+        // Trusting client-declared attestation enables robocall fraud.
+        let token = shaken_identity_token(identity_value)
+        let jwt_claims = jwt_payload(token)
+        let mut attestation = shaken_attest_from_payload(jwt_claims)
+        if len(attestation) == 0 { attestation = "C" }
         // Store for the worker to apply when forwarding
         let _ = bounded_cache_set(cache, "maf_cache_seq", "maf_cache_ring|", "maf_identity|" + call_id, identity_value, 65536)
         let _ = bounded_cache_set(cache, "maf_cache_seq", "maf_cache_ring|", "maf_attest|" + call_id, attestation, 65536)
@@ -943,7 +951,9 @@ fn maf_worker_identity(db: SqlDB, ok: int, tenant: string, call_id: string, requ
         let orig = shaken_orig_from_payload(jwt_payload)
         let dest = shaken_dest_from_payload(jwt_payload)
         let iat = shaken_iat_from_payload(jwt_payload)
-        let payload = "{\"call_id\":\"" + maf_worker_json_escape(call_id) + "\",\"action\":\"verify\",\"result\":\"" + maf_worker_json_escape(if str_eq(verified, "true") { "verified" } else { "failed" }) + "\",\"attest\":\"" + maf_worker_json_escape(attest_hdr) + "\",\"error\":\"" + maf_worker_json_escape(error_hdr) + "\",\"orig\":\"" + maf_worker_json_escape(orig) + "\",\"dest\":\"" + maf_worker_json_escape(dest) + "\",\"iat\":" + string(iat) + ",\"info\":\"" + maf_worker_json_escape(info_url) + "\",\"identity\":\"" + maf_worker_json_escape(identity) + "\"}"
+        // Emit metadata only — do not leak the full JWT token in events
+        let alg = shaken_identity_alg(identity)
+        let payload = "{\"call_id\":\"" + maf_worker_json_escape(call_id) + "\",\"action\":\"verify\",\"result\":\"" + maf_worker_json_escape(if str_eq(verified, "true") { "verified" } else { "failed" }) + "\",\"attest\":\"" + maf_worker_json_escape(attest_hdr) + "\",\"error\":\"" + maf_worker_json_escape(error_hdr) + "\",\"orig\":\"" + maf_worker_json_escape(orig) + "\",\"dest\":\"" + maf_worker_json_escape(dest) + "\",\"iat\":" + string(iat) + ",\"info\":\"" + maf_worker_json_escape(info_url) + "\",\"alg\":\"" + maf_worker_json_escape(alg) + "\"}"
         let _ = maf_worker_emit_event(db, ok, tenant, "identity.verified", call_id, payload, trace)
         return "ok"
     }

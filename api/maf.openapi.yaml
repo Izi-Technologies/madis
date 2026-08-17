@@ -285,34 +285,6 @@ paths:
         '403': {description: Scope or call policy denied the command}
         '404': {description: Call not found}
         '409': {description: Call state conflict}
-  /api/v1/maf/calls/{call_id}/identity:
-    post:
-      operationId: identityControl
-      summary: STIR/SHAKEN identity control for external signing
-      description: >-
-        SDK-controlled STIR/SHAKEN for external vendors (TransNexus, Neustar,
-        Iconectiv). Sign: attach a pre-signed Identity header. Verify: get
-        verification result. Attest: set attestation level. Clear: remove
-        Identity headers.
-      security: [{mafBearerAuth: []}]
-      parameters:
-        - {$ref: '#/components/parameters/CallId'}
-        - {$ref: '#/components/parameters/IdempotencyKey'}
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [action]
-              properties:
-                action: {type: string, enum: [sign, verify, attest, clear]}
-                identity: {type: string, maxLength: 4096, description: Pre-signed Identity header value (required for sign)}
-                attest: {type: string, enum: [A, B, C], description: Attestation level}
-      responses:
-        '202': {description: Command accepted, content: {application/json: {schema: {$ref: '#/components/schemas/CommandReceipt'}}}}
-        '401': {description: Authentication failed}
-        '404': {description: Call not found}
   /api/v1/maf/events:
     get:
       operationId: listEvents
@@ -832,6 +804,34 @@ paths:
                 priority: {type: integer, minimum: 1, maximum: 9999, default: 1}
       responses:
         '201': {description: Dispatch member added}
+  /api/v1/maf/calls/{call_id}/identity:
+    post:
+      operationId: identityControl
+      summary: STIR/SHAKEN identity control for external signing
+      description: >-
+        SDK-controlled STIR/SHAKEN for external vendors (TransNexus, Neustar,
+        Iconectiv). Sign attaches a pre-signed header. Verify returns
+        verification result. Attest sets attestation level. Clear removes
+        headers.
+      security: [{mafBearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/CallId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: {type: string, enum: [sign, verify, attest, clear]}
+                identity: {type: string, maxLength: 4096}
+                attest: {type: string, enum: [A, B, C]}
+      responses:
+        '202': {description: Command accepted}
+        '401': {description: Authentication failed}
+        '404': {description: Call not found}
 components:
   securitySchemes:
     mafBearerAuth:
