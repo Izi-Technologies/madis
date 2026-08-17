@@ -146,12 +146,12 @@ fn sec_is_fraud_dest(dest: string, cache: CMap) -> int {
     let mut start = 0
     while start < plen {
         // Skip whitespace
-        while start < plen && (int(prefixes[start]) == 32 || int(prefixes[start]) == 9) { start = start + 1 }
+        while start < plen && (int(prefixes[start]) == 32 || int(prefixes[start]) == 9 || int(prefixes[start]) == 13 || int(prefixes[start]) == 10) { start = start + 1 }
         let mut end = start
         while end < plen && int(prefixes[end]) != 44 { end = end + 1 }
         // Trim trailing whitespace
         let mut te = end
-        while te > start && (int(prefixes[te - 1]) == 32 || int(prefixes[te - 1]) == 9) { te = te - 1 }
+        while te > start && (int(prefixes[te - 1]) == 32 || int(prefixes[te - 1]) == 9 || int(prefixes[te - 1]) == 13 || int(prefixes[te - 1]) == 10) { te = te - 1 }
         if te > start && str_has_prefix(dest, prefixes[start:te]) { return 1 }
         start = end + 1
     }

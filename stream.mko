@@ -144,6 +144,8 @@ fn sip_per_ip_conn_check(cache: CMap, ip: string) -> int {
     }
     if count >= sip_per_ip_conn_limit() { return 0 }
     // Use bounded ring so connection-scan from many IPs doesn't grow unbounded
+    // ponytail: evicted IPs lose their counter and restart at 1; 65536 slots
+    // covers production cardinality. Switch to cmap_set + periodic sweep if not.
     let _ = bounded_cache_set(cache, "ipconn_seq", "ipconn_ring|", key, string(count + 1), 65536)
     return 1
 }

@@ -1149,7 +1149,8 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         let scope = maf_api_scope(raw, n)
         if scope < 1 { return maf_api_error(401, "authentication required") }
         if ok == 0 { return maf_api_error(503, "database unavailable") }
-        let rows = tbl_query(db, ok, "SELECT json_build_object('id',id,'match_method',match_method,'match_direction',match_direction,'action',action,'header_name',header_name,'header_value',COALESCE(header_value,''),'priority',priority,'enabled',enabled,'description',COALESCE(description,''))::text FROM header_rules ORDER BY priority ASC, id ASC", 100)
+        let tenant = maf_api_tenant()
+        let rows = tbl_query_param(db, ok, "SELECT json_build_object('id',id,'match_method',match_method,'match_direction',match_direction,'action',action,'header_name',header_name,'header_value',COALESCE(header_value,''),'priority',priority,'enabled',enabled,'description',COALESCE(description,''))::text FROM header_rules WHERE tenant_id = $1 ORDER BY priority ASC, id ASC", tenant, 100)
         let mut out = "{\"schema\":\"madis.maf.header-rules.v1\",\"rules\":["
         let mut i = 0
         while i < len(rows) {
@@ -1176,8 +1177,9 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         let mut hp = if hr_pri > 0 { hr_pri } else { 10 }
         if hp > 9999 { hp = 9999 }
         let desc = json_get_string(body, "description")
-        let packed = "{\"match_method\":\"" + maf_api_json_escape(match_method) + "\",\"match_direction\":\"" + maf_api_json_escape(match_direction) + "\",\"action\":\"" + maf_api_json_escape(hr_action) + "\",\"header_name\":\"" + maf_api_json_escape(header_name) + "\",\"header_value\":\"" + maf_api_json_escape(header_value) + "\",\"priority\":" + string(hp) + ",\"description\":\"" + maf_api_json_escape(desc) + "\"}"
-        let rc = sql_exec_str4(db, "INSERT INTO header_rules (match_method, match_direction, action, header_name, header_value, priority, description) VALUES (($1::jsonb->>'match_method'), ($1::jsonb->>'match_direction'), ($1::jsonb->>'action'), ($1::jsonb->>'header_name'), ($1::jsonb->>'header_value'), ($1::jsonb->>'priority')::int, ($1::jsonb->>'description'))", packed, "", "", "")
+        let tenant = maf_api_tenant()
+        let packed = "{\"tenant_id\":\"" + maf_api_json_escape(tenant) + "\",\"match_method\":\"" + maf_api_json_escape(match_method) + "\",\"match_direction\":\"" + maf_api_json_escape(match_direction) + "\",\"action\":\"" + maf_api_json_escape(hr_action) + "\",\"header_name\":\"" + maf_api_json_escape(header_name) + "\",\"header_value\":\"" + maf_api_json_escape(header_value) + "\",\"priority\":" + string(hp) + ",\"description\":\"" + maf_api_json_escape(desc) + "\"}"
+        let rc = sql_exec_str4(db, "INSERT INTO header_rules (tenant_id, match_method, match_direction, action, header_name, header_value, priority, description) VALUES (($1::jsonb->>'tenant_id'), ($1::jsonb->>'match_method'), ($1::jsonb->>'match_direction'), ($1::jsonb->>'action'), ($1::jsonb->>'header_name'), ($1::jsonb->>'header_value'), ($1::jsonb->>'priority')::int, ($1::jsonb->>'description'))", packed, "", "", "")
         if rc < 0 { return maf_api_error(500, "header rule insert failed") }
         return http_resp(201, "application/json", "{\"ok\":true}\n", "Cache-Control: no-store\r\n")
     }
@@ -1197,6 +1199,8 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         return http_resp(200, "application/json", out + "]}\n", "Cache-Control: no-store\r\n")
     }
     // POST /admin/api/v1/maf/billing/events/ack — acknowledge billing event
+    // ponytail: billing_events is platform-scoped (shared outbox), not per-tenant.
+    // Add tenant scoping if billing becomes multi-tenant.
     if kind == 50 {
         let scope = maf_api_scope(raw, n)
         if scope < 2 { return maf_api_error(if scope == 0 { 401 } else { 403 }, "write scope required") }

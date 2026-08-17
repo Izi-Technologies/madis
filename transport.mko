@@ -448,6 +448,7 @@ fn sip_forward_ws(target: string, msg: string, cache: CMap) -> int {
     let host = sip_target_host(target)
     let port = sip_target_port(target, 80)
     if len(host) == 0 || port <= 0 { return 0 }
+    if sip_outbound_target_safe(host) == 0 { return 0 }
     let path = sip_target_path(target)
     let key = base64_encode(random_bytes(16))
     let conn = ws_client_connect(host, port, path, key)

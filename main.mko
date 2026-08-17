@@ -3068,6 +3068,7 @@ fn main() {
         let _ = sql_exec_plain(db, "ALTER TABLE dispatch_sets ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default'")
         let _ = sql_exec_plain(db, "ALTER TABLE registration_bindings ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default'")
         let _ = sql_exec_plain(db, "ALTER TABLE config ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default'")
+        let _ = sql_exec_plain(db, "ALTER TABLE header_rules ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default'")
         let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_routing_rules_tenant ON routing_rules (tenant_id, priority) WHERE enabled = true")
         let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_gateways_tenant ON gateways (tenant_id, name)")
         let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_dids_tenant ON dids (tenant_id, number)")

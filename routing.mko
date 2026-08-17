@@ -295,7 +295,7 @@ fn ani_in_group(db: SqlDB, db_ok: int, number: string, group_name: string, cache
     if str_has_prefix(clean, "+") { clean = clean[1:] }
 
     // Query: check if number falls in any range of this group
-    let hit = sql_query_str(db, "SELECT 1 FROM ani_ranges ar JOIN ani_groups ag ON ar.group_id = ag.id WHERE ag.name = $1 AND ag.enabled = true AND ar.enabled = true AND $1 >= ar.range_start AND $1 <= ar.range_end LIMIT 1", clean)
+    let hit = sql_query_str2(db, "SELECT 1 FROM ani_ranges ar JOIN ani_groups ag ON ar.group_id = ag.id WHERE ag.name = $1 AND ag.enabled = true AND ar.enabled = true AND $2 >= ar.range_start AND $2 <= ar.range_end LIMIT 1", group_name, clean)
     if len(hit) > 0 {
         let _ = bounded_cache_set(cache, "ani_seq", "ani_ring|", key, "1", 16384)
         return 1
