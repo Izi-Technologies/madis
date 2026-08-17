@@ -60,6 +60,10 @@ The checklists below use these labels:
 - NAT traversal: Contact URI rewrite, SDP c=/o= line-scoped rewrite, IPv6
   ULA/link-local detection, registration NAT target resolution, hold SDP
   detection.
+- Emergency call handling (TS 23.167): `urn:service:sos` detection, built-in
+  and configurable emergency numbers, auth bypass, E-CSCF routing.
+- P-Access-Network-Info insertion (TS 24.229 §5.2.6.3): transport-aware
+  access type on forwarded requests from UEs.
 - STIR/SHAKEN (RFC 8224/8225/8226): ES256 PASSporT signing, ES256/RS256/JWKS
   verification, x5u cert fetch, iat freshness, orig/dest TN validation,
   HS256 downgrade prevention in auto mode.
@@ -201,8 +205,10 @@ The checklists below use these labels:
 - [x] Originating P-Charging-Vector generation and terminating validation.
 - [x] Rx AAR/STR builders and fail-closed authorization gate.
 - [x] MAF charging authorization/denial per call.
+- [x] Emergency call detection and E-CSCF routing (TS 23.167).
+- [x] P-Access-Network-Info insertion (TS 24.229 §5.2.6.3).
 - [ ] Real PCRF/PCF policy evidence and reauthorization behavior.
-- [ ] IBCF/SBC, roaming, emergency, PSTN/SIGTRAN, and regulatory profiles.
+- [ ] IBCF/SBC, roaming, PSTN/SIGTRAN, and regulatory profiles.
 
 ## MAF integration track
 

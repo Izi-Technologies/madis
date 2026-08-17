@@ -210,6 +210,10 @@ fn maf_worker_ingress_invite(db: SqlDB, ok: int, tenant: string, msg: string, ip
         if len(identity) > 0 { app = app + ",\"identity\":\"" + maf_worker_json_escape(identity) + "\"" }
         if len(verified) > 0 { app = app + ",\"identity_verified\":\"" + maf_worker_json_escape(verified) + "\"" }
         if len(sdp) > 0 && len(sdp) < 8192 { app = app + ",\"sdp\":\"" + maf_worker_json_escape(sdp) + "\"" }
+        // Emergency and access-network metadata
+        if sip_is_emergency(req_uri) == 1 { app = app + ",\"emergency\":true" }
+        let pani = sip_header(msg, "P-Access-Network-Info")
+        if len(pani) > 0 { app = app + ",\"p_access_network_info\":\"" + maf_worker_json_escape(pani) + "\"" }
         app = app + "}"
         let document = "{\"from\":\"" + maf_worker_json_escape(from_uri) + "\",\"to\":\"" + maf_worker_json_escape(to_uri) + "\",\"application_data\":" + app + "}"
         let call_rc = sql_exec_str4(db, "INSERT INTO maf_calls (call_id, tenant_id, state, version, from_uri, to_uri, application_data) SELECT $1, $2, 'ringing', 1, $4::jsonb->>'from', $4::jsonb->>'to', $4::jsonb->'application_data' ON CONFLICT (call_id) DO NOTHING", call_id, tenant, "", document)

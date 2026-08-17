@@ -200,6 +200,15 @@ B2BUA state is bounded in memory and owned by the SIP worker. The control API ch
 
 Post-call outbox failures do not change a completed SIP dialog. Initial preauthorization is fail-closed unless `SIP_CHARGING_FAIL_OPEN=1` is explicitly set.
 
+## Emergency calls
+
+| Variable | Purpose |
+| --- | --- |
+| `SIP_EMERGENCY_TARGET` | SIP URI of the E-CSCF for emergency call routing (e.g., `sip:ecscf.example.com`). Empty = disabled. |
+| `SIP_EMERGENCY_NUMBERS` | Comma-separated additional emergency numbers beyond the built-in set (911, 112, 999, 000, 110, 119). Example: `933,988,211`. |
+
+Emergency calls (`urn:service:sos` URIs or configured numbers) bypass SIP authentication and route directly to the E-CSCF per TS 23.167. The MAF SIP inspection endpoint includes `"emergency": true` for detected emergency calls.
+
 ## IMS subscriber authorization
 
 Set `SIP_IMS_SUBSCRIBER_URL` to enable the optional fail-closed HTTPS subscriber authorization contract. Configure `SIP_IMS_SUBSCRIBER_TOKEN`, and optionally `SIP_IMS_SUBSCRIBER_CA` and `SIP_IMS_SUBSCRIBER_TIMEOUT_MS`. The URL host must be a DNS name (or `localhost`); certificate verification through the runtime does not match IP-literal hosts against iPAddress SANs. The service owns IMS identities and AKA material; Madis only sends a bounded request and accepts a matching `allow` response. If both this adapter and `SIP_IMS_CX=1` are enabled, both gates must authorize REGISTER. See [`../api/ims-subscriber.md`](../api/ims-subscriber.md).

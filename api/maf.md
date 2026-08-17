@@ -192,7 +192,9 @@ from the call's `application_data`. For inbound calls:
   "p_asserted_identity": "sip:+15559876543@carrier.example.com",
   "identity": "<base64-passport>",
   "identity_verified": "true",
-  "sdp": "v=0\r\n..."
+  "sdp": "v=0\r\n...",
+  "emergency": true,
+  "p_access_network_info": "3GPP-E-UTRAN-FDD;network-provided"
 }
 ```
 
@@ -208,6 +210,26 @@ When the call is answered, the remote party's details are merged:
 
 This gives SDKs full visibility into caller identity, STIR/SHAKEN attestation,
 codec negotiation, and NAT topology without parsing raw SIP.
+
+### Emergency call detection
+
+Inbound INVITEs to emergency URIs (`urn:service:sos`) or well-known numbers
+(911, 112, 999, etc.) are flagged in the SIP inspection data with
+`"emergency": true`. Emergency calls bypass SIP authentication and route
+directly to `SIP_EMERGENCY_TARGET` (the E-CSCF).
+
+SDKs can detect emergency calls via the `call.created` event or the
+`GET /calls/{id}/sip` endpoint and apply special handling (priority routing,
+location services, mandatory recording).
+
+Configure additional emergency numbers via the MAF config API:
+
+```sh
+curl -X POST "$MAF_BASE_URL/api/v1/maf/config" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"key":"security_emergency_numbers","value":"933,988,211"}'
+```
 
 ### Registration and presence
 
