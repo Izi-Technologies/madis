@@ -160,8 +160,9 @@ fn nat_fix_contact(msg: string, source_ip: string, source_port: int) -> string {
         }
         new_uri = new_uri + ";transport=" + addr[tp + 10:tp_end]
     }
-    // Replace the old URI in the Contact header value
-    return sip_replace_header(msg, "Contact", str_replace(contact, addr, new_uri))
+    // Replace the Contact header with the rewritten value
+    let new_contact = str_replace(contact, addr, new_uri)
+    return hdr_set(msg, "Contact", new_contact)
 }
 
 // Full NAT traversal: rewrite private SDP c=/o= addresses with public IP.
