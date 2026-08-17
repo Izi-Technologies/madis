@@ -204,10 +204,11 @@ fn resolve_dispatch_set(db: SqlDB, set_name: string, from_user: string, call_id:
         let set_info = sql_query_str(db, "SELECT id || '|' || algorithm FROM dispatch_sets WHERE name = $1 AND enabled = true", set_name)
         let pipe = str_index(set_info, "|")
         if pipe < 1 { return "" }
-        match parse_int(set_info[0:pipe]) { Ok(v) => { set_id = v } Err(_) => { return "" } }
-        algo = set_info[pipe + 1:]
+        let set_id_str = "" + set_info[0:pipe]
+        match parse_int(set_id_str) { Ok(v) => { set_id = v } Err(_) => { return "" } }
+        algo = "" + set_info[pipe + 1:]
 
-        let member_rows = sql_query_rows_str(db, "SELECT g.address || ':' || g.port FROM dispatch_members dm JOIN gateways g ON dm.gateway_id = g.id WHERE dm.set_id = $1 AND dm.enabled = true AND g.enabled = true ORDER BY dm.priority ASC, dm.weight DESC LIMIT 8", set_info[0:pipe])
+        let member_rows = sql_query_rows_str(db, "SELECT g.address || ':' || g.port FROM dispatch_members dm JOIN gateways g ON dm.gateway_id = g.id WHERE dm.set_id = $1 AND dm.enabled = true AND g.enabled = true ORDER BY dm.priority ASC, dm.weight DESC LIMIT 8", set_id_str)
         let mut first = 1
         if sql_rows_ok(member_rows) == 1 {
             while sql_rows_next(member_rows) == 1 {
