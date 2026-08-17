@@ -23,7 +23,6 @@ fn nat_fix_message(msg: string, source_ip: string, source_port: int, public_ip: 
 fn nat_fix_sdp(msg: string, msglen: int, source_ip: string) string { return msg }
 fn is_private_ip(ip: string) int { return 0 }
 fn registration_nat_target(value: string) string { return "" }
-fn proxy_hop(msg: string, ip: string, port: int, tr: string) string { return msg }
 fn b2bua_enabled() int { return 0 }
 fn b2bua_prepare_invite(msg: string, target: string, tr: string, addr: string, tr2: string, cache: CMap) string { return "" }
 fn b2bua_lookup_in(msg: string, cache: CMap) string { return "" }
