@@ -411,6 +411,30 @@ fn cached_env(cache: CMap, cache_key: string, env_key: string, fallback: string)
     return v
 }
 
+// TS 23.167: detect emergency URIs and well-known emergency numbers.
+fn sip_is_emergency(ruri: string) -> int {
+    let low = str_to_lower(ruri)
+    if str_contains(low, "urn:service:sos") { return 1 }
+    if str_contains(low, "urn:service:sos.") { return 1 }
+    let user = sip_uri_user(ruri)
+    if str_has_prefix(user, "911") { return 1 }
+    if str_has_prefix(user, "112") { return 1 }
+    if str_has_prefix(user, "999") { return 1 }
+    if str_has_prefix(user, "000") { return 1 }
+    if str_has_prefix(user, "110") { return 1 }
+    if str_has_prefix(user, "119") { return 1 }
+    // Configurable additional emergency numbers
+    let extra = env_get_or("SIP_EMERGENCY_NUMBERS", "")
+    if len(extra) > 0 {
+        if str_contains("," + extra + ",", "," + user + ",") { return 1 }
+    }
+    return 0
+}
+
+fn sip_emergency_target(cache: CMap) -> string {
+    return cached_env(cache, "_ecscf_target", "SIP_EMERGENCY_TARGET", "")
+}
+
 fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, port: int, source_port: int, tr: string, forward_fd: int, db: SqlDB, db_ok: int, cache: CMap, realm: string, node_id: string, diameter_lock: Mutex) -> string {
     // Cache public IP — env_get_or is not free at 10K+ CPS.
     // Only cache if SIP_PUBLIC_IP is explicitly set; the fallback (source IP)
@@ -833,6 +857,8 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
         }
         msg = identity_msg
     }
+    // TS 24.229 §5.2.6.3: P-CSCF adds P-Access-Network-Info
+    msg = ims_access_network_apply(msg, tr, ip)
 
     // Add received= and rport= to Via for NAT detection
     msg = via_add_received(msg, len(msg), ip, port)
@@ -1252,6 +1278,16 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
         if ims_initial_dialog_request(data, dl) == 0 {
             if ims_session_glare_begin(cache, cid) == 0 {
                 return sip_resp(491, "Request Pending", data, dl, "glare")
+            }
+        }
+        // Emergency calls bypass authentication (TS 23.167 §7.1)
+        if sip_is_emergency(ruri) == 1 {
+            let ecscf = sip_emergency_target(cache)
+            if len(ecscf) > 0 {
+                let fwd = nat_fix_sdp(proxy_hop(msg, ip, port, tr), len(msg), public_ip)
+                let _ = sip_forward_target(ecscf, fwd, sip_transport_param(ecscf, "udp"), cache, forward_fd)
+                let _ = db_cdr(db, db_ok, cid, from_user, sip_uri_user(ruri), "EMERGENCY:" + ecscf)
+                return sip_resp(100, "Trying", data, dl, "emergency")
             }
         }
         // IP auth: skip digest if source IP is trusted

@@ -187,6 +187,23 @@ fn ims_identity_egress(msg: string) -> string {
 }
 
 // ---------------------------------------------------------------------------
+// TS 24.229 §5.2.6.3 — P-Access-Network-Info
+// ---------------------------------------------------------------------------
+// P-CSCF inserts access-type based on transport; UE-supplied values are stripped.
+fn ims_access_network_info(tr: string, ip: string) -> string {
+    let t = str_to_upper(tr)
+    if str_eq(t, "WSS") { return "IEEE-802.11;network-provided" }
+    return "3GPP-E-UTRAN-FDD;network-provided"
+}
+
+fn ims_access_network_apply(msg: string, tr: string, ip: string) -> string {
+    if ims_identity_policy_enabled() == 0 { return msg }
+    let existing = sip_header(msg, "P-Access-Network-Info")
+    if len(existing) > 0 { return msg }
+    return hdr_add(msg, "P-Access-Network-Info", ims_access_network_info(tr, ip))
+}
+
+// ---------------------------------------------------------------------------
 // RFC 3325 §7 — Connected identity for mid-dialog messages
 // ---------------------------------------------------------------------------
 // For mid-dialog requests (re-INVITE, UPDATE) from a trusted source, update
