@@ -808,7 +808,11 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         let rows = tbl_query_param(db, ok, "SELECT json_build_object('id',id,'name',name,'address',address,'port',port,'transport',transport,'max_channels',max_channels,'health_status',health_status,'enabled',enabled)::text FROM gateways WHERE tenant_id = $1 ORDER BY name", tenant, 100)
         let mut out = "{\"schema\":\"madis.maf.gateways.v1\",\"gateways\":["
         let mut i = 0
-        while i < len(rows) { if i > 0 { out = out + "," }; out = out + rows[i]; i = i + 1 }
+        while i < len(rows) {
+            if i > 0 { out = out + "," }
+            out = out + rows[i]
+            i = i + 1
+        }
         return http_resp(200, "application/json", out + "]}\n", "Cache-Control: no-store\r\n")
     }
     // POST /admin/api/v1/maf/gateways — create/upsert gateway
@@ -840,7 +844,11 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         let rows = tbl_query_param(db, ok, "SELECT json_build_object('id',id,'number',number,'destination_user',destination_user,'description',COALESCE(description,''),'enabled',enabled)::text FROM dids WHERE tenant_id = $1 ORDER BY number", tenant, 100)
         let mut out = "{\"schema\":\"madis.maf.dids.v1\",\"dids\":["
         let mut i = 0
-        while i < len(rows) { if i > 0 { out = out + "," }; out = out + rows[i]; i = i + 1 }
+        while i < len(rows) {
+            if i > 0 { out = out + "," }
+            out = out + rows[i]
+            i = i + 1
+        }
         return http_resp(200, "application/json", out + "]}\n", "Cache-Control: no-store\r\n")
     }
     // POST /admin/api/v1/maf/dids — create/upsert DID
@@ -869,7 +877,11 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         let rows = tbl_query_param(db, ok, "SELECT json_build_object('id',id,'name',name,'algorithm',algorithm,'enabled',enabled,'members',(SELECT COALESCE(json_agg(j),'[]'::json) FROM (SELECT json_build_object('gateway',(SELECT name FROM gateways WHERE id=dm.gateway_id),'priority',dm.priority,'weight',dm.weight,'enabled',dm.enabled) j FROM dispatch_members dm WHERE dm.set_id=dispatch_sets.id LIMIT 32) sub))::text FROM dispatch_sets WHERE tenant_id = $1 ORDER BY name", tenant, 50)
         let mut out = "{\"schema\":\"madis.maf.dispatch-sets.v1\",\"sets\":["
         let mut i = 0
-        while i < len(rows) { if i > 0 { out = out + "," }; out = out + rows[i]; i = i + 1 }
+        while i < len(rows) {
+            if i > 0 { out = out + "," }
+            out = out + rows[i]
+            i = i + 1
+        }
         return http_resp(200, "application/json", out + "]}\n", "Cache-Control: no-store\r\n")
     }
     // POST /admin/api/v1/maf/dispatch-sets — create/upsert dispatch set
@@ -898,7 +910,11 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         let rows = tbl_query_param(db, ok, "SELECT json_build_object('id',id,'address',address,'port',port,'region',region,'status',status,'last_heartbeat',last_heartbeat,'started_at',started_at)::text FROM cluster_nodes WHERE tenant_id = $1 ORDER BY id", tenant, 50)
         let mut out = "{\"schema\":\"madis.maf.cluster.v1\",\"nodes\":["
         let mut i = 0
-        while i < len(rows) { if i > 0 { out = out + "," }; out = out + rows[i]; i = i + 1 }
+        while i < len(rows) {
+            if i > 0 { out = out + "," }
+            out = out + rows[i]
+            i = i + 1
+        }
         return http_resp(200, "application/json", out + "]}\n", "Cache-Control: no-store\r\n")
     }
     // GET /admin/api/v1/maf/config — read config
@@ -910,7 +926,11 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         let rows = tbl_query_param(db, ok, "SELECT json_build_object('key',key,'value',value,'description',COALESCE(description,''))::text FROM config WHERE tenant_id = $1 ORDER BY key", tenant, 200)
         let mut out = "{\"schema\":\"madis.maf.config.v1\",\"config\":["
         let mut i = 0
-        while i < len(rows) { if i > 0 { out = out + "," }; out = out + rows[i]; i = i + 1 }
+        while i < len(rows) {
+            if i > 0 { out = out + "," }
+            out = out + rows[i]
+            i = i + 1
+        }
         return http_resp(200, "application/json", out + "]}\n", "Cache-Control: no-store\r\n")
     }
     // POST /admin/api/v1/maf/config — set config key
