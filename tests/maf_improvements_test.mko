@@ -59,7 +59,6 @@ fn shaken_orig_from_payload(payload: string) string { return "" }
 fn shaken_dest_from_payload(payload: string) string { return "" }
 fn shaken_iat_from_payload(payload: string) int { return 0 }
 fn jwt_payload(token: string) string { return "" }
-fn maf_identity_apply(cache: CMap, call_id: string, msg: string) string { return msg }
 fn time_format(ms: int) string { return "" }
 pull . "../headers.mko"
 pull . "../maf_headers.mko"
