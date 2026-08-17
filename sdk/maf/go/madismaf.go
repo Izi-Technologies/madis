@@ -331,7 +331,7 @@ func (c *Client) Subscribe(ctx context.Context, cursor int, eventType, callID st
 
 // WSUrl builds the WebSocket URL for direct connection with gorilla/websocket or nhooyr.io/websocket.
 func (c *Client) WSUrl(cursor int, eventType, callID string) string {
-	base := strings.Replace(strings.Replace(c.baseURL, "https://", "wss://", 1), "http://", "ws://", 1)
+	base := strings.Replace(strings.Replace(c.BaseURL, "https://", "wss://", 1), "http://", "ws://", 1)
 	q := url.Values{"cursor": {strconv.Itoa(cursor)}}
 	if eventType != "" { q.Set("event_type", eventType) }
 	if callID != "" { q.Set("call_id", callID) }
