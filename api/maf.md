@@ -36,6 +36,57 @@ state.
 | `calls.media` | Play, record, stop, pause, resume via external media module |
 | `calls.headers` | Set per-call SIP header policy (add/set/remove/copy/move) |
 | `calls.rtp` | Direct RTPEngine control: offer, answer, delete, query |
+| `calls.identity` | STIR/SHAKEN identity: external signing, verification, attestation |
+
+### External STIR/SHAKEN signing (TransNexus, Neustar, Iconectiv)
+
+The `calls.identity` operation lets SDKs manage STIR/SHAKEN through external
+signing services instead of local key material:
+
+| Action | What it does |
+| --- | --- |
+| `sign` | Attach a pre-signed Identity header from an external signing API |
+| `verify` | Return verification result for an inbound call (orig, dest, attest, alg, iat) |
+| `attest` | Set attestation level (A/B/C) for this call |
+| `clear` | Remove Identity and P-Attestation-Indicator headers |
+
+**Workflow with TransNexus ClearIP:**
+
+1. Inbound INVITE arrives → MAF creates call with `call.created` event
+2. SDK reads SIP details via `GET /calls/{id}/sip` (includes Identity header)
+3. SDK sends the Identity to TransNexus for verification
+4. SDK calls `calls.identity` with `action: verify` to emit the result as an event
+5. For outbound signing, SDK obtains signed header from TransNexus and calls
+   `calls.identity` with `action: sign` + the pre-signed Identity value
+
+```sh
+# Attach externally-signed Identity (e.g., from TransNexus ClearIP)
+curl -X POST "$MAF_BASE_URL/api/v1/maf/calls/$CALL_ID/identity" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: identity-$CALL_ID" \
+  --data '{
+    "action": "sign",
+    "identity": "eyJhbGciOiJFUzI1NiIsInBwdCI6InNoYWtlbiIsInR5cCI6InBhc3Nwb3J0IiwieDV1IjoiaHR0cHM6Ly9jZXJ0cy5leGFtcGxlLmNvbS9zdGkucGVtIn0.eyJhdHRlc3QiOiJBIiwiZGVzdCI6eyJ0biI6WyIxNTU1MTIzNDU2NyJdfSwiaWF0IjoxNzE5NjQ4MDAwLCJvcmlnIjp7InRuIjoiMTU1NTk4NzY1NDMifSwib3JpZ2lkIjoiYWJjMTIzIn0.signature;info=<https://certs.example.com/sti.pem>;alg=ES256;ppt=shaken"
+  }'
+
+# Get verification result for an inbound call
+curl -X POST "$MAF_BASE_URL/api/v1/maf/calls/$CALL_ID/identity" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: verify-$CALL_ID" \
+  --data '{"action": "verify"}'
+```
+
+**Security:**
+- Identity values are validated for CRLF/null injection before header insertion
+- Attestation level is derived from the JWT payload, not client-supplied (prevents
+  attestation fraud)
+- Auto-mode verification respects the `;alg=` parameter from the Identity header
+  (prevents HS256 downgrade attacks)
+- Verify events emit metadata only (orig, dest, attest, alg) — not the raw JWT
+
+Events: `identity.signed`, `identity.verified`, `identity.attest`, `identity.cleared`.
 
 ### Custom SIP headers (X-headers, UUI, etc.)
 
@@ -503,6 +554,7 @@ POST   /admin/api/v1/maf/calls/{call_id}/dtmf            — send DTMF
 POST   /admin/api/v1/maf/calls/{call_id}/media           — media control
 POST   /admin/api/v1/maf/calls/{call_id}/headers         — header policy
 POST   /admin/api/v1/maf/calls/{call_id}/rtp             — RTPEngine control
+POST   /admin/api/v1/maf/calls/{call_id}/identity        — STIR/SHAKEN identity
 GET    /admin/api/v1/maf/calls/{call_id}/sip             — SIP inspection
 POST   /admin/api/v1/maf/calls/{call_id}/charge          — authorize charge
 POST   /admin/api/v1/maf/calls/{call_id}/charge-deny     — deny charge
@@ -645,6 +697,10 @@ Events are versioned, replayable, and durable:
 | `rtp.answer` | RTPEngine answer OK | `action` |
 | `rtp.deleted` | RTP session torn down | — |
 | `rtp.query` | RTP state queried | `state` |
+| `identity.signed` | External Identity header attached | `attest`, `source` |
+| `identity.verified` | Verification result returned | `result`, `orig`, `dest`, `attest`, `alg` |
+| `identity.attest` | Attestation level set | `attest` |
+| `identity.cleared` | Identity headers removed | — |
 | `app.*` | Custom application events | User-defined |
 
 ### Rich event payloads
@@ -829,6 +885,7 @@ body limit, 16-512 char token validation.
 | | Bridge | `bridge_call()` | `BridgeCall()` | `bridgeCall()` | `bridgeCall()` | `bridge_call/4` |
 | **Media** | Media | `media()` | `Media()` | `media()` | `media()` | `media/4` |
 | | RTP | `rtp_control()` | `RTPControl()` | `rtpControl()` | `rtpControl()` | `rtp_control/4` |
+| | Identity | `identity()` | `Identity()` | `identity()` | `identity()` | `identity/4` |
 | | Headers | `set_headers()` | `SetHeaders()` | `setHeaders()` | `setHeaders()` | `set_headers/4` |
 | **Inspect** | SIP | `sip_inspect()` | `SIPInspect()` | `sipInspect()` | `sipInspect()` | `sip_inspect/3` |
 | **Presence** | List | `presence()` | `Presence()` | `presence()` | `presence()` | `presence/2` |
