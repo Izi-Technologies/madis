@@ -105,3 +105,27 @@ fn maf_headers_apply(db: SqlDB, ok: int, tenant: string, call_id: string, msg: s
     let _ = sql_rows_close(rows)
     return result
 }
+
+// Apply externally-signed STIR/SHAKEN Identity header from MAF cache.
+// Called after maf_headers_apply when the SDK used calls.identity to
+// provide a pre-signed Identity from TransNexus, Neustar, etc.
+fn maf_identity_apply(cache: CMap, call_id: string, msg: string) -> string {
+    let identity_key = "maf_identity|" + call_id
+    if cmap_has(cache, identity_key) == 0 { return msg }
+    let identity_val = cmap_get(cache, identity_key)
+    if len(identity_val) == 0 { return msg }
+    // Remove any existing Identity header (local signing) and replace
+    let mut result = hdr_remove(msg, "Identity")
+    result = hdr_add(result, "Identity", identity_val)
+    // Apply attestation level
+    let attest_key = "maf_attest|" + call_id
+    if cmap_has(cache, attest_key) == 1 {
+        let attest = cmap_get(cache, attest_key)
+        if len(attest) > 0 { result = hdr_set(result, "P-Attestation-Indicator", attest) }
+    }
+    // RFC 8224 §4.1: Date header required
+    if len(sip_header(result, "Date")) == 0 {
+        result = hdr_add(result, "Date", time_format(now_ms()))
+    }
+    return result
+}

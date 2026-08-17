@@ -341,7 +341,9 @@ fn maf_worker_start_call(db: SqlDB, ok: int, tenant: string, call_id: string, re
     if len(node_addr) == 0 || len(node_addr) > 128 || maf_worker_text_safe(node_addr, 128) == 0 { return 0 }
     // Derive transport from the target URI scheme/params (sips:→TLS, transport=tcp, etc.)
     let tr = sip_transport_param(to_uri, "udp")
-    let invite = maf_headers_apply(db, ok, tenant, call_id, maf_worker_invite(call_id, from_uri, to_uri, node_id, node_addr, tr), "INVITE", "outbound")
+    let mut invite = maf_headers_apply(db, ok, tenant, call_id, maf_worker_invite(call_id, from_uri, to_uri, node_id, node_addr, tr), "INVITE", "outbound")
+    // Apply externally-signed Identity (TransNexus, Neustar, etc.) if present
+    invite = maf_identity_apply(cache, call_id, invite)
     if sip_validate_message(invite, len(invite)) == 0 { return 0 }
     let target = sip_forward_first(to_uri, invite, cache, call_id, out_fd)
     if len(target) == 0 { return 0 }
@@ -721,6 +723,7 @@ fn maf_worker_execute(db: SqlDB, ok: int, tenant: string, operation: string, cal
     if str_eq(operation, "calls.dtmf") { return maf_worker_dtmf(db, ok, tenant, call_id, request, trace, cache, out_fd) }
     if str_eq(operation, "calls.route") { return maf_worker_route(db, ok, tenant, call_id, request, trace, cache, out_fd) }
     if str_eq(operation, "calls.rtp") { return maf_worker_rtp(db, ok, tenant, call_id, request, trace, cache) }
+    if str_eq(operation, "calls.identity") { return maf_worker_identity(db, ok, tenant, call_id, request, trace, cache) }
     return "unknown_operation|operation is not allowlisted"
 }
 
@@ -863,7 +866,9 @@ fn maf_worker_route(db: SqlDB, ok: int, tenant: string, call_id: string, request
         }
     } else {
     // Build the outbound INVITE: add Via, Record-Route, NAT-fix SDP
-    let hopped = proxy_hop(invite, public_ip, udp_port, tr)
+    // Apply externally-signed Identity (TransNexus, Neustar, etc.) if present
+    let signed_invite = maf_identity_apply(cache, call_id, invite)
+    let hopped = proxy_hop(signed_invite, public_ip, udp_port, tr)
     let fwd = nat_fix_sdp(hopped, len(hopped), public_ip)
     if sip_forward_target(target, fwd, tr, cache, out_fd) == 0 { return "route_delivery_failed|could not forward INVITE to target" }
     }
@@ -877,6 +882,91 @@ fn maf_worker_route(db: SqlDB, ok: int, tenant: string, call_id: string, request
     let _ = maf_worker_emit_event(db, ok, tenant, "call.routed", call_id, payload, trace)
     let _ = maf_worker_call_state(db, ok, tenant, call_id, "ringing", trace)
     return "ok"
+}
+
+// MAF STIR/SHAKEN identity control: let the SDK manage signing and
+// verification through external services (TransNexus, Neustar/Iconectiv,
+// Metaswitch, etc.) instead of local key material.
+//
+// Operations:
+//   sign    — SDK provides a pre-signed Identity header value to attach
+//   verify  — returns the current verification result from the cached SIP data
+//   attest  — set the attestation level for this call
+//   clear   — remove Identity/P-Attestation-Indicator headers
+fn maf_worker_identity(db: SqlDB, ok: int, tenant: string, call_id: string, request: string, trace: string, cache: CMap) -> string {
+    let action = str_to_lower(str_trim_space(json_get_string(request, "action")))
+    if not str_eq(action, "sign") && not str_eq(action, "verify") && not str_eq(action, "attest") && not str_eq(action, "clear") {
+        return "invalid_identity|action must be sign, verify, attest, or clear"
+    }
+
+    if str_eq(action, "sign") {
+        // The SDK obtained a signed Identity header from an external service
+        // (TransNexus ClearIP, Neustar, etc.) and provides it here.
+        let identity_value = json_get_string(request, "identity")
+        if len(identity_value) == 0 || len(identity_value) > 4096 {
+            return "invalid_identity|identity header value required (max 4KB)"
+        }
+        // Validate it looks like a JWT;info=<url>;alg=...;ppt=shaken
+        if str_index(identity_value, ";info=<") < 0 || str_index(identity_value, ";ppt=shaken") < 0 {
+            return "invalid_identity|identity must contain ;info=<url>;ppt=shaken"
+        }
+        let attest = str_to_upper(str_trim_space(json_get_string(request, "attest")))
+        let attestation = if str_eq(attest, "A") || str_eq(attest, "B") || str_eq(attest, "C") { attest } else { "C" }
+        // Store for the worker to apply when forwarding
+        let _ = bounded_cache_set(cache, "maf_cache_seq", "maf_cache_ring|", "maf_identity|" + call_id, identity_value, 65536)
+        let _ = bounded_cache_set(cache, "maf_cache_seq", "maf_cache_ring|", "maf_attest|" + call_id, attestation, 65536)
+        let payload = "{\"call_id\":\"" + maf_worker_json_escape(call_id) + "\",\"action\":\"sign\",\"attest\":\"" + attestation + "\",\"source\":\"external\"}"
+        let _ = maf_worker_emit_event(db, ok, tenant, "identity.signed", call_id, payload, trace)
+        return "ok"
+    }
+
+    if str_eq(action, "verify") {
+        // Return the verification result from the inbound SIP data
+        let packed = maf_worker_inbound_cache_get(cache, call_id)
+        let outbound_inv = cmap_get(cache, "maf_invite|" + call_id)
+        let mut msg = ""
+        if len(packed) > 0 { msg = json_get_string(packed, "invite") }
+        if len(msg) == 0 && len(outbound_inv) > 0 { msg = outbound_inv }
+        if len(msg) == 0 { return "dialog_unavailable|no cached SIP message for this call" }
+        let identity = sip_header(msg, "Identity")
+        if len(identity) == 0 {
+            let payload = "{\"call_id\":\"" + maf_worker_json_escape(call_id) + "\",\"action\":\"verify\",\"result\":\"none\",\"reason\":\"no Identity header\"}"
+            let _ = maf_worker_emit_event(db, ok, tenant, "identity.verified", call_id, payload, trace)
+            return "ok"
+        }
+        let verified = sip_header(msg, "P-Identity-Verified")
+        let attest_hdr = sip_header(msg, "P-Attestation-Indicator")
+        let error_hdr = sip_header(msg, "P-Identity-Error")
+        let info_url = shaken_identity_info(identity)
+        let token = shaken_identity_token(identity)
+        let jwt_payload = jwt_payload(token)
+        let orig = shaken_orig_from_payload(jwt_payload)
+        let dest = shaken_dest_from_payload(jwt_payload)
+        let iat = shaken_iat_from_payload(jwt_payload)
+        let payload = "{\"call_id\":\"" + maf_worker_json_escape(call_id) + "\",\"action\":\"verify\",\"result\":\"" + maf_worker_json_escape(if str_eq(verified, "true") { "verified" } else { "failed" }) + "\",\"attest\":\"" + maf_worker_json_escape(attest_hdr) + "\",\"error\":\"" + maf_worker_json_escape(error_hdr) + "\",\"orig\":\"" + maf_worker_json_escape(orig) + "\",\"dest\":\"" + maf_worker_json_escape(dest) + "\",\"iat\":" + string(iat) + ",\"info\":\"" + maf_worker_json_escape(info_url) + "\",\"identity\":\"" + maf_worker_json_escape(identity) + "\"}"
+        let _ = maf_worker_emit_event(db, ok, tenant, "identity.verified", call_id, payload, trace)
+        return "ok"
+    }
+
+    if str_eq(action, "attest") {
+        let attest = str_to_upper(str_trim_space(json_get_string(request, "attest")))
+        if not str_eq(attest, "A") && not str_eq(attest, "B") && not str_eq(attest, "C") {
+            return "invalid_identity|attest must be A, B, or C"
+        }
+        let _ = bounded_cache_set(cache, "maf_cache_seq", "maf_cache_ring|", "maf_attest|" + call_id, attest, 65536)
+        let payload = "{\"call_id\":\"" + maf_worker_json_escape(call_id) + "\",\"action\":\"attest\",\"attest\":\"" + attest + "\"}"
+        let _ = maf_worker_emit_event(db, ok, tenant, "identity.attest", call_id, payload, trace)
+        return "ok"
+    }
+
+    if str_eq(action, "clear") {
+        let _ = cmap_del(cache, "maf_identity|" + call_id)
+        let _ = cmap_del(cache, "maf_attest|" + call_id)
+        let payload = "{\"call_id\":\"" + maf_worker_json_escape(call_id) + "\",\"action\":\"clear\"}"
+        let _ = maf_worker_emit_event(db, ok, tenant, "identity.cleared", call_id, payload, trace)
+        return "ok"
+    }
+    return "invalid_identity|unsupported action"
 }
 
 fn maf_worker_poll(db: SqlDB, ok: int, cache: CMap, out_fd: int, node_id: string) -> int {

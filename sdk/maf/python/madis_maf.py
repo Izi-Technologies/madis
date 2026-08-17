@@ -175,6 +175,26 @@ class MadisMaf:
         return self._command("POST", f"/api/v1/maf/calls/{quote(call_id, safe='')}/dtmf",
                              {"digit": digit, "duration": duration}, idempotency_key)
 
+    def identity(self, call_id: str, action: str,
+                 identity: str | None = None,
+                 attest: str | None = None,
+                 idempotency_key: str | None = None) -> object:
+        """STIR/SHAKEN identity control for external signing services.
+
+        Actions:
+          sign   — attach a pre-signed Identity header from TransNexus/Neustar
+          verify — get the verification result for an inbound call
+          attest — set attestation level (A/B/C)
+          clear  — remove Identity headers
+        """
+        body: dict[str, object] = {"action": action}
+        if identity is not None:
+            body["identity"] = identity
+        if attest is not None:
+            body["attest"] = attest
+        return self._command("POST", f"/api/v1/maf/calls/{quote(call_id, safe='')}/identity",
+                             body, idempotency_key)
+
     def rtp_control(self, call_id: str, action: str,
                     sdp: str | None = None,
                     from_tag: str | None = None,

@@ -131,6 +131,7 @@ fn maf_api_route(method: string, path: string) -> int {
     if str_eq(method, "POST") && len(maf_api_call_id(path, "dtmf")) > 0 { return 13 }
     if str_eq(method, "POST") && len(maf_api_call_id(path, "route")) > 0 { return 14 }
     if str_eq(method, "POST") && len(maf_api_call_id(path, "rtp")) > 0 { return 15 }
+    if str_eq(method, "POST") && len(maf_api_call_id(path, "identity")) > 0 { return 56 }
     if str_eq(method, "GET") && str_eq(path, "/admin/api/v1/maf/events") { return 8 }
     if str_eq(method, "POST") && str_eq(path, "/admin/api/v1/maf/events") { return 16 }
     if str_eq(method, "GET") && str_eq(path, "/admin/api/v1/maf/registrations") { return 17 }
@@ -180,7 +181,7 @@ fn maf_api_ws_route(method: string, path: string) -> int {
 }
 
 fn maf_api_write_required(kind: int) -> int {
-    return if kind == 1 || kind >= 3 && kind <= 7 || kind == 9 || (kind >= 10 && kind <= 15) || kind == 20 || kind == 21 || kind == 26 || kind == 27 || kind == 29 || kind == 31 || kind == 33 || kind == 36 || kind == 37 || kind == 38 || kind == 40 || kind == 41 || kind == 43 || kind == 44 || kind == 46 || kind == 48 || kind == 50 || kind == 53 || kind == 55 { 1 } else { 0 }
+    return if kind == 1 || kind >= 3 && kind <= 7 || kind == 9 || (kind >= 10 && kind <= 15) || kind == 20 || kind == 21 || kind == 26 || kind == 27 || kind == 29 || kind == 31 || kind == 33 || kind == 36 || kind == 37 || kind == 38 || kind == 40 || kind == 41 || kind == 43 || kind == 44 || kind == 46 || kind == 48 || kind == 50 || kind == 53 || kind == 55 || kind == 56 { 1 } else { 0 }
 }
 
 fn maf_api_bootstrap(db: SqlDB) -> int {
@@ -468,6 +469,7 @@ fn maf_api_command(db: SqlDB, ok: int, kind: int, raw: string, n: int, call_id: 
     if kind == 13 { operation = "calls.dtmf" }
     if kind == 14 { operation = "calls.route" }
     if kind == 15 { operation = "calls.rtp" }
+    if kind == 56 { operation = "calls.identity" }
     if kind == 4 {
         let code = json_get_int(body, "sip_code")
         if code != 0 && (code < 300 || code > 699) { return maf_api_error(400, "invalid sip_code") }
@@ -510,6 +512,15 @@ fn maf_api_command(db: SqlDB, ok: int, kind: int, raw: string, n: int, call_id: 
         }
         if (str_eq(rtp_action, "offer") || str_eq(rtp_action, "answer")) && len(json_get_string(body, "sdp")) == 0 {
             return maf_api_error(400, "sdp is required for offer/answer")
+        }
+    }
+    if kind == 56 {
+        let id_action = str_to_lower(str_trim_space(json_get_string(body, "action")))
+        if not str_eq(id_action, "sign") && not str_eq(id_action, "verify") && not str_eq(id_action, "attest") && not str_eq(id_action, "clear") {
+            return maf_api_error(400, "action must be sign, verify, attest, or clear")
+        }
+        if str_eq(id_action, "sign") && len(json_get_string(body, "identity")) == 0 {
+            return maf_api_error(400, "identity header value required for sign")
         }
     }
     if kind == 13 {
@@ -557,7 +568,7 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         if len(resource) == 0 { return maf_api_error(404, "call not found") }
         return http_resp(200, "application/json", resource + "\n", "Cache-Control: no-store\r\n")
     }
-    if kind >= 3 && kind <= 7 || kind == 9 || (kind >= 10 && kind <= 15) { return maf_api_command(db, ok, kind, raw, n, maf_api_call_id(path, if kind == 3 { "answer" } else if kind == 4 { "reject" } else if kind == 5 { "hangup" } else if kind == 6 { "bridges" } else if kind == 7 { "media" } else if kind == 10 { "transfer" } else if kind == 11 { "hold" } else if kind == 12 { "unhold" } else if kind == 13 { "dtmf" } else if kind == 14 { "route" } else if kind == 15 { "rtp" } else { "headers" })) }
+    if kind >= 3 && kind <= 7 || kind == 9 || (kind >= 10 && kind <= 15) || kind == 56 { return maf_api_command(db, ok, kind, raw, n, maf_api_call_id(path, if kind == 3 { "answer" } else if kind == 4 { "reject" } else if kind == 5 { "hangup" } else if kind == 6 { "bridges" } else if kind == 7 { "media" } else if kind == 10 { "transfer" } else if kind == 11 { "hold" } else if kind == 12 { "unhold" } else if kind == 13 { "dtmf" } else if kind == 14 { "route" } else if kind == 15 { "rtp" } else if kind == 56 { "identity" } else { "headers" })) }
     if kind == 8 {
         if ok == 0 { return maf_api_error(503, "database unavailable") }
         let q = parse_query(raw, n)

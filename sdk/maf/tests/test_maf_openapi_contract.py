@@ -212,6 +212,7 @@ class OpenApiContractTests(unittest.TestCase):
         ("POST", "/api/v1/maf/ani-groups"): "create_ani_group",
         ("GET", "/api/v1/maf/calls/active"): "active_calls",
         ("POST", "/api/v1/maf/dispatch-members"): "create_dispatch_member",
+        ("POST", "/api/v1/maf/calls/{call_id}/identity"): "identity",
     }
 
     def test_every_openapi_route_has_sdk_method(self):
