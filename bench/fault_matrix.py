@@ -55,12 +55,13 @@ def response(request: bytes, code: int, reason: bytes, tag: bytes = b"uas") -> b
 
 
 class FaultUas:
-    def __init__(self, port: int):
+    def __init__(self, port: int, timing_scale: float):
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket.bind(("127.0.0.1", port))
         self.stop = threading.Event()
         self.thread = threading.Thread(target=self.run, daemon=True)
         self.invites: dict[bytes, int] = {}
+        self.timing_scale = timing_scale
         self.thread.start()
 
     def run(self) -> None:
@@ -88,7 +89,7 @@ class FaultUas:
                 self.socket.sendto(response(packet, 200, b"OK"), address)
                 continue
             if call_id.startswith(b"delay-"):
-                time.sleep(0.7)
+                time.sleep(1.2 * self.timing_scale)
             self.socket.sendto(response(packet, 100, b"Trying"), address)
             self.socket.sendto(response(packet, 180, b"Ringing"), address)
             self.socket.sendto(response(packet, 200, b"OK"), address)
@@ -167,9 +168,10 @@ def main() -> int:
             "SIP_ADMIN_TOKEN": admin_token,
             "SIP_UDP_WORKERS": "1",
             "SIP_TCP_WORKERS": "1",
+            "SIP_ALLOW_PRIVATE_TARGETS": "1",
         }
     )
-    uas = FaultUas(uas_port)
+    uas = FaultUas(uas_port, timing_scale)
     proxy_log = os.environ.get("FAULT_PROXY_LOG")
     log_handle = open(proxy_log, "w", encoding="utf-8") if proxy_log else None
     process = subprocess.Popen(

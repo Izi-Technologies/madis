@@ -83,7 +83,7 @@ def main() -> int:
             "SIP_WSS_PORT": str(wss_port),
             "SIP_ADMIN_PORT": str(admin_port),
             "SIP_ADMIN_TOKEN": admin_token,
-            "SIP_UDP_WORKERS": "2",
+            "SIP_UDP_WORKERS": os.environ.get("MADIS_MATRIX_UDP_WORKERS", "2"),
             "SIP_TCP_WORKERS": "1",
         }
     )

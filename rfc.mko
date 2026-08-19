@@ -796,6 +796,7 @@ fn sip_client_txn_record(msg: string, target: string, transport: string, owner: 
     cmap_set(cache, "client_target|" + key, target)
     cmap_set(cache, "client_transport|" + key, str_to_lower(transport))
     cmap_set(cache, "client_owner|" + key, string(owner))
+    cmap_set_int2(cache, "client_scan|", string(owner), slot)
     cmap_set(cache, "client_sent|" + key, string(now))
     cmap_set(cache, "client_next|" + key, string(now + sip_t1_ms()))
     cmap_set(cache, "client_attempt|" + key, "0")

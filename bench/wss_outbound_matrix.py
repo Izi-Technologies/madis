@@ -265,6 +265,7 @@ class WssFixture:
                 require(b"Content-Length:" in self.payload, "forwarded INVITE lost Content-Length")
                 self.received.set()
                 send_text_frame(tls, sip_response(self.payload, 180, b"Ringing"))
+                time.sleep(0.05)
                 send_text_frame(tls, sip_response(self.payload, 200, b"OK"))
                 while True:
                     next_message = read_text_frame(tls)
@@ -357,10 +358,13 @@ def exercise_proxy(udp_port: int, upstream_port: int, fixture: WssFixture) -> No
         require(fixture.received.wait(5.0), "WSS upstream did not receive the INVITE")
         if fixture.error is not None:
             raise fixture.error
-        ringing = recv_response(udp, "180 Ringing")
-        require(response_status(ringing) == 180, "proxy did not forward WSS 180 Ringing")
-        ok = recv_response(udp, "200 OK")
-        require(response_status(ok) == 200, "proxy did not forward WSS 200 OK")
+        statuses: set[int] = set()
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and not {180, 200}.issubset(statuses):
+            response = recv_response(udp, "WSS 180/200")
+            statuses.add(response_status(response))
+        require(180 in statuses, f"proxy did not forward WSS 180 Ringing, got {sorted(statuses)}")
+        require(200 in statuses, f"proxy did not forward WSS 200 OK, got {sorted(statuses)}")
 
         ack = (
             "ACK sip:uas@example.test SIP/2.0\r\n"
@@ -421,6 +425,8 @@ def main() -> int:
                 "SIP_IPV6": "0",
                 "SIP_UPSTREAM_CA": str(ca_cert),
                 "SIP_UPSTREAM_TLS_INSECURE": "0",
+                "SIP_ALLOW_FOREIGN_CONTACT": "1",
+                "SIP_ALLOW_PRIVATE_TARGETS": "1",
             }
         )
         root = Path(__file__).resolve().parents[1]

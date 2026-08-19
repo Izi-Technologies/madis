@@ -2485,7 +2485,7 @@ fn tls_worker(fd: int, srv: TlsServer, port: int, reg: CMap, calls: CMap, cache:
                     if c < 0 { break }
                     if len(buffers) >= max_connections {
                         let _ = tcp_close(c)
-                    } else if io_set_nonblocking(c, 1) < 0 || tcp_nodelay(c) < 0 {
+                    } else if io_set_nonblocking(c, 0) < 0 || tcp_nodelay(c) < 0 {
                         let _ = tcp_close(c)
                     } else {
                         let mut peer_ip = peer_host(c)
@@ -2510,18 +2510,26 @@ fn tls_worker(fd: int, srv: TlsServer, port: int, reg: CMap, calls: CMap, cache:
                         }
                         let handle = tls_server_pool_accept(srv, c)
                         if handle < 0 {
+                            slog("  TLS:     accept failed from " + peer_ip)
                             let _ = sip_per_ip_conn_release(cache, peer_ip)
                             let _ = tcp_close(c)
                         } else {
                             let tls_fd = tls_server_pool_fd(handle)
-                            let fk = string(tls_fd)
-                            buffers[fk] = ""
-                            peers[fk] = peer_ip
-                            peer_ports[fk] = pp_port
-                            tls_states[fk] = 1
-                            tls_handles[fk] = handle
-                            let _ = proxy_conn_incr(cache, "TLS")
-                            let _ = evloop_add(el, tls_fd, 1)
+                            if tls_fd < 0 {
+                                slog("  TLS:     accept returned invalid fd from " + peer_ip)
+                                let _ = sip_per_ip_conn_release(cache, peer_ip)
+                                let _ = tls_server_pool_close(handle)
+                            } else {
+                                let _ = io_set_nonblocking(tls_fd, 1)
+                                let fk = string(tls_fd)
+                                buffers[fk] = ""
+                                peers[fk] = peer_ip
+                                peer_ports[fk] = pp_port
+                                tls_states[fk] = 1
+                                tls_handles[fk] = handle
+                                let _ = proxy_conn_incr(cache, "TLS")
+                                let _ = evloop_add(el, tls_fd, 1)
+                            }
                         }
                     }
                     accepted = accepted + 1

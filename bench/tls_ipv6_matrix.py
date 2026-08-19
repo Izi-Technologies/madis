@@ -197,9 +197,9 @@ def main() -> int:
                 "SIP_TLS_SNI": f"alt.test={alt_cert}:{alt_key}",
             }
         )
-        process = subprocess.Popen(
-            [args.binary], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
+        log_path = os.environ.get("MADIS_TEST_LOG")
+        log = open(log_path, "w", encoding="utf-8") if log_path else subprocess.DEVNULL
+        process = subprocess.Popen([args.binary], env=env, stdout=log, stderr=subprocess.STDOUT)
         try:
             wait_ready(admin_port, admin_token)
             request = sip_options("UDP", "ipv6-udp", "ipv6-udp", "::1")
@@ -241,6 +241,8 @@ def main() -> int:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=5)
+            if log_path:
+                log.close()
 
 
 if __name__ == "__main__":
