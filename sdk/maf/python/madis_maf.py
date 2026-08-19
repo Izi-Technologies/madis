@@ -182,7 +182,7 @@ class MadisMaf:
         """STIR/SHAKEN identity control for external signing services.
 
         Actions:
-          sign   — attach a pre-signed Identity header from TransNexus/Neustar
+          sign   — attach a pre-signed Identity header from an external STI service
           verify — get the verification result for an inbound call
           attest — set attestation level (A/B/C)
           clear  — remove Identity headers

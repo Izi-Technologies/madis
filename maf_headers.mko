@@ -108,7 +108,7 @@ fn maf_headers_apply(db: SqlDB, ok: int, tenant: string, call_id: string, msg: s
 
 // Apply externally-signed STIR/SHAKEN Identity header from MAF cache.
 // Called after maf_headers_apply when the SDK used calls.identity to
-// provide a pre-signed Identity from TransNexus, Neustar, etc.
+// provide a pre-signed Identity from an external STI service.
 fn maf_identity_apply(cache: CMap, call_id: string, msg: string) -> string {
     let identity_key = "maf_identity|" + call_id
     if cmap_has(cache, identity_key) == 0 { return msg }

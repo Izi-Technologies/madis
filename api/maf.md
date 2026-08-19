@@ -38,7 +38,7 @@ state.
 | `calls.rtp` | Direct RTPEngine control: offer, answer, delete, query |
 | `calls.identity` | STIR/SHAKEN identity: external signing, verification, attestation |
 
-### External STIR/SHAKEN signing (TransNexus, Neustar, Iconectiv)
+### External STIR/SHAKEN signing
 
 The `calls.identity` operation lets SDKs manage STIR/SHAKEN through external
 signing services instead of local key material:
@@ -50,17 +50,17 @@ signing services instead of local key material:
 | `attest` | Set attestation level (A/B/C) for this call |
 | `clear` | Remove Identity and P-Attestation-Indicator headers |
 
-**Workflow with TransNexus ClearIP:**
+**Workflow with an external STI service:**
 
 1. Inbound INVITE arrives → MAF creates call with `call.created` event
 2. SDK reads SIP details via `GET /calls/{id}/sip` (includes Identity header)
-3. SDK sends the Identity to TransNexus for verification
+3. SDK sends the Identity to the external verifier
 4. SDK calls `calls.identity` with `action: verify` to emit the result as an event
-5. For outbound signing, SDK obtains signed header from TransNexus and calls
+5. For outbound signing, SDK obtains a signed header from the external signer and calls
    `calls.identity` with `action: sign` + the pre-signed Identity value
 
 ```sh
-# Attach externally-signed Identity (e.g., from TransNexus ClearIP)
+# Attach externally-signed Identity
 curl -X POST "$MAF_BASE_URL/api/v1/maf/calls/$CALL_ID/identity" \
   -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
   -H "Content-Type: application/json" \
@@ -553,7 +553,7 @@ must use the `app.` prefix:
 curl -X POST "$MAF_BASE_URL/api/v1/maf/events" \
   -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
   -H "Content-Type: application/json" \
-  --data '{"event_type":"app.ivr.menu_selected","call_id":"call-abc","payload":"{\"menu\":\"sales\"}"}'
+  --data '{"event_type":"app.workflow.step_selected","call_id":"call-abc","payload":"{\"step\":\"sales\"}"}'
 ```
 
 Custom events appear in the same event stream and WebSocket subscription as

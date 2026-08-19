@@ -346,7 +346,7 @@ fn maf_worker_start_call(db: SqlDB, ok: int, tenant: string, call_id: string, re
     // Derive transport from the target URI scheme/params (sips:→TLS, transport=tcp, etc.)
     let tr = sip_transport_param(to_uri, "udp")
     let mut invite = maf_headers_apply(db, ok, tenant, call_id, maf_worker_invite(call_id, from_uri, to_uri, node_id, node_addr, tr), "INVITE", "outbound")
-    // Apply externally-signed Identity (TransNexus, Neustar, etc.) if present
+    // Apply externally-signed Identity if present.
     invite = maf_identity_apply(cache, call_id, invite)
     if sip_validate_message(invite, len(invite)) == 0 { return 0 }
     let target = sip_forward_first(to_uri, invite, cache, call_id, out_fd)
@@ -870,7 +870,7 @@ fn maf_worker_route(db: SqlDB, ok: int, tenant: string, call_id: string, request
         }
     } else {
     // Build the outbound INVITE: add Via, Record-Route, NAT-fix SDP
-    // Apply externally-signed Identity (TransNexus, Neustar, etc.) if present
+    // Apply externally-signed Identity if present.
     let signed_invite = maf_identity_apply(cache, call_id, invite)
     let hopped = proxy_hop(signed_invite, public_ip, udp_port, tr)
     let fwd = nat_fix_sdp(hopped, len(hopped), public_ip)
@@ -889,8 +889,7 @@ fn maf_worker_route(db: SqlDB, ok: int, tenant: string, call_id: string, request
 }
 
 // MAF STIR/SHAKEN identity control: let the SDK manage signing and
-// verification through external services (TransNexus, Neustar/Iconectiv,
-// Metaswitch, etc.) instead of local key material.
+// verification through external services instead of local key material.
 //
 // Operations:
 //   sign    — SDK provides a pre-signed Identity header value to attach
@@ -905,7 +904,7 @@ fn maf_worker_identity(db: SqlDB, ok: int, tenant: string, call_id: string, requ
 
     if str_eq(action, "sign") {
         // The SDK obtained a signed Identity header from an external service
-        // (TransNexus ClearIP, Neustar, etc.) and provides it here.
+        // and provides it here.
         let identity_value = json_get_string(request, "identity")
         if len(identity_value) == 0 || len(identity_value) > 4096 {
             return "invalid_identity|identity header value required (max 4KB)"

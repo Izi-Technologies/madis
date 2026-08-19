@@ -809,8 +809,8 @@ paths:
       operationId: identityControl
       summary: STIR/SHAKEN identity control for external signing
       description: >-
-        SDK-controlled STIR/SHAKEN for external vendors (TransNexus, Neustar,
-        Iconectiv). Sign attaches a pre-signed header. Verify returns
+        SDK-controlled STIR/SHAKEN for external signing and verification
+        services. Sign attaches a pre-signed header. Verify returns
         verification result. Attest sets attestation level. Clear removes
         headers.
       security: [{mafBearerAuth: []}]

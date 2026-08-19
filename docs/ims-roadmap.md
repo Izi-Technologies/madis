@@ -56,7 +56,7 @@ declared versions, hardware, and network topology.
   bridging, subprotocol negotiation, response routing verification.
 - [ ] Real SIP phones (Ooma/Grandstream/Yealink): registration, call, hold,
   transfer, BLF.
-- [ ] TransNexus ClearIP: end-to-end external STIR/SHAKEN signing and
+- [ ] External STI service: end-to-end STIR/SHAKEN signing and
   verification with production STI certificates.
 - [ ] Asterisk/FreeSWITCH: AS/B2BUA interop as iFC targets, media anchoring.
 - [ ] Independent SIP proxies: peer interoperability comparison, routing behavior.
@@ -188,7 +188,7 @@ All of the above, proven in production.
 - [ ] Browser WebRTC call through SIP.js proven end-to-end.
 - [ ] PostgreSQL failover and rolling upgrade proven with zero call loss.
 - [ ] 72-hour stability soak at sustained load completed.
-- [ ] External STIR/SHAKEN vendor integration proven (TransNexus or equivalent).
+- [ ] External STIR/SHAKEN service integration proven.
 - [ ] MAF SDK used by at least one real application in production.
 - [ ] Complete documentation reviewed by someone who didn't write it.
 
@@ -279,7 +279,7 @@ All of the above, proven in production.
 - [x] Observability (12): registrations, presence, CDR, active calls, bans,
   security events, billing events, cluster, config.
 - [x] Events (4): replayable HTTP, custom app.*, WebSocket, streaming SDKs.
-- [x] External STIR/SHAKEN signing (TransNexus, Neustar, Iconectiv).
+- [x] External STIR/SHAKEN signing.
 - [x] 56 SDK contract tests, all passing.
 
 ---
