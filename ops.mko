@@ -34,8 +34,8 @@ fn proxy_validate_config() -> string {
         let raw = env_get_or(workers[wi], "")
         if len(raw) > 0 {
             let mut valid = 0
-            match parse_int(raw) { Ok(v) => { if v >= 1 && v <= 8 { valid = 1 } } Err(_) => {} }
-            if valid == 0 { builder_write(b, "ERROR: " + workers[wi] + "=" + raw + " must be 1-8\n") }
+            match parse_int(raw) { Ok(v) => { if str_eq(workers[wi], "SIP_UDP_WORKERS") { if v >= 1 && v <= 8 { valid = 1 } } else { if v >= 0 && v <= 8 { valid = 1 } } } Err(_) => {} }
+            if valid == 0 { builder_write(b, "ERROR: " + workers[wi] + "=" + raw + " must be 0-8, with UDP 1-8\n") }
         }
         wi = wi + 1
     }
