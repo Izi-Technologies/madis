@@ -306,6 +306,14 @@ fn sip_transaction_expiry_ms(cache: CMap, txn_key: string) -> int {
 
 fn sip_txn_cleanup_key(cache: CMap, txn_key: string) -> int {
     if len(txn_key) <= 2 { return 0 }
+    let txn_slot = cmap_get(cache, "txn_slot|" + txn_key)
+    if len(txn_slot) > 0 {
+        let ring_key = "txn_ring|" + txn_slot
+        if cmap_has(cache, ring_key) == 1 && str_eq(cmap_get(cache, ring_key), txn_key) {
+            let _ = cmap_del(cache, ring_key)
+        }
+    }
+    let _ = cmap_del(cache, "txn_slot|" + txn_key)
     let _ = cmap_del(cache, "txn|" + txn_key)
     let _ = cmap_del(cache, "txn_ts|" + txn_key)
     let _ = cmap_del(cache, "txn_exp|" + txn_key)
@@ -360,6 +368,7 @@ fn sip_txn_begin(msg: string, cache: CMap) -> string {
             }
         }
         cmap_set(cache, ring_key, key)
+        cmap_set(cache, "txn_slot|" + key, string(slot))
     }
     if cmap_has2(cache, "txn_state|", key) == 0 {
         cmap_set(cache, "txn_state|" + key, "trying|" + string(mono_ms()))
@@ -536,6 +545,14 @@ fn sip_server_txn_cleanup(key: string, cache: CMap) -> int {
     let req = cmap_get(cache, "server_req|" + key)
     let cid = cmap_get(cache, "server_cid|" + key)
     let branch = sip_via_branch(sip_header(req, "Via"))
+    let server_slot = cmap_get(cache, "server_slot|" + key)
+    if len(server_slot) > 0 {
+        let ring_key = "server_ring|" + server_slot
+        if cmap_has(cache, ring_key) == 1 && str_eq(cmap_get(cache, ring_key), key) {
+            let _ = cmap_del(cache, ring_key)
+        }
+    }
+    let _ = cmap_del(cache, "server_slot|" + key)
     let _ = cmap_del(cache, "server_req|" + key)
     let _ = cmap_del(cache, "server_resp|" + key)
     let _ = cmap_del(cache, "server_host|" + key)
@@ -571,6 +588,7 @@ fn sip_server_txn_record(request: string, response: string, ip: string, port: in
         if len(old) > 0 && not str_eq(old, key) { let _ = sip_server_txn_cleanup(old, cache) }
     }
     cmap_set(cache, ring_key, key)
+    cmap_set(cache, "server_slot|" + key, string(slot))
     let now = mono_ms()
     cmap_set(cache, "server_req|" + key, request)
     cmap_set(cache, "server_resp|" + key, response)
@@ -756,6 +774,14 @@ fn sip_timer_c_ms() -> int {
 }
 
 fn sip_client_txn_cleanup(key: string, cache: CMap) -> int {
+    let client_slot = cmap_get(cache, "client_slot|" + key)
+    if len(client_slot) > 0 {
+        let ring_key = "client_ring|" + client_slot
+        if cmap_has(cache, ring_key) == 1 && str_eq(cmap_get(cache, ring_key), key) {
+            let _ = cmap_del(cache, ring_key)
+        }
+    }
+    let _ = cmap_del(cache, "client_slot|" + key)
     let _ = cmap_del(cache, "client_req|" + key)
     let _ = cmap_del(cache, "client_target|" + key)
     let _ = cmap_del(cache, "client_transport|" + key)
@@ -789,6 +815,7 @@ fn sip_client_txn_record(msg: string, target: string, transport: string, owner: 
         }
     }
     cmap_set(cache, ring_key, key)
+    cmap_set(cache, "client_slot|" + key, string(slot))
     let now = mono_ms()
     let mut expiry_window = 64 * sip_t1_ms()
     if str_eq(method, "INVITE") { expiry_window = sip_timer_c_ms() }

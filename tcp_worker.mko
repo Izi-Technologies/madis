@@ -1,0 +1,152 @@
+fn sip_tcp_connection_limit() -> int {
+    let mut limit = 65536
+    match parse_int(env_get_or("SIP_TCP_MAX_CONNECTIONS", "65536")) {
+        Ok(value) => { limit = value }
+        Err(_) => {}
+    }
+    if limit < 1024 { limit = 1024 }
+    if limit > 1048576 { limit = 1048576 }
+    return limit
+}
+
+fn tcp_cleanup_multiplexed(c: int, el: EvLoop, buffers: map[string]string, peers: map[string]string, peer_ports: map[string]int, cache: CMap) -> int {
+    let _ = evloop_del(el, c)
+    let _ = proxy_conn_decr(cache, "TCP")
+    let cleanup_ip = peers[string(c)]
+    if len(cleanup_ip) > 0 { let _ = sip_per_ip_conn_release(cache, cleanup_ip) }
+    let conn_list_key = "server_conn_list|" + string(c)
+    if cmap_has(cache, conn_list_key) == 1 {
+        let conn_list = str_split(cmap_get(cache, conn_list_key), ",")
+        let mut ci = 0
+        while ci < len(conn_list) {
+            let key = str_trim_space(conn_list[ci])
+            if len(key) > 0 && cmap_has(cache, "server_conn|" + key) == 1 {
+                if str_eq(cmap_get(cache, "server_conn|" + key), string(c)) {
+                    let _ = cmap_del(cache, "server_conn|" + key)
+                }
+            }
+            ci = ci + 1
+        }
+        let _ = cmap_del(cache, conn_list_key)
+    }
+    let _ = ims_flow_clear_conn(cache, peer_host(c), peer_port(c), "TCP")
+    let _ = cmap_del(cache, "conn_ts|" + string(c))
+    delete(buffers, string(c))
+    delete(peers, string(c))
+    delete(peer_ports, string(c))
+    let _ = tcp_close(c)
+    return 1
+}
+
+fn sip_conn_idle_timeout_ms() -> int {
+    let mut idle_ms = 120000
+    match parse_int(env_get_or("SIP_CONN_IDLE_TIMEOUT", "120")) {
+        Ok(v) => { idle_ms = v * 1000 }
+        Err(_) => {}
+    }
+    if idle_ms < 10000 { idle_ms = 10000 }
+    if idle_ms > 600000 { idle_ms = 600000 }
+    return idle_ms
+}
+
+// Multiplex many non-blocking TCP connections on one worker. Keep message work
+// bounded per ready event so a busy peer cannot starve other connections.
+fn tcp_worker_multiplexed(fd: int, reg: CMap, calls: CMap, port: int, cache: CMap, outbox: chan[string], diameter_lock: Mutex) -> int {
+    let db_url = env_get_or("SIP_DB_URL", "")
+    let realm = env_get_or("SIP_REALM", "mako.local")
+    let nid = env_get_or("SIP_NODE_ID", "node1")
+    let mut db_ok = 0
+    let mut db = sql_open_postgres(db_url)
+    if len(db_url) > 0 { db_ok = 1 }
+    let forward_fd = nb_udp_bind(0)
+    let el = evloop_new()
+    let _ = evloop_add(el, fd, 1)
+    let mut buffers = make(map[string]string)
+    let mut peers = make(map[string]string)
+    let mut peer_ports = make(map[string]int)
+    let max_connections = sip_tcp_connection_limit()
+    let mut last_txn_tick = mono_ms()
+    while shutdown_requested() == 0 {
+        let ready = evloop_wait(el, 250)
+        if ready < 0 { break }
+        let mut event_i = 0
+        while event_i < ready {
+            let event_fd = evloop_event_fd(el, event_i)
+            if event_fd == fd {
+                let mut accepted = 0
+                while accepted < 64 {
+                    let c = tcp_accept_nb(fd)
+                    if c < 0 { break }
+                    if len(buffers) >= max_connections {
+                        let _ = tcp_close(c)
+                    } else if io_set_nonblocking(c, 1) < 0 || tcp_nodelay(c) < 0 {
+                        let _ = tcp_close(c)
+                    } else {
+                        let mut peer_ip = peer_host(c)
+                        if len(peer_ip) == 0 { peer_ip = "0.0.0.0" }
+                        let peer_p = peer_port(c)
+                        if sip_per_ip_conn_check(cache, peer_ip) == 0 {
+                            let _ = tcp_close(c)
+                        } else {
+                            let fk = string(c)
+                            buffers[fk] = ""
+                            peers[fk] = peer_ip
+                            peer_ports[fk] = peer_p
+                            cmap_set(cache, "conn_ts|" + fk, string(mono_ms()))
+                            let _ = proxy_conn_incr(cache, "TCP")
+                            let _ = evloop_add(el, c, 1)
+                        }
+                    }
+                    accepted = accepted + 1
+                }
+            } else if event_fd >= 0 {
+                let fd_key = string(event_fd)
+                let raw = tcp_read(event_fd)
+                let mut close_conn = 0
+                if len(raw) == 0 {
+                    close_conn = 1
+                } else {
+                    cmap_set(cache, "conn_ts|" + fd_key, string(mono_ms()))
+                    let combined = stream_append(buffers[fd_key], raw)
+                    if len(combined) == 0 {
+                        close_conn = 1
+                    } else {
+                        buffers[fd_key] = combined
+                        let mut budget = 64
+                        while budget > 0 && stream_has_complete(buffers[fd_key]) == 1 {
+                            let parts = stream_next_msg(buffers[fd_key])
+                            let msg = parts[0]
+                            buffers[fd_key] = parts[1]
+                            if len(msg) == 0 { break }
+                            let txn = sip_transaction_key(msg, len(msg))
+                            if len(txn) > 2 { let _ = sip_server_conn_track_transport(cache, txn, event_fd, "TCP") }
+                            let reply = process_sip(msg, len(msg), reg, calls, peers[fd_key], port, peer_ports[fd_key], "TCP", forward_fd, db, db_ok, cache, outbox, realm, nid, diameter_lock)
+                            if len(reply) > 0 {
+                                if sip_is_response(msg) == 1 {
+                                    let _ = sip_forward_reply(reply, cache, forward_fd)
+                                } else {
+                                    let sent = sip_tcp_send(event_fd, reply)
+                                    if sent < 0 { close_conn = 1 }
+                                }
+                            }
+                            budget = budget - 1
+                        }
+                    }
+                }
+                if close_conn == 1 {
+                    let _ = tcp_cleanup_multiplexed(event_fd, el, buffers, peers, peer_ports, cache)
+                }
+            }
+            event_i = event_i + 1
+        }
+        let txn_now = mono_ms()
+        if txn_now - last_txn_tick >= 250 {
+            let _ = sip_stream_poll(forward_fd, reg, calls, db, db_ok, cache, outbox, realm, nid, diameter_lock)
+            let _ = sip_client_txn_tick(cache, forward_fd)
+            let _ = sip_server_txn_tick(cache, forward_fd)
+            last_txn_tick = txn_now
+        }
+    }
+    let _ = evloop_close(el)
+    return 0
+}
