@@ -297,6 +297,7 @@ fn sip_client_txn_tick(cache: CMap, out_fd: int) -> int {
     let now = mono_ms()
     let mut acted = 0
     let owner_s = string(out_fd)
+    if cmap_get_int(cache, "client_seq", 0) <= 0 { return 0 }
     let mut start = cmap_get_int2(cache, "client_scan|", owner_s, 0)
     let mut scanned = 0
     // Sweep a small bounded slice of the 16384-slot ring per tick.
@@ -1889,6 +1890,42 @@ fn sip_max_message_size_cached(cache: CMap) -> int {
     return limit
 }
 
+fn sip_stateless_options_enabled(cache: CMap) -> int {
+    if cmap_has(cache, "_stateless_options") == 1 {
+        return cmap_get_int(cache, "_stateless_options", 1)
+    }
+    let raw = env_get_or("SIP_STATELESS_OPTIONS", "1")
+    let mut enabled = 1
+    if str_eq(raw, "0") || str_eq(str_to_lower(raw), "false") { enabled = 0 }
+    cmap_set_int(cache, "_stateless_options", enabled)
+    return enabled
+}
+
+fn sip_record_basic_metrics(cache: CMap, calls: CMap, data: string, reply: string, tr: string, elapsed: int) -> int {
+    let is_resp = sip_is_response(data)
+    metric_add(0, 1)
+    if is_resp == 1 { metric_add(2, 1) } else { metric_add(1, 1) }
+    if len(reply) > 0 {
+        let code = sip_status_code(reply)
+        if code >= 200 && code < 300 { metric_add(3, 1) }
+        if code >= 400 && code < 500 { metric_add(4, 1) }
+        if code >= 500 { metric_add(5, 1) }
+    }
+    hist_observe(0, elapsed)
+    gauge_set(0, cmap_len(calls))
+    if cmap_has(cache, "_prom_active") == 1 {
+        if is_resp == 0 {
+            let m = madis_method(data)
+            let _ = cmap_incr(cache, "prom|sip_requests|method=\"" + m + "\",transport=\"" + tr + "\"", 1)
+        }
+        if len(reply) > 0 {
+            let c = sip_status_code(reply)
+            if c > 0 { let _ = cmap_incr(cache, "prom|sip_responses|code=\"" + string(c) + "\",class=\"" + string(c / 100) + "xx\"", 1) }
+        }
+    }
+    return 0
+}
+
 fn process_sip(data: string, dl: int, reg: CMap, calls: CMap, ip: string, port: int, source_port: int, tr: string, forward_fd: int, db: SqlDB, db_ok: int, cache: CMap, outbox: chan[string], realm: string, node_id: string, diameter_lock: Mutex) -> string {
     // Size check — cached, zero alloc
     if dl > sip_max_message_size_cached(cache) {
@@ -1896,6 +1933,12 @@ fn process_sip(data: string, dl: int, reg: CMap, calls: CMap, ip: string, port: 
     }
     if sip_validate_message(data, dl) == 0 {
         return "SIP/2.0 400 Bad Request\r\nContent-Length: 0\r\n\r\n"
+    }
+    if sip_stateless_options_enabled(cache) == 1 && str_eq(madis_method(data), "OPTIONS") {
+        let started_fast = mono_ms()
+        let reply_fast = sip_options_response(data)
+        let _ = sip_record_basic_metrics(cache, calls, data, reply_fast, tr, mono_ms() - started_fast)
+        return reply_fast
     }
     // HEP — fully skipped when off (single CMap check)
     if cmap_get_int(cache, "_hep_on", -1) != 0 {
@@ -1937,28 +1980,7 @@ fn process_sip(data: string, dl: int, reg: CMap, calls: CMap, ip: string, port: 
     }
     let _ = sip_dialog_observe(data, reply, calls, cache)
     let _ = maf_worker_sync_sip(db, db_ok, data, cache)
-    // Metrics — single method parse, no double is_response
-    metric_add(0, 1)
-    if is_resp == 1 { metric_add(2, 1) } else { metric_add(1, 1) }
-    if len(reply) > 0 {
-        let code = sip_status_code(reply)
-        if code >= 200 && code < 300 { metric_add(3, 1) }
-        if code >= 400 && code < 500 { metric_add(4, 1) }
-        if code >= 500 { metric_add(5, 1) }
-    }
-    hist_observe(0, elapsed)
-    gauge_set(0, cmap_len(calls))
-    // Only compute per-label prometheus counters when the admin metrics endpoint is active.
-    if cmap_has(cache, "_prom_active") == 1 {
-        if is_resp == 0 {
-            let m = madis_method(data)
-            let _ = cmap_incr(cache, "prom|sip_requests|method=\"" + m + "\",transport=\"" + tr + "\"", 1)
-        }
-        if len(reply) > 0 {
-            let c = sip_status_code(reply)
-            if c > 0 { let _ = cmap_incr(cache, "prom|sip_responses|code=\"" + string(c) + "\",class=\"" + string(c / 100) + "xx\"", 1) }
-        }
-    }
+    let _ = sip_record_basic_metrics(cache, calls, data, reply, tr, elapsed)
     return reply
 }
 

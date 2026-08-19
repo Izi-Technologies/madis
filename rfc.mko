@@ -607,6 +607,7 @@ fn sip_server_txn_tick(cache: CMap, owner: int) -> int {
         ack_scanned = ack_scanned + 1
     }
     cmap_set_int2(cache, "server_ack_scan|", owner_s, ack_start)
+    if cmap_get_int(cache, "server_seq", 0) <= 0 { return acted }
     let mut start = cmap_get_int2(cache, "server_scan|", owner_s, 0)
     let mut scanned = 0
     while scanned < 4096 {
