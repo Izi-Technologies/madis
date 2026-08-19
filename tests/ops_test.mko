@@ -34,3 +34,16 @@ fn TestProxyCacheRingCount() {
     let _ = cmap_set(cache, "txn|branch-a|1 INVITE", "SIP/2.0 200 OK\r\nContent-Length: 0\r\n\r\n")
     assert_eq(proxy_cache_ring_count(cache, "txn_ring|", "txn|", 4), 1)
 }
+
+fn TestProxyClientTransactionMethodCount() {
+    let cache = cmap_new()
+    let invite = "INVITE sip:b@example.com SIP/2.0\r\nVia: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-inv\r\nFrom: <sip:a@example.com>;tag=a\r\nTo: <sip:b@example.com>\r\nCall-ID: inv@example.com\r\nCSeq: 1 INVITE\r\nContent-Length: 0\r\n\r\n"
+    let bye = "BYE sip:b@example.com SIP/2.0\r\nVia: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-bye\r\nFrom: <sip:a@example.com>;tag=a\r\nTo: <sip:b@example.com>;tag=b\r\nCall-ID: bye@example.com\r\nCSeq: 2 BYE\r\nContent-Length: 0\r\n\r\n"
+    let options = "OPTIONS sip:b@example.com SIP/2.0\r\nVia: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-opt\r\nFrom: <sip:a@example.com>;tag=a\r\nTo: <sip:b@example.com>\r\nCall-ID: opt@example.com\r\nCSeq: 3 OPTIONS\r\nContent-Length: 0\r\n\r\n"
+    let _ = sip_client_txn_record(invite, "example.com:5060", "udp", 9, cache)
+    let _ = sip_client_txn_record(bye, "example.com:5060", "udp", 9, cache)
+    let _ = sip_client_txn_record(options, "example.com:5060", "udp", 9, cache)
+    assert_eq(proxy_client_txn_method_count(cache, "INVITE"), 1)
+    assert_eq(proxy_client_txn_method_count(cache, "BYE"), 1)
+    assert_eq(proxy_client_txn_method_count(cache, "OTHER"), 1)
+}

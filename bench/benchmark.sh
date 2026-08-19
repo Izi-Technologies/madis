@@ -129,13 +129,18 @@ with open(output, "w", encoding="utf-8") as handle:
                 state = fetch_state()
                 families = state.get("cache_families", {})
                 state_handle.write(
-                    "{ts},sample,{registrations},{calls},{cache},{txn},{client},{server},{dialog},{fork},{whitelist},{scanner},{ban},{acl},{ipauth}\n".format(
+                    "{ts},sample,{registrations},{calls},{cache},{txn},{client},{client_invite},{client_bye},{client_cancel},{client_register},{client_other},{server},{dialog},{fork},{whitelist},{scanner},{ban},{acl},{ipauth}\n".format(
                         ts=ts_ms,
                         registrations=state.get("registrations", 0),
                         calls=state.get("calls", 0),
                         cache=state.get("cache", 0),
                         txn=families.get("txn", 0),
                         client=families.get("client", 0),
+                        client_invite=families.get("client_invite", 0),
+                        client_bye=families.get("client_bye", 0),
+                        client_cancel=families.get("client_cancel", 0),
+                        client_register=families.get("client_register", 0),
+                        client_other=families.get("client_other", 0),
                         server=families.get("server", 0),
                         dialog=families.get("dialog", 0),
                         fork=families.get("fork", 0),
@@ -157,7 +162,7 @@ PY
 
 init_state_metrics() {
     if [ "$SAMPLE_STATE" = "1" ]; then
-        printf 'ts_ms,phase,registrations,calls,cache,txn,client,server,dialog,fork,whitelist,scanner,ban,acl,ipauth\n' >"$STATE_METRICS"
+        printf 'ts_ms,phase,registrations,calls,cache,txn,client,client_invite,client_bye,client_cancel,client_register,client_other,server,dialog,fork,whitelist,scanner,ban,acl,ipauth\n' >"$STATE_METRICS"
     fi
 }
 
@@ -187,7 +192,7 @@ except (OSError, urllib.error.URLError, json.JSONDecodeError):
 families = state.get("cache_families", {})
 with open(state_output, "a", encoding="utf-8") as handle:
     handle.write(
-        "{ts},{phase},{registrations},{calls},{cache},{txn},{client},{server},{dialog},{fork},{whitelist},{scanner},{ban},{acl},{ipauth}\n".format(
+        "{ts},{phase},{registrations},{calls},{cache},{txn},{client},{client_invite},{client_bye},{client_cancel},{client_register},{client_other},{server},{dialog},{fork},{whitelist},{scanner},{ban},{acl},{ipauth}\n".format(
             ts=int(time.time() * 1000),
             phase=phase,
             registrations=state.get("registrations", 0),
@@ -195,6 +200,11 @@ with open(state_output, "a", encoding="utf-8") as handle:
             cache=state.get("cache", 0),
             txn=families.get("txn", 0),
             client=families.get("client", 0),
+            client_invite=families.get("client_invite", 0),
+            client_bye=families.get("client_bye", 0),
+            client_cancel=families.get("client_cancel", 0),
+            client_register=families.get("client_register", 0),
+            client_other=families.get("client_other", 0),
             server=families.get("server", 0),
             dialog=families.get("dialog", 0),
             fork=families.get("fork", 0),

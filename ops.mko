@@ -270,6 +270,28 @@ fn proxy_cache_ring_count(cache: CMap, ring_prefix: string, value_prefix: string
     return count
 }
 
+fn proxy_client_txn_method_count(cache: CMap, expected: string) -> int {
+    let mut count = 0
+    let mut i = 0
+    while i < 16384 {
+        if cmap_has3i(cache, "client_ring|", "", i) == 1 {
+            let key = cmap_get3i(cache, "client_ring|", "", i)
+            if len(key) > 0 && cmap_has2(cache, "client_req|", key) == 1 {
+                let method = madis_method(cmap_get2(cache, "client_req|", key))
+                if str_eq(expected, "OTHER") {
+                    if not str_eq(method, "INVITE") && not str_eq(method, "BYE") && not str_eq(method, "CANCEL") && not str_eq(method, "REGISTER") {
+                        count = count + 1
+                    }
+                } else if str_eq(method, expected) {
+                    count = count + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    return count
+}
+
 fn proxy_cache_family_state(cache: CMap) -> string {
     if not str_eq(env_get_or("SIP_STATE_CACHE_FAMILIES", "0"), "1") {
         return ""
@@ -286,6 +308,11 @@ fn proxy_cache_family_state(cache: CMap) -> string {
     let ipauth = proxy_cache_ring_count(cache, "ipauth_ring|", "", 16384)
     return ",\"cache_families\":{\"txn\":" + string(txn)
         + ",\"client\":" + string(client)
+        + ",\"client_invite\":" + string(proxy_client_txn_method_count(cache, "INVITE"))
+        + ",\"client_bye\":" + string(proxy_client_txn_method_count(cache, "BYE"))
+        + ",\"client_cancel\":" + string(proxy_client_txn_method_count(cache, "CANCEL"))
+        + ",\"client_register\":" + string(proxy_client_txn_method_count(cache, "REGISTER"))
+        + ",\"client_other\":" + string(proxy_client_txn_method_count(cache, "OTHER"))
         + ",\"server\":" + string(server)
         + ",\"dialog\":" + string(dialog)
         + ",\"fork\":" + string(fork)

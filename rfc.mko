@@ -304,6 +304,15 @@ fn sip_transaction_expiry_ms(cache: CMap, txn_key: string) -> int {
     return 0
 }
 
+fn sip_txn_cleanup_key(cache: CMap, txn_key: string) -> int {
+    if len(txn_key) <= 2 { return 0 }
+    let _ = cmap_del(cache, "txn|" + txn_key)
+    let _ = cmap_del(cache, "txn_ts|" + txn_key)
+    let _ = cmap_del(cache, "txn_exp|" + txn_key)
+    let _ = cmap_del(cache, "txn_state|" + txn_key)
+    return 1
+}
+
 fn sip_transaction_fresh(txn_key: string, cache: CMap) -> int {
     if cmap_has2(cache, "txn|", txn_key) == 0 || cmap_has2(cache, "txn_ts|", txn_key) == 0 {
         return 0
@@ -328,9 +337,7 @@ fn sip_transaction_fresh(txn_key: string, cache: CMap) -> int {
         }
     }
 
-    let _ = cmap_del(cache, "txn|" + txn_key)
-    let _ = cmap_del(cache, "txn_ts|" + txn_key)
-    let _ = cmap_del(cache, "txn_exp|" + txn_key)
+    let _ = sip_txn_cleanup_key(cache, txn_key)
     return 0
 }
 
@@ -348,10 +355,7 @@ fn sip_txn_begin(msg: string, cache: CMap) -> string {
             let old = cmap_get(cache, ring_key)
             if len(old) > 0 {
                 if not str_eq(old, key) {
-                    let _ = cmap_del(cache, "txn|" + old)
-                    let _ = cmap_del(cache, "txn_ts|" + old)
-                    let _ = cmap_del(cache, "txn_exp|" + old)
-                    let _ = cmap_del(cache, "txn_state|" + old)
+                    let _ = sip_txn_cleanup_key(cache, old)
                 }
             }
         }
@@ -372,6 +376,30 @@ fn sip_txn_finish(msg: string, reply: string, cache: CMap) -> int {
     if code >= 600 { state = "terminated" }
     cmap_set(cache, "txn_state|" + key, state + "|" + string(mono_ms()))
     return 1
+}
+
+fn sip_txn_sweep_expired(cache: CMap, budget: int) -> int {
+    if budget <= 0 || cmap_get_int(cache, "txn_seq", 0) <= 0 { return 0 }
+    let now = mono_ms()
+    let mut start = cmap_get_int(cache, "txn_sweep", 0)
+    let mut scanned = 0
+    let mut removed = 0
+    while scanned < budget {
+        let slot = (start + scanned) - ((start + scanned) / 16384) * 16384
+        if cmap_has3i(cache, "txn_ring|", "", slot) == 1 {
+            let key = cmap_get3i(cache, "txn_ring|", "", slot)
+            if len(key) > 2 && cmap_has2(cache, "txn|", key) == 1 {
+                let exp = sip_transaction_expiry_ms(cache, key)
+                if exp > 0 && now >= exp {
+                    let _ = sip_txn_cleanup_key(cache, key)
+                    removed = removed + 1
+                }
+            }
+        }
+        scanned = scanned + 1
+    }
+    cmap_set_int(cache, "txn_sweep", (start + budget) - ((start + budget) / 16384) * 16384)
+    return removed
 }
 
 fn sip_is_retransmit(txn_key: string, cache: CMap) -> int {
@@ -608,6 +636,7 @@ fn sip_server_txn_ack(request: string, cache: CMap) -> int {
 fn sip_server_txn_tick(cache: CMap, owner: int) -> int {
     let now = mono_ms()
     let mut acted = 0
+    acted = acted + sip_txn_sweep_expired(cache, 512)
     // ACKs are queued by owner so an incremental transaction sweep does not
     // make a completed INVITE wait for the 16384-slot cursor to wrap.
     let owner_s = string(owner)
@@ -743,6 +772,7 @@ fn sip_client_txn_cleanup(key: string, cache: CMap) -> int {
 // Retain an outbound request for the client transaction layer. Reliable
 // transports still need Timer B/F expiry, while UDP also needs A/E retries.
 fn sip_client_txn_record(msg: string, target: string, transport: string, owner: int, cache: CMap) -> int {
+    if sip_is_response(msg) == 1 { return 0 }
     let method = madis_method(msg)
     if len(method) == 0 || str_eq(method, "ACK") { return 0 }
     let key = sip_transaction_key(msg, len(msg))

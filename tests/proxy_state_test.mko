@@ -147,6 +147,26 @@ fn TestTransactionReplayExpiry() {
     assert_eq_str(sip_get_txn_response(key, cache), response)
 }
 
+fn TestTransactionReplaySweepExpired() {
+    let cache = cmap_new()
+    let expired = "z9hG4bK-sweep-expired|1 INVITE"
+    let fresh = "z9hG4bK-sweep-fresh|1 INVITE"
+    let _ = cmap_set(cache, "txn_seq", "2")
+    let _ = cmap_set(cache, "txn_ring|0", expired)
+    let _ = cmap_set(cache, "txn_ring|1", fresh)
+    let _ = cmap_set(cache, "txn|" + expired, "SIP/2.0 200 OK\r\nContent-Length: 0\r\n\r\n")
+    let _ = cmap_set(cache, "txn_ts|" + expired, string(mono_ms() - 70000))
+    let _ = cmap_set(cache, "txn_exp|" + expired, string(mono_ms() - 1))
+    let _ = cmap_set(cache, "txn_state|" + expired, "completed")
+    let _ = cmap_set(cache, "txn|" + fresh, "SIP/2.0 200 OK\r\nContent-Length: 0\r\n\r\n")
+    let _ = cmap_set(cache, "txn_ts|" + fresh, string(mono_ms()))
+    let _ = cmap_set(cache, "txn_exp|" + fresh, string(mono_ms() + 64000))
+    assert_eq(sip_txn_sweep_expired(cache, 2), 1)
+    assert_eq(cmap_has(cache, "txn|" + expired), 0)
+    assert_eq(cmap_has(cache, "txn_state|" + expired), 0)
+    assert_eq(cmap_has(cache, "txn|" + fresh), 1)
+}
+
 fn proxy_test_final_response(code: int, branch: string) -> string {
     return "SIP/2.0 " + string(code) + " Test\r\n"
         + "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=" + branch + "\r\n"
@@ -214,6 +234,20 @@ fn TestClientTransactionLifecycle() {
     assert(str_contains(cmap_get(cache, "client_req|" + key), "REGISTER sip:example.com"))
     let response = sip_reply(req, 200, "OK", "", "")
     assert_eq(sip_client_txn_finish(response, cache), 1)
+    assert_eq(cmap_has(cache, "client_req|" + key), 0)
+}
+
+fn TestClientTransactionRejectsResponses() {
+    let response = "SIP/2.0 180 Ringing\r\n"
+        + "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-response\r\n"
+        + "From: <sip:a@example.com>;tag=a\r\n"
+        + "To: <sip:b@example.com>;tag=b\r\n"
+        + "Call-ID: response-cache@example.com\r\n"
+        + "CSeq: 1 INVITE\r\n"
+        + "Content-Length: 0\r\n\r\n"
+    let cache = cmap_new()
+    let key = sip_transaction_key(response, len(response))
+    assert_eq(sip_client_txn_record(response, "example.com:5060", "udp", 9, cache), 0)
     assert_eq(cmap_has(cache, "client_req|" + key), 0)
 }
 
