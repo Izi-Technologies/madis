@@ -277,7 +277,7 @@ fn proxy_client_txn_method_count(cache: CMap, expected: string) -> int {
         if cmap_has3i(cache, "client_ring|", "", i) == 1 {
             let key = cmap_get3i(cache, "client_ring|", "", i)
             if len(key) > 0 && cmap_has2(cache, "client_req|", key) == 1 {
-                let method = madis_method(cmap_get2(cache, "client_req|", key))
+                let method = cmap_get2(cache, "client_method|", key)
                 if str_eq(expected, "OTHER") {
                     if not str_eq(method, "INVITE") && not str_eq(method, "BYE") && not str_eq(method, "CANCEL") && not str_eq(method, "REGISTER") {
                         count = count + 1
