@@ -18,15 +18,135 @@ RATE=${RATE:-100}
 CALLS=${CALLS:-1000}
 CONCURRENCY=${CONCURRENCY:-200}
 STATS=${STATS:-$ROOT/bench/sipp_stat.csv}
+METRICS=${METRICS:-${STATS}.metrics}
+SAMPLE_INTERVAL_MS=${BENCH_SAMPLE_INTERVAL_MS:-250}
 KEEP_ARTIFACTS=${KEEP_ARTIFACTS:-0}
 USER_RATE_LIMIT=${SIP_USER_RATE_LIMIT:-1000000}
 ALLOW_PRIVATE_TARGETS=${SIP_ALLOW_PRIVATE_TARGETS:-1}
+BENCH_BUILD=${BENCH_BUILD:-1}
+POST_RUN_SLEEP=${BENCH_POST_RUN_SLEEP:-0}
 
 TMPDIR=$(mktemp -d /tmp/mako-sip-bench.XXXXXX)
 PROXY_PID=""
 UAS_PID=""
+METRICS_PID=""
+
+sample_process() {
+    pid="$1"
+    output="$2"
+    interval_ms="$3"
+    python3 - "$pid" "$output" "$interval_ms" <<'PY'
+import os
+import signal
+import sys
+import time
+
+pid = int(sys.argv[1])
+output = sys.argv[2]
+interval = int(sys.argv[3]) / 1000.0
+running = True
+
+def stop(_signum, _frame):
+    global running
+    running = False
+
+signal.signal(signal.SIGTERM, stop)
+signal.signal(signal.SIGINT, stop)
+
+def read_status(path):
+    rss_kb = 0
+    vsz_kb = 0
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("VmRSS:"):
+                    rss_kb = int(line.split()[1])
+                elif line.startswith("VmSize:"):
+                    vsz_kb = int(line.split()[1])
+    except OSError:
+        pass
+    return rss_kb, vsz_kb
+
+def read_cpu_ticks(path):
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            stat = handle.read()
+        tail = stat.rsplit(") ", 1)[1].split()
+        return int(tail[11]), int(tail[12])
+    except (IndexError, OSError, ValueError):
+        return 0, 0
+
+with open(output, "w", encoding="utf-8") as handle:
+    handle.write("ts_ms,rss_kb,vsz_kb,fd_count,utime_ticks,stime_ticks\n")
+    status_path = f"/proc/{pid}/status"
+    stat_path = f"/proc/{pid}/stat"
+    fd_path = f"/proc/{pid}/fd"
+    while running and os.path.exists(status_path):
+        ts_ms = int(time.time() * 1000)
+        rss_kb, vsz_kb = read_status(status_path)
+        try:
+            fd_count = len(os.listdir(fd_path))
+        except OSError:
+            fd_count = 0
+        utime, stime = read_cpu_ticks(stat_path)
+        handle.write(f"{ts_ms},{rss_kb},{vsz_kb},{fd_count},{utime},{stime}\n")
+        handle.flush()
+        time.sleep(interval)
+PY
+}
+
+summarize_metrics() {
+    metrics_file="$1"
+    if [ ! -s "$metrics_file" ]; then
+        echo "metrics_samples=0"
+        return
+    fi
+    python3 - "$metrics_file" <<'PY'
+import csv
+import sys
+
+rows = []
+with open(sys.argv[1], newline="") as handle:
+    for row in csv.DictReader(handle):
+        try:
+            rows.append({key: int(value) for key, value in row.items()})
+        except ValueError:
+            continue
+
+if not rows:
+    print("metrics_samples=0")
+    raise SystemExit
+
+first = rows[0]
+last = rows[-1]
+cpu_ticks = (last["utime_ticks"] + last["stime_ticks"]) - (first["utime_ticks"] + first["stime_ticks"])
+duration_ms = max(0, last["ts_ms"] - first["ts_ms"])
+print(
+    "metrics_samples={samples} rss_peak_kb={rss_peak} rss_last_kb={rss_last} "
+    "vsz_peak_kb={vsz_peak} fd_peak={fd_peak} cpu_ticks={cpu_ticks} "
+    "sample_duration_ms={duration_ms}".format(
+        samples=len(rows),
+        rss_peak=max(row["rss_kb"] for row in rows),
+        rss_last=last["rss_kb"],
+        vsz_peak=max(row["vsz_kb"] for row in rows),
+        fd_peak=max(row["fd_count"] for row in rows),
+        cpu_ticks=cpu_ticks,
+        duration_ms=duration_ms,
+    )
+)
+PY
+}
+
+stop_metrics() {
+    if [ -n "$METRICS_PID" ]; then
+        kill -TERM "$METRICS_PID" 2>/dev/null || true
+        wait "$METRICS_PID" 2>/dev/null || true
+        METRICS_PID=""
+    fi
+}
 
 cleanup() {
+    stop_metrics
     if [ -n "$UAS_PID" ]; then kill -TERM "$UAS_PID" 2>/dev/null || true; fi
     if [ -n "$PROXY_PID" ]; then kill -TERM "$PROXY_PID" 2>/dev/null || true; fi
     sleep 1
@@ -54,8 +174,16 @@ if [ ! -f "$RUNTIME/mako_rt.h" ]; then
     exit 2
 fi
 
-echo "Building proxy with runtime: $RUNTIME"
-MAKO_BIN="$MAKO" MAKO_RUNTIME="$RUNTIME" "$ROOT/scripts/build-native.sh" main.mko main
+if [ "$BENCH_BUILD" = "1" ]; then
+    echo "Building proxy with runtime: $RUNTIME"
+    MAKO_BIN="$MAKO" MAKO_RUNTIME="$RUNTIME" "$ROOT/scripts/build-native.sh" main.mko main
+else
+    if [ ! -x "$ROOT/main" ]; then
+        echo "BENCH_BUILD=0 requires an existing executable: $ROOT/main" >&2
+        exit 2
+    fi
+    echo "Reusing existing proxy binary: $ROOT/main"
+fi
 
 echo "Starting UAS on UDP :$UAS_PORT"
 "$SIPP" -sn uas -i 127.0.0.1 -p "$UAS_PORT" -nostdin -skip_rlimit \
@@ -75,6 +203,8 @@ SIP_USER_RATE_LIMIT="$USER_RATE_LIMIT" \
 SIP_ALLOW_PRIVATE_TARGETS="$ALLOW_PRIVATE_TARGETS" \
   "$ROOT/main" >"$TMPDIR/proxy.log" 2>&1 &
 PROXY_PID=$!
+sample_process "$PROXY_PID" "$METRICS" "$SAMPLE_INTERVAL_MS" &
+METRICS_PID=$!
 
 sleep 1
 
@@ -95,6 +225,11 @@ echo "Running: rate=${RATE} cps calls=${CALLS} concurrency=${CONCURRENCY}"
   -f 1 -fd 1 -stf "$STATS" -trace_stat -trace_err -trace_screen \
   -nostdin -skip_rlimit >"$TMPDIR/uac.log" 2>&1 || true
 
+if [ "$POST_RUN_SLEEP" != "0" ]; then
+    echo "Observing proxy for ${POST_RUN_SLEEP}s after load"
+    sleep "$POST_RUN_SLEEP"
+fi
+
 echo
 echo "===== SIPp result ====="
 tail -80 "$TMPDIR/uac.log"
@@ -102,4 +237,9 @@ echo
 echo "===== Proxy log tail ====="
 tail -30 "$TMPDIR/proxy.log"
 echo
+echo "===== Resource metrics ====="
+stop_metrics
+summarize_metrics "$METRICS"
+echo
 echo "Artifacts: $STATS"
+echo "Metrics: $METRICS"
