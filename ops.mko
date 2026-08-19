@@ -253,6 +253,50 @@ fn proxy_metrics_labeled_export(cache: CMap) -> string {
     return builder_string(b)
 }
 
+fn proxy_cache_ring_count(cache: CMap, ring_prefix: string, value_prefix: string, capacity: int) -> int {
+    let mut count = 0
+    let mut i = 0
+    while i < capacity {
+        if cmap_has3i(cache, ring_prefix, "", i) == 1 {
+            let key = cmap_get3i(cache, ring_prefix, "", i)
+            if len(value_prefix) == 0 {
+                if len(key) > 0 && cmap_has(cache, key) == 1 { count = count + 1 }
+            } else {
+                if len(key) > 0 && cmap_has2(cache, value_prefix, key) == 1 { count = count + 1 }
+            }
+        }
+        i = i + 1
+    }
+    return count
+}
+
+fn proxy_cache_family_state(cache: CMap) -> string {
+    if not str_eq(env_get_or("SIP_STATE_CACHE_FAMILIES", "0"), "1") {
+        return ""
+    }
+    let txn = proxy_cache_ring_count(cache, "txn_ring|", "txn|", 16384)
+    let client = proxy_cache_ring_count(cache, "client_ring|", "client_req|", 16384)
+    let server = proxy_cache_ring_count(cache, "server_ring|", "server_req|", 16384)
+    let dialog = proxy_cache_ring_count(cache, "dialog_ring|", "", 131072)
+    let fork = proxy_cache_ring_count(cache, "fork_group_ring|", "fork_branches|", 16384)
+    let wl = proxy_cache_ring_count(cache, "wl_ring|", "", 16384)
+    let scanner = proxy_cache_ring_count(cache, "scanner_ring|", "", 16384)
+    let ban = proxy_cache_ring_count(cache, "ban_ring|", "", 16384)
+    let acl = proxy_cache_ring_count(cache, "acl_ring|", "", 16384)
+    let ipauth = proxy_cache_ring_count(cache, "ipauth_ring|", "", 16384)
+    return ",\"cache_families\":{\"txn\":" + string(txn)
+        + ",\"client\":" + string(client)
+        + ",\"server\":" + string(server)
+        + ",\"dialog\":" + string(dialog)
+        + ",\"fork\":" + string(fork)
+        + ",\"whitelist\":" + string(wl)
+        + ",\"scanner\":" + string(scanner)
+        + ",\"ban\":" + string(ban)
+        + ",\"acl\":" + string(acl)
+        + ",\"ipauth\":" + string(ipauth)
+        + "}"
+}
+
 fn proxy_admin_secret_equal(actual: string, expected: string) int {
     if len(actual) == 0 || len(actual) != len(expected) { return 0 }
     let mut diff = 0
@@ -344,7 +388,7 @@ fn proxy_admin_worker(reg: CMap, calls: CMap, cache: CMap) -> int {
                 let _ = http_respond_ct(c, 200, "text/plain", errors)
             }
         } else if str_eq(path, "/state") {
-            let body = "{\"registrations\":" + string(cmap_len(reg)) + ",\"calls\":" + string(cmap_len(calls)) + ",\"cache\":" + string(cmap_len(cache)) + "}\n"
+            let body = "{\"registrations\":" + string(cmap_len(reg)) + ",\"calls\":" + string(cmap_len(calls)) + ",\"cache\":" + string(cmap_len(cache)) + proxy_cache_family_state(cache) + "}\n"
             let _ = http_respond_json(c, 200, body)
         } else {
             let _ = http_respond_json(c, 404, "{\"ok\":false,\"error\":\"not found\"}\n")

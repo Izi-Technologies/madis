@@ -19,12 +19,15 @@ CALLS=${CALLS:-1000}
 CONCURRENCY=${CONCURRENCY:-200}
 STATS=${STATS:-$ROOT/bench/sipp_stat.csv}
 METRICS=${METRICS:-${STATS}.metrics}
+STATE_METRICS=${STATE_METRICS:-${STATS}.state}
 SAMPLE_INTERVAL_MS=${BENCH_SAMPLE_INTERVAL_MS:-250}
+SAMPLE_STATE=${BENCH_SAMPLE_STATE:-0}
 KEEP_ARTIFACTS=${KEEP_ARTIFACTS:-0}
 USER_RATE_LIMIT=${SIP_USER_RATE_LIMIT:-1000000}
 ALLOW_PRIVATE_TARGETS=${SIP_ALLOW_PRIVATE_TARGETS:-1}
 BENCH_BUILD=${BENCH_BUILD:-1}
 POST_RUN_SLEEP=${BENCH_POST_RUN_SLEEP:-0}
+ADMIN_TOKEN=${SIP_ADMIN_TOKEN:-bench-admin-token-0000000000000000}
 
 TMPDIR=$(mktemp -d /tmp/mako-sip-bench.XXXXXX)
 PROXY_PID=""
@@ -35,15 +38,26 @@ sample_process() {
     pid="$1"
     output="$2"
     interval_ms="$3"
-    python3 - "$pid" "$output" "$interval_ms" <<'PY'
+    admin_port="$4"
+    state_output="$5"
+    sample_state="$6"
+    admin_token="$7"
+    python3 - "$pid" "$output" "$interval_ms" "$admin_port" "$state_output" "$sample_state" "$admin_token" <<'PY'
+import json
 import os
 import signal
 import sys
 import time
+import urllib.error
+import urllib.request
 
 pid = int(sys.argv[1])
 output = sys.argv[2]
 interval = int(sys.argv[3]) / 1000.0
+admin_port = int(sys.argv[4])
+state_output = sys.argv[5]
+sample_state = sys.argv[6] == "1"
+admin_token = sys.argv[7]
 running = True
 
 def stop(_signum, _frame):
@@ -76,22 +90,63 @@ def read_cpu_ticks(path):
     except (IndexError, OSError, ValueError):
         return 0, 0
 
+def fetch_state():
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{admin_port}/state",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=0.2) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except (OSError, urllib.error.URLError, json.JSONDecodeError):
+        return {}
+
 with open(output, "w", encoding="utf-8") as handle:
     handle.write("ts_ms,rss_kb,vsz_kb,fd_count,utime_ticks,stime_ticks\n")
+    state_handle = None
+    if sample_state:
+        state_handle = open(state_output, "w", encoding="utf-8")
+        state_handle.write("ts_ms,registrations,calls,cache,txn,client,server,dialog,fork,whitelist,scanner,ban,acl,ipauth\n")
     status_path = f"/proc/{pid}/status"
     stat_path = f"/proc/{pid}/stat"
     fd_path = f"/proc/{pid}/fd"
-    while running and os.path.exists(status_path):
-        ts_ms = int(time.time() * 1000)
-        rss_kb, vsz_kb = read_status(status_path)
-        try:
-            fd_count = len(os.listdir(fd_path))
-        except OSError:
-            fd_count = 0
-        utime, stime = read_cpu_ticks(stat_path)
-        handle.write(f"{ts_ms},{rss_kb},{vsz_kb},{fd_count},{utime},{stime}\n")
-        handle.flush()
-        time.sleep(interval)
+    try:
+        while running and os.path.exists(status_path):
+            ts_ms = int(time.time() * 1000)
+            rss_kb, vsz_kb = read_status(status_path)
+            try:
+                fd_count = len(os.listdir(fd_path))
+            except OSError:
+                fd_count = 0
+            utime, stime = read_cpu_ticks(stat_path)
+            handle.write(f"{ts_ms},{rss_kb},{vsz_kb},{fd_count},{utime},{stime}\n")
+            handle.flush()
+            if state_handle is not None:
+                state = fetch_state()
+                families = state.get("cache_families", {})
+                state_handle.write(
+                    "{ts},{registrations},{calls},{cache},{txn},{client},{server},{dialog},{fork},{whitelist},{scanner},{ban},{acl},{ipauth}\n".format(
+                        ts=ts_ms,
+                        registrations=state.get("registrations", 0),
+                        calls=state.get("calls", 0),
+                        cache=state.get("cache", 0),
+                        txn=families.get("txn", 0),
+                        client=families.get("client", 0),
+                        server=families.get("server", 0),
+                        dialog=families.get("dialog", 0),
+                        fork=families.get("fork", 0),
+                        whitelist=families.get("whitelist", 0),
+                        scanner=families.get("scanner", 0),
+                        ban=families.get("ban", 0),
+                        acl=families.get("acl", 0),
+                        ipauth=families.get("ipauth", 0),
+                    )
+                )
+                state_handle.flush()
+            time.sleep(interval)
+    finally:
+        if state_handle is not None:
+            state_handle.close()
 PY
 }
 
@@ -201,9 +256,11 @@ SIP_TCP_MAX_CONNECTIONS="$TCP_MAX_CONNECTIONS" \
 SIP_CALL_STATE_CAPACITY="$CALL_STATE_CAPACITY" \
 SIP_USER_RATE_LIMIT="$USER_RATE_LIMIT" \
 SIP_ALLOW_PRIVATE_TARGETS="$ALLOW_PRIVATE_TARGETS" \
+SIP_ADMIN_TOKEN="$ADMIN_TOKEN" \
+SIP_STATE_CACHE_FAMILIES="$SAMPLE_STATE" \
   "$ROOT/main" >"$TMPDIR/proxy.log" 2>&1 &
 PROXY_PID=$!
-sample_process "$PROXY_PID" "$METRICS" "$SAMPLE_INTERVAL_MS" &
+sample_process "$PROXY_PID" "$METRICS" "$SAMPLE_INTERVAL_MS" "$ADMIN_PORT" "$STATE_METRICS" "$SAMPLE_STATE" "$ADMIN_TOKEN" &
 METRICS_PID=$!
 
 sleep 1
@@ -243,3 +300,6 @@ summarize_metrics "$METRICS"
 echo
 echo "Artifacts: $STATS"
 echo "Metrics: $METRICS"
+if [ "$SAMPLE_STATE" = "1" ]; then
+    echo "State metrics: $STATE_METRICS"
+fi

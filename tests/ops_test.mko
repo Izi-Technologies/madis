@@ -21,3 +21,16 @@ fn TestProxyConfigReloadClearsRuntimeOverrides() {
     assert_eq(cmap_has(cache, "sec_enabled"), 0)
     assert_eq(if len(cmap_get(cache, "config_reloaded_at")) > 0 { 1 } else { 0 }, 1)
 }
+
+fn TestProxyCacheRingCount() {
+    let cache = cmap_new()
+    let _ = cmap_set(cache, "dialog_ring|0", "dialog|live")
+    let _ = cmap_set(cache, "dialog_ring|1", "dialog|gone")
+    let _ = cmap_set(cache, "dialog|live", "confirmed|1")
+    assert_eq(proxy_cache_ring_count(cache, "dialog_ring|", "", 4), 1)
+
+    let _ = cmap_set(cache, "txn_ring|0", "branch-a|1 INVITE")
+    let _ = cmap_set(cache, "txn_ring|1", "branch-b|1 INVITE")
+    let _ = cmap_set(cache, "txn|branch-a|1 INVITE", "SIP/2.0 200 OK\r\nContent-Length: 0\r\n\r\n")
+    assert_eq(proxy_cache_ring_count(cache, "txn_ring|", "txn|", 4), 1)
+}
