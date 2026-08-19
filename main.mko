@@ -527,11 +527,11 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
                 } else { response_input = changed }
             }
         }
-        if sip_status_code(response_input) == 100 { return "" }
+        let response_code = sip_status_code(response_input)
+        if response_code == 100 { return "" }
         if len(downstream_request) > 0 && str_eq(madis_method(downstream_request), "CANCEL") { return "" }
         let response_branch = sip_via_branch(sip_header(response_input, "Via"))
         let mut response_data = response_input
-        let response_code = sip_status_code(response_input)
         if len(downstream_request) > 0 && response_code >= 180 && response_code < 200 {
             let _ = sip_relprov_record(response_input, cache)
         }
@@ -569,9 +569,9 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
                 }
             }
         }
-        if sip_status_code(response_input) >= 300 {
+        if response_code >= 300 {
             if cmap_has(cache, "fork_branch|" + response_branch) == 1 {
-                if sip_status_code(response_input) >= 600 {
+                if response_code >= 600 {
                     let fork_cid = cmap_get(cache, "fork_branch|" + response_branch)
                     let _ = sip_send_fork_cancels(fork_cid, response_branch, cache, forward_fd)
                 }
@@ -583,7 +583,7 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
         // A non-2xx INVITE final response completes the downstream INVITE
         // transaction only after its matching ACK. Generate that ACK locally
         // before the client transaction record is discarded.
-        if sip_status_code(response_input) >= 300 && sip_status_code(response_input) < 700 && len(downstream_request) > 0 {
+        if response_code >= 300 && response_code < 700 && len(downstream_request) > 0 {
             if str_eq(madis_method(downstream_request), "INVITE") {
                 let ack = sip_build_ack_non2xx(downstream_request)
                 if len(ack) > 0 && len(downstream_target) > 0 {
@@ -594,8 +594,7 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
         // RFC 3261 §16.7 step 6: recurse on 3xx. If the downstream UAS
         // redirects us, re-INVITE the Contact target instead of forwarding
         // the 3xx upstream. Limited to one redirect to prevent loops.
-        let redir_code = sip_status_code(response_input)
-        if redir_code >= 300 && redir_code < 400 && len(downstream_request) > 0 && str_eq(madis_method(downstream_request), "INVITE") {
+        if response_code >= 300 && response_code < 400 && len(downstream_request) > 0 && str_eq(madis_method(downstream_request), "INVITE") {
             let redir_contact = sip_contact_addr(sip_header(response_input, "Contact"))
             let redir_cid = sip_header(downstream_request, "Call-ID")
             let redir_key = "redir_done|" + redir_cid
@@ -615,9 +614,10 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
                 }
             }
         }
-        response_data = ims_session_timer_apply_response(cache, sip_header(response_input, "Call-ID"), downstream_request, response_data)
+        let response_cid = sip_header(response_input, "Call-ID")
+        response_data = ims_session_timer_apply_response(cache, response_cid, downstream_request, response_data)
         // RFC 4028 §10: record session interval from 2xx for refresh tracking.
-        let _ = ims_session_timer_bind_from_response(cache, sip_header(response_input, "Call-ID"), downstream_request, response_data)
+        let _ = ims_session_timer_bind_from_response(cache, response_cid, downstream_request, response_data)
         let mut resp = sip_strip_top_via(response_data)
         if len(sip_header(resp, "Via")) == 0 { return "" }
         resp = nat_fix_sdp(resp, len(resp), public_ip)
@@ -625,8 +625,8 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
         let resp_from_tag = sip_addr_tag(sip_header(resp, "From"))
         let resp_to_tag = sip_addr_tag(sip_header(resp, "To"))
         resp = rtp_process_answer(resp, len(resp), resp_cid, resp_from_tag, resp_to_tag, db, db_ok, cache)
-        let resp_code = string(sip_status_code(response_input))
-        let resp_code_int = sip_status_code(response_input)
+        let resp_code = string(response_code)
+        let resp_code_int = response_code
         if resp_code_int >= 300 && resp_code_int < 700 {
             let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_non2xx|" + resp_cid, "1", 131072)
         }
@@ -1933,7 +1933,7 @@ fn process_sip(data: string, dl: int, reg: CMap, calls: CMap, ip: string, port: 
     if sip_validate_message(data, dl) == 0 {
         return "SIP/2.0 400 Bad Request\r\nContent-Length: 0\r\n\r\n"
     }
-    if sip_stateless_options_enabled(cache) == 1 && str_eq(madis_method(data), "OPTIONS") {
+    if dl > 0 && int(data[0]) == 79 && sip_stateless_options_enabled(cache) == 1 && str_eq(madis_method(data), "OPTIONS") {
         let started_fast = mono_ms()
         let reply_fast = sip_options_response(data)
         let _ = sip_record_basic_metrics(cache, calls, data, reply_fast, tr, mono_ms() - started_fast)
