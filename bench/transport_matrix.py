@@ -13,6 +13,7 @@ import json
 import os
 import socket
 import ssl
+import struct
 import subprocess
 import sys
 import time
@@ -62,6 +63,45 @@ def read_socket(sock: socket.socket, expected: bytes, count: int = 1) -> bytes:
             break
         data.extend(chunk)
     return bytes(data)
+
+
+def read_exact(sock: socket.socket, count: int) -> bytes:
+    data = bytearray()
+    while len(data) < count:
+        chunk = sock.recv(count - len(data))
+        require(len(chunk) > 0, "WSS closed before complete frame")
+        data.extend(chunk)
+    return bytes(data)
+
+
+def ws_frame(payload: bytes) -> bytes:
+    mask = os.urandom(4)
+    length = len(payload)
+    if length < 126:
+        header = bytes([0x81, 0x80 | length])
+    elif length <= 0xFFFF:
+        header = bytes([0x81, 0x80 | 126]) + struct.pack("!H", length)
+    else:
+        header = bytes([0x81, 0x80 | 127]) + struct.pack("!Q", length)
+    masked = bytes(byte ^ mask[index % 4] for index, byte in enumerate(payload))
+    return header + mask + masked
+
+
+def read_ws_message(sock: socket.socket) -> bytes:
+    sock.settimeout(3.0)
+    header = read_exact(sock, 2)
+    length = header[1] & 0x7F
+    if length == 126:
+        length = struct.unpack("!H", read_exact(sock, 2))[0]
+    elif length == 127:
+        length = struct.unpack("!Q", read_exact(sock, 8))[0]
+    mask = b""
+    if header[1] & 0x80:
+        mask = read_exact(sock, 4)
+    payload = bytearray(read_exact(sock, length))
+    if mask:
+        payload = bytearray(byte ^ mask[index % 4] for index, byte in enumerate(payload))
+    return bytes(payload)
 
 
 def main() -> int:
@@ -118,11 +158,15 @@ def main() -> int:
                     f"GET / HTTP/1.1\r\nHost: 127.0.0.1:{wss_port}\r\n"
                     "Upgrade: websocket\r\nConnection: Upgrade\r\n"
                     "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
-                    "Sec-WebSocket-Version: 13\r\n\r\n"
+                    "Sec-WebSocket-Version: 13\r\n"
+                    "Sec-WebSocket-Protocol: sip\r\n\r\n"
                 ).encode()
             )
             response = read_socket(wss, b"101 Switching Protocols")
             require(b"101 Switching Protocols" in response, "WSS did not return 101")
+            wss.sendall(ws_frame(sip_options("WS", "matrix-wss", "matrix-wss")))
+            response = read_ws_message(wss)
+            require(b"SIP/2.0 200" in response, "WSS SIP OPTIONS did not return 200")
 
         health_request = urllib.request.Request(
             f"http://127.0.0.1:{admin_port}/healthz",
@@ -131,7 +175,7 @@ def main() -> int:
         with urllib.request.urlopen(health_request, timeout=3) as health:
             body = json.loads(health.read())
             require(health.status == 200 and body.get("ok") is True, "health check failed")
-        print("transport matrix: UDP 200, TCP pipeline 2x200, TLS 200, WSS 101, admin ready/health")
+        print("transport matrix: UDP 200, TCP pipeline 2x200, TLS 200, WSS SIP 200, admin ready/health")
         return 0
     finally:
         process.terminate()

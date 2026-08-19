@@ -57,6 +57,7 @@ python3 bench/abnf_corpus.py --binary ./main
 python3 bench/fuzz_sip.py --binary ./main --iterations 1000
 sh bench/sanitizer.sh
 SOAK_RUNS=5 SOAK_CALLS=1000 SOAK_RATE=750 SOAK_CONCURRENCY=500 SOAK_WORKERS=4 sh bench/soak.sh
+python3 bench/perf_matrix.py --binary ./main --out-dir /tmp/madis-perf
 ```
 
 `tls_ipv6_matrix.py` creates a temporary CA and verifies SNI certificate
@@ -90,3 +91,8 @@ SIP_TCP_MAX_CONNECTIONS=100000 \
 Run this with increasing connection counts while recording file descriptors,
 RSS, CPU, response counts, and failed connections. The requested count is an
 input to the experiment; the output is not a capacity guarantee.
+
+For a broader local performance run, `bench/perf_matrix.py` combines UDP CPS,
+long-dialog retention, TCP/TLS/WSS stateless OPTIONS load, and TCP connection
+retention into one timestamped output directory. It reuses `benchmark.sh` for
+INVITE dialogs and `transport_options_load.py` for stream transport load.

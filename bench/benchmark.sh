@@ -11,6 +11,8 @@ UAS_PORT=${UAS_PORT:-15070}
 TLS_PORT=${TLS_PORT:-15061}
 WSS_PORT=${WSS_PORT:-18443}
 ADMIN_PORT=${ADMIN_PORT:-18080}
+REGISTER_SOURCE_PORT=${REGISTER_SOURCE_PORT:-15071}
+UAC_SOURCE_PORT=${UAC_SOURCE_PORT:-15072}
 WORKERS=${WORKERS:-${BENCH_UDP_WORKERS:-1}}
 TCP_MAX_CONNECTIONS=${SIP_TCP_MAX_CONNECTIONS:-65536}
 CALL_STATE_CAPACITY=${SIP_CALL_STATE_CAPACITY:-262144}
@@ -20,6 +22,7 @@ CONCURRENCY=${CONCURRENCY:-${BENCH_CONCURRENCY:-200}}
 STATS=${STATS:-$ROOT/bench/sipp_stat.csv}
 METRICS=${METRICS:-${STATS}.metrics}
 STATE_METRICS=${STATE_METRICS:-${STATS}.state}
+INVITE_SCENARIO=${BENCH_INVITE_SCENARIO:-$ROOT/bench/invite.xml}
 SAMPLE_INTERVAL_MS=${BENCH_SAMPLE_INTERVAL_MS:-250}
 SAMPLE_STATE=${BENCH_SAMPLE_STATE:-0}
 STATE_INTERVAL_MS=${BENCH_STATE_INTERVAL_MS:-5000}
@@ -28,6 +31,7 @@ KEEP_ARTIFACTS=${KEEP_ARTIFACTS:-0}
 USER_RATE_LIMIT=${SIP_USER_RATE_LIMIT:-1000000}
 ALLOW_PRIVATE_TARGETS=${SIP_ALLOW_PRIVATE_TARGETS:-1}
 BENCH_BUILD=${BENCH_BUILD:-1}
+PROXY_BIN=${BENCH_PROXY_BIN:-$ROOT/main}
 POST_RUN_SLEEP=${BENCH_POST_RUN_SLEEP:-0}
 ADMIN_TOKEN=${SIP_ADMIN_TOKEN:-bench-admin-token-0000000000000000}
 BENCH_MALLOC_ARENA_MAX=${BENCH_MALLOC_ARENA_MAX:-}
@@ -304,11 +308,11 @@ if [ "$BENCH_BUILD" = "1" ]; then
     echo "Building proxy with runtime: $RUNTIME"
     MAKO_BIN="$MAKO" MAKO_RUNTIME="$RUNTIME" "$ROOT/scripts/build-native.sh" main.mko main
 else
-    if [ ! -x "$ROOT/main" ]; then
-        echo "BENCH_BUILD=0 requires an existing executable: $ROOT/main" >&2
+    if [ ! -x "$PROXY_BIN" ]; then
+        echo "BENCH_BUILD=0 requires an existing executable: $PROXY_BIN" >&2
         exit 2
     fi
-    echo "Reusing existing proxy binary: $ROOT/main"
+    echo "Reusing existing proxy binary: $PROXY_BIN"
 fi
 
 echo "Starting UAS on UDP :$UAS_PORT"
@@ -338,7 +342,7 @@ SIP_USER_RATE_LIMIT="$USER_RATE_LIMIT" \
 SIP_ALLOW_PRIVATE_TARGETS="$ALLOW_PRIVATE_TARGETS" \
 SIP_ADMIN_TOKEN="$ADMIN_TOKEN" \
 SIP_STATE_CACHE_FAMILIES="$SAMPLE_STATE" \
-  "$ROOT/main" >"$TMPDIR/proxy.log" 2>&1 &
+  "$PROXY_BIN" >"$TMPDIR/proxy.log" 2>&1 &
 PROXY_PID=$!
 init_state_metrics
 sample_process "$PROXY_PID" "$METRICS" "$SAMPLE_INTERVAL_MS" "$ADMIN_PORT" "$STATE_METRICS" "$STATE_DURING_LOAD" "$ADMIN_TOKEN" "$STATE_INTERVAL_MS" &
@@ -349,16 +353,23 @@ capture_state_snapshot "before_load"
 
 echo "Registering benchmark UAS through proxy"
 printf '%s\n%s\n' SEQUENTIAL "$UAS_PORT" >"$TMPDIR/register.csv"
-"$SIPP" "127.0.0.1:$PROXY_PORT" \
+if ! "$SIPP" "127.0.0.1:$PROXY_PORT" \
   -sf "$ROOT/bench/register.xml" \
-  -s bench -i 127.0.0.1 -p 15071 -m 1 -recv_timeout 5000 -timeout 10s \
+  -s bench -i 127.0.0.1 -p "$REGISTER_SOURCE_PORT" -m 1 -recv_timeout 5000 -timeout 10s \
   -inf "$TMPDIR/register.csv" \
   -nostdin -skip_rlimit \
-  -trace_err -trace_msg -nd >"$TMPDIR/register.log" 2>&1
+  -trace_err -trace_msg -nd >"$TMPDIR/register.log" 2>&1; then
+    echo "Registration failed" >&2
+    echo "===== Registration log tail =====" >&2
+    tail -80 "$TMPDIR/register.log" >&2 || true
+    echo "===== Proxy log tail =====" >&2
+    tail -80 "$TMPDIR/proxy.log" >&2 || true
+    exit 1
+fi
 
 echo "Running: rate=${RATE} cps calls=${CALLS} concurrency=${CONCURRENCY}"
 "$SIPP" "127.0.0.1:$PROXY_PORT" \
-  -sf "$ROOT/bench/invite.xml" -s bench -i 127.0.0.1 -p 15072 \
+  -sf "$INVITE_SCENARIO" -s bench -i 127.0.0.1 -p "$UAC_SOURCE_PORT" \
   -r "$RATE" -l "$CONCURRENCY" -m "$CALLS" \
   -recv_timeout 5000 -timeout 180s \
   -f 1 -fd 1 -stf "$STATS" -trace_stat -trace_err -trace_screen \

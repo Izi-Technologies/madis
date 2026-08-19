@@ -2579,7 +2579,17 @@ fn wss_worker(fd: int, port: int, reg: CMap, calls: CMap, cache: CMap, outbox: c
         let _ = proxy_conn_incr(cache, "WSS")
         let mut buffer = ""
         let mut alive = 1
+        let mut read_wait_ms = 1000
+        match parse_int(env_get_or("SIP_WSS_READ_WAIT_MS", "1000")) {
+            Ok(v) => { read_wait_ms = v }
+            Err(_) => {}
+        }
+        if read_wait_ms < 1 { read_wait_ms = 1 }
+        if read_wait_ms > 60000 { read_wait_ms = 60000 }
         while alive == 1 && shutdown_requested() == 0 {
+            if io_read_ready(c, read_wait_ms) <= 0 {
+                continue
+            }
             let chunk = ws_recv(c, 65536)
             if len(chunk) == 0 {
                 alive = 0
