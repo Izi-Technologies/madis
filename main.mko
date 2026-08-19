@@ -2357,53 +2357,95 @@ fn tcp_worker_multiplexed(fd: int, reg: CMap, calls: CMap, port: int, cache: CMa
     let mut db = sql_open_postgres(db_url)
     if len(db_url) > 0 { db_ok = 1 }
     let forward_fd = nb_udp_bind(0)
+    let el = evloop_new()
+    let _ = evloop_add(el, fd, 1)
+    let mut buffers = make(map[string]string)
+    let mut peers = make(map[string]string)
+    let mut peer_ports = make(map[string]int)
+    let max_connections = sip_tcp_connection_limit()
+    let mut last_txn_tick = mono_ms()
     while shutdown_requested() == 0 {
-        let c = tcp_accept(fd)
-        if c < 0 {
-            if shutdown_requested() == 1 { break }
-            sleep_ms(25)
-            continue
-        }
-        let _ = tcp_nodelay(c)
-        let mut peer_ip = peer_host(c)
-        if len(peer_ip) == 0 { peer_ip = "0.0.0.0" }
-        let peer_p = peer_port(c)
-        if sip_per_ip_conn_check(cache, peer_ip) == 0 {
-            let _ = tcp_close(c)
-            continue
-        }
-        let _ = proxy_conn_incr(cache, "TCP")
-        let mut alive = 1
-        let mut buf = ""
-        while alive == 1 && shutdown_requested() == 0 {
-            let raw = tcp_read(c)
-            if len(raw) == 0 {
-                alive = 0
-            } else {
-                buf = stream_append(buf, raw)
-                if len(buf) == 0 { alive = 0 }
-                while alive == 1 && stream_has_complete(buf) == 1 {
-                    let parts = stream_next_msg(buf)
-                    let msg = parts[0]
-                    buf = parts[1]
-                    if len(msg) == 0 { break }
-                    let txn = sip_transaction_key(msg, len(msg))
-                    if len(txn) > 2 { let _ = sip_server_conn_track_transport(cache, txn, c, "TCP") }
-                    let reply = process_sip(msg, len(msg), reg, calls, peer_ip, port, peer_p, "TCP", forward_fd, db, db_ok, cache, outbox, realm, nid, diameter_lock)
-                    if len(reply) > 0 {
-                        if sip_is_response(msg) == 1 {
-                            let _ = sip_forward_reply(reply, cache, forward_fd)
+        let ready = evloop_wait(el, 250)
+        if ready < 0 { break }
+        let mut event_i = 0
+        while event_i < ready {
+            let event_fd = evloop_event_fd(el, event_i)
+            if event_fd == fd {
+                let mut accepted = 0
+                while accepted < 64 {
+                    let c = tcp_accept_nb(fd)
+                    if c < 0 { break }
+                    if len(buffers) >= max_connections {
+                        let _ = tcp_close(c)
+                    } else if io_set_nonblocking(c, 1) < 0 || tcp_nodelay(c) < 0 {
+                        let _ = tcp_close(c)
+                    } else {
+                        let mut peer_ip = peer_host(c)
+                        if len(peer_ip) == 0 { peer_ip = "0.0.0.0" }
+                        let peer_p = peer_port(c)
+                        if sip_per_ip_conn_check(cache, peer_ip) == 0 {
+                            let _ = tcp_close(c)
                         } else {
-                            let _ = sip_tcp_send(c, reply)
+                            let fk = string(c)
+                            buffers[fk] = ""
+                            peers[fk] = peer_ip
+                            peer_ports[fk] = peer_p
+                            cmap_set(cache, "conn_ts|" + fk, string(mono_ms()))
+                            let _ = proxy_conn_incr(cache, "TCP")
+                            let _ = evloop_add(el, c, 1)
+                        }
+                    }
+                    accepted = accepted + 1
+                }
+            } else if event_fd >= 0 {
+                let fd_key = string(event_fd)
+                let raw = tcp_read(event_fd)
+                let mut close_conn = 0
+                if len(raw) == 0 {
+                    close_conn = 1
+                } else {
+                    cmap_set(cache, "conn_ts|" + fd_key, string(mono_ms()))
+                    let combined = stream_append(buffers[fd_key], raw)
+                    if len(combined) == 0 {
+                        close_conn = 1
+                    } else {
+                        buffers[fd_key] = combined
+                        let mut budget = 64
+                        while budget > 0 && stream_has_complete(buffers[fd_key]) == 1 {
+                            let parts = stream_next_msg(buffers[fd_key])
+                            let msg = parts[0]
+                            buffers[fd_key] = parts[1]
+                            if len(msg) == 0 { break }
+                            let txn = sip_transaction_key(msg, len(msg))
+                            if len(txn) > 2 { let _ = sip_server_conn_track_transport(cache, txn, event_fd, "TCP") }
+                            let reply = process_sip(msg, len(msg), reg, calls, peers[fd_key], port, peer_ports[fd_key], "TCP", forward_fd, db, db_ok, cache, outbox, realm, nid, diameter_lock)
+                            if len(reply) > 0 {
+                                if sip_is_response(msg) == 1 {
+                                    let _ = sip_forward_reply(reply, cache, forward_fd)
+                                } else {
+                                    let sent = sip_tcp_send(event_fd, reply)
+                                    if sent < 0 { close_conn = 1 }
+                                }
+                            }
+                            budget = budget - 1
                         }
                     }
                 }
+                if close_conn == 1 {
+                    let _ = tcp_cleanup_multiplexed(event_fd, el, buffers, peers, peer_ports, cache)
+                }
             }
+            event_i = event_i + 1
         }
-        let _ = sip_per_ip_conn_release(cache, peer_ip)
-        let _ = proxy_conn_decr(cache, "TCP")
-        let _ = tcp_close(c)
+        let txn_now = mono_ms()
+        if txn_now - last_txn_tick >= 250 {
+            let _ = sip_stream_poll(forward_fd, reg, calls, db, db_ok, cache, outbox, realm, nid, diameter_lock)
+            let _ = sip_client_txn_tick(cache, forward_fd)
+            let _ = sip_server_txn_tick(cache, forward_fd)
+            last_txn_tick = txn_now
+        }
     }
+    let _ = evloop_close(el)
     return 0
 }
 
