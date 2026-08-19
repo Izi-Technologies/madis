@@ -298,7 +298,7 @@ fn proxy_cache_family_state(cache: CMap) -> string {
     }
     let txn = proxy_cache_ring_count(cache, "txn_ring|", "txn|", 16384)
     let client = proxy_cache_ring_count(cache, "client_ring|", "client_req|", 16384)
-    let server = proxy_cache_ring_count(cache, "server_ring|", "server_req|", 16384)
+    let server = proxy_cache_ring_count(cache, "server_ring|", "server_resp|", 16384)
     let dialog = proxy_cache_ring_count(cache, "dialog_ring|", "", 131072)
     let fork = proxy_cache_ring_count(cache, "fork_group_ring|", "fork_branches|", 16384)
     let wl = proxy_cache_ring_count(cache, "wl_ring|", "", 16384)

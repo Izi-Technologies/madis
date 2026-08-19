@@ -1958,12 +1958,9 @@ fn process_sip(data: string, dl: int, reg: CMap, calls: CMap, ip: string, port: 
         }
     }
     let started = mono_ms()
-    let txn_key = sip_txn_begin(data, cache)
-    let _ = len(txn_key)
     let _ = sip_server_txn_ack(data, cache)
     let reply = process_sip_core(data, dl, reg, calls, ip, port, source_port, tr, forward_fd, db, db_ok, cache, realm, node_id, diameter_lock)
     let elapsed = mono_ms() - started
-    let _ = sip_txn_finish(data, reply, cache)
     // Single is_response check — reused 3 times
     let is_resp = sip_is_response(data)
     if is_resp == 1 {
