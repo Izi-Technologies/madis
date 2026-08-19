@@ -147,6 +147,20 @@ fn TestTransactionReplayExpiry() {
     assert_eq_str(sip_get_txn_response(key, cache), response)
 }
 
+fn TestTransactionReplaySweepRemovesExpiredResponses() {
+    let msg = proxy_test_register_message("<sip:alice@192.0.2.10:5060>", "301")
+    let cache = cmap_new()
+    let response = sip_reply(msg, 200, "OK", "", "tag1")
+    let key = sip_txn_begin(msg, cache)
+    let _ = sip_store_txn(key, response, cache)
+    cmap_set(cache, "txn_exp|" + key, string(mono_ms() - 1))
+    assert_eq(sip_txn_sweep(cache, 16384), 1)
+    assert_eq(cmap_has(cache, "txn|" + key), 0)
+    assert_eq(cmap_has(cache, "txn_ts|" + key), 0)
+    assert_eq(cmap_has(cache, "txn_exp|" + key), 0)
+    assert_eq(cmap_has(cache, "txn_state|" + key), 0)
+}
+
 fn proxy_test_final_response(code: int, branch: string) -> string {
     return "SIP/2.0 " + string(code) + " Test\r\n"
         + "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=" + branch + "\r\n"
