@@ -59,7 +59,7 @@ declared versions, hardware, and network topology.
 - [ ] TransNexus ClearIP: end-to-end external STIR/SHAKEN signing and
   verification with production STI certificates.
 - [ ] Asterisk/FreeSWITCH: AS/B2BUA interop as iFC targets, media anchoring.
-- [ ] Kamailio/OpenSIPS: peer interoperability comparison, routing behavior.
+- [ ] Independent SIP proxies: peer interoperability comparison, routing behavior.
 - [ ] PJSIP/oSIP: client-library interop for PRACK, 100rel, session timers.
 
 ### NAT and transport evidence
@@ -117,7 +117,7 @@ with published methodology.
 
 ### CPS and throughput
 
-- [ ] CPS benchmark: target 15K+ on 8-core/16GB, compare against OpenSIPS
+- [ ] CPS benchmark: target 15K+ on 8-core/16GB, compare against a baseline proxy
   on identical hardware with identical routing policy.
 - [ ] REGISTER throughput: target 20K+ registrations/sec with DB writes.
 - [ ] OPTIONS/keepalive: target 50K+ stateless responses/sec.
@@ -138,7 +138,7 @@ with published methodology.
 
 - [ ] Benchmark scripts in `bench/` with declared hardware, OS, kernel
   parameters, and PostgreSQL configuration.
-- [ ] Comparison methodology document against OpenSIPS.
+- [ ] Comparison methodology document against alternate SIP proxies.
 
 ---
 
@@ -199,7 +199,7 @@ All of the above, proven in production.
 | **v0.7.0** | Feature complete | All features implemented, 140 tests pass ✅ |
 | **v0.8.0** | Interoperability | Works with real peers, captured traces |
 | **v0.8.5** | Resilience | Recovers from failures, documented drills |
-| **v0.9.0** | Scale | Beats OpenSIPS on measured benchmarks |
+| **v0.9.0** | Scale | Beats baseline proxy targets on measured benchmarks |
 | **v0.9.5** | Compliance | Independent security assessment passes |
 | **v1.0.0** | Production | All above, running in carrier deployments |
 

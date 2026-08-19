@@ -63,7 +63,7 @@ SOAK_RUNS=5 SOAK_CALLS=1000 SOAK_RATE=750 SOAK_CONCURRENCY=500 SOAK_WORKERS=4 sh
 selection, hostname rejection, and UDP/TCP/TLS over `::1`. `fault_matrix.py`
 drives deterministic loss, delay, duplicate, reorder, retransmission, and
 unacknowledged-2xx cases through a real local UAS. These are independent
-process checks, but they do not replace PJSIP/Kamailio/OpenSIPS/Asterisk
+process checks, but they do not replace independent SIP stack
 interoperability; those stacks must be installed and supplied as separate
 fixtures.
 

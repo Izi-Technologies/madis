@@ -108,7 +108,7 @@ These are interoperability and endpoint-scope items, not proxy-scope protocol bu
 - Independent-stack timer interoperability and fork-race validation remains
   open. The local fault matrix now covers loss/reordering, delayed responses,
   retransmissions, and 2xx ACK loss through a separate UAS, but it is not a
-  PJSIP/Kamailio/OpenSIPS/Asterisk certification.
+  independent SIP stack certification.
 - Full SIP URI/header ABNF coverage across every RFC production remains open.
   The ingress validator is strict for the proxy-critical grammar and now has
   a generated-style corpus, but it is not a generated full RFC ABNF parser.
