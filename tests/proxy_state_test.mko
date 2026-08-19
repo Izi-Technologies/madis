@@ -252,10 +252,36 @@ fn TestDialogLifecycleTeardown() {
     let calls = cmap_new()
     let cache = cmap_new()
     let dialog_key = "dialog|" + proxy_dialog_id("lifecycle-dialog", "from1", "to1")
+    let untagged_key = "dialog|lifecycle-dialog"
+    cmap_set(calls, "lifecycle-dialog", "alice|bob|1")
+    cmap_set(calls, untagged_key, "trying|1")
     assert_eq(sip_dialog_observe(invite, reply, calls, cache), 1)
     assert_eq(cmap_has(calls, dialog_key), 1)
+    assert_eq(sip_dialog_observe(reply, "", calls, cache), 0)
     assert_eq(sip_dialog_observe(tagged_bye, "", calls, cache), 1)
     assert_eq(cmap_has(calls, dialog_key), 0)
+    assert_eq(cmap_has(calls, untagged_key), 0)
+    assert_eq(cmap_has(calls, "lifecycle-dialog"), 0)
+}
+
+fn TestDialogCacheCleanupRemovesTaggedDestination() {
+    let bye = "BYE sip:b@example.com SIP/2.0\r\n"
+        + "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-dialog-clean\r\n"
+        + "From: <sip:a@example.com>;tag=from1\r\n"
+        + "To: <sip:b@example.com>;tag=to1\r\n"
+        + "Call-ID: cleanup-dialog\r\n"
+        + "CSeq: 43 BYE\r\n"
+        + "Content-Length: 0\r\n\r\n"
+    let cache = cmap_new()
+    cmap_set(cache, "dialog_dst|cleanup-dialog", "sip:uas@example.com")
+    cmap_set(cache, "dialog_dst|cleanup-dialog|to1", "sip:uas@example.com")
+    cmap_set(cache, "dialog_branch|cleanup-dialog", "z9hG4bK-dialog-clean")
+    cmap_set(cache, "dialog_non2xx|cleanup-dialog", "1")
+    assert_eq(sip_dialog_cache_cleanup(cache, "cleanup-dialog", bye), 1)
+    assert_eq(cmap_has(cache, "dialog_dst|cleanup-dialog"), 0)
+    assert_eq(cmap_has(cache, "dialog_dst|cleanup-dialog|to1"), 0)
+    assert_eq(cmap_has(cache, "dialog_branch|cleanup-dialog"), 0)
+    assert_eq(cmap_has(cache, "dialog_non2xx|cleanup-dialog"), 0)
 }
 
 fn TestInviteAckAndCancelConstruction() {

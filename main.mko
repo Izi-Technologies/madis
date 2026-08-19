@@ -1816,9 +1816,7 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
             let _ = cmap_del(calls, cid)
         }
         let sent = sip_forward_dialog_request(msg, cid, "BYE", next_hop, ip, port, tr, cache, forward_fd)
-        let _ = cmap_del(cache, "dialog_dst|" + cid)
-        let _ = cmap_del(cache, "dialog_branch|" + cid)
-        let _ = cmap_del(cache, "dialog_non2xx|" + cid)
+        let _ = sip_dialog_cache_cleanup(cache, cid, msg)
         if sent == 1 { return "" }
         // Cluster failover: if this node doesn't own the dialog, check PG
         // for a dialog binding from a failed node and forward BYE there.

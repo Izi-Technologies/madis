@@ -22,6 +22,8 @@ METRICS=${METRICS:-${STATS}.metrics}
 STATE_METRICS=${STATE_METRICS:-${STATS}.state}
 SAMPLE_INTERVAL_MS=${BENCH_SAMPLE_INTERVAL_MS:-250}
 SAMPLE_STATE=${BENCH_SAMPLE_STATE:-0}
+STATE_INTERVAL_MS=${BENCH_STATE_INTERVAL_MS:-5000}
+STATE_DURING_LOAD=${BENCH_STATE_DURING_LOAD:-0}
 KEEP_ARTIFACTS=${KEEP_ARTIFACTS:-0}
 USER_RATE_LIMIT=${SIP_USER_RATE_LIMIT:-1000000}
 ALLOW_PRIVATE_TARGETS=${SIP_ALLOW_PRIVATE_TARGETS:-1}
@@ -42,7 +44,8 @@ sample_process() {
     state_output="$5"
     sample_state="$6"
     admin_token="$7"
-    python3 - "$pid" "$output" "$interval_ms" "$admin_port" "$state_output" "$sample_state" "$admin_token" <<'PY'
+    state_interval_ms="$8"
+    python3 - "$pid" "$output" "$interval_ms" "$admin_port" "$state_output" "$sample_state" "$admin_token" "$state_interval_ms" <<'PY'
 import json
 import os
 import signal
@@ -58,6 +61,7 @@ admin_port = int(sys.argv[4])
 state_output = sys.argv[5]
 sample_state = sys.argv[6] == "1"
 admin_token = sys.argv[7]
+state_interval_ms = int(sys.argv[8])
 running = True
 
 def stop(_signum, _frame):
@@ -105,11 +109,11 @@ with open(output, "w", encoding="utf-8") as handle:
     handle.write("ts_ms,rss_kb,vsz_kb,fd_count,utime_ticks,stime_ticks\n")
     state_handle = None
     if sample_state:
-        state_handle = open(state_output, "w", encoding="utf-8")
-        state_handle.write("ts_ms,registrations,calls,cache,txn,client,server,dialog,fork,whitelist,scanner,ban,acl,ipauth\n")
+        state_handle = open(state_output, "a", encoding="utf-8")
     status_path = f"/proc/{pid}/status"
     stat_path = f"/proc/{pid}/stat"
     fd_path = f"/proc/{pid}/fd"
+    next_state_ms = 0
     try:
         while running and os.path.exists(status_path):
             ts_ms = int(time.time() * 1000)
@@ -121,11 +125,11 @@ with open(output, "w", encoding="utf-8") as handle:
             utime, stime = read_cpu_ticks(stat_path)
             handle.write(f"{ts_ms},{rss_kb},{vsz_kb},{fd_count},{utime},{stime}\n")
             handle.flush()
-            if state_handle is not None:
+            if state_handle is not None and ts_ms >= next_state_ms:
                 state = fetch_state()
                 families = state.get("cache_families", {})
                 state_handle.write(
-                    "{ts},{registrations},{calls},{cache},{txn},{client},{server},{dialog},{fork},{whitelist},{scanner},{ban},{acl},{ipauth}\n".format(
+                    "{ts},sample,{registrations},{calls},{cache},{txn},{client},{server},{dialog},{fork},{whitelist},{scanner},{ban},{acl},{ipauth}\n".format(
                         ts=ts_ms,
                         registrations=state.get("registrations", 0),
                         calls=state.get("calls", 0),
@@ -143,10 +147,64 @@ with open(output, "w", encoding="utf-8") as handle:
                     )
                 )
                 state_handle.flush()
+                next_state_ms = ts_ms + state_interval_ms
             time.sleep(interval)
     finally:
         if state_handle is not None:
             state_handle.close()
+PY
+}
+
+init_state_metrics() {
+    if [ "$SAMPLE_STATE" = "1" ]; then
+        printf 'ts_ms,phase,registrations,calls,cache,txn,client,server,dialog,fork,whitelist,scanner,ban,acl,ipauth\n' >"$STATE_METRICS"
+    fi
+}
+
+capture_state_snapshot() {
+    phase="$1"
+    if [ "$SAMPLE_STATE" != "1" ]; then return 0; fi
+    python3 - "$ADMIN_PORT" "$STATE_METRICS" "$ADMIN_TOKEN" "$phase" <<'PY'
+import json
+import sys
+import time
+import urllib.error
+import urllib.request
+
+admin_port = int(sys.argv[1])
+state_output = sys.argv[2]
+admin_token = sys.argv[3]
+phase = sys.argv[4]
+request = urllib.request.Request(
+    f"http://127.0.0.1:{admin_port}/state",
+    headers={"Authorization": f"Bearer {admin_token}"},
+)
+try:
+    with urllib.request.urlopen(request, timeout=2.0) as response:
+        state = json.loads(response.read().decode("utf-8"))
+except (OSError, urllib.error.URLError, json.JSONDecodeError):
+    state = {}
+families = state.get("cache_families", {})
+with open(state_output, "a", encoding="utf-8") as handle:
+    handle.write(
+        "{ts},{phase},{registrations},{calls},{cache},{txn},{client},{server},{dialog},{fork},{whitelist},{scanner},{ban},{acl},{ipauth}\n".format(
+            ts=int(time.time() * 1000),
+            phase=phase,
+            registrations=state.get("registrations", 0),
+            calls=state.get("calls", 0),
+            cache=state.get("cache", 0),
+            txn=families.get("txn", 0),
+            client=families.get("client", 0),
+            server=families.get("server", 0),
+            dialog=families.get("dialog", 0),
+            fork=families.get("fork", 0),
+            whitelist=families.get("whitelist", 0),
+            scanner=families.get("scanner", 0),
+            ban=families.get("ban", 0),
+            acl=families.get("acl", 0),
+            ipauth=families.get("ipauth", 0),
+        )
+    )
 PY
 }
 
@@ -260,10 +318,12 @@ SIP_ADMIN_TOKEN="$ADMIN_TOKEN" \
 SIP_STATE_CACHE_FAMILIES="$SAMPLE_STATE" \
   "$ROOT/main" >"$TMPDIR/proxy.log" 2>&1 &
 PROXY_PID=$!
-sample_process "$PROXY_PID" "$METRICS" "$SAMPLE_INTERVAL_MS" "$ADMIN_PORT" "$STATE_METRICS" "$SAMPLE_STATE" "$ADMIN_TOKEN" &
+init_state_metrics
+sample_process "$PROXY_PID" "$METRICS" "$SAMPLE_INTERVAL_MS" "$ADMIN_PORT" "$STATE_METRICS" "$STATE_DURING_LOAD" "$ADMIN_TOKEN" "$STATE_INTERVAL_MS" &
 METRICS_PID=$!
 
 sleep 1
+capture_state_snapshot "before_load"
 
 echo "Registering benchmark UAS through proxy"
 printf '%s\n%s\n' SEQUENTIAL "$UAS_PORT" >"$TMPDIR/register.csv"
@@ -281,11 +341,13 @@ echo "Running: rate=${RATE} cps calls=${CALLS} concurrency=${CONCURRENCY}"
   -recv_timeout 5000 -timeout 180s \
   -f 1 -fd 1 -stf "$STATS" -trace_stat -trace_err -trace_screen \
   -nostdin -skip_rlimit >"$TMPDIR/uac.log" 2>&1 || true
+capture_state_snapshot "after_load"
 
 if [ "$POST_RUN_SLEEP" != "0" ]; then
     echo "Observing proxy for ${POST_RUN_SLEEP}s after load"
     sleep "$POST_RUN_SLEEP"
 fi
+capture_state_snapshot "after_observe"
 
 echo
 echo "===== SIPp result ====="

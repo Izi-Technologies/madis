@@ -444,7 +444,28 @@ fn sip_call_state_set(calls: CMap, cache: CMap, key: string, value: string) -> i
     return rfc_bounded_state_set(calls, cache, "call_state_seq", "call_state_ring|", key, value, sip_call_state_capacity())
 }
 
+fn sip_call_state_cleanup(calls: CMap, cid: string, from_tag: string, to_tag: string) -> int {
+    if len(cid) == 0 { return 0 }
+    let _ = cmap_del(calls, cid)
+    let _ = cmap_del(calls, "dialog|" + cid)
+    if len(from_tag) > 0 && len(to_tag) > 0 {
+        let _ = cmap_del(calls, "dialog|" + proxy_dialog_id(cid, from_tag, to_tag))
+    }
+    return 1
+}
+
+fn sip_dialog_cache_cleanup(cache: CMap, cid: string, msg: string) -> int {
+    if len(cid) == 0 { return 0 }
+    let _ = cmap_del(cache, "dialog_dst|" + cid)
+    let to_tag = sip_addr_tag(sip_header(msg, "To"))
+    if len(to_tag) > 0 { let _ = cmap_del(cache, "dialog_dst|" + cid + "|" + to_tag) }
+    let _ = cmap_del(cache, "dialog_branch|" + cid)
+    let _ = cmap_del(cache, "dialog_non2xx|" + cid)
+    return 1
+}
+
 fn sip_dialog_observe(msg: string, reply: string, calls: CMap, cache: CMap) -> int {
+    if sip_is_response(msg) == 1 { return 0 }
     let cid = sip_header(msg, "Call-ID")
     if len(cid) == 0 { return 0 }
     let method = madis_method(msg)
@@ -464,7 +485,7 @@ fn sip_dialog_observe(msg: string, reply: string, calls: CMap, cache: CMap) -> i
     }
     let _ = sip_call_state_set(calls, cache, key, state + "|" + string(now_ms()))
     if str_eq(state, "terminated") || str_eq(state, "failed") {
-        let _ = cmap_del(calls, key)
+        let _ = sip_call_state_cleanup(calls, cid, from_tag, to_tag)
     }
     return 1
 }
