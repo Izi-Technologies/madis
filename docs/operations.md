@@ -103,6 +103,8 @@ include:
 - `madis_sip_requests_total{method,transport}` — per-method, per-transport request counts.
 - `madis_sip_responses_total{code,class}` — per-status-code response counts with class label (e.g. `2xx`).
 - `madis_sip_connections_total{transport}` — gauge of active stream connections by transport.
+- `madis_maf_inbound_calls_total{transport}` — inbound calls published to MAF by SIP transport.
+- `madis_maf_commands_total{operation,status,error}` — MAF command worker transitions. The `error` label is present only on failed command counters.
 
 The labeled counters supplement the fixed metric slots (backward-compatible);
 both are emitted in every `/metrics` scrape.

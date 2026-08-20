@@ -250,6 +250,56 @@ fn proxy_metrics_labeled_export(cache: CMap) -> string {
         }
         mi = mi + 1
     }
+    let mut maf_found = 0
+    let maf_ops = ["calls.create", "calls.answer", "calls.hangup", "calls.route", "bridges.create", "bridges.destroy", "media.play", "media.stop", "dtmf.send"]
+    let maf_status = ["processing", "completed"]
+    let mut moi = 0
+    while moi < len(maf_ops) {
+        let mut msi = 0
+        while msi < len(maf_status) {
+            let key = "prom|maf_commands|operation=\"" + maf_ops[moi] + "\",status=\"" + maf_status[msi] + "\""
+            if cmap_has(cache, key) == 1 {
+                if maf_found == 0 {
+                    builder_write(b, "# TYPE madis_maf_commands_total counter\n")
+                    maf_found = 1
+                }
+                builder_write(b, "madis_maf_commands_total{operation=\"" + maf_ops[moi] + "\",status=\"" + maf_status[msi] + "\"} " + cmap_get(cache, key) + "\n")
+            }
+            msi = msi + 1
+        }
+        moi = moi + 1
+    }
+    let maf_errors = ["transport_or_endpoint_rejected", "unsupported_operation", "bad_request", "worker_error", "state_conflict", "not_found"]
+    let mut mei = 0
+    while mei < len(maf_errors) {
+        let mut meoi = 0
+        while meoi < len(maf_ops) {
+            let key = "prom|maf_commands|operation=\"" + maf_ops[meoi] + "\",status=\"failed\",error=\"" + maf_errors[mei] + "\""
+            if cmap_has(cache, key) == 1 {
+                if maf_found == 0 {
+                    builder_write(b, "# TYPE madis_maf_commands_total counter\n")
+                    maf_found = 1
+                }
+                builder_write(b, "madis_maf_commands_total{operation=\"" + maf_ops[meoi] + "\",status=\"failed\",error=\"" + maf_errors[mei] + "\"} " + cmap_get(cache, key) + "\n")
+            }
+            meoi = meoi + 1
+        }
+        mei = mei + 1
+    }
+    let mut inbound_found = 0
+    let inbound_transports = ["UDP", "TCP", "TLS", "WSS"]
+    let mut iti = 0
+    while iti < len(inbound_transports) {
+        let key = "prom|maf_inbound_calls|transport=\"" + inbound_transports[iti] + "\""
+        if cmap_has(cache, key) == 1 {
+            if inbound_found == 0 {
+                builder_write(b, "# TYPE madis_maf_inbound_calls_total counter\n")
+                inbound_found = 1
+            }
+            builder_write(b, "madis_maf_inbound_calls_total{transport=\"" + inbound_transports[iti] + "\"} " + cmap_get(cache, key) + "\n")
+        }
+        iti = iti + 1
+    }
     return builder_string(b)
 }
 

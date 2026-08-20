@@ -161,6 +161,15 @@ fn TestMafWorkerInboundCachePutUsesBoundedCacheSuccess() {
     assert_eq(maf_worker_inbound_cache_put(cache, "call-in-test", value), 0)
 }
 
+fn TestMafWorkerMetricRequiresPromActive() {
+    let cache = cmap_new()
+    assert_eq(maf_worker_metric(cache, "maf_commands", "operation=\"calls.create\",status=\"processing\""), 0)
+    assert_eq(cmap_has(cache, "prom|maf_commands|operation=\"calls.create\",status=\"processing\""), 0)
+    let _ = cmap_set(cache, "_prom_active", "1")
+    assert_eq(maf_worker_metric(cache, "maf_commands", "operation=\"calls.create\",status=\"processing\""), 1)
+    assert_eq_str(cmap_get(cache, "prom|maf_commands|operation=\"calls.create\",status=\"processing\""), "1")
+}
+
 // --- MAF API route coverage ---
 
 fn TestMafApiRouteEvents() {

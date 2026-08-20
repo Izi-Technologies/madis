@@ -18,6 +18,7 @@ run_mako() {
 }
 
 cd "$ROOT"
+bash scripts/privacy-scan.sh
 run_mako check --no-incremental main.mko
 run_mako lint main.mko
 run_mako check --no-incremental admin/main.mko

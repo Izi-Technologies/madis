@@ -35,6 +35,7 @@ CLAUDE.local.md
 .env
 .env.*
 madis.env
+.privacy-denylist.local
 apps/control-ui/schema.sql
 
 # Editor / OS

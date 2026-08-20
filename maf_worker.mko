@@ -117,6 +117,13 @@ fn maf_worker_command_state(db: SqlDB, ok: int, tenant: string, command_id: stri
     return 1
 }
 
+fn maf_worker_metric(cache: CMap, name: string, labels: string) -> int {
+    if cmap_has(cache, "_prom_active") == 0 { return 0 }
+    if len(name) == 0 || len(labels) == 0 { return 0 }
+    let _ = cmap_incr(cache, "prom|" + name + "|" + labels, 1)
+    return 1
+}
+
 fn maf_worker_claim(db: SqlDB, ok: int, tenant: string, command_id: string, claim: string) -> int {
     if ok == 0 || len(command_id) == 0 || len(claim) == 0 { return 0 }
     // The WHERE status = 'accepted' guard makes this atomic: exactly one
@@ -231,6 +238,7 @@ fn maf_worker_ingress_invite(db: SqlDB, ok: int, tenant: string, msg: string, ip
     let nat_fixed = nat_fix_message(received, ip, port, public_ip)
     if maf_worker_inbound_cache_put(cache, call_id, maf_worker_inbound_cache_value(nat_fixed, ip, port, transport)) != 0 { return "" }
     cmap_set(cache, "maf_created_ms|" + call_id, string(mono_ms()))
+    let _ = maf_worker_metric(cache, "maf_inbound_calls", "transport=\"" + transport + "\"")
     return call_id
 }
 
@@ -1017,14 +1025,17 @@ fn maf_worker_poll(db: SqlDB, ok: int, cache: CMap, out_fd: int, node_id: string
         if len(call_id) == 0 || len(operation) == 0 || len(request) == 0 { continue }
         let claim = sha256("madis.maf.claim|" + node_id + "|" + command_id + "|" + string(now_ms()))
         if maf_worker_claim(db, ok, tenant, command_id, claim) == 0 { continue }
+        let _ = maf_worker_metric(cache, "maf_commands", "operation=\"" + operation + "\",status=\"processing\"")
         let result = maf_worker_execute(db, ok, tenant, operation, call_id, command_id, request, trace, cache, out_fd, node_id)
         let result_parts = str_split(result, "|")
         let result_code = if len(result_parts) > 0 { result_parts[0] } else { "worker_error" }
         let result_message = if len(result_parts) > 1 { result_parts[1] } else { "worker execution failed" }
         if str_eq(result, "ok") {
             let _ = maf_worker_command_state(db, ok, tenant, command_id, claim, "completed", "", "", call_id, trace)
+            let _ = maf_worker_metric(cache, "maf_commands", "operation=\"" + operation + "\",status=\"completed\"")
         } else {
             let _ = maf_worker_command_state(db, ok, tenant, command_id, claim, "failed", result_code, result_message, call_id, trace)
+            let _ = maf_worker_metric(cache, "maf_commands", "operation=\"" + operation + "\",status=\"failed\",error=\"" + result_code + "\"")
             if str_eq(operation, "calls.create") { let _ = maf_worker_call_state(db, ok, tenant, call_id, "failed", trace) }
         }
         acted = acted + 1
