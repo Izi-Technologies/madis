@@ -407,7 +407,155 @@ fn proxy_admin_authorized(c: int) -> int {
     return 0
 }
 
+fn proxy_json_escape(s: string) -> string {
+    let mut b = str_builder()
+    let mut i = 0
+    while i < len(s) {
+        let c = int(s[i])
+        if c == 34 { builder_write(b, "\\\"") }
+        else if c == 92 { builder_write(b, "\\\\") }
+        else if c == 10 { builder_write(b, "\\n") }
+        else if c == 13 { builder_write(b, "\\r") }
+        else if c == 9 { builder_write(b, "\\t") }
+        else if c < 32 || c == 127 { builder_write_byte(b, byte(32)) }
+        else { builder_write_byte(b, byte(c)) }
+        i = i + 1
+    }
+    return builder_string(b)
+}
+
+fn proxy_identifier_ok(value: string, min: int, max: int) -> int {
+    if len(value) < min || len(value) > max { return 0 }
+    let mut i = 0
+    while i < len(value) {
+        let c = int(value[i])
+        let ok = (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 45 || c == 46 || c == 58 || c == 64 || c == 95
+        if not ok { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn proxy_maf_scope(c: int) -> int {
+    let header = http_header(c, "Authorization")
+    let low = str_to_lower(header)
+    if not str_has_prefix(low, "bearer ") { return 0 }
+    let actual = str_trim_space(header[7:])
+    if len(actual) < 16 || len(actual) > 512 { return 0 }
+    let write_token = env_get_or("SIP_MAF_API_TOKEN", env_get_or("MADIS_MAF_WRITE_TOKEN", ""))
+    if len(write_token) >= 16 && proxy_admin_secret_equal(actual, write_token) == 1 { return 2 }
+    let read_token = env_get_or("SIP_MAF_API_READ_TOKEN", env_get_or("MADIS_MAF_READ_TOKEN", ""))
+    if len(read_token) >= 16 && proxy_admin_secret_equal(actual, read_token) == 1 { return 1 }
+    return 0
+}
+
+fn proxy_maf_tenant() -> string {
+    let tenant = str_trim_space(env_get_or("SIP_MAF_TENANT", "default"))
+    if proxy_identifier_ok(tenant, 1, 128) == 0 { return "default" }
+    return tenant
+}
+
+fn proxy_tbl_query_param(db: SqlDB, ok: int, sql: string, param: string, max: int) -> []string {
+    let mut rows = make([]string, 0, max)
+    if ok == 0 { return rows }
+    let mut lim = max
+    if lim < 1 { lim = 1 }
+    if lim > 100 { lim = 100 }
+    let rh = sql_query_rows_str(db, sql + " LIMIT " + string(lim), param)
+    if sql_rows_ok(rh) == 1 {
+        while sql_rows_next(rh) == 1 {
+            let v = sql_rows_str(rh, 0)
+            if len(v) == 0 { break }
+            rows = append(rows, v)
+            if len(rows) >= lim { break }
+        }
+    }
+    let _ = sql_rows_close(rh)
+    return rows
+}
+
+fn proxy_maf_events(db: SqlDB, ok: int) -> string {
+    let tenant = proxy_maf_tenant()
+    let rows = proxy_tbl_query_param(db, ok, "SELECT json_build_object('schema','madis.maf.event.v1','event_id',event_id,'event_type',event_type,'event_version',event_version,'tenant_id',tenant_id,'call_id',call_id,'channel_id',channel_id,'sequence',sequence,'occurred_at',occurred_at,'trace_id',trace_id,'payload',payload_json)::text FROM maf_events WHERE tenant_id = $1 ORDER BY sequence DESC", tenant, 100)
+    let mut out = "{\"schema\":\"madis.maf.event-page.v1\",\"events\":["
+    let mut i = 0
+    while i < len(rows) {
+        if i > 0 { out = out + "," }
+        out = out + rows[i]
+        i = i + 1
+    }
+    return out + "]}\n"
+}
+
+fn proxy_maf_active_calls(db: SqlDB, ok: int) -> string {
+    let tenant = proxy_maf_tenant()
+    let rows = proxy_tbl_query_param(db, ok, "SELECT json_build_object('call_id',call_id,'tenant_id',tenant_id,'state',state,'version',version,'from_uri',from_uri,'to_uri',to_uri,'created_at',created_at,'updated_at',updated_at)::text FROM maf_calls WHERE tenant_id = $1 AND state NOT IN ('ended','failed') ORDER BY created_at DESC", tenant, 100)
+    let mut out = "{\"schema\":\"madis.maf.active-calls.v1\",\"calls\":["
+    let mut i = 0
+    while i < len(rows) {
+        if i > 0 { out = out + "," }
+        out = out + rows[i]
+        i = i + 1
+    }
+    return out + "]}\n"
+}
+
+fn proxy_maf_call(db: SqlDB, ok: int, call_id: string) -> string {
+    if proxy_identifier_ok(call_id, 8, 128) == 0 { return "" }
+    return sql_query_str2(db, "SELECT json_build_object('schema','madis.maf.call.v1','call_id',call_id,'tenant_id',tenant_id,'state',state,'version',version,'from_uri',from_uri,'to_uri',to_uri,'created_at',created_at,'updated_at',updated_at)::text FROM maf_calls WHERE tenant_id = $1 AND call_id = $2", proxy_maf_tenant(), call_id)
+}
+
+fn proxy_maf_call_id(path: string, suffix: string) -> string {
+    let prefix = "/admin/api/v1/maf/calls/"
+    if not str_has_prefix(path, prefix) { return "" }
+    let rest = path[len(prefix):]
+    if len(suffix) == 0 {
+        if str_index(rest, "/") >= 0 { return "" }
+        return rest
+    }
+    let tail = "/" + suffix
+    if not str_has_suffix(rest, tail) { return "" }
+    return rest[0:len(rest) - len(tail)]
+}
+
+fn proxy_maf_operation(method: string, path: string) -> string {
+    if not str_eq(method, "POST") { return "" }
+    if len(proxy_maf_call_id(path, "answer")) > 0 { return "calls.answer" }
+    if len(proxy_maf_call_id(path, "reject")) > 0 { return "calls.reject" }
+    if len(proxy_maf_call_id(path, "hangup")) > 0 { return "calls.hangup" }
+    if len(proxy_maf_call_id(path, "route")) > 0 { return "calls.route" }
+    return ""
+}
+
+fn proxy_maf_command(db: SqlDB, ok: int, path: string, operation: string, body: string, idempotency: string) -> string {
+    if ok == 0 { return "{\"ok\":false,\"error\":\"database unavailable\"}\n" }
+    let mut req_body = body
+    if len(req_body) == 0 { req_body = "{}" }
+    if len(req_body) > 65536 { return "{\"ok\":false,\"error\":\"request too large\"}\n" }
+    let mut idem = idempotency
+    if len(idem) == 0 { idem = "cmd-" + sha256(operation + "|" + path + "|" + req_body + "|" + string(now_ms()))[0:32] }
+    if proxy_identifier_ok(idem, 8, 128) == 0 { return "{\"ok\":false,\"error\":\"invalid Idempotency-Key\"}\n" }
+    let call_id = if str_eq(operation, "calls.answer") { proxy_maf_call_id(path, "answer") } else if str_eq(operation, "calls.reject") { proxy_maf_call_id(path, "reject") } else if str_eq(operation, "calls.hangup") { proxy_maf_call_id(path, "hangup") } else { proxy_maf_call_id(path, "route") }
+    if proxy_identifier_ok(call_id, 8, 128) == 0 { return "{\"ok\":false,\"error\":\"invalid call_id\"}\n" }
+    let tenant = proxy_maf_tenant()
+    let exists = sql_query_str2(db, "SELECT call_id FROM maf_calls WHERE tenant_id = $1 AND call_id = $2", tenant, call_id)
+    if len(exists) == 0 { return "{\"ok\":false,\"error\":\"call not found\"}\n" }
+    let command_id = idem
+    let trace = sha256("madis.maf.trace|" + tenant + "|" + command_id + "|" + string(now_ms()))[0:32]
+    let packed = "{\"command_id\":\"" + proxy_json_escape(command_id) + "\",\"idempotency_key\":\"" + proxy_json_escape(idem) + "\",\"tenant_id\":\"" + proxy_json_escape(tenant) + "\",\"call_id\":\"" + proxy_json_escape(call_id) + "\",\"operation\":\"" + proxy_json_escape(operation) + "\",\"resource_id\":\"" + proxy_json_escape(call_id) + "\",\"trace_id\":\"" + proxy_json_escape(trace) + "\",\"request_hash\":\"" + sha256(req_body) + "\",\"request\":" + req_body + "}"
+    let rc = sql_exec_str4(db, "INSERT INTO maf_commands (command_id, idempotency_key, tenant_id, call_id, operation, request_json, request_hash, status, resource_id, trace_id) SELECT $1::jsonb->>'command_id', $1::jsonb->>'idempotency_key', $1::jsonb->>'tenant_id', $1::jsonb->>'call_id', $1::jsonb->>'operation', $1::jsonb->'request', $1::jsonb->>'request_hash', 'accepted', $1::jsonb->>'resource_id', $1::jsonb->>'trace_id' ON CONFLICT (command_id) DO NOTHING", packed, "", "", "")
+    if rc < 0 { return "{\"ok\":false,\"error\":\"command rejected\"}\n" }
+    return "{\"schema\":\"madis.maf.command-receipt.v1\",\"command_id\":\"" + proxy_json_escape(command_id) + "\",\"status\":\"accepted\",\"resource_id\":\"" + proxy_json_escape(call_id) + "\",\"trace_id\":\"" + proxy_json_escape(trace) + "\"}\n"
+}
+
 fn proxy_admin_worker(reg: CMap, calls: CMap, cache: CMap) -> int {
+    let db_url = env_get_or("SIP_DB_URL", "")
+    let mut db_ok = 0
+    let mut db = sql_open_postgres("")
+    if len(db_url) > 0 {
+        db = sql_open_postgres(db_url)
+        db_ok = 1
+    }
     // Default matches the documented installer layout (9090); 8080 is the
     // standalone WebUI port and must stay free on shared hosts.
     let raw_port = env_get_or("SIP_ADMIN_PORT", "9090")
@@ -433,7 +581,37 @@ fn proxy_admin_worker(reg: CMap, calls: CMap, cache: CMap) -> int {
             continue
         }
         let path = http_path(c)
-        if proxy_admin_authorized(c) == 0 {
+        let method = http_method(c)
+        let maf_operation = proxy_maf_operation(method, path)
+        if str_eq(method, "GET") && str_eq(path, "/admin/api/v1/maf/events") {
+            if proxy_maf_scope(c) < 1 {
+                let _ = http_respond_json(c, 401, "{\"ok\":false,\"error\":\"MAF bearer token required\"}\n")
+            } else {
+                let _ = http_respond_json(c, 200, proxy_maf_events(db, db_ok))
+            }
+        } else if str_eq(method, "GET") && str_eq(path, "/admin/api/v1/maf/calls/active") {
+            if proxy_maf_scope(c) < 1 {
+                let _ = http_respond_json(c, 401, "{\"ok\":false,\"error\":\"MAF bearer token required\"}\n")
+            } else {
+                let _ = http_respond_json(c, 200, proxy_maf_active_calls(db, db_ok))
+            }
+        } else if str_eq(method, "GET") && len(proxy_maf_call_id(path, "")) > 0 {
+            if proxy_maf_scope(c) < 1 {
+                let _ = http_respond_json(c, 401, "{\"ok\":false,\"error\":\"MAF bearer token required\"}\n")
+            } else {
+                let resource = proxy_maf_call(db, db_ok, proxy_maf_call_id(path, ""))
+                if len(resource) == 0 { let _ = http_respond_json(c, 404, "{\"ok\":false,\"error\":\"call not found\"}\n") }
+                else { let _ = http_respond_json(c, 200, resource + "\n") }
+            }
+        } else if len(maf_operation) > 0 {
+            if proxy_maf_scope(c) < 2 {
+                let _ = http_respond_json(c, 401, "{\"ok\":false,\"error\":\"MAF write token required\"}\n")
+            } else {
+                let receipt = proxy_maf_command(db, db_ok, path, maf_operation, http_body(c), http_header(c, "Idempotency-Key"))
+                let status = if str_contains(receipt, "\"error\"") { 400 } else { 202 }
+                let _ = http_respond_json(c, status, receipt)
+            }
+        } else if proxy_admin_authorized(c) == 0 {
             let _ = http_respond_json(c, 401, "{\"ok\":false,\"error\":\"unauthorized\"}\n")
         } else if str_eq(path, "/healthz") {
             let version = env_get_or("MADIS_VERSION", "dev")

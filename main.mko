@@ -3106,7 +3106,6 @@ fn main() {
             wss_i = wss_i + 1
         }
     let _ = t.kick(ims_cx_push_server_worker(reg))
-        let _ = t.kick(proxy_admin_worker(reg, calls, cache))
 
         // Heartbeat + stats loop
         let hb_db_url = env_get_or("SIP_DB_URL", "")
@@ -3114,6 +3113,7 @@ fn main() {
         let mut hb_db_ok = 0
         let mut hb_db = sql_open_postgres(hb_db_url)
         if len(hb_db_url) > 0 { hb_db_ok = 1 }
+        let _ = t.kick(proxy_admin_worker(reg, calls, cache))
 
         while shutdown_requested() == 0 {
             sleep_ms(1000)
