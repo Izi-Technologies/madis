@@ -300,6 +300,20 @@ fn proxy_metrics_labeled_export(cache: CMap) -> string {
         }
         iti = iti + 1
     }
+    let mut recovery_found = 0
+    let recovery_actions = ["requeued", "failed"]
+    let mut rai = 0
+    while rai < len(recovery_actions) {
+        let key = "prom|maf_command_recoveries|action=\"" + recovery_actions[rai] + "\""
+        if cmap_has(cache, key) == 1 {
+            if recovery_found == 0 {
+                builder_write(b, "# TYPE madis_maf_command_recoveries_total counter\n")
+                recovery_found = 1
+            }
+            builder_write(b, "madis_maf_command_recoveries_total{action=\"" + recovery_actions[rai] + "\"} " + cmap_get(cache, key) + "\n")
+        }
+        rai = rai + 1
+    }
     return builder_string(b)
 }
 

@@ -193,6 +193,7 @@ fn maf_api_bootstrap(db: SqlDB) -> int {
     let _ = sql_exec_plain(db, "ALTER TABLE maf_commands ADD COLUMN IF NOT EXISTS request_hash TEXT NOT NULL DEFAULT ''")
     let _ = sql_exec_plain(db, "ALTER TABLE maf_commands ADD COLUMN IF NOT EXISTS claim_token TEXT NOT NULL DEFAULT ''")
     let _ = sql_exec_plain(db, "ALTER TABLE maf_commands ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMP")
+    let _ = sql_exec_plain(db, "ALTER TABLE maf_commands ADD COLUMN IF NOT EXISTS attempt_count INT NOT NULL DEFAULT 0")
     let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_maf_commands_pending ON maf_commands (tenant_id, status, created_at)")
     let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS maf_events (event_id TEXT PRIMARY KEY, sequence BIGSERIAL UNIQUE NOT NULL, tenant_id TEXT NOT NULL, event_type TEXT NOT NULL, event_version INT NOT NULL DEFAULT 1, call_id TEXT NOT NULL DEFAULT '', channel_id TEXT NOT NULL DEFAULT '', payload_json JSONB NOT NULL DEFAULT '{}'::jsonb, trace_id TEXT NOT NULL DEFAULT '', occurred_at TIMESTAMP DEFAULT NOW(), CONSTRAINT maf_event_payload_size CHECK (octet_length(payload_json::text) <= 65536))")
     let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_maf_events_tenant_sequence ON maf_events (tenant_id, sequence)")

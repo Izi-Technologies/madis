@@ -105,6 +105,7 @@ include:
 - `madis_sip_connections_total{transport}` — gauge of active stream connections by transport.
 - `madis_maf_inbound_calls_total{transport}` — inbound calls published to MAF by SIP transport.
 - `madis_maf_commands_total{operation,status,error}` — MAF command worker transitions. The `error` label is present only on failed command counters.
+- `madis_maf_command_recoveries_total{action}` — stale MAF commands requeued or failed by worker recovery.
 
 The labeled counters supplement the fixed metric slots (backward-compatible);
 both are emitted in every `/metrics` scrape.
@@ -116,6 +117,31 @@ period controlled by `SIP_SHUTDOWN_DRAIN_MS` (default 5000, clamped
 0–30000 ms). During drain the worker continues flushing transactions and
 cleaning registrations. If the active call count reaches zero before the timer
 expires, drain exits early. After drain the worker begins server shutdown.
+
+## MAF Worker Recovery
+
+The MAF worker records `attempt_count` when it claims an accepted command. If a
+command remains in `processing` past `SIP_MAF_COMMAND_TIMEOUT_SECS`, the worker
+requeues it until `SIP_MAF_COMMAND_MAX_ATTEMPTS` is reached. After that, the
+command is failed with `processing_timeout`; `calls.create` commands also move
+their call to `failed`.
+
+Monitor `madis_maf_command_recoveries_total{action}`. Any sustained non-zero
+rate means a worker is timing out, crashing, losing database connectivity, or
+calling an endpoint that cannot complete within the configured timeout.
+
+## Carrier and NAT Validation
+
+Use `scripts/maf-carrier-smoke.sh` with environment-provided `MAF_BASE_URL`,
+`SIP_MAF_API_TOKEN`, and `MAF_SMOKE_TO` to create a real outbound MAF call
+through an operator-configured target. The script only proves the API accepted
+the command; confirm the final command state, SIP trace, and downstream carrier
+response separately.
+
+Use `scripts/nat-transport-check.py --host <public-host>` from a network outside
+the deployment to probe UDP, TCP, TLS, and WSS. Treat this as a transport smoke
+test, then inspect SIP traces for advertised Via, Contact, Record-Route, and SDP
+addresses.
 
 ## Event package subscription sweep
 

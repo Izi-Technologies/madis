@@ -70,7 +70,9 @@ for path in Path("api").glob("*.json"):
 PY
 
 bash -n install.sh
+bash -n scripts/maf-carrier-smoke.sh
 python3 -m py_compile sdk/python/madis_carrier.py
+python3 -m py_compile scripts/nat-transport-check.py
 python3 -m py_compile sdk/maf/python/madis_maf.py sdk/maf/tests/test_maf_sdk.py bench/maf_security_matrix.py
 python3 -m unittest discover -s sdk/maf/tests -p 'test_*.py'
 

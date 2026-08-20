@@ -158,6 +158,8 @@ Cluster INVITE fallback routes only through live `registration_bindings` rows wh
 | `SIP_MAF_INBOUND_MODE` | Inbound MAF ownership mode. `disabled` (default) preserves normal proxy routing; `control` publishes authenticated initial INVITEs as ringing MAF calls; `route` intercepts INVITEs and requires SDK to route via `calls.route`. |
 | `SIP_MAF_DB_URL` | Separate PostgreSQL connection for MAF tables (calls, events, commands). Falls back to `SIP_DB_URL` if not set. Allows MAF state isolation or independent database scaling. |
 | `SIP_MAF_CONTACT_URI` | Override the Contact URI used in MAF-generated SIP responses. Defaults to `sip:madis@<SIP_PUBLIC_IP>`. |
+| `SIP_MAF_COMMAND_TIMEOUT_SECS` | Stale `processing` command timeout before worker recovery. Defaults to `30`, clamped 5–3600. |
+| `SIP_MAF_COMMAND_MAX_ATTEMPTS` | Maximum processing attempts before a stale command is failed with `processing_timeout`. Defaults to `3`, clamped 1–10. |
 | `SIP_APP_URL`, `SIP_APP_TOKEN` | Optional signed live SIP application endpoint. Both must be configured to enable it. |
 | `SIP_APP_CA` | CA bundle for the application endpoint. |
 | `SIP_APP_TIMEOUT_MS` | Application decision timeout, clamped to 10–1000 ms. |

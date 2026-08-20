@@ -62,6 +62,7 @@ fn maf_worker_bootstrap(db: SqlDB) -> int {
     let _ = sql_exec_plain(db, "ALTER TABLE maf_commands ADD COLUMN IF NOT EXISTS request_hash TEXT NOT NULL DEFAULT ''")
     let _ = sql_exec_plain(db, "ALTER TABLE maf_commands ADD COLUMN IF NOT EXISTS claim_token TEXT NOT NULL DEFAULT ''")
     let _ = sql_exec_plain(db, "ALTER TABLE maf_commands ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMP")
+    let _ = sql_exec_plain(db, "ALTER TABLE maf_commands ADD COLUMN IF NOT EXISTS attempt_count INT NOT NULL DEFAULT 0")
     let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS maf_events (event_id TEXT PRIMARY KEY, sequence BIGSERIAL UNIQUE NOT NULL, tenant_id TEXT NOT NULL, event_type TEXT NOT NULL, event_version INT NOT NULL DEFAULT 1, call_id TEXT NOT NULL DEFAULT '', channel_id TEXT NOT NULL DEFAULT '', payload_json JSONB NOT NULL DEFAULT '{}'::jsonb, trace_id TEXT NOT NULL DEFAULT '', occurred_at TIMESTAMP DEFAULT NOW(), CONSTRAINT maf_event_payload_size CHECK (octet_length(payload_json::text) <= 65536))")
     let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_maf_commands_pending ON maf_commands (tenant_id, status, created_at)")
     let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_maf_events_tenant_sequence ON maf_events (tenant_id, sequence)")
@@ -124,11 +125,27 @@ fn maf_worker_metric(cache: CMap, name: string, labels: string) -> int {
     return 1
 }
 
+fn maf_worker_env_int(name: string, fallback: int, min: int, max: int) -> int {
+    let raw = str_trim_space(env_get_or(name, string(fallback)))
+    let mut value = fallback
+    match parse_int(raw) { Ok(v) => { value = v } Err(_) => { value = fallback } }
+    if value < min { value = min }
+    if value > max { value = max }
+    return value
+}
+
+fn maf_worker_int_text(value: string) -> int {
+    let mut out = 0
+    match parse_int(str_trim_space(value)) { Ok(v) => { out = v } Err(_) => { out = 0 } }
+    if out < 0 { out = 0 }
+    return out
+}
+
 fn maf_worker_claim(db: SqlDB, ok: int, tenant: string, command_id: string, claim: string) -> int {
     if ok == 0 || len(command_id) == 0 || len(claim) == 0 { return 0 }
     // The WHERE status = 'accepted' guard makes this atomic: exactly one
     // worker wins the UPDATE. No verify SELECT needed.
-    let rc = sql_exec_str4(db, "UPDATE maf_commands SET status = 'processing', claim_token = $2, claimed_at = NOW(), updated_at = NOW() WHERE tenant_id = $3 AND command_id = $1 AND status = 'accepted'", command_id, claim, tenant, "")
+    let rc = sql_exec_str4(db, "UPDATE maf_commands SET status = 'processing', claim_token = $2, claimed_at = NOW(), attempt_count = attempt_count + 1, updated_at = NOW() WHERE tenant_id = $3 AND command_id = $1 AND status = 'accepted'", command_id, claim, tenant, "")
     if rc < 0 { return 0 }
     return 1
 }
@@ -1006,13 +1023,14 @@ fn maf_worker_poll(db: SqlDB, ok: int, cache: CMap, out_fd: int, node_id: string
     if last_poll > 0 && now - last_poll < interval { return 0 }
     cmap_set(cache, "maf_poll_at", string(now))
     let tenant = maf_worker_tenant()
+    let recovered = maf_worker_recover_stale_commands(db, ok, tenant, cache)
     let packed = "{\"tenant_id\":\"" + maf_worker_json_escape(tenant) + "\"}"
     let rows = sql_query_rows_str(db, "SELECT command_id FROM maf_commands WHERE tenant_id = $1::jsonb->>'tenant_id' AND status = 'accepted' ORDER BY created_at ASC LIMIT 8", packed)
     if sql_rows_ok(rows) == 0 {
         slog("  MAF:     command poll query returned no row handle")
         // Back off: double interval up to 2s
         if interval < 2000 { cmap_set(cache, "maf_poll_interval", string(interval * 2)) }
-        return 0
+        return recovered
     }
     let mut acted = 0
     while sql_rows_next(rows) == 1 {
@@ -1046,7 +1064,33 @@ fn maf_worker_poll(db: SqlDB, ok: int, cache: CMap, out_fd: int, node_id: string
     else {
         if interval < 2000 { cmap_set(cache, "maf_poll_interval", string(interval * 2)) }
     }
-    return acted
+    return acted + recovered
+}
+
+fn maf_worker_recover_stale_commands(db: SqlDB, ok: int, tenant: string, cache: CMap) -> int {
+    if ok == 0 || len(tenant) == 0 { return 0 }
+    let now = mono_ms()
+    let mut last = 0
+    if cmap_has(cache, "maf_recover_at") == 1 {
+        match parse_int(cmap_get(cache, "maf_recover_at")) { Ok(v) => { last = v } Err(_) => {} }
+    }
+    if last > 0 && now - last < 5000 { return 0 }
+    cmap_set(cache, "maf_recover_at", string(now))
+    let timeout_secs = maf_worker_env_int("SIP_MAF_COMMAND_TIMEOUT_SECS", 30, 5, 3600)
+    let max_attempts = maf_worker_env_int("SIP_MAF_COMMAND_MAX_ATTEMPTS", 3, 1, 10)
+    let packed = "{\"tenant_id\":\"" + maf_worker_json_escape(tenant) + "\",\"timeout_secs\":\"" + string(timeout_secs) + "\",\"max_attempts\":\"" + string(max_attempts) + "\"}"
+    let retry_count = maf_worker_int_text(sql_query_str(db, "SELECT COUNT(*)::text FROM maf_commands WHERE tenant_id = $1::jsonb->>'tenant_id' AND status = 'processing' AND claimed_at < NOW() - (($1::jsonb->>'timeout_secs') || ' seconds')::interval AND attempt_count < (($1::jsonb->>'max_attempts')::int)", packed))
+    let fail_count = maf_worker_int_text(sql_query_str(db, "SELECT COUNT(*)::text FROM maf_commands WHERE tenant_id = $1::jsonb->>'tenant_id' AND status = 'processing' AND claimed_at < NOW() - (($1::jsonb->>'timeout_secs') || ' seconds')::interval AND attempt_count >= (($1::jsonb->>'max_attempts')::int)", packed))
+    if retry_count > 0 {
+        let _ = sql_exec_str4(db, "UPDATE maf_commands SET status = 'accepted', claim_token = '', claimed_at = NULL, error_code = '', error_message = '', updated_at = NOW() WHERE tenant_id = $1::jsonb->>'tenant_id' AND status = 'processing' AND claimed_at < NOW() - (($1::jsonb->>'timeout_secs') || ' seconds')::interval AND attempt_count < (($1::jsonb->>'max_attempts')::int)", packed, "", "", "")
+        let _ = maf_worker_metric(cache, "maf_command_recoveries", "action=\"requeued\"")
+    }
+    if fail_count > 0 {
+        let _ = sql_exec_str4(db, "UPDATE maf_calls SET state = 'failed', updated_at = NOW(), ended_at = NOW() WHERE tenant_id = $1::jsonb->>'tenant_id' AND call_id IN (SELECT call_id FROM maf_commands WHERE tenant_id = $1::jsonb->>'tenant_id' AND status = 'processing' AND operation = 'calls.create' AND claimed_at < NOW() - (($1::jsonb->>'timeout_secs') || ' seconds')::interval AND attempt_count >= (($1::jsonb->>'max_attempts')::int))", packed, "", "", "")
+        let _ = sql_exec_str4(db, "UPDATE maf_commands SET status = 'failed', error_code = 'processing_timeout', error_message = 'command processing timed out', claim_token = '', updated_at = NOW() WHERE tenant_id = $1::jsonb->>'tenant_id' AND status = 'processing' AND claimed_at < NOW() - (($1::jsonb->>'timeout_secs') || ' seconds')::interval AND attempt_count >= (($1::jsonb->>'max_attempts')::int)", packed, "", "", "")
+        let _ = maf_worker_metric(cache, "maf_command_recoveries", "action=\"failed\"")
+    }
+    return retry_count + fail_count
 }
 
 fn maf_worker_sync_sip(db: SqlDB, ok: int, msg: string, cache: CMap) -> int {

@@ -170,6 +170,22 @@ fn TestMafWorkerMetricRequiresPromActive() {
     assert_eq_str(cmap_get(cache, "prom|maf_commands|operation=\"calls.create\",status=\"processing\""), "1")
 }
 
+fn TestMafWorkerEnvIntBounds() {
+    let _ = env_set("SIP_MAF_COMMAND_MAX_ATTEMPTS", "99")
+    assert_eq(maf_worker_env_int("SIP_MAF_COMMAND_MAX_ATTEMPTS", 3, 1, 10), 10)
+    let _ = env_set("SIP_MAF_COMMAND_MAX_ATTEMPTS", "0")
+    assert_eq(maf_worker_env_int("SIP_MAF_COMMAND_MAX_ATTEMPTS", 3, 1, 10), 1)
+    let _ = env_set("SIP_MAF_COMMAND_MAX_ATTEMPTS", "bad")
+    assert_eq(maf_worker_env_int("SIP_MAF_COMMAND_MAX_ATTEMPTS", 3, 1, 10), 3)
+    let _ = env_set("SIP_MAF_COMMAND_MAX_ATTEMPTS", "")
+}
+
+fn TestMafWorkerIntText() {
+    assert_eq(maf_worker_int_text("7"), 7)
+    assert_eq(maf_worker_int_text("-2"), 0)
+    assert_eq(maf_worker_int_text("bad"), 0)
+}
+
 // --- MAF API route coverage ---
 
 fn TestMafApiRouteEvents() {

@@ -52,9 +52,11 @@ fn TestProxyMafMetricsExport() {
     let cache = cmap_new()
     let _ = cmap_set(cache, "prom|maf_commands|operation=\"calls.create\",status=\"processing\"", "2")
     let _ = cmap_set(cache, "prom|maf_commands|operation=\"calls.create\",status=\"failed\",error=\"transport_or_endpoint_rejected\"", "1")
+    let _ = cmap_set(cache, "prom|maf_command_recoveries|action=\"requeued\"", "4")
     let _ = cmap_set(cache, "prom|maf_inbound_calls|transport=\"UDP\"", "3")
     let out = proxy_metrics_labeled_export(cache)
     assert(str_contains(out, "madis_maf_commands_total{operation=\"calls.create\",status=\"processing\"} 2"))
     assert(str_contains(out, "madis_maf_commands_total{operation=\"calls.create\",status=\"failed\",error=\"transport_or_endpoint_rejected\"} 1"))
+    assert(str_contains(out, "madis_maf_command_recoveries_total{action=\"requeued\"} 4"))
     assert(str_contains(out, "madis_maf_inbound_calls_total{transport=\"UDP\"} 3"))
 }

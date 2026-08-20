@@ -15,6 +15,7 @@ main.dSYM/
 bench/__pycache__/
 sdk/python/__pycache__/
 sdk/maf/**/__pycache__/
+scripts/__pycache__/
 lab/__pycache__/
 media/__pycache__/
 docker/ims-lab/__pycache__/
