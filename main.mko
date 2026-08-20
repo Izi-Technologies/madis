@@ -2246,7 +2246,6 @@ fn udp_worker(id: int, fd: int, port: int, reg: CMap, calls: CMap, cache: CMap, 
     let mut db = sql_open_postgres(db_url)
     if len(db_url) > 0 { db_ok = 1 }
     let mut last_txn_tick = mono_ms()
-    let mut last_maf_poll = mono_ms()
     while shutdown_requested() == 0 {
         // Drain up to 256 datagrams per evloop wakeup. A single epoll/kqueue
         // event can mean many packets queued; reading one per wakeup adds
@@ -2283,13 +2282,24 @@ fn udp_worker(id: int, fd: int, port: int, reg: CMap, calls: CMap, cache: CMap, 
             let _ = sip_server_txn_tick(cache, fd)
             last_txn_tick = tick_now
         }
-        if tick_now - last_maf_poll >= 1000 {
-            let _ = maf_worker_poll(db, db_ok, cache, fd, nid)
-            last_maf_poll = tick_now
-        }
         if ei == 0 {
             sleep_ms(10)
         }
+    }
+    return 0
+}
+
+fn maf_poll_worker(fd: int, cache: CMap) -> int {
+    let db_url = env_get_or("SIP_DB_URL", "")
+    let nid = env_get_or("SIP_NODE_ID", "node1")
+    let mut db_ok = 0
+    let mut db = sql_open_postgres(db_url)
+    if len(db_url) > 0 { db_ok = 1 }
+    slog("  MAF:     command poll worker started")
+    while shutdown_requested() == 0 {
+        let acted = maf_worker_poll(db, db_ok, cache, fd, nid)
+        if acted > 0 { slog("  MAF:     processed " + string(acted) + " command(s)") }
+        sleep_ms(1000)
     }
     return 0
 }
@@ -2935,6 +2945,7 @@ fn main() {
     // HEP worker disabled in proxy-only deployment.
     crew t {
         let mut udp_i = 0
+        let mut maf_poll_fd = -1
         while udp_i < requested_udp_workers {
             let mut udp_fd = -1
             if requested_udp_workers > 1 {
@@ -2958,6 +2969,7 @@ fn main() {
             } else {
                 let _ = register_listener(udp_fd)
                 let _ = t.kick(udp_worker(udp_i, udp_fd, udp_port, reg, calls, cache, hep_outbox, diameter_lock))
+                if maf_poll_fd < 0 { maf_poll_fd = udp_fd }
             }
             udp_i = udp_i + 1
         }
@@ -2969,7 +2981,11 @@ fn main() {
             } else {
                 let _ = register_listener(ipv6_fd)
                 let _ = t.kick(udp_worker(requested_udp_workers, ipv6_fd, udp_port, reg, calls, cache, hep_outbox, diameter_lock))
+                if maf_poll_fd < 0 { maf_poll_fd = ipv6_fd }
             }
+        }
+        if maf_poll_fd >= 0 {
+            let _ = t.kick(maf_poll_worker(maf_poll_fd, cache))
         }
         let mut tcp_i = 0
         while tcp_i < tcp_workers {

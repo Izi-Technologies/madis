@@ -233,13 +233,13 @@ fn maf_api_emit_event(db: SqlDB, ok: int, tenant: string, event_type: string, ca
     if p0 != 123 && p0 != 91 { return -1 }  // must start with { or [
     let event_id = sha256("madis.maf.event.v1|" + tenant + "|" + event_type + "|" + call_id + "|" + channel_id + "|" + trace + "|" + string(now_ms()) + "|" + sha256(payload))
     let packed = "{\"event_id\":\"" + maf_api_json_escape(event_id) + "\",\"tenant_id\":\"" + maf_api_json_escape(tenant) + "\",\"event_type\":\"" + maf_api_json_escape(event_type) + "\",\"call_id\":\"" + maf_api_json_escape(call_id) + "\",\"channel_id\":\"" + maf_api_json_escape(channel_id) + "\",\"trace_id\":\"" + maf_api_json_escape(trace) + "\",\"payload\":" + payload + "}"
-    return sql_exec_str4(db, "INSERT INTO maf_events (event_id, tenant_id, event_type, event_version, call_id, channel_id, payload_json, trace_id) SELECT $4::jsonb->>'event_id', $4::jsonb->>'tenant_id', $4::jsonb->>'event_type', 1, $4::jsonb->>'call_id', $4::jsonb->>'channel_id', $4::jsonb->'payload', $4::jsonb->>'trace_id' ON CONFLICT (event_id) DO NOTHING", "", "", "", packed)
+    return sql_exec_str4(db, "INSERT INTO maf_events (event_id, tenant_id, event_type, event_version, call_id, channel_id, payload_json, trace_id) SELECT $1::jsonb->>'event_id', $1::jsonb->>'tenant_id', $1::jsonb->>'event_type', 1, $1::jsonb->>'call_id', $1::jsonb->>'channel_id', $1::jsonb->'payload', $1::jsonb->>'trace_id' ON CONFLICT (event_id) DO NOTHING", packed, "", "", "")
 }
 
 fn maf_api_insert_command(db: SqlDB, ok: int, tenant: string, command_id: string, idempotency: string, operation: string, call_id: string, body: string, resource_id: string, trace: string) -> int {
     if ok == 0 || len(body) == 0 || len(body) > 65536 { return -1 }
     let packed = "{\"command_id\":\"" + maf_api_json_escape(command_id) + "\",\"idempotency_key\":\"" + maf_api_json_escape(idempotency) + "\",\"tenant_id\":\"" + maf_api_json_escape(tenant) + "\",\"call_id\":\"" + maf_api_json_escape(call_id) + "\",\"operation\":\"" + maf_api_json_escape(operation) + "\",\"resource_id\":\"" + maf_api_json_escape(resource_id) + "\",\"trace_id\":\"" + maf_api_json_escape(trace) + "\",\"request_hash\":\"" + sha256(body) + "\",\"request\":" + body + "}"
-    return sql_exec_str4(db, "INSERT INTO maf_commands (command_id, idempotency_key, tenant_id, call_id, operation, request_json, request_hash, status, resource_id, trace_id) SELECT $4::jsonb->>'command_id', $4::jsonb->>'idempotency_key', $4::jsonb->>'tenant_id', $4::jsonb->>'call_id', $4::jsonb->>'operation', $4::jsonb->'request', $4::jsonb->>'request_hash', 'accepted', $4::jsonb->>'resource_id', $4::jsonb->>'trace_id'", "", "", "", packed)
+    return sql_exec_str4(db, "INSERT INTO maf_commands (command_id, idempotency_key, tenant_id, call_id, operation, request_json, request_hash, status, resource_id, trace_id) SELECT $1::jsonb->>'command_id', $1::jsonb->>'idempotency_key', $1::jsonb->>'tenant_id', $1::jsonb->>'call_id', $1::jsonb->>'operation', $1::jsonb->'request', $1::jsonb->>'request_hash', 'accepted', $1::jsonb->>'resource_id', $1::jsonb->>'trace_id'", packed, "", "", "")
 }
 
 fn maf_api_parse_cursor(q: string) -> int {
@@ -419,7 +419,8 @@ fn maf_api_create_call(db: SqlDB, ok: int, raw: string, n: int) -> string {
     let call_id = "call-" + sha256("madis.maf.call|" + tenant + "|" + idempotency)[0:32]
     let from_channel = "chan-" + sha256(call_id + "|from")[0:32]
     let to_channel = "chan-" + sha256(call_id + "|to")[0:32]
-    let call_rc = sql_exec_str4(db, "INSERT INTO maf_calls (call_id, tenant_id, state, version, from_uri, to_uri, application_data) SELECT $1, $2, 'created', 1, $4::jsonb->>'from', $4::jsonb->>'to', COALESCE($4::jsonb->'application_data','{}'::jsonb) ON CONFLICT (call_id) DO NOTHING", call_id, tenant, "", body)
+    let call_doc = "{\"call_id\":\"" + maf_api_json_escape(call_id) + "\",\"tenant_id\":\"" + maf_api_json_escape(tenant) + "\",\"request\":" + body + "}"
+    let call_rc = sql_exec_str4(db, "INSERT INTO maf_calls (call_id, tenant_id, state, version, from_uri, to_uri, application_data) SELECT $1::jsonb->>'call_id', $1::jsonb->>'tenant_id', 'created', 1, $1::jsonb->'request'->>'from', $1::jsonb->'request'->>'to', COALESCE($1::jsonb->'request'->'application_data','{}'::jsonb) ON CONFLICT (call_id) DO NOTHING", call_doc, "", "", "")
     if call_rc < 0 { return maf_api_error(500, "call could not be created") }
     let _ = sql_exec_str4(db, "INSERT INTO maf_channels (channel_id, call_id, tenant_id, state, direction, endpoint) VALUES ($1, $2, $3, 'created', 'inbound', $4)", from_channel, call_id, tenant, from_uri)
     let _ = sql_exec_str4(db, "INSERT INTO maf_channels (channel_id, call_id, tenant_id, state, direction, endpoint) VALUES ($1, $2, $3, 'created', 'outbound', $4)", to_channel, call_id, tenant, to_uri)

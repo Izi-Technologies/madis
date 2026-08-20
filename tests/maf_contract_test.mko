@@ -48,6 +48,7 @@ fn shaken_dest_from_payload(payload: string) string { return "" }
 fn shaken_iat_from_payload(payload: string) int { return 0 }
 fn jwt_payload(token: string) string { return "" }
 fn time_format(ms: int) string { return "" }
+fn slog(msg: string) { let _ = msg }
 pull . "../headers.mko"
 pull . "../maf_headers.mko"
 pull . "../maf_worker.mko"

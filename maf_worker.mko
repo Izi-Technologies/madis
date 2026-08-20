@@ -87,7 +87,7 @@ fn maf_worker_emit_event(db: SqlDB, ok: int, tenant: string, event_type: string,
     // same type fire in the same millisecond for the same call.
     let event_id = sha256("madis.maf.event.v1|" + tenant + "|" + event_type + "|" + call_id + "|" + trace + "|" + string(mono_ms()) + "|" + sha256(payload))
     let packed = "{\"event_id\":\"" + maf_worker_json_escape(event_id) + "\",\"tenant_id\":\"" + maf_worker_json_escape(tenant) + "\",\"event_type\":\"" + maf_worker_json_escape(event_type) + "\",\"call_id\":\"" + maf_worker_json_escape(call_id) + "\",\"channel_id\":\"\",\"trace_id\":\"" + maf_worker_json_escape(trace) + "\",\"payload\":" + payload + "}"
-    return sql_exec_str4(db, "INSERT INTO maf_events (event_id, tenant_id, event_type, event_version, call_id, channel_id, payload_json, trace_id) SELECT $4::jsonb->>'event_id', $4::jsonb->>'tenant_id', $4::jsonb->>'event_type', 1, $4::jsonb->>'call_id', $4::jsonb->>'channel_id', $4::jsonb->'payload', $4::jsonb->>'trace_id' ON CONFLICT (event_id) DO NOTHING", "", "", "", packed)
+    return sql_exec_str4(db, "INSERT INTO maf_events (event_id, tenant_id, event_type, event_version, call_id, channel_id, payload_json, trace_id) SELECT $1::jsonb->>'event_id', $1::jsonb->>'tenant_id', $1::jsonb->>'event_type', 1, $1::jsonb->>'call_id', $1::jsonb->>'channel_id', $1::jsonb->'payload', $1::jsonb->>'trace_id' ON CONFLICT (event_id) DO NOTHING", packed, "", "", "")
 }
 
 fn maf_worker_call_state(db: SqlDB, ok: int, tenant: string, call_id: string, state: string, trace: string) -> int {
@@ -122,7 +122,7 @@ fn maf_worker_claim(db: SqlDB, ok: int, tenant: string, command_id: string, clai
     // The WHERE status = 'accepted' guard makes this atomic: exactly one
     // worker wins the UPDATE. No verify SELECT needed.
     let rc = sql_exec_str4(db, "UPDATE maf_commands SET status = 'processing', claim_token = $2, claimed_at = NOW(), updated_at = NOW() WHERE tenant_id = $3 AND command_id = $1 AND status = 'accepted'", command_id, claim, tenant, "")
-    if rc <= 0 { return 0 }
+    if rc < 0 { return 0 }
     return 1
 }
 
@@ -216,7 +216,7 @@ fn maf_worker_ingress_invite(db: SqlDB, ok: int, tenant: string, msg: string, ip
         if len(pani) > 0 { app = app + ",\"p_access_network_info\":\"" + maf_worker_json_escape(pani) + "\"" }
         app = app + "}"
         let document = "{\"from\":\"" + maf_worker_json_escape(from_uri) + "\",\"to\":\"" + maf_worker_json_escape(to_uri) + "\",\"application_data\":" + app + "}"
-        let call_rc = sql_exec_str4(db, "INSERT INTO maf_calls (call_id, tenant_id, state, version, from_uri, to_uri, application_data) SELECT $1, $2, 'ringing', 1, $4::jsonb->>'from', $4::jsonb->>'to', $4::jsonb->'application_data' ON CONFLICT (call_id) DO NOTHING", call_id, tenant, "", document)
+        let call_rc = sql_exec_str4(db, "INSERT INTO maf_calls (call_id, tenant_id, state, version, from_uri, to_uri, application_data) SELECT $1, $2, 'ringing', 1, $3::jsonb->>'from', $3::jsonb->>'to', $3::jsonb->'application_data' ON CONFLICT (call_id) DO NOTHING", call_id, tenant, document, "")
         if call_rc < 0 { return "" }
         let channel_id = "chan-" + sha256(call_id + "|inbound")[0:32]
         let _ = sql_exec_str4(db, "INSERT INTO maf_channels (channel_id, call_id, tenant_id, state, direction, endpoint) VALUES ($1, $2, $3, 'ringing', 'inbound', $4) ON CONFLICT (channel_id) DO NOTHING", channel_id, call_id, tenant, from_uri)
@@ -229,7 +229,7 @@ fn maf_worker_ingress_invite(db: SqlDB, ok: int, tenant: string, msg: string, ip
     // NAT: fix SDP and Contact for NATted inbound callers before caching
     let public_ip = env_get_or("SIP_PUBLIC_IP", ip)
     let nat_fixed = nat_fix_message(received, ip, port, public_ip)
-    if maf_worker_inbound_cache_put(cache, call_id, maf_worker_inbound_cache_value(nat_fixed, ip, port, transport)) == 0 { return "" }
+    if maf_worker_inbound_cache_put(cache, call_id, maf_worker_inbound_cache_value(nat_fixed, ip, port, transport)) != 0 { return "" }
     cmap_set(cache, "maf_created_ms|" + call_id, string(mono_ms()))
     return call_id
 }
@@ -998,21 +998,23 @@ fn maf_worker_poll(db: SqlDB, ok: int, cache: CMap, out_fd: int, node_id: string
     if last_poll > 0 && now - last_poll < interval { return 0 }
     cmap_set(cache, "maf_poll_at", string(now))
     let tenant = maf_worker_tenant()
-    let rows = sql_query_rows_str(db, "SELECT json_build_object('command_id',command_id,'tenant_id',tenant_id,'call_id',call_id,'operation',operation,'request_json',request_json::text,'trace_id',trace_id)::text FROM maf_commands WHERE tenant_id = $1 AND status = 'accepted' ORDER BY created_at ASC LIMIT 8", tenant)
+    let packed = "{\"tenant_id\":\"" + maf_worker_json_escape(tenant) + "\"}"
+    let rows = sql_query_rows_str(db, "SELECT command_id FROM maf_commands WHERE tenant_id = $1::jsonb->>'tenant_id' AND status = 'accepted' ORDER BY created_at ASC LIMIT 8", packed)
     if sql_rows_ok(rows) == 0 {
+        slog("  MAF:     command poll query returned no row handle")
         // Back off: double interval up to 2s
         if interval < 2000 { cmap_set(cache, "maf_poll_interval", string(interval * 2)) }
         return 0
     }
     let mut acted = 0
     while sql_rows_next(rows) == 1 {
-        let row = sql_rows_str(rows, 0)
-        let command_id = json_get_string(row, "command_id")
-        let call_id = json_get_string(row, "call_id")
-        let operation = json_get_string(row, "operation")
-        let request = json_get_string(row, "request_json")
-        let trace = json_get_string(row, "trace_id")
+        let command_id = sql_rows_str(rows, 0)
         if len(command_id) == 0 { continue }
+        let call_id = sql_query_str2(db, "SELECT call_id FROM maf_commands WHERE tenant_id = $1 AND command_id = $2", tenant, command_id)
+        let operation = sql_query_str2(db, "SELECT operation FROM maf_commands WHERE tenant_id = $1 AND command_id = $2", tenant, command_id)
+        let request = sql_query_str2(db, "SELECT request_json::text FROM maf_commands WHERE tenant_id = $1 AND command_id = $2", tenant, command_id)
+        let trace = sql_query_str2(db, "SELECT trace_id FROM maf_commands WHERE tenant_id = $1 AND command_id = $2", tenant, command_id)
+        if len(call_id) == 0 || len(operation) == 0 || len(request) == 0 { continue }
         let claim = sha256("madis.maf.claim|" + node_id + "|" + command_id + "|" + string(now_ms()))
         if maf_worker_claim(db, ok, tenant, command_id, claim) == 0 { continue }
         let result = maf_worker_execute(db, ok, tenant, operation, call_id, command_id, request, trace, cache, out_fd, node_id)
