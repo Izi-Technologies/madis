@@ -161,7 +161,14 @@ fn sip_forward_udp(target: string, msg: string, cache: CMap, out_fd: int) -> int
         owns_fd = 1
     }
     if fd < 0 { return 0 }
-    let sent = udp_send_to(fd, host, port, msg)
+    let mut sent = udp_send_to(fd, host, port, msg)
+    if owns_fd == 0 && sent < 0 {
+        let retry_fd = nb_udp_bind(0)
+        if retry_fd >= 0 {
+            sent = udp_send_to(retry_fd, host, port, msg)
+            let _ = udp_close(retry_fd)
+        }
+    }
     if owns_fd == 1 { let _ = udp_close(fd) }
     if sent >= 0 {
         cmap_set(cache, "last_forward_target", host + ":" + string(port))
@@ -470,6 +477,10 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
             downstream_request = cmap_get(cache, "client_req|" + response_txn)
             if cmap_has(cache, "client_target|" + response_txn) == 1 { downstream_target = cmap_get(cache, "client_target|" + response_txn) }
             if cmap_has(cache, "client_transport|" + response_txn) == 1 { downstream_transport = cmap_get(cache, "client_transport|" + response_txn) }
+        }
+        if maf_worker_handle_outbound_response(db, db_ok, data, cache, forward_fd) == 1 {
+            let _ = sip_client_txn_finish(data, cache)
+            return ""
         }
         let b2_key = b2bua_lookup_out(data, cache)
         if len(b2_key) > 0 {
@@ -803,6 +814,16 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
     }
     if mf == 0 {
         return sip_resp(483, "Too Many Hops", data, dl, "loop")
+    }
+
+    // MAF-created outbound dialogs terminate locally. Handle their in-dialog
+    // requests before proxy loop detection, since their Request-URI can point
+    // back at this node by design.
+    if is_ack == 1 || is_bye == 1 || is_cancel == 1 {
+        if maf_worker_handle_outbound_request(db, db_ok, data, cache) == 1 {
+            if is_ack == 1 { return "" }
+            return sip_reply(data, 200, "OK", "", "")
+        }
     }
 
     // --- Section 16.3 step 4: Loop detection ---

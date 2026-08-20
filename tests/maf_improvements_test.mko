@@ -35,6 +35,24 @@ fn module_gateway_action(raw: string, msg: string, event: string, module: string
 fn nat_detected(msg: string, source_ip: string) int { return 0 }
 fn nat_fix_message(msg: string, source_ip: string, source_port: int, public_ip: string) string { return msg }
 fn nat_fix_sdp(msg: string, msglen: int, source_ip: string) string { return msg }
+fn msg_set_body(msg: string, new_body: string) string {
+    let end = str_index(msg, "\r\n\r\n")
+    let headers = if end >= 0 { msg[0:end] } else { msg }
+    let mut out = ""
+    let mut line_start = 0
+    while line_start < len(headers) {
+        let rel = str_index(headers[line_start:], "\r\n")
+        let line_end = if rel >= 0 { line_start + rel } else { len(headers) }
+        let line = headers[line_start:line_end]
+        let low = str_to_lower(line)
+        if not str_has_prefix(low, "content-length:") && not str_has_prefix(low, "l:") {
+            out = out + line + "\r\n"
+        }
+        if rel < 0 { break }
+        line_start = line_end + 2
+    }
+    return out + "Content-Length: " + string(len(new_body)) + "\r\n\r\n" + new_body
+}
 fn is_private_ip(ip: string) int { return 0 }
 fn registration_nat_target(value: string) string { return "" }
 fn b2bua_enabled() int { return 0 }
@@ -46,6 +64,9 @@ fn rtp_config(db: SqlDB, db_ok: int, cache: CMap) []string { let mut r = make([]
 fn rtp_delete_cache(cache: CMap, host: string, port: int, cid: string) int { return 0 }
 fn rtp_send_call(cache: CMap, cid: string, cmd: string, host: string, port: int) string { return "" }
 fn rtp_policy_flags() string { return "" }
+fn rtp_process_offer(msg: string, msglen: int, call_id: string, from_tag: string, db: SqlDB, db_ok: int, cache: CMap) string { let _ = msglen; let _ = call_id; let _ = from_tag; let _ = db; let _ = db_ok; let _ = cache; return msg }
+fn rtp_process_answer(msg: string, msglen: int, call_id: string, from_tag: string, to_tag: string, db: SqlDB, db_ok: int, cache: CMap) string { let _ = msglen; let _ = call_id; let _ = from_tag; let _ = to_tag; let _ = db; let _ = db_ok; let _ = cache; return msg }
+fn rtp_process_delete(call_id: string, db: SqlDB, db_ok: int, cache: CMap) int { let _ = call_id; let _ = db; let _ = db_ok; let _ = cache; return 1 }
 fn bencode_dict_4(k1: string, v1: string, k2: string, v2: string, k3: string, v3: string, k4: string, v4: string) string { return "" }
 fn bencode_dict_5(k1: string, v1: string, k2: string, v2: string, k3: string, v3: string, k4: string, v4: string, k5: string, v5: string) string { return "" }
 fn bencode_str(s: string) string { return s }
@@ -92,6 +113,14 @@ fn TestMafJsonEscapeSpecialChars() {
     assert_eq_str(maf_worker_json_escape("a\tb"), "a\\tb")
 }
 
+fn TestMafWorkerJsonCompactForExtract() {
+    let raw = "{\"to\": \"sip:15551234567@carrier.example.net:5060\", \"from\": \"sip:alice@example.net\", \"application_data\": {\"purpose\": \"smoke:ok\"}}"
+    let compact = maf_worker_json_compact_for_extract(raw)
+    assert_eq_str(json_get_string(compact, "from"), "sip:alice@example.net")
+    assert_eq_str(json_get_string(compact, "to"), "sip:15551234567@carrier.example.net:5060")
+    assert(str_contains(compact, "\"purpose\":\"smoke:ok\""))
+}
+
 // --- Tenant validation ---
 
 fn TestMafWorkerTenantDefault() {
@@ -118,7 +147,78 @@ fn TestMafWorkerTextSafeRejectsControlChars() {
 
 fn TestMafWorkerEndpointOk() {
     assert_eq(maf_worker_endpoint_ok("sip:alice@example.com"), 1)
+    assert_eq(maf_worker_endpoint_ok("sip:15550002222@example.net"), 1)
+    assert_eq(maf_worker_endpoint_ok("sip:15551234567@carrier.example.net:5060"), 1)
     assert_eq(maf_worker_endpoint_ok(""), 0)
+}
+
+fn TestMafWorkerInviteNumericTargetValid() {
+    let invite = maf_worker_invite("call-test", "sip:+15550002222@example.net", "sip:15551234567@carrier.example.net:5060", "node1", "proxy.example.net:5060", "udp")
+    assert_eq(sip_validate_message(invite, len(invite)), 1)
+    let loopback_invite = maf_worker_invite("call-test", "sip:+15550002222@example.net", "sip:15551234567@carrier.example.net:5060", "node1", "127.0.0.1", "udp")
+    assert_eq(sip_validate_message(loopback_invite, len(loopback_invite)), 1)
+}
+
+fn TestMafWorkerInviteWithSdp() {
+    let sdp = "v=0\r\no=- 1 1 IN IP4 192.0.2.10\r\ns=-\r\nt=0 0\r\nm=audio 40000 RTP/AVP 0\r\n"
+    let invite = maf_worker_invite_with_sdp(maf_worker_invite("call-test", "sip:alice@example.net", "sip:15551234567@carrier.example.net:5060", "node1", "proxy.example.net:5060", "udp"), sdp)
+    assert(str_contains(invite, "Content-Type: application/sdp"))
+    assert(str_contains(invite, "Content-Length: " + string(len(sdp))))
+    assert(str_contains(invite, "m=audio 40000 RTP/AVP 0"))
+    assert_eq(madis_header_count(invite, "Content-Length"), 1)
+    assert_eq(sip_validate_message(invite, len(invite)), 1)
+    let escaped = maf_worker_json_unescape("v=0\\r\\no=- 1 1 IN IP4 192.0.2.10\\r\\ns=-\\r\\nt=0 0\\r\\nm=audio 40000 RTP/AVP 0\\r\\n")
+    let escaped_invite = maf_worker_invite_with_sdp(maf_worker_invite("call-test", "sip:alice@example.net", "sip:15551234567@carrier.example.net:5060", "node1", "proxy.example.net:5060", "udp"), escaped)
+    assert(str_contains(escaped_invite, "v=0\r\no=- 1 1 IN IP4 192.0.2.10\r\n"))
+    assert_eq(sip_validate_message(escaped_invite, len(escaped_invite)), 1)
+}
+
+fn TestMafWorkerAck2xxUsesRemoteTagAndContactTarget() {
+    let invite = maf_worker_invite("call-test", "sip:alice@example.net", "sip:bob@example.net", "node1", "proxy.example.net:5060", "udp")
+    let response = "SIP/2.0 200 OK\r\nVia: SIP/2.0/UDP proxy.example.net:5060;branch=z9hG4bK-maf-test\r\nFrom: <sip:alice@example.net>;tag=maf-local\r\nTo: <sip:bob@example.net>;tag=remote-1\r\nCall-ID: call-test@node1\r\nCSeq: 1 INVITE\r\nContact: <sip:bob@carrier.example.net:5060>\r\nContent-Length: 0\r\n\r\n"
+    let ack = maf_worker_build_ack_2xx(invite, response, "sip:bob@carrier.example.net:5060", "proxy.example.net:5060", "udp")
+    assert(str_has_prefix(ack, "ACK sip:bob@carrier.example.net:5060 SIP/2.0"))
+    assert(str_contains(ack, "To: <sip:bob@example.net>;tag=remote-1"))
+    assert(str_contains(ack, "CSeq: 1 ACK"))
+    assert_eq(sip_validate_message(ack, len(ack)), 1)
+}
+
+fn TestMafWorkerOutboundByeConsumesOwnedDialog() {
+    let cache = cmap_new()
+    let invite = maf_worker_invite("call-test", "sip:alice@example.net", "sip:bob@carrier.example.net:5060", "node1", "proxy.example.net:5060", "udp")
+    cmap_set(cache, "maf_invite|call-test", invite)
+    let bye =
+        "BYE sip:madis@proxy.example.net:5060 SIP/2.0\r\n" +
+        "Via: SIP/2.0/UDP carrier.example.net:5060;branch=z9hG4bK-bye\r\n" +
+        "From: <sip:bob@carrier.example.net>;tag=remote\r\n" +
+        "To: <sip:alice@example.net>;tag=local\r\n" +
+        "Call-ID: call-test@node1\r\n" +
+        "CSeq: 2 BYE\r\n" +
+        "Content-Length: 0\r\n\r\n"
+    let db = sql_open_sqlite(":memory:")
+    assert_eq(maf_worker_handle_outbound_request(db, 0, bye, cache), 1)
+}
+
+fn TestMafWorkerOutboundByeResponseConsumesOwnedDialog() {
+    let cache = cmap_new()
+    let invite = maf_worker_invite("call-test", "sip:alice@example.net", "sip:bob@carrier.example.net:5060", "node1", "proxy.example.net:5060", "udp")
+    cmap_set(cache, "maf_invite|call-test", invite)
+    cmap_set(cache, "maf_response|call-test", "cached")
+    cmap_set(cache, "maf_target|call-test", "sip:bob@carrier.example.net:5060")
+    cmap_set(cache, "maf_transport|call-test", "udp")
+    let response =
+        "SIP/2.0 200 OK\r\n" +
+        "Via: SIP/2.0/UDP proxy.example.net:5060;branch=z9hG4bK-maf-bye\r\n" +
+        "From: <sip:alice@example.net>;tag=local\r\n" +
+        "To: <sip:bob@carrier.example.net>;tag=remote\r\n" +
+        "Call-ID: call-test@node1\r\n" +
+        "CSeq: 2 BYE\r\n" +
+        "Content-Length: 0\r\n\r\n"
+    let db = sql_open_sqlite(":memory:")
+    assert_eq(maf_worker_handle_outbound_response(db, 0, response, cache, 0), 1)
+    assert_eq(cmap_has(cache, "maf_response|call-test"), 0)
+    assert_eq(cmap_has(cache, "maf_target|call-test"), 0)
+    assert_eq(cmap_has(cache, "maf_transport|call-test"), 0)
 }
 
 // --- SDP validation ---

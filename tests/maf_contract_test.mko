@@ -21,6 +21,24 @@ fn module_gateway_action(raw: string, msg: string, event: string, module: string
 fn nat_detected(msg: string, source_ip: string) int { return 0 }
 fn nat_fix_message(msg: string, source_ip: string, source_port: int, public_ip: string) string { return msg }
 fn nat_fix_sdp(msg: string, msglen: int, source_ip: string) string { return msg }
+fn msg_set_body(msg: string, new_body: string) string {
+    let end = str_index(msg, "\r\n\r\n")
+    let headers = if end >= 0 { msg[0:end] } else { msg }
+    let mut out = ""
+    let mut line_start = 0
+    while line_start < len(headers) {
+        let rel = str_index(headers[line_start:], "\r\n")
+        let line_end = if rel >= 0 { line_start + rel } else { len(headers) }
+        let line = headers[line_start:line_end]
+        let low = str_to_lower(line)
+        if not str_has_prefix(low, "content-length:") && not str_has_prefix(low, "l:") {
+            out = out + line + "\r\n"
+        }
+        if rel < 0 { break }
+        line_start = line_end + 2
+    }
+    return out + "Content-Length: " + string(len(new_body)) + "\r\n\r\n" + new_body
+}
 fn is_private_ip(ip: string) int { return 0 }
 fn registration_nat_target(value: string) string { return "" }
 fn b2bua_enabled() int { return 0 }
@@ -32,6 +50,9 @@ fn rtp_config(db: SqlDB, db_ok: int, cache: CMap) []string { let mut r = make([]
 fn rtp_delete_cache(cache: CMap, host: string, port: int, cid: string) int { return 0 }
 fn rtp_send_call(cache: CMap, cid: string, cmd: string, host: string, port: int) string { return "" }
 fn rtp_policy_flags() string { return "" }
+fn rtp_process_offer(msg: string, msglen: int, call_id: string, from_tag: string, db: SqlDB, db_ok: int, cache: CMap) string { let _ = msglen; let _ = call_id; let _ = from_tag; let _ = db; let _ = db_ok; let _ = cache; return msg }
+fn rtp_process_answer(msg: string, msglen: int, call_id: string, from_tag: string, to_tag: string, db: SqlDB, db_ok: int, cache: CMap) string { let _ = msglen; let _ = call_id; let _ = from_tag; let _ = to_tag; let _ = db; let _ = db_ok; let _ = cache; return msg }
+fn rtp_process_delete(call_id: string, db: SqlDB, db_ok: int, cache: CMap) int { let _ = call_id; let _ = db; let _ = db_ok; let _ = cache; return 1 }
 fn bencode_dict_4(k1: string, v1: string, k2: string, v2: string, k3: string, v3: string, k4: string, v4: string) string { return "" }
 fn bencode_dict_5(k1: string, v1: string, k2: string, v2: string, k3: string, v3: string, k4: string, v4: string, k5: string, v5: string) string { return "" }
 fn bencode_str(s: string) string { return s }
@@ -108,6 +129,10 @@ fn TestMafAuthComparisonAndFramingBoundaries() {
     assert_eq(maf_api_body_ok(wrong_type, len(wrong_type), 1), 0)
     let missing_body = "POST /admin/api/v1/maf/calls HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: 0\r\n\r\n"
     assert_eq(maf_api_body_ok(missing_body, len(missing_body), 1), 0)
+    let spaced = "{\"from\": \"sip:alice@example.net\", \"to\": \"sip:bob@example.net\"}"
+    let compact = maf_api_json_compact_for_extract(spaced)
+    assert_eq_str(json_get_string(compact, "from"), "sip:alice@example.net")
+    assert_eq_str(json_get_string(compact, "to"), "sip:bob@example.net")
 }
 
 fn TestMafWorkerEndpointAndInviteBoundaries() {

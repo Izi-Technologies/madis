@@ -33,6 +33,35 @@ fn maf_api_text_safe(s: string, max: int) -> int {
     return 1
 }
 
+fn maf_api_json_compact_for_extract(s: string) -> string {
+    let mut out = str_builder()
+    let mut in_str = 0
+    let mut esc = 0
+    let mut after_colon = 0
+    let mut i = 0
+    while i < len(s) {
+        let c = int(s[i])
+        if in_str == 1 {
+            builder_write_byte(out, byte(c))
+            if esc == 1 { esc = 0 }
+            else if c == 92 { esc = 1 }
+            else if c == 34 { in_str = 0 }
+        } else {
+            if c == 34 {
+                in_str = 1
+                after_colon = 0
+                builder_write_byte(out, byte(c))
+            } else if after_colon == 1 && (c == 32 || c == 9 || c == 10 || c == 13) {
+            } else {
+                builder_write_byte(out, byte(c))
+                after_colon = if c == 58 { 1 } else { 0 }
+            }
+        }
+        i = i + 1
+    }
+    return builder_string(out)
+}
+
 fn maf_api_identifier_ok(value: string, min: int, max: int) -> int {
     if len(value) < min || len(value) > max { return 0 }
     let mut i = 0
@@ -90,7 +119,7 @@ fn maf_api_command_id(raw: string, n: int, body: string) -> string {
 }
 
 fn maf_api_body_ok(raw: string, n: int, required: int) -> int {
-    let body = parse_body(raw, n)
+    let body = maf_api_json_compact_for_extract(parse_body(raw, n))
     if len(body) == 0 { return if required == 1 { 0 } else { 1 } }
     if len(body) > 65536 || maf_api_text_safe(body, 65536) == 0 { return 0 }
     let content_type = str_to_lower(str_trim_space(parse_header(raw, n, "Content-Type")))
@@ -396,7 +425,7 @@ fn maf_api_bridge_ok(db: SqlDB, ok: int, tenant: string, call_id: string, body: 
 fn maf_api_create_call(db: SqlDB, ok: int, raw: string, n: int) -> string {
     if ok == 0 { return maf_api_error(503, "database unavailable") }
     if maf_api_body_ok(raw, n, 1) == 0 { return maf_api_error(400, "application/json body required") }
-    let body = parse_body(raw, n)
+    let body = maf_api_json_compact_for_extract(parse_body(raw, n))
     let tenant = maf_api_tenant()
     let requested_tenant = json_get_string(body, "tenant_id")
     if len(requested_tenant) > 0 && not str_eq(requested_tenant, tenant) { return maf_api_error(403, "tenant policy denied the request") }
@@ -442,7 +471,7 @@ fn maf_api_create_call(db: SqlDB, ok: int, raw: string, n: int) -> string {
 
 fn maf_api_command(db: SqlDB, ok: int, kind: int, raw: string, n: int, call_id: string) -> string {
     if ok == 0 { return maf_api_error(503, "database unavailable") }
-    let body_raw = parse_body(raw, n)
+    let body_raw = maf_api_json_compact_for_extract(parse_body(raw, n))
     let mut body = body_raw
     if len(body) == 0 { body = "{}" }
     if maf_api_body_ok(raw, n, 0) == 0 { return maf_api_error(400, "application/json body required") }

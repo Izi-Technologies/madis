@@ -22,6 +22,69 @@ fn maf_worker_json_escape(s: string) -> string {
     return builder_string(b)
 }
 
+fn maf_worker_json_unescape(s: string) -> string {
+    let mut b = str_builder()
+    let mut i = 0
+    while i < len(s) {
+        let c = int(s[i])
+        if c == 92 && i + 1 < len(s) {
+            let n = int(s[i + 1])
+            if n == 110 { builder_write_byte(b, byte(10)) }
+            else if n == 114 { builder_write_byte(b, byte(13)) }
+            else if n == 116 { builder_write_byte(b, byte(9)) }
+            else if n == 34 { builder_write_byte(b, byte(34)) }
+            else if n == 92 { builder_write_byte(b, byte(92)) }
+            else if n == 47 { builder_write_byte(b, byte(47)) }
+            else {
+                builder_write_byte(b, byte(c))
+                builder_write_byte(b, byte(n))
+            }
+            i = i + 2
+        } else {
+            builder_write_byte(b, byte(c))
+            i = i + 1
+        }
+    }
+    return builder_string(b)
+}
+
+fn maf_worker_json_compact_for_extract(raw: string) -> string {
+    let mut out = ""
+    let mut in_string = 0
+    let mut escaped = 0
+    let mut after_colon = 0
+    let mut i = 0
+    while i < len(raw) {
+        let c = int(raw[i])
+        if in_string == 0 && after_colon == 1 && (c == 32 || c == 9 || c == 10 || c == 13) {
+            i = i + 1
+            continue
+        }
+        out = out + raw[i:i + 1]
+        if in_string == 1 {
+            if escaped == 1 {
+                escaped = 0
+            } else if c == 92 {
+                escaped = 1
+            } else if c == 34 {
+                in_string = 0
+            }
+            after_colon = 0
+        } else {
+            if c == 34 {
+                in_string = 1
+                after_colon = 0
+            } else if c == 58 {
+                after_colon = 1
+            } else if c != 32 && c != 9 && c != 10 && c != 13 {
+                after_colon = 0
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
 fn maf_worker_text_safe(s: string, max: int) -> int {
     if len(s) > max { return 0 }
     let mut i = 0
@@ -278,7 +341,7 @@ fn maf_worker_inbound_answer(db: SqlDB, ok: int, tenant: string, call_id: string
     let current = sql_query_str2(db, "SELECT state FROM maf_calls WHERE tenant_id = $1 AND call_id = $2", tenant, call_id)
     if not str_eq(current, "ringing") { return "answer_state_conflict|the inbound call is not ringing" }
     let invite = json_get_string(packed, "invite")
-    let answer_sdp = json_get_string(request, "answer_sdp")
+    let answer_sdp = maf_worker_json_unescape(json_get_string(request, "answer_sdp"))
     let contact_uri = maf_worker_inbound_contact_uri()
     if len(invite) == 0 || maf_worker_answer_sdp_ok(answer_sdp) == 0 || len(contact_uri) == 0 {
         return "invalid_answer|answer_sdp and a reachable contact URI are required"
@@ -362,26 +425,163 @@ fn maf_worker_invite(call_id: string, from_uri: string, to_uri: string, node_id:
         "Content-Length: 0\r\n\r\n"
 }
 
-fn maf_worker_start_call(db: SqlDB, ok: int, tenant: string, call_id: string, request: string, trace: string, cache: CMap, out_fd: int, node_id: string) -> int {
+fn maf_worker_invite_with_sdp(invite: string, offer_sdp: string) -> string {
+    if len(offer_sdp) == 0 { return invite }
+    if maf_worker_answer_sdp_ok(offer_sdp) == 0 { return "" }
+    let header_end = str_index(invite, "\r\n\r\n")
+    if header_end < 0 { return "" }
+    let headers = invite[0:header_end]
+    let mut clean = ""
+    let mut line_start = 0
+    while line_start < len(headers) {
+        let rel = str_index(headers[line_start:], "\r\n")
+        let line_end = if rel >= 0 { line_start + rel } else { len(headers) }
+        let line = headers[line_start:line_end]
+        let low = str_to_lower(line)
+        if not str_has_prefix(low, "content-length:") && not str_has_prefix(low, "l:") {
+            clean = clean + line + "\r\n"
+        }
+        if rel < 0 { break }
+        line_start = line_end + 2
+    }
+    if len(sip_header(invite, "Content-Type")) == 0 { clean = clean + "Content-Type: application/sdp\r\n" }
+    let with_type = clean + "Content-Length: 0\r\n\r\n"
+    return msg_set_body(with_type, offer_sdp)
+}
+
+fn maf_worker_build_ack_2xx(invite: string, response: string, target: string, node_addr: string, transport: string) -> string {
+    let from_header = sip_header(invite, "From")
+    let to_header = sip_header(response, "To")
+    let call_header = sip_header(invite, "Call-ID")
+    let cseq_no = sip_cseq_number(invite)
+    if len(from_header) == 0 || len(to_header) == 0 || len(call_header) == 0 || len(cseq_no) == 0 || len(target) == 0 || maf_worker_text_safe(node_addr, 128) == 0 { return "" }
+    let branch = "z9hG4bK-maf-ack-" + sha256(call_header + "|ack|" + string(now_ms()))[0:24]
+    return "ACK " + target + " SIP/2.0\r\n" +
+        "Via: SIP/2.0/" + str_to_upper(transport) + " " + node_addr + ";branch=" + branch + "\r\n" +
+        "Max-Forwards: 70\r\n" +
+        "From: " + from_header + "\r\n" +
+        "To: " + to_header + "\r\n" +
+        "Call-ID: " + call_header + "\r\n" +
+        "CSeq: " + cseq_no + " ACK\r\n" +
+        "Contact: <sip:madis@" + node_addr + ">\r\n" +
+        "Content-Length: 0\r\n\r\n"
+}
+
+fn maf_worker_start_call(db: SqlDB, ok: int, tenant: string, call_id: string, request: string, trace: string, cache: CMap, out_fd: int, node_id: string) -> string {
     let from_uri = json_get_string(request, "from")
     let to_uri = json_get_string(request, "to")
-    if maf_worker_endpoint_ok(from_uri) == 0 || maf_worker_endpoint_ok(to_uri) == 0 { return 0 }
+    if maf_worker_endpoint_ok(from_uri) == 0 { return "invalid_from_uri|from must be a valid SIP URI" }
+    if maf_worker_endpoint_ok(to_uri) == 0 { return "invalid_to_uri|to must be a valid SIP URI" }
     let node_addr = env_get_or("SIP_NODE_ADDR", "127.0.0.1")
-    if len(node_addr) == 0 || len(node_addr) > 128 || maf_worker_text_safe(node_addr, 128) == 0 { return 0 }
+    if len(node_addr) == 0 || len(node_addr) > 128 || maf_worker_text_safe(node_addr, 128) == 0 { return "invalid_node_addr|SIP_NODE_ADDR is not usable" }
     // Derive transport from the target URI scheme/params (sips:→TLS, transport=tcp, etc.)
     let tr = sip_transport_param(to_uri, "udp")
     let mut invite = maf_headers_apply(db, ok, tenant, call_id, maf_worker_invite(call_id, from_uri, to_uri, node_id, node_addr, tr), "INVITE", "outbound")
+    let offer_sdp = maf_worker_json_unescape(json_get_string(request, "offer_sdp"))
+    if len(offer_sdp) > 0 {
+        invite = maf_worker_invite_with_sdp(invite, offer_sdp)
+        if len(invite) == 0 { return "invalid_offer_sdp|offer_sdp must be valid SDP" }
+        let from_tag = sip_addr_tag(sip_header(invite, "From"))
+        let wire_call_id = sip_header(invite, "Call-ID")
+        invite = rtp_process_offer(invite, len(invite), wire_call_id, from_tag, db, ok, cache)
+    }
     // Apply externally-signed Identity if present.
     invite = maf_identity_apply(cache, call_id, invite)
-    if sip_validate_message(invite, len(invite)) == 0 { return 0 }
+    if sip_validate_message(invite, len(invite)) == 0 { return "invalid_invite|generated outbound INVITE did not pass SIP validation" }
     let target = sip_forward_first(to_uri, invite, cache, call_id, out_fd)
-    if len(target) == 0 { return 0 }
+    if len(target) == 0 { return "invite_send_failed|outbound INVITE could not be sent to target" }
     let _ = bounded_cache_set(cache, "maf_cache_seq", "maf_cache_ring|", "maf_invite|" + call_id, invite, 65536)
     let _ = bounded_cache_set(cache, "maf_cache_seq", "maf_cache_ring|", "maf_target|" + call_id, target, 65536)
     let _ = bounded_cache_set(cache, "maf_cache_seq", "maf_cache_ring|", "maf_transport|" + call_id, tr, 65536)
     cmap_set(cache, "maf_created_ms|" + call_id, string(mono_ms()))
     let _ = maf_worker_call_state(db, ok, tenant, call_id, "ringing", trace)
+    return "ok"
+}
+
+fn maf_worker_handle_outbound_response(db: SqlDB, ok: int, msg: string, cache: CMap, out_fd: int) -> int {
+    if sip_is_response(msg) == 0 { return 0 }
+    let wire_call_id = sip_header(msg, "Call-ID")
+    if len(wire_call_id) == 0 { return 0 }
+    let at = str_index(wire_call_id, "@")
+    let call_id = if at > 0 { wire_call_id[0:at] } else { wire_call_id }
+    let invite = cmap_get(cache, "maf_invite|" + call_id)
+    if len(invite) == 0 { return 0 }
+    let cseq_parts = str_split(sip_header(msg, "CSeq"), " ")
+    let cseq_method = if len(cseq_parts) >= 2 { str_to_upper(str_trim_space(cseq_parts[1])) } else { "" }
+    if str_eq(cseq_method, "BYE") || str_eq(cseq_method, "CANCEL") {
+        let _ = maf_worker_sync_sip(db, ok, msg, cache)
+        let code = sip_status_code(msg)
+        if code >= 200 {
+            let _ = maf_worker_call_state(db, ok, maf_worker_tenant(), call_id, "ended", sha256("madis.maf.response|" + call_id + "|" + cseq_method + "|" + string(code))[0:32])
+            let _ = rtp_process_delete(wire_call_id, db, ok, cache)
+            let _ = cmap_del(cache, "maf_response|" + call_id)
+            let _ = cmap_del(cache, "maf_target|" + call_id)
+            let _ = cmap_del(cache, "maf_transport|" + call_id)
+        }
+        return 1
+    }
+    if not str_eq(cseq_method, "INVITE") { return 0 }
+    let code = sip_status_code(msg)
+    let mut observed = msg
+    if code >= 200 && code < 300 {
+        let from_tag = sip_addr_tag(sip_header(invite, "From"))
+        let to_tag = sip_addr_tag(sip_header(msg, "To"))
+        if len(sip_body(msg)) > 0 && cmap_has(cache, "rtp_state|" + wire_call_id) == 1 {
+            observed = rtp_process_answer(msg, len(msg), wire_call_id, from_tag, to_tag, db, ok, cache)
+        }
+    }
+    let _ = maf_worker_sync_sip(db, ok, observed, cache)
+    if code >= 200 && code < 300 {
+        let _ = bounded_cache_set(cache, "maf_cache_seq", "maf_cache_ring|", "maf_response|" + call_id, observed, 65536)
+        let _ = maf_worker_call_state(db, ok, maf_worker_tenant(), call_id, "answered", sha256("madis.maf.response|" + call_id + "|INVITE|" + string(code))[0:32])
+    }
+    if code >= 300 && code < 700 {
+        let _ = maf_worker_call_state(db, ok, maf_worker_tenant(), call_id, "failed", sha256("madis.maf.response|" + call_id + "|INVITE|" + string(code))[0:32])
+    }
+    if code < 200 { return 1 }
+    let mut tr = cmap_get(cache, "maf_transport|" + call_id)
+    if len(tr) == 0 { tr = "udp" }
+    if code >= 200 && code < 300 {
+        let contact = sip_contact_addr(sip_header(observed, "Contact"))
+        let fallback = cmap_get(cache, "maf_target|" + call_id)
+        let target = if maf_worker_endpoint_ok(contact) == 1 { contact } else { fallback }
+        if len(target) == 0 { return 1 }
+        let node_addr = env_get_or("SIP_NODE_ADDR", "127.0.0.1")
+        let ack = maf_worker_build_ack_2xx(invite, observed, target, node_addr, tr)
+        if len(ack) > 0 && sip_validate_message(ack, len(ack)) == 1 {
+            let _ = sip_forward_target(target, ack, tr, cache, out_fd)
+        }
+        return 1
+    }
+    if code >= 300 && code < 700 {
+        let target = cmap_get(cache, "maf_target|" + call_id)
+        let ack = sip_build_ack_non2xx(invite)
+        if len(ack) > 0 && len(target) > 0 {
+            let _ = sip_forward_target(target, ack, tr, cache, out_fd)
+        }
+        return 1
+    }
     return 1
+}
+
+fn maf_worker_handle_outbound_request(db: SqlDB, ok: int, msg: string, cache: CMap) -> int {
+    if sip_is_response(msg) == 1 { return 0 }
+    let wire_call_id = sip_header(msg, "Call-ID")
+    if len(wire_call_id) == 0 { return 0 }
+    let at = str_index(wire_call_id, "@")
+    let call_id = if at > 0 { wire_call_id[0:at] } else { wire_call_id }
+    if len(call_id) == 0 || cmap_has(cache, "maf_invite|" + call_id) == 0 { return 0 }
+    let method = str_to_upper(str_trim_space(madis_method(msg)))
+    if str_eq(method, "ACK") { return 1 }
+    if str_eq(method, "BYE") || str_eq(method, "CANCEL") {
+        let _ = maf_worker_sync_sip(db, ok, msg, cache)
+        let _ = rtp_process_delete(wire_call_id, db, ok, cache)
+        let _ = cmap_del(cache, "maf_response|" + call_id)
+        let _ = cmap_del(cache, "maf_target|" + call_id)
+        let _ = cmap_del(cache, "maf_transport|" + call_id)
+        return 1
+    }
+    return 0
 }
 
 fn maf_worker_cancel_call(db: SqlDB, ok: int, tenant: string, call_id: string, trace: string, cache: CMap, out_fd: int) -> int {
@@ -706,7 +906,7 @@ fn maf_worker_dtmf(db: SqlDB, ok: int, tenant: string, call_id: string, request:
 
 fn maf_worker_execute(db: SqlDB, ok: int, tenant: string, operation: string, call_id: string, command_id: string, request: string, trace: string, cache: CMap, out_fd: int, node_id: string) string {
     if str_eq(operation, "calls.create") {
-        return if maf_worker_start_call(db, ok, tenant, call_id, request, trace, cache, out_fd, node_id) == 1 { "ok" } else { "transport_or_endpoint_rejected|outbound INVITE was not sent" }
+        return maf_worker_start_call(db, ok, tenant, call_id, request, trace, cache, out_fd, node_id)
     }
     if str_eq(operation, "calls.reject") {
         if len(maf_worker_inbound_cache_get(cache, call_id)) > 0 {
@@ -1038,7 +1238,7 @@ fn maf_worker_poll(db: SqlDB, ok: int, cache: CMap, out_fd: int, node_id: string
         if len(command_id) == 0 { continue }
         let call_id = sql_query_str2(db, "SELECT call_id FROM maf_commands WHERE tenant_id = $1 AND command_id = $2", tenant, command_id)
         let operation = sql_query_str2(db, "SELECT operation FROM maf_commands WHERE tenant_id = $1 AND command_id = $2", tenant, command_id)
-        let request = sql_query_str2(db, "SELECT request_json::text FROM maf_commands WHERE tenant_id = $1 AND command_id = $2", tenant, command_id)
+        let request = maf_worker_json_compact_for_extract(sql_query_str2(db, "SELECT request_json::text FROM maf_commands WHERE tenant_id = $1 AND command_id = $2", tenant, command_id))
         let trace = sql_query_str2(db, "SELECT trace_id FROM maf_commands WHERE tenant_id = $1 AND command_id = $2", tenant, command_id)
         if len(call_id) == 0 || len(operation) == 0 || len(request) == 0 { continue }
         let claim = sha256("madis.maf.claim|" + node_id + "|" + command_id + "|" + string(now_ms()))
