@@ -259,6 +259,10 @@ fn maf_worker_inbound_cache_value(invite: string, ip: string, port: int, transpo
         "\",\"transport\":\"" + maf_worker_json_escape(transport) + "\"}"
 }
 
+fn maf_worker_cached_invite(packed: string) -> string {
+    return maf_worker_json_unescape(json_get_string(packed, "invite"))
+}
+
 fn maf_worker_inbound_cache_put(cache: CMap, call_id: string, value: string) -> int {
     if len(call_id) == 0 || len(value) == 0 || len(value) > 65536 { return 0 }
     return bounded_cache_set(cache, "maf_inbound_seq", "maf_inbound_ring|", "maf_inbound|" + call_id, value, 4096)
@@ -340,7 +344,7 @@ fn maf_worker_inbound_answer(db: SqlDB, ok: int, tenant: string, call_id: string
     if len(packed) == 0 { return "inbound_dialog_unavailable|the worker does not own this inbound dialog" }
     let current = sql_query_str2(db, "SELECT state FROM maf_calls WHERE tenant_id = $1 AND call_id = $2", tenant, call_id)
     if not str_eq(current, "ringing") { return "answer_state_conflict|the inbound call is not ringing" }
-    let invite = json_get_string(packed, "invite")
+    let invite = maf_worker_cached_invite(packed)
     let answer_sdp = maf_worker_json_unescape(json_get_string(request, "answer_sdp"))
     let contact_uri = maf_worker_inbound_contact_uri()
     if len(invite) == 0 || maf_worker_answer_sdp_ok(answer_sdp) == 0 || len(contact_uri) == 0 {
@@ -366,7 +370,7 @@ fn maf_worker_inbound_reject(db: SqlDB, ok: int, tenant: string, call_id: string
     if len(packed) == 0 { return "inbound_dialog_unavailable|the worker does not own this inbound dialog" }
     let current = sql_query_str2(db, "SELECT state FROM maf_calls WHERE tenant_id = $1 AND call_id = $2", tenant, call_id)
     if str_eq(current, "answered") { return "reject_state_conflict|answered calls must be hung up" }
-    let invite = json_get_string(packed, "invite")
+    let invite = maf_worker_cached_invite(packed)
     let mut code = json_get_int(request, "sip_code")
     if code < 300 || code > 699 { code = 486 }
     let reason = if code == 487 { "Request Terminated" } else if code == 603 { "Decline" } else { "Busy Here" }
@@ -387,7 +391,7 @@ fn maf_worker_inbound_bye(db: SqlDB, ok: int, tenant: string, call_id: string, t
     let packed = maf_worker_inbound_cache_get(cache, call_id)
     let answer = cmap_get(cache, "maf_inbound_answer|" + call_id)
     if len(packed) == 0 || len(answer) == 0 { return "dialog_unavailable|the inbound dialog is not confirmed" }
-    let target = sip_contact_addr(sip_header(json_get_string(packed, "invite"), "Contact"))
+    let target = sip_contact_addr(sip_header(maf_worker_cached_invite(packed), "Contact"))
     let from_header = sip_header(answer, "To")
     let to_header = sip_header(answer, "From")
     let wire_call_id = sip_header(answer, "Call-ID")
@@ -445,8 +449,66 @@ fn maf_worker_invite_with_sdp(invite: string, offer_sdp: string) -> string {
         line_start = line_end + 2
     }
     if len(sip_header(invite, "Content-Type")) == 0 { clean = clean + "Content-Type: application/sdp\r\n" }
-    let with_type = clean + "Content-Length: 0\r\n\r\n"
-    return msg_set_body(with_type, offer_sdp)
+    return clean + "Content-Length: " + string(len(offer_sdp)) + "\r\n\r\n" + offer_sdp
+}
+
+fn maf_worker_invite_invalid_reason(msg: string) -> string {
+    let n = len(msg)
+    if n < 12 || n > 65535 { return "message_size" }
+    if sip_ingress_header_safe(msg, n) == 0 { return "unsafe_header" }
+    if sip_ok(msg) == 0 { return "parse_failed" }
+    let mut header_end = -1
+    let mut i = 0
+    while i + 3 < n {
+        if int(msg[i]) == 13 && int(msg[i + 1]) == 10 && int(msg[i + 2]) == 13 && int(msg[i + 3]) == 10 {
+            header_end = i + 2
+            break
+        }
+        i = i + 1
+    }
+    if header_end < 0 { return "missing_header_end" }
+    if not str_eq(sip_version(msg), "SIP/2.0") { return "sip_version" }
+    if sip_is_response(msg) == 1 { return "not_request" }
+    if sip_request_uri_valid(msg) == 0 { return "request_uri" }
+    let via = sip_header(msg, "Via")
+    let from = sip_header(msg, "From")
+    let to = sip_header(msg, "To")
+    let call_id = sip_header(msg, "Call-ID")
+    if len(via) == 0 || len(from) == 0 || len(to) == 0 || len(call_id) == 0 { return "required_header" }
+    if sip_name_addr_valid(from) == 0 { return "from" }
+    if sip_name_addr_valid(to) == 0 { return "to" }
+    if sip_call_id_valid(call_id) == 0 { return "call_id" }
+    if sip_cseq_valid(msg, 0) == 0 { return "cseq" }
+    if sip_via_valid(msg) == 0 { return "via" }
+    if sip_header_block_valid(msg, header_end) == 0 { return "header_block" }
+    if madis_header_count(msg, "From") != 1 || madis_header_count(msg, "To") != 1 || madis_header_count(msg, "Call-ID") != 1 || madis_header_count(msg, "CSeq") != 1 { return "singleton_header" }
+    if madis_header_count(msg, "Max-Forwards") > 1 { return "max_forwards" }
+    i = 0
+    while i < header_end {
+        let c = int(msg[i])
+        if c == 0 || c == 127 || (c < 32 && c != 9 && c != 10 && c != 13) { return "control_char" }
+        i = i + 1
+    }
+    let body = sip_body(msg)
+    let content_length_count = madis_header_count(msg, "Content-Length")
+    if content_length_count == 0 { return "content_length_missing" }
+    let mut declared_length = -1
+    let mut content_i = 0
+    while content_i < content_length_count {
+        let raw_length = str_trim_space(sip_header_n(msg, "Content-Length", content_i))
+        if len(raw_length) == 0 { return "content_length_empty" }
+        match parse_int(raw_length) {
+            Ok(v) => {
+                if v < 0 || v > 1048576 { return "content_length_bounds" }
+                if declared_length >= 0 && declared_length != v { return "content_length_conflict" }
+                declared_length = v
+            }
+            Err(_) => { return "content_length_parse" }
+        }
+        content_i = content_i + 1
+    }
+    if declared_length != len(body) { return "content_length_mismatch" }
+    return "unknown"
 }
 
 fn maf_worker_build_ack_2xx(invite: string, response: string, target: string, node_addr: string, transport: string) -> string {
@@ -487,7 +549,7 @@ fn maf_worker_start_call(db: SqlDB, ok: int, tenant: string, call_id: string, re
     }
     // Apply externally-signed Identity if present.
     invite = maf_identity_apply(cache, call_id, invite)
-    if sip_validate_message(invite, len(invite)) == 0 { return "invalid_invite|generated outbound INVITE did not pass SIP validation" }
+    if sip_validate_message(invite, len(invite)) == 0 { return "invalid_invite|" + maf_worker_invite_invalid_reason(invite) }
     let target = sip_forward_first(to_uri, invite, cache, call_id, out_fd)
     if len(target) == 0 { return "invite_send_failed|outbound INVITE could not be sent to target" }
     let _ = bounded_cache_set(cache, "maf_cache_seq", "maf_cache_ring|", "maf_invite|" + call_id, invite, 65536)
@@ -534,6 +596,29 @@ fn maf_worker_handle_outbound_response(db: SqlDB, ok: int, msg: string, cache: C
     if code >= 200 && code < 300 {
         let _ = bounded_cache_set(cache, "maf_cache_seq", "maf_cache_ring|", "maf_response|" + call_id, observed, 65536)
         let _ = maf_worker_call_state(db, ok, maf_worker_tenant(), call_id, "answered", sha256("madis.maf.response|" + call_id + "|INVITE|" + string(code))[0:32])
+        let packed = maf_worker_inbound_cache_get(cache, call_id)
+        if len(packed) > 0 {
+            let inbound_invite = maf_worker_cached_invite(packed)
+            let answer_sdp = sip_body(observed)
+            let contact_uri = maf_worker_inbound_contact_uri()
+            let inbound_to_tag = "maf-in-" + sha256(call_id + "|route-answer")[0:20]
+            if len(inbound_invite) > 0 && len(answer_sdp) > 0 && len(contact_uri) > 0 {
+                let inbound_response = maf_headers_apply(db, ok, maf_worker_tenant(), call_id, maf_worker_build_inbound_answer(inbound_invite, answer_sdp, contact_uri, inbound_to_tag), "INVITE", "inbound")
+                if len(inbound_response) > 0 && sip_validate_message(inbound_response, len(inbound_response)) == 1 {
+                    let ip = json_get_string(packed, "ip")
+                    let inbound_tr = json_get_string(packed, "transport")
+                    let mut inbound_port = 5060
+                    match parse_int(json_get_string(packed, "port")) { Ok(v) => { inbound_port = v } Err(_) => {} }
+                    let _ = sip_server_txn_record(inbound_invite, inbound_response, ip, inbound_port, inbound_tr, out_fd, cache)
+                    if str_eq(str_to_lower(inbound_tr), "udp") {
+                        let _ = udp_send_to(out_fd, ip, inbound_port, inbound_response)
+                    } else {
+                        let _ = sip_forward_reply(inbound_response, cache, out_fd)
+                    }
+                    cmap_set(cache, "maf_inbound_answer|" + call_id, inbound_response)
+                }
+            }
+        }
     }
     if code >= 300 && code < 700 {
         let _ = maf_worker_call_state(db, ok, maf_worker_tenant(), call_id, "failed", sha256("madis.maf.response|" + call_id + "|INVITE|" + string(code))[0:32])
@@ -716,7 +801,7 @@ fn maf_worker_transfer(db: SqlDB, ok: int, tenant: string, call_id: string, requ
         from_header = sip_header(inbound_answer, "To")
         to_header = sip_header(inbound_answer, "From")
         wire_call_id = sip_header(inbound_answer, "Call-ID")
-        target = sip_contact_addr(sip_header(json_get_string(inbound_packed, "invite"), "Contact"))
+        target = sip_contact_addr(sip_header(maf_worker_cached_invite(inbound_packed), "Contact"))
         tr = str_to_lower(json_get_string(inbound_packed, "transport"))
     } else {
         from_header = sip_header(invite, "From")
@@ -788,7 +873,7 @@ fn maf_worker_reinvite_sdp(db: SqlDB, ok: int, tenant: string, call_id: string, 
         from_header = sip_header(inbound_answer, "To")
         to_header = sip_header(inbound_answer, "From")
         wire_call_id = sip_header(inbound_answer, "Call-ID")
-        target = sip_contact_addr(sip_header(json_get_string(inbound_packed, "invite"), "Contact"))
+        target = sip_contact_addr(sip_header(maf_worker_cached_invite(inbound_packed), "Contact"))
         tr = str_to_lower(json_get_string(inbound_packed, "transport"))
     } else {
         from_header = sip_header(invite, "From")
@@ -869,7 +954,7 @@ fn maf_worker_dtmf(db: SqlDB, ok: int, tenant: string, call_id: string, request:
         from_header = sip_header(inbound_answer, "To")
         to_header = sip_header(inbound_answer, "From")
         wire_call_id = sip_header(inbound_answer, "Call-ID")
-        target = sip_contact_addr(sip_header(json_get_string(inbound_packed, "invite"), "Contact"))
+        target = sip_contact_addr(sip_header(maf_worker_cached_invite(inbound_packed), "Contact"))
         tr = str_to_lower(json_get_string(inbound_packed, "transport"))
     } else {
         from_header = sip_header(invite, "From")
@@ -950,7 +1035,7 @@ fn maf_worker_execute(db: SqlDB, ok: int, tenant: string, operation: string, cal
     if str_eq(operation, "calls.hold") { return maf_worker_hold(db, ok, tenant, call_id, trace, cache, out_fd) }
     if str_eq(operation, "calls.unhold") { return maf_worker_unhold(db, ok, tenant, call_id, trace, cache, out_fd) }
     if str_eq(operation, "calls.dtmf") { return maf_worker_dtmf(db, ok, tenant, call_id, request, trace, cache, out_fd) }
-    if str_eq(operation, "calls.route") { return maf_worker_route(db, ok, tenant, call_id, request, trace, cache, out_fd) }
+    if str_eq(operation, "calls.route") { return maf_worker_route(db, ok, tenant, call_id, request, trace, cache, out_fd, node_id) }
     if str_eq(operation, "calls.rtp") { return maf_worker_rtp(db, ok, tenant, call_id, request, trace, cache) }
     if str_eq(operation, "calls.identity") { return maf_worker_identity(db, ok, tenant, call_id, request, trace, cache) }
     return "unknown_operation|operation is not allowlisted"
@@ -1062,24 +1147,20 @@ fn maf_worker_rtp(db: SqlDB, ok: int, tenant: string, call_id: string, request: 
 // The SDK posts calls.route with a target SIP URI (or list) and optional
 // transport. The worker forwards the cached inbound INVITE to that target,
 // replacing the built-in routing engine for this call.
-fn maf_worker_route(db: SqlDB, ok: int, tenant: string, call_id: string, request: string, trace: string, cache: CMap, out_fd: int) -> string {
+fn maf_worker_route(db: SqlDB, ok: int, tenant: string, call_id: string, request: string, trace: string, cache: CMap, out_fd: int, node_id: string) -> string {
     let packed = maf_worker_inbound_cache_get(cache, call_id)
     if len(packed) == 0 { return "inbound_dialog_unavailable|route requires an owned inbound dialog" }
     let current = sql_query_str2(db, "SELECT state FROM maf_calls WHERE tenant_id = $1 AND call_id = $2", tenant, call_id)
     if not str_eq(current, "ringing") && not str_eq(current, "created") { return "route_state_conflict|the call is not in a routable state" }
     let target = json_get_string(request, "target")
     if len(target) == 0 || maf_worker_endpoint_ok(target) == 0 { return "invalid_route|target must be a valid SIP URI" }
-    let invite = json_get_string(packed, "invite")
+    let invite = maf_worker_cached_invite(packed)
     if len(invite) == 0 { return "dialog_unavailable|cached invite is missing" }
     let ip = json_get_string(packed, "ip")
-    let tr_from = json_get_string(packed, "transport")
-    let mut port_val = 5060
-    match parse_int(json_get_string(packed, "port")) { Ok(v) => { port_val = v } Err(_) => {} }
     // Transport for outbound leg: SDK can override, else derive from target URI
     let mut tr = str_to_lower(str_trim_space(json_get_string(request, "transport")))
     if len(tr) == 0 { tr = sip_transport_param(target, "udp") }
     let public_ip = env_get_or("SIP_PUBLIC_IP", ip)
-    let node_addr = env_get_or("SIP_NODE_ADDR", "127.0.0.1")
     let udp_port_str = env_get_or("SIP_UDP_PORT", "5060")
     let mut udp_port = 5060
     match parse_int(udp_port_str) { Ok(v) => { udp_port = v } Err(_) => {} }
@@ -1094,17 +1175,25 @@ fn maf_worker_route(db: SqlDB, ok: int, tenant: string, call_id: string, request
             return "route_delivery_failed|could not forward B2BUA INVITE to target"
         }
     } else {
-    // Build the outbound INVITE: add Via, Record-Route, NAT-fix SDP
-    // Apply externally-signed Identity if present.
-    let signed_invite = maf_identity_apply(cache, call_id, invite)
-    let hopped = proxy_hop(signed_invite, public_ip, udp_port, tr)
-    let fwd = nat_fix_sdp(hopped, len(hopped), public_ip)
-    if sip_forward_target(target, fwd, tr, cache, out_fd) == 0 { return "route_delivery_failed|could not forward INVITE to target" }
+        let from_uri = sip_contact_addr(sip_header(invite, "From"))
+        let offer_sdp = sip_body(invite)
+        let mut out_invite = maf_headers_apply(db, ok, tenant, call_id, maf_worker_invite(call_id, from_uri, target, node_id, public_ip + ":" + string(udp_port), tr), "INVITE", "outbound")
+        if len(offer_sdp) > 0 {
+            out_invite = maf_worker_invite_with_sdp(out_invite, offer_sdp)
+            if len(out_invite) == 0 { return "invalid_offer_sdp|cached inbound SDP is not usable" }
+            let from_tag = sip_addr_tag(sip_header(out_invite, "From"))
+            let wire_call_id = sip_header(out_invite, "Call-ID")
+            out_invite = rtp_process_offer(out_invite, len(out_invite), wire_call_id, from_tag, db, ok, cache)
+        }
+        // Apply externally-signed Identity if present.
+        out_invite = maf_identity_apply(cache, call_id, out_invite)
+        if sip_validate_message(out_invite, len(out_invite)) == 0 { return "invalid_invite|" + maf_worker_invite_invalid_reason(out_invite) }
+        if sip_forward_target(target, out_invite, tr, cache, out_fd) == 0 { return "route_delivery_failed|could not forward INVITE to target" }
+        let wire_out_cid = sip_header(out_invite, "Call-ID")
+        let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_dst|" + wire_out_cid, target, 131072)
+        let _ = bounded_cache_set(cache, "maf_cache_seq", "maf_cache_ring|", "maf_invite|" + call_id, out_invite, 65536)
     }
     // Track dialog so responses route back
-    let wire_cid = sip_header(invite, "Call-ID")
-    let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_dst|" + wire_cid, target, 131072)
-    let _ = bounded_cache_set(cache, "maf_cache_seq", "maf_cache_ring|", "maf_invite|" + call_id, invite, 65536)
     let _ = bounded_cache_set(cache, "maf_cache_seq", "maf_cache_ring|", "maf_target|" + call_id, target, 65536)
     let _ = bounded_cache_set(cache, "maf_cache_seq", "maf_cache_ring|", "maf_transport|" + call_id, tr, 65536)
     let payload = "{\"call_id\":\"" + maf_worker_json_escape(call_id) + "\",\"target\":\"" + maf_worker_json_escape(target) + "\",\"transport\":\"" + maf_worker_json_escape(tr) + "\"}"
@@ -1161,7 +1250,7 @@ fn maf_worker_identity(db: SqlDB, ok: int, tenant: string, call_id: string, requ
         let packed = maf_worker_inbound_cache_get(cache, call_id)
         let outbound_inv = cmap_get(cache, "maf_invite|" + call_id)
         let mut msg = ""
-        if len(packed) > 0 { msg = json_get_string(packed, "invite") }
+        if len(packed) > 0 { msg = maf_worker_cached_invite(packed) }
         if len(msg) == 0 && len(outbound_inv) > 0 { msg = outbound_inv }
         if len(msg) == 0 { return "dialog_unavailable|no cached SIP message for this call" }
         let identity = sip_header(msg, "Identity")

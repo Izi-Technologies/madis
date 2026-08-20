@@ -1352,7 +1352,7 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
 
         let maf_inbound_mode = if cmap_has(cache, "_maf_mode") == 1 { cmap_get(cache, "_maf_mode") } else { let v = str_to_lower(env_get_or("SIP_MAF_INBOUND_MODE", "disabled")); cmap_set(cache, "_maf_mode", v); v }
         if ims_initial_dialog_request(data, dl) == 1 && (str_eq(maf_inbound_mode, "control") || str_eq(maf_inbound_mode, "route")) {
-            let maf_call_id = maf_worker_ingress_invite(db, db_ok, maf_worker_tenant(), data, ip, port, tr, cache)
+            let maf_call_id = maf_worker_ingress_invite(db, db_ok, maf_worker_tenant(), data, ip, source_port, tr, cache)
             if len(maf_call_id) == 0 { return sip_resp(503, "MAF Inbound Unavailable", data, dl, "maf-inbound") }
             return sip_resp(100, "Trying", data, dl, "maf-inbound")
         }

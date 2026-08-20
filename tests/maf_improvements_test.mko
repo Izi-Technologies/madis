@@ -29,6 +29,7 @@ fn bounded_cache_set(cache: CMap, seq_key: string, ring_prefix: string, key: str
 fn via_add_received(msg: string, n: int, ip: string, port: int) string { return msg }
 fn sip_server_txn_record(request: string, response: string, ip: string, port: int, transport: string, owner: int, cache: CMap) int { return 1 }
 fn sip_forward_reply(reply: string, cache: CMap, out_fd: int) int { return 1 }
+fn udp_send_to(fd: int, host: string, port: int, msg: string) int { return len(msg) }
 fn module_gateway_call(msg: string, ip: string, port: int, tr: string, event: string, module: string, operation: string, payload: string) string { return "__MODULE_FAIL__" }
 fn module_gateway_command_valid(raw: string, msg: string, event: string, module: string, operation: string, payload: string, for_response: int) int { return 0 }
 fn module_gateway_action(raw: string, msg: string, event: string, module: string, operation: string, payload: string) string { return "fail" }
@@ -173,6 +174,30 @@ fn TestMafWorkerInviteWithSdp() {
     assert_eq(sip_validate_message(escaped_invite, len(escaped_invite)), 1)
 }
 
+fn TestMafWorkerRouteInviteNumericEndpointWithTransportParam() {
+    let sdp =
+        "v=0\r\n" +
+        "o=facility 1 1 IN IP4 192.0.2.20\r\n" +
+        "s=madis-e2e\r\n" +
+        "c=IN IP4 192.0.2.20\r\n" +
+        "t=0 0\r\n" +
+        "m=audio 40000 RTP/AVP 0 101\r\n" +
+        "a=rtpmap:0 PCMU/8000\r\n" +
+        "a=rtpmap:101 telephone-event/8000\r\n" +
+        "a=sendrecv\r\n"
+    let target = "sip:15551234567@198.51.100.20:5060;transport=udp"
+    let invite = maf_worker_invite_with_sdp(maf_worker_invite("call-in-test", "sip:facility@example.net", target, "node1", "198.51.100.10:5060", "udp"), sdp)
+    assert_eq(sip_validate_message(invite, len(invite)), 1)
+}
+
+fn TestMafWorkerCachedInviteUnescapesJsonEnvelope() {
+    let invite = maf_worker_invite("call-in-test", "sip:facility@example.net", "sip:15551234567@example.net", "node1", "198.51.100.10:5060", "udp")
+    let packed = maf_worker_inbound_cache_value(invite, "192.0.2.20", 5062, "udp")
+    let decoded = maf_worker_cached_invite(packed)
+    assert(str_eq(sip_header(decoded, "From"), "<sip:facility@example.net>;tag=maf-" + sha256("call-in-test|from")[0:20]))
+    assert_eq(sip_validate_message(decoded, len(decoded)), 1)
+}
+
 fn TestMafWorkerAck2xxUsesRemoteTagAndContactTarget() {
     let invite = maf_worker_invite("call-test", "sip:alice@example.net", "sip:bob@example.net", "node1", "proxy.example.net:5060", "udp")
     let response = "SIP/2.0 200 OK\r\nVia: SIP/2.0/UDP proxy.example.net:5060;branch=z9hG4bK-maf-test\r\nFrom: <sip:alice@example.net>;tag=maf-local\r\nTo: <sip:bob@example.net>;tag=remote-1\r\nCall-ID: call-test@node1\r\nCSeq: 1 INVITE\r\nContact: <sip:bob@carrier.example.net:5060>\r\nContent-Length: 0\r\n\r\n"
@@ -219,6 +244,43 @@ fn TestMafWorkerOutboundByeResponseConsumesOwnedDialog() {
     assert_eq(cmap_has(cache, "maf_response|call-test"), 0)
     assert_eq(cmap_has(cache, "maf_target|call-test"), 0)
     assert_eq(cmap_has(cache, "maf_transport|call-test"), 0)
+}
+
+fn TestMafWorkerOutboundInviteResponseBridgesInboundAnswer() {
+    let cache = cmap_new()
+    let db = sql_open_sqlite(":memory:")
+    let inbound =
+        "INVITE sip:15551234567@proxy.example.net SIP/2.0\r\n" +
+        "Via: SIP/2.0/UDP facility.example.net:5062;rport;branch=z9hG4bK-inbound\r\n" +
+        "Max-Forwards: 70\r\n" +
+        "From: <sip:facility@example.net>;tag=facility\r\n" +
+        "To: <sip:15551234567@proxy.example.net>\r\n" +
+        "Call-ID: inbound-wire@example.net\r\n" +
+        "CSeq: 1 INVITE\r\n" +
+        "Contact: <sip:facility@facility.example.net:5062>\r\n" +
+        "Content-Length: 0\r\n\r\n"
+    let invite = maf_worker_invite("call-test", "sip:facility@example.net", "sip:15551234567@carrier.example.net:5060", "node1", "proxy.example.net:5060", "udp")
+    cmap_set(cache, "maf_invite|call-test", invite)
+    cmap_set(cache, "maf_target|call-test", "sip:15551234567@carrier.example.net:5060")
+    cmap_set(cache, "maf_transport|call-test", "udp")
+    cmap_set(cache, "maf_inbound|call-test", maf_worker_inbound_cache_value(inbound, "192.0.2.20", 5062, "udp"))
+    let sdp = "v=0\r\no=- 1 2 IN IP4 198.51.100.20\r\ns=-\r\nc=IN IP4 198.51.100.20\r\nt=0 0\r\nm=audio 20000 RTP/AVP 0\r\n"
+    let response =
+        "SIP/2.0 200 OK\r\n" +
+        "Via: SIP/2.0/UDP proxy.example.net:5060;branch=z9hG4bK-maf-test\r\n" +
+        "From: <sip:facility@example.net>;tag=maf-local\r\n" +
+        "To: <sip:15551234567@carrier.example.net>;tag=remote\r\n" +
+        "Call-ID: call-test@node1\r\n" +
+        "CSeq: 1 INVITE\r\n" +
+        "Contact: <sip:15551234567@carrier.example.net:5060>\r\n" +
+        "Content-Type: application/sdp\r\n" +
+        "Content-Length: " + string(len(sdp)) + "\r\n\r\n" + sdp
+    assert_eq(maf_worker_handle_outbound_response(db, 0, response, cache, 0), 1)
+    let inbound_answer = cmap_get(cache, "maf_inbound_answer|call-test")
+    assert(str_has_prefix(inbound_answer, "SIP/2.0 200 OK"))
+    assert(str_contains(inbound_answer, "Call-ID: inbound-wire@example.net"))
+    assert(str_contains(inbound_answer, "Content-Type: application/sdp"))
+    assert_eq(sip_validate_message(inbound_answer, len(inbound_answer)), 1)
 }
 
 // --- SDP validation ---
