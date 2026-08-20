@@ -23,7 +23,8 @@ scan_regex() {
   fi
 }
 
-scan_regex "possible private key material" 'BEGIN (RSA |EC |OPENSSH |)PRIVATE KEY|PRIVATE KEY-----'
+key_re='BEGIN (RSA |EC |OPENSSH |)PRIVATE KEY|PRIVATE KEY-{5}'
+scan_regex "possible private key material" "$key_re"
 scan_regex "possible hard-coded cloud credential" 'A[K]IA[0-9A-Z]{16}|A[S]IA[0-9A-Z]{16}|[a]ws_secret_access_key|[a]ws_access_key_id'
 
 sensitive_files=$(git ls-files | grep -E '(^|/)(\.env(\..*)?|madis\.env|.*\.(pem|key))$' | grep -vE '(^|/)[^/]+\.env\.example$|(^|/)madis\.env\.example$' || true)
