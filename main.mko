@@ -883,7 +883,7 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
     msg = ims_access_network_apply(msg, tr, ip)
 
     // Add received= and rport= to Via for NAT detection
-    msg = via_add_received(msg, len(msg), ip, port)
+    msg = via_add_received(msg, len(msg), ip, source_port)
     let msglen = len(msg)
 
     // --- Section 16.6 step 3: Decrement Max-Forwards ---

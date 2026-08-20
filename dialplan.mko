@@ -95,20 +95,27 @@ fn num_apply_chain(num: string, actions: string) -> string {
 //                         callee_action, caller_action, priority, direction
 fn db_dialplan(db: SqlDB, db_ok: int, caller: string, callee: string, direction: string, cache: CMap) -> []string {
     // Returns [transformed_callee, transformed_caller]
-    let mut result = make([]string, 2)
-    result[0] = callee
-    result[1] = caller
+    let mut out_callee = callee
+    let mut out_caller = caller
 
-    if db_ok == 0 { return result }
+    if db_ok == 0 {
+        let mut result = make([]string, 2)
+        result[0] = out_callee
+        result[1] = out_caller
+        return result
+    }
 
     let key = "dp|" + direction + "|" + callee
     if cmap_has(cache, key) == 1 {
         let cached = cmap_get(cache, key)
         let parts = str_split(cached, "\x01")
         if len(parts) >= 2 {
-            result[0] = parts[0]
-            result[1] = parts[1]
+            out_callee = parts[0]
+            out_caller = parts[1]
         }
+        let mut result = make([]string, 2)
+        result[0] = out_callee
+        result[1] = out_caller
         return result
     }
 
@@ -117,11 +124,14 @@ fn db_dialplan(db: SqlDB, db_ok: int, caller: string, callee: string, direction:
     if len(actions) > 0 {
         let action_parts = str_split(actions, "\x01")
         if len(action_parts) >= 1 && len(action_parts[0]) > 0 {
-            result[0] = num_apply_chain(callee, action_parts[0])
+            out_callee = num_apply_chain(callee, action_parts[0])
             if len(action_parts) >= 2 {
-                if len(action_parts[1]) > 0 { result[1] = num_apply_chain(caller, action_parts[1]) }
+                if len(action_parts[1]) > 0 { out_caller = num_apply_chain(caller, action_parts[1]) }
             }
-            let _ = bounded_cache_set(cache, "dp_seq", "dp_ring|", key, result[0] + "\x01" + result[1], 16384)
+            let _ = bounded_cache_set(cache, "dp_seq", "dp_ring|", key, out_callee + "\x01" + out_caller, 16384)
+            let mut result = make([]string, 2)
+            result[0] = out_callee
+            result[1] = out_caller
             return result
         }
     }
@@ -129,10 +139,13 @@ fn db_dialplan(db: SqlDB, db_ok: int, caller: string, callee: string, direction:
     // Default rule (prefix = '*')
     let def_action = sql_query_str(db, "SELECT callee_action FROM dialplan WHERE match_prefix = '*' AND direction = $1 AND enabled = true ORDER BY priority ASC LIMIT 1", direction)
     if len(def_action) > 0 {
-        result[0] = num_apply_chain(callee, def_action)
+        out_callee = num_apply_chain(callee, def_action)
     }
 
-    let _ = bounded_cache_set(cache, "dp_seq", "dp_ring|", key, result[0] + "\x01" + result[1], 16384)
+    let _ = bounded_cache_set(cache, "dp_seq", "dp_ring|", key, out_callee + "\x01" + out_caller, 16384)
+    let mut result = make([]string, 2)
+    result[0] = out_callee
+    result[1] = out_caller
     return result
 }
 

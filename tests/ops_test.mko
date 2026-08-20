@@ -60,3 +60,20 @@ fn TestProxyMafMetricsExport() {
     assert(str_contains(out, "madis_maf_command_recoveries_total{action=\"requeued\"} 4"))
     assert(str_contains(out, "madis_maf_inbound_calls_total{transport=\"UDP\"} 3"))
 }
+
+fn TestDialplanNoRuleKeepsNumbers() {
+    let db = sql_open_sqlite(":memory:")
+    let _ = sql_exec_plain(db, "CREATE TABLE dialplan (id INTEGER PRIMARY KEY AUTOINCREMENT, match_prefix TEXT NOT NULL, callee_action TEXT NOT NULL DEFAULT '', caller_action TEXT DEFAULT '', direction TEXT DEFAULT 'outbound', priority INTEGER DEFAULT 10, enabled BOOLEAN DEFAULT true)")
+    let cache = cmap_new()
+    let result = db_dialplan(db, 1, "facility-test", "15551234567", "outbound", cache)
+    assert_eq_str(result[0], "15551234567")
+    assert_eq_str(result[1], "facility-test")
+}
+
+fn TestViaAddReceivedUsesPacketSourcePort() {
+    let msg = "INVITE sip:b@example.net SIP/2.0\r\nVia: SIP/2.0/UDP 10.0.0.5:5062;branch=z9hG4bK-nat;rport\r\nFrom: <sip:a@example.net>;tag=a\r\nTo: <sip:b@example.net>\r\nCall-ID: nat@example.net\r\nCSeq: 1 INVITE\r\nContent-Length: 0\r\n\r\n"
+    let out = via_add_received(msg, len(msg), "198.51.100.10", 62000)
+    assert(str_contains(out, "received=198.51.100.10"))
+    assert(str_contains(out, "rport=62000"))
+    assert(not str_contains(out, "rport=5060"))
+}
