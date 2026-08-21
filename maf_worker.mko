@@ -263,6 +263,37 @@ fn maf_worker_cached_invite(packed: string) -> string {
     return maf_worker_json_unescape(json_get_string(packed, "invite"))
 }
 
+fn maf_worker_inbound_cancel_response(cache: CMap, call_id: string) -> string {
+    let packed = maf_worker_inbound_cache_get(cache, call_id)
+    if len(packed) == 0 { return "" }
+    let invite = maf_worker_cached_invite(packed)
+    if len(invite) == 0 { return "" }
+    let to_tag = "maf-in-" + sha256(call_id + "|cancel")[0:20]
+    let response = sip_reply_with_to_tag(invite, 487, "Request Terminated", "", "", to_tag)
+    if sip_validate_message(response, len(response)) == 0 { return "" }
+    return response
+}
+
+fn maf_worker_inbound_cancel_terminate(db: SqlDB, ok: int, msg: string, cache: CMap, out_fd: int) -> int {
+    if ok == 0 || not str_eq(str_to_upper(str_trim_space(madis_method(msg))), "CANCEL") { return 0 }
+    let tenant = maf_worker_tenant()
+    let call_id = maf_worker_inbound_call_for_wire(cache, tenant, sip_header(msg, "Call-ID"))
+    if len(call_id) == 0 { return 0 }
+    let current = sql_query_str2(db, "SELECT state FROM maf_calls WHERE tenant_id = $1 AND call_id = $2", tenant, call_id)
+    if str_eq(current, "answered") { return 0 }
+    let response = maf_worker_inbound_cancel_response(cache, call_id)
+    if len(response) == 0 { return 0 }
+    let packed = maf_worker_inbound_cache_get(cache, call_id)
+    let ip = json_get_string(packed, "ip")
+    let tr = json_get_string(packed, "transport")
+    let mut port = 5060
+    match parse_int(json_get_string(packed, "port")) { Ok(v) => { port = v } Err(_) => {} }
+    let invite = maf_worker_cached_invite(packed)
+    let _ = sip_server_txn_record(invite, response, ip, port, tr, out_fd, cache)
+    if sip_forward_reply(response, cache, out_fd) == 1 { return 1 }
+    return 0
+}
+
 fn maf_worker_inbound_cache_put(cache: CMap, call_id: string, value: string) -> int {
     if len(call_id) == 0 || len(value) == 0 || len(value) > 65536 { return 0 }
     return bounded_cache_set(cache, "maf_inbound_seq", "maf_inbound_ring|", "maf_inbound|" + call_id, value, 4096)

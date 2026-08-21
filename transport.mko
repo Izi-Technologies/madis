@@ -614,6 +614,16 @@ fn sip_forward_reply(reply: string, cache: CMap, out_fd: int) -> int {
             if str_eq(conn_tr, "WSS") || str_eq(conn_tr, "WS") {
                 let ws_sent = ws_send_text(conn_fd, reply)
                 if ws_sent >= 0 { return 1 }
+            } else if str_eq(conn_tr, "TLS") {
+                let mut handle = -1
+                match parse_int(cmap_get(cache, "server_conn_tls_handle|" + txn_key)) {
+                    Ok(v) => { handle = v }
+                    Err(_) => {}
+                }
+                if handle >= 0 {
+                    let tls_sent = tls_server_pool_write(handle, reply)
+                    if tls_sent >= len(reply) { return 1 }
+                }
             } else {
                 let sent_existing = tcp_write_all(conn_fd, reply)
                 if sent_existing >= 0 { return 1 }

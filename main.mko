@@ -959,7 +959,10 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
     let maf_inbound_call = maf_worker_inbound_call_for_wire(cache, maf_worker_tenant(), cid)
     if len(maf_inbound_call) > 0 {
         if is_ack == 1 { return "" }
-        if is_bye == 1 || is_cancel == 1 { return sip_reply(data, 200, "OK", "", "") }
+        if is_bye == 1 || is_cancel == 1 {
+            if is_cancel == 1 { let _ = maf_worker_inbound_cancel_terminate(db, db_ok, data, cache, forward_fd) }
+            return sip_reply(data, 200, "OK", "", "")
+        }
     }
 
     // === REGISTER ===
@@ -1852,6 +1855,8 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
     } else {
     // === CANCEL ===
     if is_cancel == 1 {
+        let _ = maf_worker_inbound_cancel_terminate(db, db_ok, data, cache, forward_fd)
+        let _ = maf_worker_sync_sip(db, db_ok, data, cache)
         let _ = sip_send_fork_cancels(cid, "", cache, forward_fd)
         let _ = sip_forward_dialog_request(msg, cid, "CANCEL", next_hop, ip, port, tr, cache, forward_fd)
         // Mark the INVITE transaction as cancelled. If the downstream UAS
@@ -2215,6 +2220,12 @@ fn sip_server_conn_track_transport(cache: CMap, txn: string, c: int, transport: 
     return sip_server_conn_track(cache, txn, c)
 }
 
+fn sip_server_conn_track_tls(cache: CMap, txn: string, c: int, handle: int) -> int {
+    if len(txn) <= 2 || handle < 0 { return 0 }
+    cmap_set(cache, "server_conn_tls_handle|" + txn, string(handle))
+    return sip_server_conn_track_transport(cache, txn, c, "TLS")
+}
+
 fn sip_server_conn_track(cache: CMap, txn: string, c: int) -> int {
     if len(txn) <= 2 { return 0 }
     let seq = cmap_incr(cache, "server_conn_seq", 1)
@@ -2223,7 +2234,7 @@ fn sip_server_conn_track(cache: CMap, txn: string, c: int) -> int {
     let ring_key = "server_conn_ring|" + string(slot)
     if cmap_has(cache, ring_key) == 1 {
         let old = cmap_get(cache, ring_key)
-        if len(old) > 0 && not str_eq(old, txn) { let _ = cmap_del(cache, "server_conn|" + old); let _ = cmap_del(cache, "server_conn_tr|" + old) }
+        if len(old) > 0 && not str_eq(old, txn) { let _ = cmap_del(cache, "server_conn|" + old); let _ = cmap_del(cache, "server_conn_tr|" + old); let _ = cmap_del(cache, "server_conn_tls_handle|" + old) }
     }
     cmap_set(cache, ring_key, txn)
     cmap_set(cache, "server_conn|" + txn, string(c))
@@ -2238,6 +2249,8 @@ fn sip_server_conn_track(cache: CMap, txn: string, c: int) -> int {
         let old_txn = str_trim_space(values[0])
         if len(old_txn) > 0 && cmap_has(cache, "server_conn|" + old_txn) == 1 {
             if str_eq(cmap_get(cache, "server_conn|" + old_txn), string(c)) { let _ = cmap_del(cache, "server_conn|" + old_txn) }
+            let _ = cmap_del(cache, "server_conn_tr|" + old_txn)
+            let _ = cmap_del(cache, "server_conn_tls_handle|" + old_txn)
         }
         start = 1
     }
@@ -2358,6 +2371,23 @@ fn tls_srv_cleanup(handle: int, el: EvLoop, tls_handles: map[string]int, buffers
     let _ = ims_flow_clear_conn(cache, peers[fd_key], peer_ports[fd_key], "TLS")
     let _ = proxy_conn_decr(cache, "TLS")
     if len(peers[fd_key]) > 0 { let _ = sip_per_ip_conn_release(cache, peers[fd_key]) }
+    let conn_list_key = "server_conn_list|" + fd_key
+    if cmap_has(cache, conn_list_key) == 1 {
+        let conn_list = str_split(cmap_get(cache, conn_list_key), ",")
+        let mut ci = 0
+        while ci < len(conn_list) {
+            let key = str_trim_space(conn_list[ci])
+            if len(key) > 0 && cmap_has(cache, "server_conn|" + key) == 1 {
+                if str_eq(cmap_get(cache, "server_conn|" + key), fd_key) {
+                    let _ = cmap_del(cache, "server_conn|" + key)
+                    let _ = cmap_del(cache, "server_conn_tr|" + key)
+                    let _ = cmap_del(cache, "server_conn_tls_handle|" + key)
+                }
+            }
+            ci = ci + 1
+        }
+        let _ = cmap_del(cache, conn_list_key)
+    }
     // RFC 5923: clear any alias entries for this closing connection
     let _ = tls_reuse_clear(cache, handle)
     let _ = tls_server_pool_close(handle)
@@ -2473,7 +2503,7 @@ fn tls_worker(fd: int, srv: TlsServer, port: int, reg: CMap, calls: CMap, cache:
                                 if len(msg) == 0 { break }
                                 if sip_ingress_header_safe(msg, len(msg)) == 0 || sip_ok(msg) == 0 { budget = budget - 1; continue }
                                 let tls_txn = sip_transaction_key(msg, len(msg))
-                                if len(tls_txn) > 2 { let _ = sip_server_conn_track_transport(cache, tls_txn, event_fd, "TLS") }
+                                if len(tls_txn) > 2 { let _ = sip_server_conn_track_tls(cache, tls_txn, event_fd, handle) }
                                 // RFC 5923: register inbound TLS conn as reusable when Via has ;alias
                                 if sip_is_response(msg) == 0 && tls_reuse_enabled() == 1 {
                                     let alias_via = sip_header(msg, "Via")
