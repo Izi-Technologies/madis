@@ -120,6 +120,9 @@ fn maf_worker_tenant() -> string {
 
 fn maf_worker_bootstrap(db: SqlDB) -> int {
     let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS maf_calls (call_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'created', version BIGINT NOT NULL DEFAULT 1, from_uri TEXT NOT NULL, to_uri TEXT NOT NULL, application_data JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW(), ended_at TIMESTAMP)")
+    let _ = sql_exec_plain(db, "ALTER TABLE maf_calls ADD COLUMN IF NOT EXISTS final_sip_code INT")
+    let _ = sql_exec_plain(db, "ALTER TABLE maf_calls ADD COLUMN IF NOT EXISTS final_reason TEXT NOT NULL DEFAULT ''")
+    let _ = sql_exec_plain(db, "ALTER TABLE maf_calls ADD COLUMN IF NOT EXISTS ended_by TEXT NOT NULL DEFAULT ''")
     let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS maf_channels (channel_id TEXT PRIMARY KEY, call_id TEXT NOT NULL REFERENCES maf_calls(call_id) ON DELETE CASCADE, tenant_id TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'created', direction TEXT NOT NULL, endpoint TEXT NOT NULL, version BIGINT NOT NULL DEFAULT 1, created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW())")
     let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS maf_commands (command_id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE, tenant_id TEXT NOT NULL, call_id TEXT NOT NULL DEFAULT '', operation TEXT NOT NULL, request_json JSONB NOT NULL DEFAULT '{}'::jsonb, request_hash TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'accepted', resource_id TEXT NOT NULL DEFAULT '', trace_id TEXT NOT NULL DEFAULT '', error_code TEXT NOT NULL DEFAULT '', error_message TEXT NOT NULL DEFAULT '', claim_token TEXT NOT NULL DEFAULT '', claimed_at TIMESTAMP, created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW())")
     let _ = sql_exec_plain(db, "ALTER TABLE maf_commands ADD COLUMN IF NOT EXISTS request_hash TEXT NOT NULL DEFAULT ''")
@@ -133,6 +136,10 @@ fn maf_worker_bootstrap(db: SqlDB) -> int {
     let _ = sql_exec_plain(db, "CREATE UNIQUE INDEX IF NOT EXISTS idx_maf_bridges_call_channels ON maf_bridges (tenant_id, call_id, md5(channel_ids::text))")
     let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS maf_media_operations (media_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, call_id TEXT NOT NULL REFERENCES maf_calls(call_id) ON DELETE CASCADE, operation TEXT NOT NULL, resource TEXT NOT NULL DEFAULT '', state TEXT NOT NULL DEFAULT 'accepted', error_code TEXT NOT NULL DEFAULT '', error_message TEXT NOT NULL DEFAULT '', created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW())")
     let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_maf_media_call ON maf_media_operations (tenant_id, call_id, created_at)")
+    let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS maf_route_attempts (attempt_id BIGSERIAL PRIMARY KEY, tenant_id TEXT NOT NULL, call_id TEXT NOT NULL REFERENCES maf_calls(call_id) ON DELETE CASCADE, command_id TEXT NOT NULL DEFAULT '', target TEXT NOT NULL, transport TEXT NOT NULL DEFAULT 'udp', mode TEXT NOT NULL DEFAULT 'proxy', status TEXT NOT NULL DEFAULT 'attempted', sip_code INT, error_code TEXT NOT NULL DEFAULT '', error_message TEXT NOT NULL DEFAULT '', started_at TIMESTAMP DEFAULT NOW(), completed_at TIMESTAMP)")
+    let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_maf_route_attempts_call ON maf_route_attempts (tenant_id, call_id, started_at DESC)")
+    let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS maf_capacity_policies (policy_id SERIAL PRIMARY KEY, tenant_id TEXT NOT NULL DEFAULT 'default', name TEXT NOT NULL, selector_type TEXT NOT NULL DEFAULT 'global', selector_value TEXT NOT NULL DEFAULT '', max_active_calls INT NOT NULL DEFAULT 0, max_cps INT NOT NULL DEFAULT 0, reject_sip_code INT NOT NULL DEFAULT 503, enabled BOOLEAN NOT NULL DEFAULT true, created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW(), UNIQUE(tenant_id, name))")
+    let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_maf_capacity_policies_selector ON maf_capacity_policies (tenant_id, enabled, selector_type, selector_value)")
     let _ = maf_headers_bootstrap(db)
     // PG trigger: NOTIFY on event insert so WS subscribers wake instantly.
     let _ = sql_exec_plain(db, "CREATE OR REPLACE FUNCTION maf_notify_event() RETURNS trigger AS $$ BEGIN PERFORM pg_notify('maf_events', NEW.tenant_id || '|' || NEW.event_type || '|' || NEW.call_id || '|' || NEW.sequence::text); RETURN NEW; END; $$ LANGUAGE plpgsql")
@@ -170,6 +177,27 @@ fn maf_worker_call_state_detail(db: SqlDB, ok: int, tenant: string, call_id: str
     return 1
 }
 
+fn maf_worker_call_final(db: SqlDB, ok: int, tenant: string, call_id: string, state: string, code: int, reason: string, ended_by: string, trace: string) -> int {
+    if ok == 0 || len(call_id) == 0 || len(state) == 0 { return 0 }
+    let rc = sql_exec_str4(db, "UPDATE maf_calls SET state = $2, version = version + 1, updated_at = NOW(), ended_at = CASE WHEN $2 IN ('ended','failed','canceled','rejected','timeout') THEN NOW() ELSE ended_at END, final_sip_code = CASE WHEN $4::jsonb->>'code' = '' THEN final_sip_code ELSE ($4::jsonb->>'code')::int END, final_reason = COALESCE(NULLIF($4::jsonb->>'reason',''), final_reason), ended_by = COALESCE(NULLIF($4::jsonb->>'ended_by',''), ended_by) WHERE tenant_id = $3 AND call_id = $1", call_id, state, tenant, "{\"code\":\"" + string(code) + "\",\"reason\":\"" + maf_worker_json_escape(reason) + "\",\"ended_by\":\"" + maf_worker_json_escape(ended_by) + "\"}")
+    if rc < 0 { return 0 }
+    let payload = "{\"call_id\":\"" + maf_worker_json_escape(call_id) + "\",\"state\":\"" + maf_worker_json_escape(state) + "\",\"sip_code\":" + string(code) + ",\"reason\":\"" + maf_worker_json_escape(reason) + "\",\"ended_by\":\"" + maf_worker_json_escape(ended_by) + "\",\"source\":\"sip-worker\"}"
+    let _ = maf_worker_emit_event(db, ok, tenant, "call." + state, call_id, payload, trace)
+    return 1
+}
+
+fn maf_worker_route_attempt_start(db: SqlDB, ok: int, tenant: string, call_id: string, command_id: string, target: string, transport: string, mode: string) -> int {
+    if ok == 0 || len(call_id) == 0 || len(target) == 0 { return 0 }
+    let packed = "{\"tenant_id\":\"" + maf_worker_json_escape(tenant) + "\",\"call_id\":\"" + maf_worker_json_escape(call_id) + "\",\"command_id\":\"" + maf_worker_json_escape(command_id) + "\",\"target\":\"" + maf_worker_json_escape(target) + "\",\"transport\":\"" + maf_worker_json_escape(transport) + "\",\"mode\":\"" + maf_worker_json_escape(mode) + "\"}"
+    return sql_exec_str4(db, "INSERT INTO maf_route_attempts (tenant_id, call_id, command_id, target, transport, mode, status) SELECT $1::jsonb->>'tenant_id', $1::jsonb->>'call_id', $1::jsonb->>'command_id', $1::jsonb->>'target', $1::jsonb->>'transport', $1::jsonb->>'mode', 'attempted'", packed, "", "", "")
+}
+
+fn maf_worker_route_attempt_finish(db: SqlDB, ok: int, tenant: string, call_id: string, status: string, code: int, err_code: string, err_msg: string) -> int {
+    if ok == 0 || len(call_id) == 0 || len(status) == 0 { return 0 }
+    let packed = "{\"status\":\"" + maf_worker_json_escape(status) + "\",\"code\":\"" + string(code) + "\",\"error_code\":\"" + maf_worker_json_escape(err_code) + "\",\"error_message\":\"" + maf_worker_json_escape(err_msg) + "\"}"
+    return sql_exec_str4(db, "UPDATE maf_route_attempts SET status = $4::jsonb->>'status', sip_code = CASE WHEN $4::jsonb->>'code' = '0' THEN sip_code ELSE ($4::jsonb->>'code')::int END, error_code = $4::jsonb->>'error_code', error_message = $4::jsonb->>'error_message', completed_at = NOW() WHERE tenant_id = $1 AND call_id = $2 AND attempt_id = (SELECT attempt_id FROM maf_route_attempts WHERE tenant_id = $1 AND call_id = $2 ORDER BY started_at DESC LIMIT 1)", tenant, call_id, "", packed)
+}
+
 fn maf_worker_command_state(db: SqlDB, ok: int, tenant: string, command_id: string, claim: string, status: string, code: string, message: string, call_id: string, trace: string) -> int {
     if ok == 0 || len(command_id) == 0 || len(claim) == 0 { return 0 }
     let packed = "{\"status\":\"" + maf_worker_json_escape(status) + "\",\"error_code\":\"" + maf_worker_json_escape(code) + "\",\"error_message\":\"" + maf_worker_json_escape(message) + "\"}"
@@ -202,6 +230,26 @@ fn maf_worker_int_text(value: string) -> int {
     match parse_int(str_trim_space(value)) { Ok(v) => { out = v } Err(_) => { out = 0 } }
     if out < 0 { out = 0 }
     return out
+}
+
+fn maf_worker_sip_reason(msg: string) -> string {
+    let first_end = str_index(msg, "\r\n")
+    let first = if first_end >= 0 { msg[0:first_end] } else { msg }
+    if not str_has_prefix(first, "SIP/2.0 ") { return "" }
+    let parts = str_split(first, " ")
+    if len(parts) < 3 { return "" }
+    let mut code = 0
+    match parse_int(parts[1]) { Ok(v) => { code = v } Err(_) => { return "" } }
+    if code < 100 || code > 699 { return "" }
+    let mut reason = ""
+    let mut i = 2
+    while i < len(parts) {
+        if len(reason) > 0 { reason = reason + " " }
+        reason = reason + parts[i]
+        i = i + 1
+    }
+    if maf_worker_text_safe(reason, 128) == 0 { return "" }
+    return reason
 }
 
 fn maf_worker_claim(db: SqlDB, ok: int, tenant: string, command_id: string, claim: string) -> int {
@@ -414,7 +462,7 @@ fn maf_worker_inbound_reject(db: SqlDB, ok: int, tenant: string, call_id: string
     match parse_int(json_get_string(packed, "port")) { Ok(v) => { port = v } Err(_) => {} }
     let _ = sip_server_txn_record(invite, response, ip, port, tr, out_fd, cache)
     if sip_forward_reply(response, cache, out_fd) == 0 { return "reject_delivery_failed|the worker could not deliver the SIP response" }
-    let _ = maf_worker_call_state(db, ok, tenant, call_id, "ended", trace)
+    let _ = maf_worker_call_final(db, ok, tenant, call_id, "rejected", code, reason, "application", trace)
     return "ok"
 }
 
@@ -458,6 +506,57 @@ fn maf_worker_invite(call_id: string, from_uri: string, to_uri: string, node_id:
         "CSeq: 1 INVITE\r\n" +
         "Contact: <sip:madis@" + node_addr + ">\r\n" +
         "Content-Length: 0\r\n\r\n"
+}
+
+fn maf_worker_from_domain(msg: string) -> string {
+    let uri = sip_contact_addr(sip_header(msg, "From"))
+    let at = str_index(uri, "@")
+    if at < 0 || at + 1 >= len(uri) { return "" }
+    let mut end = len(uri)
+    let semi = str_index(uri[at + 1:], ";")
+    if semi >= 0 { end = at + 1 + semi }
+    let domain = uri[at + 1:end]
+    if len(domain) == 0 || len(domain) > 255 || maf_worker_text_safe(domain, 255) == 0 { return "" }
+    return domain
+}
+
+fn maf_worker_digits_plus(s: string) -> string {
+    let mut b = str_builder()
+    let mut i = 0
+    while i < len(s) {
+        let c = int(s[i])
+        if (c >= 48 && c <= 57) || c == 43 { builder_write_byte(b, byte(c)) }
+        i = i + 1
+    }
+    return builder_string(b)
+}
+
+fn maf_worker_apply_presentation(msg: string, request: string) -> string {
+    let mut result = msg
+    let mut caller_uri = str_trim_space(json_get_string(request, "caller_uri"))
+    let caller_id = maf_worker_digits_plus(json_get_string(request, "caller_id"))
+    if len(caller_uri) == 0 && len(caller_id) > 0 {
+        let domain = maf_worker_from_domain(result)
+        if len(domain) > 0 { caller_uri = "sip:" + caller_id + "@" + domain }
+    }
+    if len(caller_uri) > 0 && maf_worker_endpoint_ok(caller_uri) == 1 {
+        let old_from = sip_header(result, "From")
+        let tag = sip_addr_tag(old_from)
+        let display_raw = str_trim_space(json_get_string(request, "caller_name"))
+        let display = if len(display_raw) > 0 && len(display_raw) <= 128 && maf_worker_text_safe(display_raw, 128) == 1 { "\"" + maf_worker_json_escape(display_raw) + "\" " } else { "" }
+        let mut from_value = display + "<" + caller_uri + ">"
+        if len(tag) > 0 { from_value = from_value + ";tag=" + tag }
+        result = hdr_set(result, "From", from_value)
+        let asserted = str_trim_space(json_get_string(request, "p_asserted_identity"))
+        if len(asserted) > 0 && maf_worker_endpoint_ok(asserted) == 1 {
+            result = hdr_set(result, "P-Asserted-Identity", "<" + asserted + ">")
+        }
+    }
+    let privacy = str_trim_space(json_get_string(request, "privacy"))
+    if len(privacy) > 0 && len(privacy) <= 64 && maf_worker_text_safe(privacy, 64) == 1 {
+        result = hdr_set(result, "Privacy", privacy)
+    }
+    return result
 }
 
 fn maf_worker_invite_with_sdp(invite: string, offer_sdp: string) -> string {
@@ -570,6 +669,7 @@ fn maf_worker_start_call(db: SqlDB, ok: int, tenant: string, call_id: string, re
     // Derive transport from the target URI scheme/params (sips:→TLS, transport=tcp, etc.)
     let tr = sip_transport_param(to_uri, "udp")
     let mut invite = maf_headers_apply(db, ok, tenant, call_id, maf_worker_invite(call_id, from_uri, to_uri, node_id, node_addr, tr), "INVITE", "outbound")
+    invite = maf_worker_apply_presentation(invite, request)
     let offer_sdp = maf_worker_json_unescape(json_get_string(request, "offer_sdp"))
     if len(offer_sdp) > 0 {
         invite = maf_worker_invite_with_sdp(invite, offer_sdp)
@@ -605,7 +705,7 @@ fn maf_worker_handle_outbound_response(db: SqlDB, ok: int, msg: string, cache: C
         let _ = maf_worker_sync_sip(db, ok, msg, cache)
         let code = sip_status_code(msg)
         if code >= 200 {
-            let _ = maf_worker_call_state(db, ok, maf_worker_tenant(), call_id, "ended", sha256("madis.maf.response|" + call_id + "|" + cseq_method + "|" + string(code))[0:32])
+            let _ = maf_worker_call_final(db, ok, maf_worker_tenant(), call_id, "ended", code, cseq_method, "remote", sha256("madis.maf.response|" + call_id + "|" + cseq_method + "|" + string(code))[0:32])
             let _ = rtp_process_delete(wire_call_id, db, ok, cache)
             let _ = cmap_del(cache, "maf_response|" + call_id)
             let _ = cmap_del(cache, "maf_target|" + call_id)
@@ -652,7 +752,10 @@ fn maf_worker_handle_outbound_response(db: SqlDB, ok: int, msg: string, cache: C
         }
     }
     if code >= 300 && code < 700 {
-        let _ = maf_worker_call_state(db, ok, maf_worker_tenant(), call_id, "failed", sha256("madis.maf.response|" + call_id + "|INVITE|" + string(code))[0:32])
+        let final_state = if code == 487 { "canceled" } else if code == 486 || code == 603 { "rejected" } else { "failed" }
+        let reason = maf_worker_sip_reason(msg)
+        let _ = maf_worker_route_attempt_finish(db, ok, maf_worker_tenant(), call_id, "failed", code, "sip_final_response", reason)
+        let _ = maf_worker_call_final(db, ok, maf_worker_tenant(), call_id, final_state, code, reason, "remote", sha256("madis.maf.response|" + call_id + "|INVITE|" + string(code))[0:32])
     }
     if code < 200 { return 1 }
     let mut tr = cmap_get(cache, "maf_transport|" + call_id)
@@ -1066,7 +1169,7 @@ fn maf_worker_execute(db: SqlDB, ok: int, tenant: string, operation: string, cal
     if str_eq(operation, "calls.hold") { return maf_worker_hold(db, ok, tenant, call_id, trace, cache, out_fd) }
     if str_eq(operation, "calls.unhold") { return maf_worker_unhold(db, ok, tenant, call_id, trace, cache, out_fd) }
     if str_eq(operation, "calls.dtmf") { return maf_worker_dtmf(db, ok, tenant, call_id, request, trace, cache, out_fd) }
-    if str_eq(operation, "calls.route") { return maf_worker_route(db, ok, tenant, call_id, request, trace, cache, out_fd, node_id) }
+    if str_eq(operation, "calls.route") { return maf_worker_route(db, ok, tenant, call_id, command_id, request, trace, cache, out_fd, node_id) }
     if str_eq(operation, "calls.rtp") { return maf_worker_rtp(db, ok, tenant, call_id, request, trace, cache) }
     if str_eq(operation, "calls.identity") { return maf_worker_identity(db, ok, tenant, call_id, request, trace, cache) }
     return "unknown_operation|operation is not allowlisted"
@@ -1106,6 +1209,8 @@ fn maf_worker_rtp(db: SqlDB, ok: int, tenant: string, call_id: string, request: 
 
     if str_eq(action, "delete") {
         let rc = rtp_delete_cache(cache, cfg[1], rtp_port, wire_cid)
+        let _ = sql_exec_str4(db, "UPDATE maf_calls SET application_data = application_data || $3::jsonb, updated_at = NOW() WHERE tenant_id = $1 AND call_id = $2", tenant, call_id, "{\"rtp_status\":\"deleted\",\"rtp_action\":\"delete\"}", "")
+        let _ = maf_worker_metric(cache, "maf_rtp_actions", "action=\"delete\",result=\"" + if rc == 1 { "ok" } else { "failed" } + "\"")
         let payload = "{\"call_id\":\"" + maf_worker_json_escape(call_id) + "\",\"action\":\"delete\",\"result\":\"" + if rc == 1 { "ok" } else { "failed" } + "\"}"
         let _ = maf_worker_emit_event(db, ok, tenant, "rtp.deleted", call_id, payload, trace)
         return if rc == 1 { "ok" } else { "rtp_delete_failed|rtpengine did not accept the delete" }
@@ -1148,6 +1253,8 @@ fn maf_worker_rtp(db: SqlDB, ok: int, tenant: string, call_id: string, request: 
         let _ = bounded_cache_set(cache, "rtp_seq", "rtp_ring|", "rtp_state|" + wire_cid, "offer|" + string(mono_ms()), 65536)
         // Store the rewritten SDP so the SDK can retrieve it
         let _ = bounded_cache_set(cache, "maf_cache_seq", "maf_cache_ring|", "maf_rtp_sdp|" + call_id, new_sdp, 65536)
+        let _ = sql_exec_str4(db, "UPDATE maf_calls SET application_data = application_data || $3::jsonb, updated_at = NOW() WHERE tenant_id = $1 AND call_id = $2", tenant, call_id, "{\"rtp_status\":\"offered\",\"rtp_action\":\"offer\"}", "")
+        let _ = maf_worker_metric(cache, "maf_rtp_actions", "action=\"offer\",result=\"ok\"")
         let payload = "{\"call_id\":\"" + maf_worker_json_escape(call_id) + "\",\"action\":\"offer\",\"result\":\"ok\"}"
         let _ = maf_worker_emit_event(db, ok, tenant, "rtp.offer", call_id, payload, trace)
         return "ok"
@@ -1167,6 +1274,8 @@ fn maf_worker_rtp(db: SqlDB, ok: int, tenant: string, call_id: string, request: 
         let new_sdp = bencode_get(resp, "sdp")
         let _ = bounded_cache_set(cache, "rtp_seq", "rtp_ring|", "rtp_state|" + wire_cid, "answer|" + string(mono_ms()), 65536)
         let _ = bounded_cache_set(cache, "maf_cache_seq", "maf_cache_ring|", "maf_rtp_sdp|" + call_id, new_sdp, 65536)
+        let _ = sql_exec_str4(db, "UPDATE maf_calls SET application_data = application_data || $3::jsonb, updated_at = NOW() WHERE tenant_id = $1 AND call_id = $2", tenant, call_id, "{\"rtp_status\":\"answered\",\"rtp_action\":\"answer\"}", "")
+        let _ = maf_worker_metric(cache, "maf_rtp_actions", "action=\"answer\",result=\"ok\"")
         let payload = "{\"call_id\":\"" + maf_worker_json_escape(call_id) + "\",\"action\":\"answer\",\"result\":\"ok\"}"
         let _ = maf_worker_emit_event(db, ok, tenant, "rtp.answer", call_id, payload, trace)
         return "ok"
@@ -1178,7 +1287,7 @@ fn maf_worker_rtp(db: SqlDB, ok: int, tenant: string, call_id: string, request: 
 // The SDK posts calls.route with a target SIP URI (or list) and optional
 // transport. The worker forwards the cached inbound INVITE to that target,
 // replacing the built-in routing engine for this call.
-fn maf_worker_route(db: SqlDB, ok: int, tenant: string, call_id: string, request: string, trace: string, cache: CMap, out_fd: int, node_id: string) -> string {
+fn maf_worker_route(db: SqlDB, ok: int, tenant: string, call_id: string, command_id: string, request: string, trace: string, cache: CMap, out_fd: int, node_id: string) -> string {
     let packed = maf_worker_inbound_cache_get(cache, call_id)
     if len(packed) == 0 { return "inbound_dialog_unavailable|route requires an owned inbound dialog" }
     let current = sql_query_str2(db, "SELECT state FROM maf_calls WHERE tenant_id = $1 AND call_id = $2", tenant, call_id)
@@ -1198,28 +1307,45 @@ fn maf_worker_route(db: SqlDB, ok: int, tenant: string, call_id: string, request
     // B2BUA mode: terminate both legs locally instead of proxy forwarding
     let mode = str_to_lower(str_trim_space(json_get_string(request, "mode")))
     if str_eq(mode, "b2bua") && b2bua_enabled() == 1 {
+        let _ = maf_worker_route_attempt_start(db, ok, tenant, call_id, command_id, target, tr, "b2bua")
         let b2_msg = b2bua_prepare_invite(invite, target, tr, public_ip + ":" + string(udp_port), tr, cache)
-        if len(b2_msg) == 0 { return "b2bua_build_failed|could not build B2BUA INVITE" }
+        if len(b2_msg) == 0 {
+            let _ = maf_worker_route_attempt_finish(db, ok, tenant, call_id, "failed", 0, "b2bua_build_failed", "could not build B2BUA INVITE")
+            return "b2bua_build_failed|could not build B2BUA INVITE"
+        }
         if sip_forward_target(target, b2_msg, tr, cache, out_fd) == 0 {
             let failed_key = b2bua_lookup_in(invite, cache)
             if len(failed_key) > 0 { let _ = b2bua_cleanup(failed_key, cache) }
+            let _ = maf_worker_route_attempt_finish(db, ok, tenant, call_id, "failed", 0, "route_delivery_failed", "could not forward B2BUA INVITE to target")
             return "route_delivery_failed|could not forward B2BUA INVITE to target"
         }
     } else {
+        let _ = maf_worker_route_attempt_start(db, ok, tenant, call_id, command_id, target, tr, "proxy")
         let from_uri = sip_contact_addr(sip_header(invite, "From"))
         let offer_sdp = sip_body(invite)
         let mut out_invite = maf_headers_apply(db, ok, tenant, call_id, maf_worker_invite(call_id, from_uri, target, node_id, public_ip + ":" + string(udp_port), tr), "INVITE", "outbound")
+        out_invite = maf_worker_apply_presentation(out_invite, request)
         if len(offer_sdp) > 0 {
             out_invite = maf_worker_invite_with_sdp(out_invite, offer_sdp)
-            if len(out_invite) == 0 { return "invalid_offer_sdp|cached inbound SDP is not usable" }
+            if len(out_invite) == 0 {
+                let _ = maf_worker_route_attempt_finish(db, ok, tenant, call_id, "failed", 0, "invalid_offer_sdp", "cached inbound SDP is not usable")
+                return "invalid_offer_sdp|cached inbound SDP is not usable"
+            }
             let from_tag = sip_addr_tag(sip_header(out_invite, "From"))
             let wire_call_id = sip_header(out_invite, "Call-ID")
             out_invite = rtp_process_offer(out_invite, len(out_invite), wire_call_id, from_tag, db, ok, cache)
         }
         // Apply externally-signed Identity if present.
         out_invite = maf_identity_apply(cache, call_id, out_invite)
-        if sip_validate_message(out_invite, len(out_invite)) == 0 { return "invalid_invite|" + maf_worker_invite_invalid_reason(out_invite) }
-        if sip_forward_target(target, out_invite, tr, cache, out_fd) == 0 { return "route_delivery_failed|could not forward INVITE to target" }
+        if sip_validate_message(out_invite, len(out_invite)) == 0 {
+            let invalid_reason = maf_worker_invite_invalid_reason(out_invite)
+            let _ = maf_worker_route_attempt_finish(db, ok, tenant, call_id, "failed", 0, "invalid_invite", invalid_reason)
+            return "invalid_invite|" + invalid_reason
+        }
+        if sip_forward_target(target, out_invite, tr, cache, out_fd) == 0 {
+            let _ = maf_worker_route_attempt_finish(db, ok, tenant, call_id, "failed", 0, "route_delivery_failed", "could not forward INVITE to target")
+            return "route_delivery_failed|could not forward INVITE to target"
+        }
         let wire_out_cid = sip_header(out_invite, "Call-ID")
         let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_dst|" + wire_out_cid, target, 131072)
         let _ = bounded_cache_set(cache, "maf_cache_seq", "maf_cache_ring|", "maf_invite|" + call_id, out_invite, 65536)
@@ -1229,6 +1355,8 @@ fn maf_worker_route(db: SqlDB, ok: int, tenant: string, call_id: string, request
     let _ = bounded_cache_set(cache, "maf_cache_seq", "maf_cache_ring|", "maf_transport|" + call_id, tr, 65536)
     let payload = "{\"call_id\":\"" + maf_worker_json_escape(call_id) + "\",\"target\":\"" + maf_worker_json_escape(target) + "\",\"transport\":\"" + maf_worker_json_escape(tr) + "\"}"
     let _ = maf_worker_emit_event(db, ok, tenant, "call.routed", call_id, payload, trace)
+    let _ = maf_worker_route_attempt_finish(db, ok, tenant, call_id, "sent", 0, "", "")
+    let _ = maf_worker_metric(cache, "maf_route_attempts", "transport=\"" + tr + "\",status=\"sent\"")
     let _ = maf_worker_call_state(db, ok, tenant, call_id, "ringing", trace)
     return "ok"
 }

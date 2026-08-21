@@ -202,6 +202,9 @@ fn maf_api_route(method: string, path: string) -> int {
     if str_eq(method, "POST") && str_eq(path, "/admin/api/v1/maf/ani-groups") { return 53 }
     if str_eq(method, "GET") && str_eq(path, "/admin/api/v1/maf/calls/active") { return 54 }
     if str_eq(method, "POST") && str_eq(path, "/admin/api/v1/maf/dispatch-members") { return 55 }
+    if str_eq(method, "POST") && len(maf_api_call_id(path, "identity")) > 0 { return 56 }
+    if str_eq(method, "GET") && str_eq(path, "/admin/api/v1/maf/capacity/policies") { return 57 }
+    if str_eq(method, "POST") && str_eq(path, "/admin/api/v1/maf/capacity/policies") { return 58 }
     return 0
 }
 
@@ -210,11 +213,59 @@ fn maf_api_ws_route(method: string, path: string) -> int {
 }
 
 fn maf_api_write_required(kind: int) -> int {
-    return if kind == 1 || kind >= 3 && kind <= 7 || kind == 9 || (kind >= 10 && kind <= 15) || kind == 20 || kind == 21 || kind == 26 || kind == 27 || kind == 29 || kind == 31 || kind == 33 || kind == 36 || kind == 37 || kind == 38 || kind == 40 || kind == 41 || kind == 43 || kind == 44 || kind == 46 || kind == 48 || kind == 50 || kind == 53 || kind == 55 || kind == 56 { 1 } else { 0 }
+    return if kind == 1 || kind >= 3 && kind <= 7 || kind == 9 || (kind >= 10 && kind <= 15) || kind == 20 || kind == 21 || kind == 26 || kind == 27 || kind == 29 || kind == 31 || kind == 33 || kind == 36 || kind == 37 || kind == 38 || kind == 40 || kind == 41 || kind == 43 || kind == 44 || kind == 46 || kind == 48 || kind == 50 || kind == 53 || kind == 55 || kind == 56 || kind == 58 { 1 } else { 0 }
+}
+
+fn maf_api_capacity_limit(db: SqlDB, ok: int, tenant: string) -> int {
+    let env_limit = str_trim_space(env_get_or("SIP_MAF_MAX_ACTIVE_CALLS", "0"))
+    let mut limit = 0
+    match parse_int(env_limit) { Ok(v) => { limit = v } Err(_) => {} }
+    let db_limit = sql_query_str2(db, "SELECT COALESCE(NULLIF(MAX(max_active_calls),0),0)::text FROM maf_capacity_policies WHERE tenant_id = $1 AND enabled AND selector_type = 'global'", tenant, "")
+    match parse_int(db_limit) { Ok(v) => { if v > 0 && (limit == 0 || v < limit) { limit = v } } Err(_) => {} }
+    if limit < 0 { limit = 0 }
+    return limit
+}
+
+fn maf_api_capacity_available(db: SqlDB, ok: int, tenant: string) -> int {
+    if ok == 0 { return 1 }
+    let limit = maf_api_capacity_limit(db, ok, tenant)
+    if limit <= 0 { return 1 }
+    let active_raw = sql_query_str2(db, "SELECT COUNT(*)::text FROM maf_calls WHERE tenant_id = $1 AND ended_at IS NULL AND state NOT IN ('ended','failed','canceled','rejected','timeout')", tenant, "")
+    let mut active = 0
+    match parse_int(active_raw) { Ok(v) => { active = v } Err(_) => {} }
+    return if active < limit { 1 } else { 0 }
+}
+
+fn maf_api_sip_uri_ok(value: string) -> int {
+    if len(value) < 5 || len(value) > 512 || maf_api_text_safe(value, 512) == 0 { return 0 }
+    let low = str_to_lower(str_trim_space(value))
+    if not str_has_prefix(low, "sip:") && not str_has_prefix(low, "sips:") { return 0 }
+    if str_index(value, "@") < 0 { return 0 }
+    if str_index(value, " ") >= 0 || str_index(value, "<") >= 0 || str_index(value, ">") >= 0 { return 0 }
+    return 1
+}
+
+fn maf_api_presentation_ok(body: string) -> int {
+    let low_body = str_to_lower(body)
+    if str_index(low_body, "\\r") >= 0 || str_index(low_body, "\\n") >= 0 { return 0 }
+    let caller_uri = str_trim_space(json_get_string(body, "caller_uri"))
+    if len(caller_uri) > 0 && maf_api_sip_uri_ok(caller_uri) == 0 { return 0 }
+    let caller_id = str_trim_space(json_get_string(body, "caller_id"))
+    if len(caller_id) > 64 || maf_api_text_safe(caller_id, 64) == 0 { return 0 }
+    let caller_name = str_trim_space(json_get_string(body, "caller_name"))
+    if len(caller_name) > 128 || maf_api_text_safe(caller_name, 128) == 0 { return 0 }
+    let pai = str_trim_space(json_get_string(body, "p_asserted_identity"))
+    if len(pai) > 0 && maf_api_sip_uri_ok(pai) == 0 { return 0 }
+    let privacy = str_trim_space(json_get_string(body, "privacy"))
+    if len(privacy) > 64 || maf_api_text_safe(privacy, 64) == 0 { return 0 }
+    return 1
 }
 
 fn maf_api_bootstrap(db: SqlDB) -> int {
     let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS maf_calls (call_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'created', version BIGINT NOT NULL DEFAULT 1, from_uri TEXT NOT NULL, to_uri TEXT NOT NULL, application_data JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW(), ended_at TIMESTAMP)")
+    let _ = sql_exec_plain(db, "ALTER TABLE maf_calls ADD COLUMN IF NOT EXISTS final_sip_code INT")
+    let _ = sql_exec_plain(db, "ALTER TABLE maf_calls ADD COLUMN IF NOT EXISTS final_reason TEXT NOT NULL DEFAULT ''")
+    let _ = sql_exec_plain(db, "ALTER TABLE maf_calls ADD COLUMN IF NOT EXISTS ended_by TEXT NOT NULL DEFAULT ''")
     let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_maf_calls_tenant_state ON maf_calls (tenant_id, state, updated_at)")
     let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS maf_channels (channel_id TEXT PRIMARY KEY, call_id TEXT NOT NULL REFERENCES maf_calls(call_id) ON DELETE CASCADE, tenant_id TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'created', direction TEXT NOT NULL, endpoint TEXT NOT NULL, version BIGINT NOT NULL DEFAULT 1, created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW())")
     let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_maf_channels_call ON maf_channels (call_id, tenant_id)")
@@ -231,6 +282,10 @@ fn maf_api_bootstrap(db: SqlDB) -> int {
     let _ = sql_exec_plain(db, "CREATE UNIQUE INDEX IF NOT EXISTS idx_maf_bridges_call_channels ON maf_bridges (tenant_id, call_id, md5(channel_ids::text))")
     let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS maf_media_operations (media_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, call_id TEXT NOT NULL REFERENCES maf_calls(call_id) ON DELETE CASCADE, operation TEXT NOT NULL, resource TEXT NOT NULL DEFAULT '', state TEXT NOT NULL DEFAULT 'accepted', error_code TEXT NOT NULL DEFAULT '', error_message TEXT NOT NULL DEFAULT '', created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW())")
     let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_maf_media_call ON maf_media_operations (tenant_id, call_id, created_at)")
+    let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS maf_route_attempts (attempt_id BIGSERIAL PRIMARY KEY, tenant_id TEXT NOT NULL, call_id TEXT NOT NULL REFERENCES maf_calls(call_id) ON DELETE CASCADE, command_id TEXT NOT NULL DEFAULT '', target TEXT NOT NULL, transport TEXT NOT NULL DEFAULT 'udp', mode TEXT NOT NULL DEFAULT 'proxy', status TEXT NOT NULL DEFAULT 'attempted', sip_code INT, error_code TEXT NOT NULL DEFAULT '', error_message TEXT NOT NULL DEFAULT '', started_at TIMESTAMP DEFAULT NOW(), completed_at TIMESTAMP)")
+    let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_maf_route_attempts_call ON maf_route_attempts (tenant_id, call_id, started_at DESC)")
+    let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS maf_capacity_policies (policy_id SERIAL PRIMARY KEY, tenant_id TEXT NOT NULL DEFAULT 'default', name TEXT NOT NULL, selector_type TEXT NOT NULL DEFAULT 'global', selector_value TEXT NOT NULL DEFAULT '', max_active_calls INT NOT NULL DEFAULT 0, max_cps INT NOT NULL DEFAULT 0, reject_sip_code INT NOT NULL DEFAULT 503, enabled BOOLEAN NOT NULL DEFAULT true, created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW(), UNIQUE(tenant_id, name))")
+    let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_maf_capacity_policies_selector ON maf_capacity_policies (tenant_id, enabled, selector_type, selector_value)")
     return 1
 }
 
@@ -252,7 +307,7 @@ fn maf_api_idempotency_state(db: SqlDB, ok: int, tenant: string, idempotency: st
 
 fn maf_api_call_resource(db: SqlDB, ok: int, tenant: string, call_id: string) -> string {
     if ok == 0 { return "" }
-    return sql_query_str2(db, "SELECT json_build_object('schema','madis.maf.call.v1','call_id',call_id,'tenant_id',tenant_id,'state',state,'version',version::text,'channels',COALESCE((SELECT json_agg(json_build_object('channel_id',channel_id,'state',state,'direction',direction,'endpoint',endpoint) ORDER BY created_at) FROM maf_channels c WHERE c.call_id = maf_calls.call_id AND c.tenant_id = maf_calls.tenant_id),'[]'::json),'bridges',COALESCE((SELECT json_agg(json_build_object('bridge_id',bridge_id,'channel_ids',channel_ids,'state',state,'created_at',created_at,'updated_at',updated_at) ORDER BY created_at) FROM maf_bridges b WHERE b.call_id = maf_calls.call_id AND b.tenant_id = maf_calls.tenant_id),'[]'::json),'media',COALESCE((SELECT json_agg(json_build_object('media_id',media_id,'operation',operation,'resource',resource,'state',state,'error_code',error_code,'error_message',error_message,'created_at',created_at,'updated_at',updated_at) ORDER BY created_at) FROM maf_media_operations m WHERE m.call_id = maf_calls.call_id AND m.tenant_id = maf_calls.tenant_id),'[]'::json),'created_at',created_at,'updated_at',updated_at)::text FROM maf_calls WHERE tenant_id = $1 AND call_id = $2", tenant, call_id)
+    return sql_query_str2(db, "SELECT json_build_object('schema','madis.maf.call.v1','call_id',call_id,'tenant_id',tenant_id,'state',state,'version',version::text,'from_uri',from_uri,'to_uri',to_uri,'application_data',application_data,'final_sip_code',final_sip_code,'final_reason',final_reason,'ended_by',ended_by,'channels',COALESCE((SELECT json_agg(json_build_object('channel_id',channel_id,'state',state,'direction',direction,'endpoint',endpoint) ORDER BY created_at) FROM maf_channels c WHERE c.call_id = maf_calls.call_id AND c.tenant_id = maf_calls.tenant_id),'[]'::json),'route_attempts',COALESCE((SELECT json_agg(json_build_object('attempt_id',attempt_id,'command_id',command_id,'target',target,'transport',transport,'mode',mode,'status',status,'sip_code',sip_code,'error_code',error_code,'error_message',error_message,'started_at',started_at,'completed_at',completed_at) ORDER BY started_at) FROM maf_route_attempts r WHERE r.call_id = maf_calls.call_id AND r.tenant_id = maf_calls.tenant_id),'[]'::json),'bridges',COALESCE((SELECT json_agg(json_build_object('bridge_id',bridge_id,'channel_ids',channel_ids,'state',state,'created_at',created_at,'updated_at',updated_at) ORDER BY created_at) FROM maf_bridges b WHERE b.call_id = maf_calls.call_id AND b.tenant_id = maf_calls.tenant_id),'[]'::json),'media',COALESCE((SELECT json_agg(json_build_object('media_id',media_id,'operation',operation,'resource',resource,'state',state,'error_code',error_code,'error_message',error_message,'created_at',created_at,'updated_at',updated_at) ORDER BY created_at) FROM maf_media_operations m WHERE m.call_id = maf_calls.call_id AND m.tenant_id = maf_calls.tenant_id),'[]'::json),'created_at',created_at,'updated_at',updated_at,'ended_at',ended_at)::text FROM maf_calls WHERE tenant_id = $1 AND call_id = $2", tenant, call_id)
 }
 
 fn maf_api_emit_event(db: SqlDB, ok: int, tenant: string, event_type: string, call_id: string, channel_id: string, payload: string, trace: string) -> int {
@@ -429,9 +484,11 @@ fn maf_api_create_call(db: SqlDB, ok: int, raw: string, n: int) -> string {
     let tenant = maf_api_tenant()
     let requested_tenant = json_get_string(body, "tenant_id")
     if len(requested_tenant) > 0 && not str_eq(requested_tenant, tenant) { return maf_api_error(403, "tenant policy denied the request") }
+    if maf_api_capacity_available(db, ok, tenant) == 0 { return maf_api_error(503, "MAF active call capacity exceeded") }
     let from_uri = json_get_string(body, "from")
     let to_uri = json_get_string(body, "to")
     if len(from_uri) == 0 || len(to_uri) == 0 || len(from_uri) > 512 || len(to_uri) > 512 { return maf_api_error(400, "from and to are required") }
+    if maf_api_presentation_ok(body) == 0 { return maf_api_error(400, "invalid caller presentation fields") }
     let idempotency = maf_api_command_id(raw, n, body)
     if maf_api_identifier_ok(idempotency, 8, 128) == 0 { return maf_api_error(400, "Idempotency-Key is required") }
     let mut command_id = str_trim_space(json_get_string(body, "command_id"))
@@ -535,6 +592,7 @@ fn maf_api_command(db: SqlDB, ok: int, kind: int, raw: string, n: int, call_id: 
     if kind == 14 {
         let route_target = json_get_string(body, "target")
         if len(route_target) == 0 || len(route_target) > 512 { return maf_api_error(400, "target is required for routing") }
+        if maf_api_presentation_ok(body) == 0 { return maf_api_error(400, "invalid caller presentation fields") }
     }
     if kind == 15 {
         let rtp_action = str_to_lower(str_trim_space(json_get_string(body, "action")))
@@ -1305,7 +1363,7 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         if scope < 1 { return maf_api_error(401, "authentication required") }
         if ok == 0 { return maf_api_error(503, "database unavailable") }
         let tenant = maf_api_tenant()
-        let rows = tbl_query_param(db, ok, "SELECT json_build_object('call_id',call_id,'state',state,'from_uri',from_uri,'to_uri',to_uri,'created_at',created_at,'updated_at',updated_at)::text FROM maf_calls WHERE tenant_id = $1 AND state NOT IN ('ended','failed') ORDER BY created_at DESC LIMIT 100", tenant, 100)
+        let rows = tbl_query_param(db, ok, "SELECT json_build_object('call_id',call_id,'state',state,'from_uri',from_uri,'to_uri',to_uri,'application_data',application_data,'final_sip_code',final_sip_code,'final_reason',final_reason,'ended_by',ended_by,'created_at',created_at,'updated_at',updated_at)::text FROM maf_calls WHERE tenant_id = $1 AND ended_at IS NULL AND state NOT IN ('ended','failed','canceled','rejected','timeout') ORDER BY created_at DESC LIMIT 100", tenant, 100)
         let mut out = "{\"schema\":\"madis.maf.calls-active.v1\",\"calls\":["
         let mut i = 0
         while i < len(rows) {
@@ -1340,6 +1398,51 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         let rc = sql_exec_str4(db, "INSERT INTO dispatch_members (set_id, gateway_id, priority, weight) VALUES (($1::jsonb->>'set_id')::int, ($1::jsonb->>'gateway_id')::int, ($1::jsonb->>'priority')::int, ($1::jsonb->>'weight')::int) ON CONFLICT (set_id, gateway_id) DO UPDATE SET priority = ($1::jsonb->>'priority')::int, weight = ($1::jsonb->>'weight')::int", packed, "", "", "")
         if rc < 0 { return maf_api_error(500, "dispatch member insert failed") }
         return http_resp(201, "application/json", "{\"ok\":true,\"set_name\":\"" + maf_api_json_escape(set_name) + "\",\"gateway_name\":\"" + maf_api_json_escape(gateway_name) + "\"}\n", "Cache-Control: no-store\r\n")
+    }
+    // GET /admin/api/v1/maf/capacity/policies — list call admission policies
+    if kind == 57 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 1 { return maf_api_error(401, "authentication required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        let tenant = maf_api_tenant()
+        let rows = tbl_query_param(db, ok, "SELECT json_build_object('policy_id',policy_id,'name',name,'selector_type',selector_type,'selector_value',selector_value,'max_active_calls',max_active_calls,'max_cps',max_cps,'reject_sip_code',reject_sip_code,'enabled',enabled,'created_at',created_at,'updated_at',updated_at)::text FROM maf_capacity_policies WHERE tenant_id = $1 ORDER BY selector_type,name LIMIT 100", tenant, 100)
+        let mut out = "{\"schema\":\"madis.maf.capacity-policies.v1\",\"policies\":["
+        let mut i = 0
+        while i < len(rows) {
+            if i > 0 { out = out + "," }
+            out = out + rows[i]
+            i = i + 1
+        }
+        return http_resp(200, "application/json", out + "]}\n", "Cache-Control: no-store\r\n")
+    }
+    // POST /admin/api/v1/maf/capacity/policies — create or update policy
+    if kind == 58 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 2 { return maf_api_error(if scope == 0 { 401 } else { 403 }, "write scope required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        if maf_api_body_ok(raw, n, 1) == 0 { return maf_api_error(400, "application/json body required") }
+        let body = parse_body(raw, n)
+        let name = json_get_string(body, "name")
+        if maf_api_identifier_ok(name, 1, 128) == 0 { return maf_api_error(400, "valid policy name required") }
+        let selector_type_raw = str_to_lower(str_trim_space(json_get_string(body, "selector_type")))
+        let selector_type = if str_eq(selector_type_raw, "source_ip") || str_eq(selector_type_raw, "target") || str_eq(selector_type_raw, "tenant") { selector_type_raw } else { "global" }
+        let selector_value = json_get_string(body, "selector_value")
+        if len(selector_value) > 256 || maf_api_text_safe(selector_value, 256) == 0 { return maf_api_error(400, "selector_value is invalid") }
+        let mut max_active = json_get_int(body, "max_active_calls")
+        let mut max_cps = json_get_int(body, "max_cps")
+        let mut reject_code = json_get_int(body, "reject_sip_code")
+        if max_active < 0 { max_active = 0 }
+        if max_active > 1000000 { max_active = 1000000 }
+        if max_cps < 0 { max_cps = 0 }
+        if max_cps > 100000 { max_cps = 100000 }
+        if reject_code < 300 || reject_code > 699 { reject_code = 503 }
+        let enabled_raw = str_to_lower(str_trim_space(json_get_string(body, "enabled")))
+        let enabled = if str_eq(enabled_raw, "false") { "false" } else { "true" }
+        let tenant = maf_api_tenant()
+        let packed = "{\"tenant_id\":\"" + maf_api_json_escape(tenant) + "\",\"name\":\"" + maf_api_json_escape(name) + "\",\"selector_type\":\"" + maf_api_json_escape(selector_type) + "\",\"selector_value\":\"" + maf_api_json_escape(selector_value) + "\",\"max_active_calls\":" + string(max_active) + ",\"max_cps\":" + string(max_cps) + ",\"reject_sip_code\":" + string(reject_code) + ",\"enabled\":" + enabled + "}"
+        let rc = sql_exec_str4(db, "INSERT INTO maf_capacity_policies (tenant_id,name,selector_type,selector_value,max_active_calls,max_cps,reject_sip_code,enabled) SELECT $1::jsonb->>'tenant_id',$1::jsonb->>'name',$1::jsonb->>'selector_type',$1::jsonb->>'selector_value',($1::jsonb->>'max_active_calls')::int,($1::jsonb->>'max_cps')::int,($1::jsonb->>'reject_sip_code')::int,($1::jsonb->>'enabled')::boolean ON CONFLICT (tenant_id,name) DO UPDATE SET selector_type=EXCLUDED.selector_type,selector_value=EXCLUDED.selector_value,max_active_calls=EXCLUDED.max_active_calls,max_cps=EXCLUDED.max_cps,reject_sip_code=EXCLUDED.reject_sip_code,enabled=EXCLUDED.enabled,updated_at=NOW()", packed, "", "", "")
+        if rc < 0 { return maf_api_error(500, "capacity policy upsert failed") }
+        return http_resp(201, "application/json", "{\"ok\":true,\"name\":\"" + maf_api_json_escape(name) + "\"}\n", "Cache-Control: no-store\r\n")
     }
     return maf_api_error(404, "not found")
 }

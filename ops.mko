@@ -251,7 +251,7 @@ fn proxy_metrics_labeled_export(cache: CMap) -> string {
         mi = mi + 1
     }
     let mut maf_found = 0
-    let maf_ops = ["calls.create", "calls.answer", "calls.hangup", "calls.route", "bridges.create", "bridges.destroy", "media.play", "media.stop", "dtmf.send"]
+    let maf_ops = ["calls.create", "calls.answer", "calls.reject", "calls.hangup", "calls.route", "calls.rtp", "calls.identity", "calls.bridge", "calls.media", "calls.transfer", "calls.hold", "calls.unhold", "calls.dtmf"]
     let maf_status = ["processing", "completed"]
     let mut moi = 0
     while moi < len(maf_ops) {
@@ -313,6 +313,49 @@ fn proxy_metrics_labeled_export(cache: CMap) -> string {
             builder_write(b, "madis_maf_command_recoveries_total{action=\"" + recovery_actions[rai] + "\"} " + cmap_get(cache, key) + "\n")
         }
         rai = rai + 1
+    }
+    let mut route_found = 0
+    let route_transports = ["udp", "tcp", "tls", "ws", "wss"]
+    let route_statuses = ["sent", "failed"]
+    let mut rti = 0
+    while rti < len(route_transports) {
+        let mut rsi = 0
+        while rsi < len(route_statuses) {
+            let key = "prom|maf_route_attempts|transport=\"" + route_transports[rti] + "\",status=\"" + route_statuses[rsi] + "\""
+            if cmap_has(cache, key) == 1 {
+                if route_found == 0 {
+                    builder_write(b, "# TYPE madis_maf_route_attempts_total counter\n")
+                    route_found = 1
+                }
+                builder_write(b, "madis_maf_route_attempts_total{transport=\"" + route_transports[rti] + "\",status=\"" + route_statuses[rsi] + "\"} " + cmap_get(cache, key) + "\n")
+            }
+            rsi = rsi + 1
+        }
+        rti = rti + 1
+    }
+    let mut rtp_found = 0
+    let rtp_actions = ["offer", "answer", "delete", "query"]
+    let rtp_results = ["ok", "failed"]
+    let mut rai2 = 0
+    while rai2 < len(rtp_actions) {
+        let mut rri = 0
+        while rri < len(rtp_results) {
+            let key = "prom|maf_rtp_actions|action=\"" + rtp_actions[rai2] + "\",result=\"" + rtp_results[rri] + "\""
+            if cmap_has(cache, key) == 1 {
+                if rtp_found == 0 {
+                    builder_write(b, "# TYPE madis_maf_rtp_actions_total counter\n")
+                    rtp_found = 1
+                }
+                builder_write(b, "madis_maf_rtp_actions_total{action=\"" + rtp_actions[rai2] + "\",result=\"" + rtp_results[rri] + "\"} " + cmap_get(cache, key) + "\n")
+            }
+            rri = rri + 1
+        }
+        rai2 = rai2 + 1
+    }
+    let stale_key = "prom|maf_stale_cleanups|reason=\"timer_expired\""
+    if cmap_has(cache, stale_key) == 1 {
+        builder_write(b, "# TYPE madis_maf_stale_cleanups_total counter\n")
+        builder_write(b, "madis_maf_stale_cleanups_total{reason=\"timer_expired\"} " + cmap_get(cache, stale_key) + "\n")
     }
     return builder_string(b)
 }

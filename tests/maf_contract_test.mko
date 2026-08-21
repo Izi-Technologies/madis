@@ -96,6 +96,9 @@ fn TestMafEveryHttpRouteIsAllowlisted() {
     assert_eq(maf_api_route("POST", "/admin/api/v1/maf/calls/call-12345678/media"), 7)
     assert_eq(maf_api_route("GET", "/admin/api/v1/maf/events"), 8)
     assert_eq(maf_api_route("POST", "/admin/api/v1/maf/calls/call-12345678/headers"), 9)
+    assert_eq(maf_api_route("POST", "/admin/api/v1/maf/calls/call-12345678/identity"), 56)
+    assert_eq(maf_api_route("GET", "/admin/api/v1/maf/capacity/policies"), 57)
+    assert_eq(maf_api_route("POST", "/admin/api/v1/maf/capacity/policies"), 58)
     assert_eq(maf_api_ws_route("GET", "/admin/api/v1/maf/events/ws"), 1)
     assert_eq(maf_api_ws_route("POST", "/admin/api/v1/maf/events/ws"), 0)
     assert_eq(maf_api_write_required(1), 1)
@@ -104,6 +107,8 @@ fn TestMafEveryHttpRouteIsAllowlisted() {
     assert_eq(maf_api_write_required(7), 1)
     assert_eq(maf_api_write_required(9), 1)
     assert_eq(maf_api_write_required(8), 0)
+    assert_eq(maf_api_write_required(57), 0)
+    assert_eq(maf_api_write_required(58), 1)
 }
 
 fn TestMafRejectsPathConfusionAndUnsafeIdentifiers() {
@@ -146,6 +151,22 @@ fn TestMafWorkerEndpointAndInviteBoundaries() {
     assert(str_contains(invite, "Call-ID: call-12345678@node1"))
 }
 
+fn TestMafPresentationControlsCallerIdentity() {
+    let invite = maf_worker_invite("call-12345678", "sip:alice@example.net", "sip:bob@example.net", "node1", "127.0.0.1", "udp")
+    let request = "{\"caller_id\":\"15551230000\",\"caller_name\":\"Operations\",\"p_asserted_identity\":\"sip:15551230000@example.net\",\"privacy\":\"none\"}"
+    let out = maf_worker_apply_presentation(invite, request)
+    assert(str_contains(out, "From: \"Operations\" <sip:15551230000@example.net>;tag="))
+    assert(str_contains(out, "P-Asserted-Identity: <sip:15551230000@example.net>"))
+    assert(str_contains(out, "Privacy: none"))
+    assert_eq(sip_validate_message(out, len(out)), 1)
+}
+
+fn TestMafPresentationRejectsUnsafeApiFields() {
+    assert_eq(maf_api_presentation_ok("{\"caller_uri\":\"sip:15551230000@example.net\",\"caller_name\":\"Ops\"}"), 1)
+    assert_eq(maf_api_presentation_ok("{\"caller_uri\":\"http://example.net\"}"), 0)
+    assert_eq(maf_api_presentation_ok("{\"caller_name\":\"bad\\r\\nX-Evil: yes\"}"), 0)
+}
+
 fn TestMafCursorAndBoundedQueryValues() {
     assert_eq(maf_api_parse_cursor(""), 0)
     assert_eq(maf_api_parse_cursor("cursor=42"), 42)
@@ -168,6 +189,12 @@ fn TestMafInboundCallIdentifiers() {
 fn TestMafInboundAnswerSdpBoundaries() {
     let sdp = "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=MAF\r\nt=0 0\r\nm=audio 4000 RTP/AVP 0\r\n"
     assert_eq(maf_worker_answer_sdp_ok(sdp), 1)
+}
+
+fn TestMafWorkerSipReasonPhrase() {
+    assert_eq_str(maf_worker_sip_reason("SIP/2.0 486 Busy Here\r\nContent-Length: 0\r\n\r\n"), "Busy Here")
+    assert_eq_str(maf_worker_sip_reason("SIP/2.0 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n"), "Service Unavailable")
+    assert_eq_str(maf_worker_sip_reason("INVITE sip:bob@example.net SIP/2.0\r\nContent-Length: 0\r\n\r\n"), "")
 }
 
 fn TestMafInboundAnswerSdpRequiresMedia() {

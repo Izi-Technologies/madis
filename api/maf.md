@@ -38,6 +38,36 @@ state.
 | `calls.rtp` | Direct RTPEngine control: offer, answer, delete, query |
 | `calls.identity` | STIR/SHAKEN identity: external signing, verification, attestation |
 
+### Caller presentation
+
+`calls.create` and `calls.route` accept optional caller-presentation fields:
+
+- `caller_uri`: full SIP URI to place in the outbound `From` header.
+- `caller_id`: telephone number used to build a `sip:` URI on the existing
+  From domain when `caller_uri` is omitted.
+- `caller_name`: display name for the outbound `From` header.
+- `p_asserted_identity`: SIP URI for `P-Asserted-Identity`.
+- `privacy`: bounded `Privacy` header value.
+
+These fields are the supported way for applications to control caller ID and
+presentation. Generic `calls.headers` rules still protect dialog-owned headers
+such as `From`, `To`, `Call-ID`, `CSeq`, `Via`, and `Contact`.
+
+```sh
+curl -X POST "$MAF_BASE_URL/api/v1/maf/calls/$CALL_ID/route" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: route-$CALL_ID" \
+  --data '{
+    "target": "sip:dest@gateway.example.com",
+    "transport": "udp",
+    "caller_id": "+15551230000",
+    "caller_name": "Example Service",
+    "p_asserted_identity": "sip:+15551230000@example.net",
+    "privacy": "none"
+  }'
+```
+
 ### External STIR/SHAKEN signing
 
 The `calls.identity` operation lets SDKs manage STIR/SHAKEN through external
@@ -130,6 +160,35 @@ Header policies are:
 - **Direction-filtered**: `inbound`, `outbound`, or `both`
 - **Priority-ordered**: applied in the order specified
 - **Bounded**: max 32 operations per call, 4KB per value, 128-byte names
+
+### Capacity policies
+
+MAF can hold generic call admission policies in PostgreSQL and enforce a global
+active-call ceiling for API-originated calls. Set `SIP_MAF_MAX_ACTIVE_CALLS`
+for an environment-level limit, or create a policy:
+
+```sh
+curl -X POST "$MAF_BASE_URL/api/v1/maf/capacity/policies" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{
+    "name": "global-default",
+    "selector_type": "global",
+    "max_active_calls": 10000,
+    "max_cps": 500,
+    "reject_sip_code": 503,
+    "enabled": true
+  }'
+```
+
+Applications can use source or target policies for their own admission logic,
+while Madis enforces the global active-call ceiling in the MAF create path.
+
+### Route Attempts And Final State
+
+Call resources include `route_attempts`, `final_sip_code`, `final_reason`, and
+`ended_by`. This makes answered, rejected, canceled, failed, and timed-out calls
+visible without reconstructing state from command rows.
 
 ### SDK-controlled routing
 
@@ -621,6 +680,8 @@ GET    /admin/api/v1/maf/ani-groups                       — list ANI groups
 POST   /admin/api/v1/maf/ani-groups                      — create ANI group
 GET    /admin/api/v1/maf/calls/active                     — active (non-ended) calls
 POST   /admin/api/v1/maf/dispatch-members                — add gateway to dispatch set
+GET    /admin/api/v1/maf/capacity/policies                — list capacity policies
+POST   /admin/api/v1/maf/capacity/policies               — create/update capacity policy
 ```
 
 ## Authentication and tenant scoping

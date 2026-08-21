@@ -387,7 +387,10 @@ fn sip_client_txn_tick(cache: CMap, out_fd: int, calls: CMap, db: SqlDB, db_ok: 
                                 if len(inbound_invite) > 0 {
                                     let _ = sip_call_state_timeout_cleanup(calls, cache, inbound_invite)
                                 }
-                                let _ = maf_worker_call_state(db, db_ok, maf_worker_tenant(), maf_timeout_call, "failed", sha256("madis.maf.inbound.timeout|" + maf_timeout_call)[0:32])
+                                let timeout_state = if timeout_code == 487 { "canceled" } else { "timeout" }
+                                let _ = maf_worker_call_final(db, db_ok, maf_worker_tenant(), maf_timeout_call, timeout_state, timeout_code, timeout_reason, "timer", sha256("madis.maf.inbound.timeout|" + maf_timeout_call)[0:32])
+                                let _ = maf_worker_route_attempt_finish(db, db_ok, maf_worker_tenant(), maf_timeout_call, "failed", timeout_code, "timer_expired", timeout_reason)
+                                let _ = cmap_incr(cache, "prom|maf_stale_cleanups|reason=\"timer_expired\"", 1)
                                 let _ = cmap_del(cache, "maf_inbound|" + maf_timeout_call)
                                 let _ = cmap_del(cache, "maf_created_ms|" + maf_timeout_call)
                                 let _ = cmap_del(cache, "maf_invite|" + maf_timeout_call)
