@@ -184,6 +184,10 @@ fn sip_forward_first(targets: string, msg: string, cache: CMap, cid: string, out
     if len(primary) == 0 { return "" }
     let ok = sip_forward_target(primary, msg, "udp", cache, out_fd)
     if ok == 1 {
+        let method = madis_method(msg)
+        if not str_eq(method, "ACK") && not str_eq(method, "") {
+            let _ = sip_client_txn_record(msg, primary, sip_transport_param(primary, "udp"), out_fd, cache)
+        }
         let _ = bounded_cache_set(cache, "dispatch_seq", "dispatch_ring|", "dispatch|" + cid, targets, 65536)
         let _ = bounded_cache_set(cache, "dispatch_idx_seq", "dispatch_idx_ring|", "dispatch_idx|" + cid, "0", 65536)
         return primary
@@ -301,7 +305,7 @@ fn sip_forward_dialog_request(msg: string, cid: string, method: string, route_ta
     return sent
 }
 
-fn sip_client_txn_tick(cache: CMap, out_fd: int) -> int {
+fn sip_client_txn_tick(cache: CMap, out_fd: int, calls: CMap, db: SqlDB, db_ok: int) -> int {
     let now = mono_ms()
     let mut acted = 0
     let owner_s = string(out_fd)
@@ -356,6 +360,42 @@ fn sip_client_txn_tick(cache: CMap, out_fd: int) -> int {
                             if len(sip_header(upstream, "Via")) > 0 {
                                 let _ = sip_forward_reply(upstream, cache, out_fd)
                             }
+                        }
+                        if str_eq(madis_method(req), "INVITE") {
+                            let mut caller = sip_uri_user(sip_header(req, "From"))
+                            let mut callee = sip_uri_user(sip_header(req, "To"))
+                            if cmap_has(calls, timeout_cid) == 1 {
+                                let parts = str_split(cmap_get(calls, timeout_cid), "|")
+                                if len(parts) >= 2 {
+                                    caller = parts[0]
+                                    callee = parts[1]
+                                }
+                            }
+                            let _ = db_cdr(db, db_ok, timeout_cid, caller, callee, "TIMEOUT:" + string(timeout_code))
+                            let _ = rtp_process_delete(timeout_cid, db, db_ok, cache)
+                            let mut maf_timeout_call = maf_worker_inbound_call_for_wire(cache, maf_worker_tenant(), timeout_cid)
+                            if len(maf_timeout_call) == 0 {
+                                let at = str_index(timeout_cid, "@")
+                                let candidate = if at > 0 { timeout_cid[0:at] } else { timeout_cid }
+                                if len(candidate) > 0 && len(maf_worker_inbound_cache_get(cache, candidate)) > 0 {
+                                    maf_timeout_call = candidate
+                                }
+                            }
+                            if len(maf_timeout_call) > 0 {
+                                let packed = maf_worker_inbound_cache_get(cache, maf_timeout_call)
+                                let inbound_invite = maf_worker_cached_invite(packed)
+                                if len(inbound_invite) > 0 {
+                                    let _ = sip_call_state_timeout_cleanup(calls, cache, inbound_invite)
+                                }
+                                let _ = maf_worker_call_state(db, db_ok, maf_worker_tenant(), maf_timeout_call, "failed", sha256("madis.maf.inbound.timeout|" + maf_timeout_call)[0:32])
+                                let _ = cmap_del(cache, "maf_inbound|" + maf_timeout_call)
+                                let _ = cmap_del(cache, "maf_created_ms|" + maf_timeout_call)
+                                let _ = cmap_del(cache, "maf_invite|" + maf_timeout_call)
+                                let _ = cmap_del(cache, "maf_target|" + maf_timeout_call)
+                                let _ = cmap_del(cache, "maf_transport|" + maf_timeout_call)
+                                let _ = cmap_del(cache, "maf_response|" + maf_timeout_call)
+                            }
+                            let _ = sip_call_state_timeout_cleanup(calls, cache, req)
                         }
                         let _ = sip_client_txn_cleanup(key, cache)
                         acted = acted + 1
@@ -2344,7 +2384,7 @@ fn udp_worker(id: int, fd: int, port: int, reg: CMap, calls: CMap, cache: CMap, 
         let tick_now = mono_ms()
         if tick_now - last_txn_tick >= 1000 {
             let _ = sip_stream_poll(fd, reg, calls, db, db_ok, cache, outbox, realm, nid, diameter_lock)
-            let _ = sip_client_txn_tick(cache, fd)
+            let _ = sip_client_txn_tick(cache, fd, calls, db, db_ok)
             let _ = sip_server_txn_tick(cache, fd)
             last_txn_tick = tick_now
         }
@@ -2355,16 +2395,22 @@ fn udp_worker(id: int, fd: int, port: int, reg: CMap, calls: CMap, cache: CMap, 
     return 0
 }
 
-fn maf_poll_worker(fd: int, cache: CMap) -> int {
+fn maf_poll_worker(fd: int, cache: CMap, calls: CMap) -> int {
     let db_url = env_get_or("SIP_DB_URL", "")
     let nid = env_get_or("SIP_NODE_ID", "node1")
     let mut db_ok = 0
     let mut db = sql_open_postgres(db_url)
     if len(db_url) > 0 { db_ok = 1 }
+    let mut last_txn_tick = mono_ms()
     slog("  MAF:     command poll worker started")
     while shutdown_requested() == 0 {
         let acted = maf_worker_poll(db, db_ok, cache, fd, nid)
         if acted > 0 { slog("  MAF:     processed " + string(acted) + " command(s)") }
+        let tick_now = mono_ms()
+        if tick_now - last_txn_tick >= 1000 {
+            let _ = sip_client_txn_tick(cache, fd, calls, db, db_ok)
+            last_txn_tick = tick_now
+        }
         sleep_ms(1000)
     }
     return 0
@@ -2568,7 +2614,7 @@ fn tls_worker(fd: int, srv: TlsServer, port: int, reg: CMap, calls: CMap, cache:
         let maint_now = mono_ms()
         if maint_now - last_txn_tick >= 250 {
             let _ = sip_stream_poll(forward_fd, reg, calls, db, db_ok, cache, outbox, realm, nid, diameter_lock)
-            let _ = sip_client_txn_tick(cache, forward_fd)
+            let _ = sip_client_txn_tick(cache, forward_fd, calls, db, db_ok)
             let _ = sip_server_txn_tick(cache, forward_fd)
             last_txn_tick = maint_now
         }
@@ -3068,7 +3114,7 @@ fn main() {
             }
         }
         if maf_poll_fd >= 0 {
-            let _ = t.kick(maf_poll_worker(maf_poll_fd, cache))
+            let _ = t.kick(maf_poll_worker(maf_poll_fd, cache, calls))
         }
         let mut tcp_i = 0
         while tcp_i < tcp_workers {

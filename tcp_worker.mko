@@ -142,7 +142,7 @@ fn tcp_worker_multiplexed(fd: int, reg: CMap, calls: CMap, port: int, cache: CMa
         let txn_now = mono_ms()
         if txn_now - last_txn_tick >= 250 {
             let _ = sip_stream_poll(forward_fd, reg, calls, db, db_ok, cache, outbox, realm, nid, diameter_lock)
-            let _ = sip_client_txn_tick(cache, forward_fd)
+            let _ = sip_client_txn_tick(cache, forward_fd, calls, db, db_ok)
             let _ = sip_server_txn_tick(cache, forward_fd)
             last_txn_tick = txn_now
         }

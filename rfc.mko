@@ -541,6 +541,17 @@ fn sip_dialog_cache_cleanup(cache: CMap, cid: string, msg: string) -> int {
     return 1
 }
 
+fn sip_call_state_timeout_cleanup(calls: CMap, cache: CMap, req: string) -> int {
+    if sip_is_response(req) == 1 || not str_eq(madis_method(req), "INVITE") { return 0 }
+    let cid = sip_header(req, "Call-ID")
+    if len(cid) == 0 { return 0 }
+    let from_tag = sip_addr_tag(sip_header(req, "From"))
+    let to_tag = sip_addr_tag(sip_header(req, "To"))
+    let _ = sip_call_state_cleanup(calls, cid, from_tag, to_tag)
+    let _ = sip_dialog_cache_cleanup(cache, cid, req)
+    return 1
+}
+
 fn sip_dialog_observe(msg: string, reply: string, calls: CMap, cache: CMap) -> int {
     if sip_is_response(msg) == 1 { return 0 }
     let cid = sip_header(msg, "Call-ID")

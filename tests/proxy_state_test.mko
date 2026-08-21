@@ -325,6 +325,37 @@ fn TestDialogByeWithOkReplyStaysTerminated() {
     assert_eq(cmap_has(calls, "dialog_keys|bye-ok-dialog"), 0)
 }
 
+fn TestInviteTimeoutCleanupClearsCallAndDialogState() {
+    let invite = "INVITE sip:b@example.com SIP/2.0\r\n"
+        + "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-timeout\r\n"
+        + "From: <sip:a@example.com>;tag=from-timeout\r\n"
+        + "To: <sip:b@example.com>;tag=to-timeout\r\n"
+        + "Call-ID: timeout-dialog\r\n"
+        + "CSeq: 1 INVITE\r\n"
+        + "Content-Length: 0\r\n\r\n"
+    let calls = cmap_new()
+    let cache = cmap_new()
+    let dialog_key = "dialog|" + proxy_dialog_id("timeout-dialog", "from-timeout", "to-timeout")
+    cmap_set(calls, "timeout-dialog", "a|b|1")
+    cmap_set(calls, "dialog|timeout-dialog", "trying|1")
+    cmap_set(calls, dialog_key, "trying|1")
+    let _ = sip_call_state_track_dialog(calls, "timeout-dialog", dialog_key)
+    cmap_set(cache, "dialog_dst|timeout-dialog", "sip:b@example.com")
+    cmap_set(cache, "dialog_dst|timeout-dialog|to-timeout", "sip:b@example.com")
+    cmap_set(cache, "dialog_branch|timeout-dialog", "z9hG4bK-timeout")
+    cmap_set(cache, "dialog_non2xx|timeout-dialog", "1")
+
+    assert_eq(sip_call_state_timeout_cleanup(calls, cache, invite), 1)
+    assert_eq(cmap_has(calls, "timeout-dialog"), 0)
+    assert_eq(cmap_has(calls, "dialog|timeout-dialog"), 0)
+    assert_eq(cmap_has(calls, dialog_key), 0)
+    assert_eq(cmap_has(calls, "dialog_keys|timeout-dialog"), 0)
+    assert_eq(cmap_has(cache, "dialog_dst|timeout-dialog"), 0)
+    assert_eq(cmap_has(cache, "dialog_dst|timeout-dialog|to-timeout"), 0)
+    assert_eq(cmap_has(cache, "dialog_branch|timeout-dialog"), 0)
+    assert_eq(cmap_has(cache, "dialog_non2xx|timeout-dialog"), 0)
+}
+
 fn TestDialogCacheCleanupRemovesTaggedDestination() {
     let bye = "BYE sip:b@example.com SIP/2.0\r\n"
         + "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-dialog-clean\r\n"
