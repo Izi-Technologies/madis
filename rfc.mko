@@ -306,6 +306,7 @@ fn sip_transaction_expiry_ms(cache: CMap, txn_key: string) -> int {
 
 fn sip_txn_cleanup_key(cache: CMap, txn_key: string) -> int {
     if len(txn_key) <= 2 { return 0 }
+    let had_txn = cmap_has(cache, "txn|" + txn_key)
     let txn_slot = cmap_get(cache, "txn_slot|" + txn_key)
     if len(txn_slot) > 0 {
         let ring_key = "txn_ring|" + txn_slot
@@ -318,12 +319,17 @@ fn sip_txn_cleanup_key(cache: CMap, txn_key: string) -> int {
     let _ = cmap_del(cache, "txn_ts|" + txn_key)
     let _ = cmap_del(cache, "txn_exp|" + txn_key)
     let _ = cmap_del(cache, "txn_state|" + txn_key)
+    if had_txn == 1 {
+        let active = cmap_get_int(cache, "txn_active", 0)
+        if active > 0 { cmap_set_int(cache, "txn_active", active - 1) }
+    }
     return 1
 }
 
 fn sip_txn_index_response(cache: CMap, txn_key: string) -> int {
     if len(txn_key) <= 2 { return 0 }
     if cmap_has2(cache, "txn_slot|", txn_key) == 1 { return 1 }
+    cmap_set_int(cache, "txn_sweep_idle", 0)
     let seq = cmap_incr(cache, "txn_seq", 1)
     if seq < 0 { return 0 }
     let slot = seq - (seq / 16384) * 16384
@@ -376,16 +382,21 @@ fn sip_txn_finish(msg: string, reply: string, cache: CMap) -> int {
 }
 
 fn sip_txn_sweep_expired(cache: CMap, budget: int) -> int {
-    if budget <= 0 || cmap_get_int(cache, "txn_seq", 0) <= 0 { return 0 }
+    if budget <= 0 { return 0 }
+    if cmap_get_int(cache, "txn_active", 0) <= 0 {
+        if cmap_get_int(cache, "txn_seq", 0) <= 0 || cmap_get_int(cache, "txn_sweep_idle", 0) == 1 { return 0 }
+    }
     let now = mono_ms()
     let mut start = cmap_get_int(cache, "txn_sweep", 0)
     let mut scanned = 0
     let mut removed = 0
+    let mut live_seen = 0
     while scanned < budget {
         let slot = (start + scanned) - ((start + scanned) / 16384) * 16384
         if cmap_has3i(cache, "txn_ring|", "", slot) == 1 {
             let key = cmap_get3i(cache, "txn_ring|", "", slot)
             if len(key) > 2 && cmap_has2(cache, "txn|", key) == 1 {
+                live_seen = 1
                 let exp = sip_transaction_expiry_ms(cache, key)
                 if exp > 0 && now >= exp {
                     let _ = sip_txn_cleanup_key(cache, key)
@@ -395,7 +406,19 @@ fn sip_txn_sweep_expired(cache: CMap, budget: int) -> int {
         }
         scanned = scanned + 1
     }
-    cmap_set_int(cache, "txn_sweep", (start + budget) - ((start + budget) / 16384) * 16384)
+    cmap_set_int(cache, "txn_sweep", (start + scanned) - ((start + scanned) / 16384) * 16384)
+    if live_seen == 0 {
+        let empty = cmap_get_int(cache, "txn_empty_scan", 0) + 1
+        if empty >= 32 {
+            cmap_set_int(cache, "txn_active", 0)
+            cmap_set_int(cache, "txn_empty_scan", 0)
+            cmap_set_int(cache, "txn_sweep_idle", 1)
+        } else {
+            cmap_set_int(cache, "txn_empty_scan", empty)
+        }
+    } else {
+        cmap_set_int(cache, "txn_empty_scan", 0)
+    }
     return removed
 }
 
@@ -404,6 +427,10 @@ fn sip_is_retransmit(txn_key: string, cache: CMap) -> int {
 }
 
 fn sip_store_txn(txn_key: string, response: string, cache: CMap) -> int {
+    if cmap_has(cache, "txn|" + txn_key) == 0 {
+        let active = cmap_get_int(cache, "txn_active", 0)
+        cmap_set_int(cache, "txn_active", active + 1)
+    }
     let _ = sip_txn_index_response(cache, txn_key)
     // Publish the timestamp first. A concurrent retransmission may observe
     // either key, but must never see a response without its freshness mark.
@@ -470,12 +497,36 @@ fn sip_call_state_set(calls: CMap, cache: CMap, key: string, value: string) -> i
     return rfc_bounded_state_set(calls, cache, "call_state_seq", "call_state_ring|", key, value, sip_call_state_capacity())
 }
 
+fn sip_call_state_track_dialog(calls: CMap, cid: string, key: string) -> int {
+    if len(cid) == 0 || len(key) == 0 { return 0 }
+    let idx = "dialog_keys|" + cid
+    let mut list = ""
+    if cmap_has(calls, idx) == 1 { list = cmap_get(calls, idx) }
+    if str_contains("," + list + ",", "," + key + ",") { return 1 }
+    if len(list) > 2048 { list = "" }
+    if len(list) > 0 { list = list + "," }
+    cmap_set(calls, idx, list + key)
+    return 1
+}
+
 fn sip_call_state_cleanup(calls: CMap, cid: string, from_tag: string, to_tag: string) -> int {
     if len(cid) == 0 { return 0 }
     let _ = cmap_del(calls, cid)
     let _ = cmap_del(calls, "dialog|" + cid)
+    let idx = "dialog_keys|" + cid
+    if cmap_has(calls, idx) == 1 {
+        let keys = str_split(cmap_get(calls, idx), ",")
+        let mut i = 0
+        while i < len(keys) {
+            let key = str_trim_space(keys[i])
+            if len(key) > 0 { let _ = cmap_del(calls, key) }
+            i = i + 1
+        }
+        let _ = cmap_del(calls, idx)
+    }
     if len(from_tag) > 0 && len(to_tag) > 0 {
         let _ = cmap_del(calls, "dialog|" + proxy_dialog_id(cid, from_tag, to_tag))
+        let _ = cmap_del(calls, "dialog|" + proxy_dialog_id(cid, to_tag, from_tag))
     }
     return 1
 }
@@ -506,10 +557,11 @@ fn sip_dialog_observe(msg: string, reply: string, calls: CMap, cache: CMap) -> i
     if str_eq(method, "BYE") || str_eq(method, "CANCEL") { state = "terminated" }
     if len(reply) > 0 {
         let code = sip_status_code(reply)
-        if code >= 200 && code < 300 { state = "confirmed" }
+        if code >= 200 && code < 300 && not str_eq(method, "BYE") && not str_eq(method, "CANCEL") { state = "confirmed" }
         if code >= 300 { state = "failed" }
     }
     let _ = sip_call_state_set(calls, cache, key, state + "|" + string(now_ms()))
+    if str_has_prefix(key, "dialog|") { let _ = sip_call_state_track_dialog(calls, cid, key) }
     if str_eq(state, "terminated") || str_eq(state, "failed") {
         let _ = sip_call_state_cleanup(calls, cid, from_tag, to_tag)
     }
@@ -531,9 +583,11 @@ fn sip_txn_cache_forwarded_response(reply: string, cache: CMap) -> int {
 }
 
 fn sip_server_txn_cleanup(key: string, cache: CMap) -> int {
+    let had_response = cmap_has(cache, "server_resp|" + key)
     let cid = cmap_get(cache, "server_cid|" + key)
     let branch = cmap_get(cache, "server_branch|" + key)
     let server_slot = cmap_get(cache, "server_slot|" + key)
+    let server_owner = cmap_get(cache, "server_owner|" + key)
     if len(server_slot) > 0 {
         let ring_key = "server_ring|" + server_slot
         if cmap_has(cache, ring_key) == 1 && str_eq(cmap_get(cache, ring_key), key) {
@@ -558,6 +612,12 @@ fn sip_server_txn_cleanup(key: string, cache: CMap) -> int {
     if len(cid) > 0 { let _ = cmap_del(cache, "server_ack_cid|" + cid) }
     if len(branch) > 0 { let _ = cmap_del(cache, "server_acked|" + branch) }
     if len(cid) > 0 { let _ = cmap_del(cache, "server_acked_cid|" + cid) }
+    if had_response == 1 {
+        let active = cmap_get_int(cache, "server_active", 0)
+        if active > 0 { cmap_set(cache, "server_active", string(active - 1)) }
+        let owner_active = cmap_get_int2(cache, "server_active|", server_owner, 0)
+        if owner_active > 0 { cmap_set_int2(cache, "server_active|", server_owner, owner_active - 1) }
+    }
     return 1
 }
 
@@ -567,6 +627,13 @@ fn sip_server_txn_record(request: string, response: string, ip: string, port: in
     if code < 200 { return 0 }
     let key = sip_transaction_key(request, len(request))
     if len(key) <= 2 { return 0 }
+    if cmap_has(cache, "server_resp|" + key) == 0 {
+        let active = cmap_get_int(cache, "server_active", 0)
+        cmap_set(cache, "server_active", string(active + 1))
+        let owner_s = string(owner)
+        let owner_active = cmap_get_int2(cache, "server_active|", owner_s, 0)
+        cmap_set_int2(cache, "server_active|", owner_s, owner_active + 1)
+    }
     let seq = cmap_incr(cache, "server_seq", 1)
     if seq < 0 { return 0 }
     let slot = seq - (seq / 16384) * 16384
@@ -663,9 +730,10 @@ fn sip_server_txn_tick(cache: CMap, owner: int) -> int {
         ack_scanned = ack_scanned + 1
     }
     cmap_set_int2(cache, "server_ack_scan|", owner_s, ack_start)
-    if cmap_get_int(cache, "server_seq", 0) <= 0 { return acted }
+    if cmap_get_int2(cache, "server_active|", owner_s, 0) <= 0 { return acted }
     let mut start = cmap_get_int2(cache, "server_scan|", owner_s, 0)
     let mut scanned = 0
+    let mut live_seen = 0
     while scanned < 4096 {
         let slot = (start + scanned) - ((start + scanned) / 16384) * 16384
         if cmap_has3i(cache, "server_ring|", "", slot) == 1 {
@@ -673,6 +741,7 @@ fn sip_server_txn_tick(cache: CMap, owner: int) -> int {
             if len(key) > 2 && cmap_has2(cache, "server_resp|", key) == 1 {
                 let txn_owner = cmap_get_int2(cache, "server_owner|", key, -1)
                 if txn_owner == owner {
+                    live_seen = 1
                     let exp = cmap_get_int2(cache, "server_exp|", key, 0)
                     let branch = cmap_get2(cache, "server_branch|", key)
                     let cid = cmap_get2(cache, "server_cid|", key)
@@ -711,7 +780,18 @@ fn sip_server_txn_tick(cache: CMap, owner: int) -> int {
         }
         scanned = scanned + 1
     }
-    cmap_set_int2(cache, "server_scan|", owner_s, (start + 4096) - ((start + 4096) / 16384) * 16384)
+    cmap_set_int2(cache, "server_scan|", owner_s, (start + scanned) - ((start + scanned) / 16384) * 16384)
+    if live_seen == 0 {
+        let empty = cmap_get_int2(cache, "server_empty_scan|", owner_s, 0) + 1
+        if empty >= 4 {
+            cmap_set_int2(cache, "server_active|", owner_s, 0)
+            cmap_set_int2(cache, "server_empty_scan|", owner_s, 0)
+        } else {
+            cmap_set_int2(cache, "server_empty_scan|", owner_s, empty)
+        }
+    } else {
+        cmap_set_int2(cache, "server_empty_scan|", owner_s, 0)
+    }
     return acted
 }
 
@@ -760,7 +840,9 @@ fn sip_timer_c_ms() -> int {
 }
 
 fn sip_client_txn_cleanup(key: string, cache: CMap) -> int {
+    let had_request = cmap_has(cache, "client_req|" + key)
     let client_slot = cmap_get(cache, "client_slot|" + key)
+    let client_owner = cmap_get(cache, "client_owner|" + key)
     if len(client_slot) > 0 {
         let ring_key = "client_ring|" + client_slot
         if cmap_has(cache, ring_key) == 1 && str_eq(cmap_get(cache, ring_key), key) {
@@ -778,6 +860,12 @@ fn sip_client_txn_cleanup(key: string, cache: CMap) -> int {
     let _ = cmap_del(cache, "client_exp|" + key)
     let _ = cmap_del(cache, "client_method|" + key)
     let _ = cmap_del(cache, "client_state|" + key)
+    if had_request == 1 {
+        let active = cmap_get_int(cache, "client_active", 0)
+        if active > 0 { cmap_set(cache, "client_active", string(active - 1)) }
+        let owner_active = cmap_get_int2(cache, "client_active|", client_owner, 0)
+        if owner_active > 0 { cmap_set_int2(cache, "client_active|", client_owner, owner_active - 1) }
+    }
     return 1
 }
 
@@ -789,6 +877,13 @@ fn sip_client_txn_record(msg: string, target: string, transport: string, owner: 
     if len(method) == 0 || str_eq(method, "ACK") { return 0 }
     let key = sip_transaction_key(msg, len(msg))
     if len(key) <= 2 { return 0 }
+    if cmap_has(cache, "client_req|" + key) == 0 {
+        let active = cmap_get_int(cache, "client_active", 0)
+        cmap_set(cache, "client_active", string(active + 1))
+        let owner_s = string(owner)
+        let owner_active = cmap_get_int2(cache, "client_active|", owner_s, 0)
+        cmap_set_int2(cache, "client_active|", owner_s, owner_active + 1)
+    }
 
     let seq = cmap_incr(cache, "client_seq", 1)
     if seq < 0 { return 0 }

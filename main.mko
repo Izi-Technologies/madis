@@ -305,9 +305,10 @@ fn sip_client_txn_tick(cache: CMap, out_fd: int) -> int {
     let now = mono_ms()
     let mut acted = 0
     let owner_s = string(out_fd)
-    if cmap_get_int(cache, "client_seq", 0) <= 0 { return 0 }
+    if cmap_get_int2(cache, "client_active|", owner_s, 0) <= 0 { return 0 }
     let mut start = cmap_get_int2(cache, "client_scan|", owner_s, 0)
     let mut scanned = 0
+    let mut live_seen = 0
     // Sweep a small bounded slice of the 16384-slot ring per tick.
     // Idle workers call this on a timer; large scans here can allocate heavily.
     while scanned < 64 {
@@ -317,6 +318,7 @@ fn sip_client_txn_tick(cache: CMap, out_fd: int) -> int {
             if len(key) > 2 && cmap_has2(cache, "client_req|", key) == 1 {
                 let owner = cmap_get_int2(cache, "client_owner|", key, -1)
                 if owner == out_fd {
+                    live_seen = 1
                     let expiry = cmap_get_int2(cache, "client_exp|", key, 0)
                     if expiry > 0 && now >= expiry {
                         let req = cmap_get2(cache, "client_req|", key)
@@ -386,7 +388,18 @@ fn sip_client_txn_tick(cache: CMap, out_fd: int) -> int {
         }
         scanned = scanned + 1
     }
-    cmap_set_int2(cache, "client_scan|", owner_s, (start + 4096) - ((start + 4096) / 16384) * 16384)
+    cmap_set_int2(cache, "client_scan|", owner_s, (start + scanned) - ((start + scanned) / 16384) * 16384)
+    if live_seen == 0 {
+        let empty = cmap_get_int2(cache, "client_empty_scan|", owner_s, 0) + 1
+        if empty >= 256 {
+            cmap_set_int2(cache, "client_active|", owner_s, 0)
+            cmap_set_int2(cache, "client_empty_scan|", owner_s, 0)
+        } else {
+            cmap_set_int2(cache, "client_empty_scan|", owner_s, empty)
+        }
+    } else {
+        cmap_set_int2(cache, "client_empty_scan|", owner_s, 0)
+    }
     return acted
 }
 
@@ -626,6 +639,15 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
             }
         }
         let response_cid = sip_header(response_input, "Call-ID")
+        if response_code >= 200 && response_code < 700 {
+            let response_cseq = str_split(str_trim_space(sip_header(response_input, "CSeq")), " ")
+            let mut response_method = ""
+            if len(response_cseq) >= 2 { response_method = str_to_upper(str_trim_space(response_cseq[1])) }
+            if str_eq(response_method, "BYE") || str_eq(response_method, "CANCEL") {
+                let _ = sip_call_state_cleanup(calls, response_cid, sip_addr_tag(sip_header(response_input, "From")), sip_addr_tag(sip_header(response_input, "To")))
+                let _ = sip_dialog_cache_cleanup(cache, response_cid, response_input)
+            }
+        }
         response_data = ims_session_timer_apply_response(cache, response_cid, downstream_request, response_data)
         // RFC 4028 §10: record session interval from 2xx for refresh tracking.
         let _ = ims_session_timer_bind_from_response(cache, response_cid, downstream_request, response_data)
@@ -822,6 +844,8 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
     if is_ack == 1 || is_bye == 1 || is_cancel == 1 {
         if maf_worker_handle_outbound_request(db, db_ok, data, cache) == 1 {
             if is_ack == 1 { return "" }
+            let _ = sip_call_state_cleanup(calls, cid, sip_addr_tag(from), sip_addr_tag(to))
+            let _ = sip_dialog_cache_cleanup(cache, cid, data)
             return sip_reply(data, 200, "OK", "", "")
         }
     }
@@ -961,6 +985,14 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
         if is_ack == 1 { return "" }
         if is_bye == 1 || is_cancel == 1 {
             if is_cancel == 1 { let _ = maf_worker_inbound_cancel_terminate(db, db_ok, data, cache, forward_fd) }
+            if is_bye == 1 {
+                let _ = maf_worker_sync_sip(db, db_ok, data, cache)
+                let _ = maf_worker_call_state(db, db_ok, maf_worker_tenant(), maf_inbound_call, "ended", sha256("madis.maf.inbound.bye|" + maf_inbound_call)[0:32])
+            }
+            let _ = cmap_del(cache, "maf_inbound|" + maf_inbound_call)
+            let _ = cmap_del(cache, "maf_created_ms|" + maf_inbound_call)
+            let _ = sip_call_state_cleanup(calls, cid, sip_addr_tag(from), sip_addr_tag(to))
+            let _ = sip_dialog_cache_cleanup(cache, cid, data)
             return sip_reply(data, 200, "OK", "", "")
         }
     }
@@ -1838,7 +1870,7 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
             let _ = db_sip_tx(db, db_ok, cid, "send", "OK", 200, "proxy", ip)
             let _ = rtp_process_delete(cid, db, db_ok, cache)
             let _ = ims_rx_terminate(cache, diameter_lock, cid)
-            let _ = cmap_del(calls, cid)
+            let _ = sip_call_state_cleanup(calls, cid, sip_addr_tag(from), sip_addr_tag(to))
         }
         let sent = sip_forward_dialog_request(msg, cid, "BYE", next_hop, ip, port, tr, cache, forward_fd)
         let _ = sip_dialog_cache_cleanup(cache, cid, msg)
@@ -1868,7 +1900,7 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
             let _ = charging_session_event(cid, from_user, "", "termination", 1, 0, cache, diameter_lock)
             let _ = rtp_process_delete(cid, db, db_ok, cache)
             let _ = ims_rx_terminate(cache, diameter_lock, cid)
-            let _ = cmap_del(calls, cid)
+            let _ = sip_call_state_cleanup(calls, cid, sip_addr_tag(from), sip_addr_tag(to))
         }
         return sip_resp(200, "OK", data, dl, "")
     } else {

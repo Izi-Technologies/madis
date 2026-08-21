@@ -286,16 +286,43 @@ fn TestDialogLifecycleTeardown() {
     let calls = cmap_new()
     let cache = cmap_new()
     let dialog_key = "dialog|" + proxy_dialog_id("lifecycle-dialog", "from1", "to1")
+    let reverse_dialog_key = "dialog|" + proxy_dialog_id("lifecycle-dialog", "to1", "from1")
     let untagged_key = "dialog|lifecycle-dialog"
     cmap_set(calls, "lifecycle-dialog", "alice|bob|1")
     cmap_set(calls, untagged_key, "trying|1")
+    cmap_set(calls, reverse_dialog_key, "confirmed|1")
+    let _ = sip_call_state_track_dialog(calls, "lifecycle-dialog", untagged_key)
+    let _ = sip_call_state_track_dialog(calls, "lifecycle-dialog", reverse_dialog_key)
     assert_eq(sip_dialog_observe(invite, reply, calls, cache), 1)
     assert_eq(cmap_has(calls, dialog_key), 1)
     assert_eq(sip_dialog_observe(reply, "", calls, cache), 0)
     assert_eq(sip_dialog_observe(tagged_bye, "", calls, cache), 1)
     assert_eq(cmap_has(calls, dialog_key), 0)
+    assert_eq(cmap_has(calls, reverse_dialog_key), 0)
     assert_eq(cmap_has(calls, untagged_key), 0)
+    assert_eq(cmap_has(calls, "dialog_keys|lifecycle-dialog"), 0)
     assert_eq(cmap_has(calls, "lifecycle-dialog"), 0)
+}
+
+fn TestDialogByeWithOkReplyStaysTerminated() {
+    let bye = "BYE sip:b@example.com SIP/2.0\r\n"
+        + "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-dialog-bye-ok\r\n"
+        + "From: <sip:a@example.com>;tag=from1\r\n"
+        + "To: <sip:b@example.com>;tag=to1\r\n"
+        + "Call-ID: bye-ok-dialog\r\n"
+        + "CSeq: 2 BYE\r\n"
+        + "Content-Length: 0\r\n\r\n"
+    let reply = sip_reply(bye, 200, "OK", "", "")
+    let calls = cmap_new()
+    let cache = cmap_new()
+    let dialog_key = "dialog|" + proxy_dialog_id("bye-ok-dialog", "from1", "to1")
+    cmap_set(calls, "bye-ok-dialog", "alice|bob|1")
+    cmap_set(calls, dialog_key, "confirmed|1")
+    let _ = sip_call_state_track_dialog(calls, "bye-ok-dialog", dialog_key)
+    assert_eq(sip_dialog_observe(bye, reply, calls, cache), 1)
+    assert_eq(cmap_has(calls, "bye-ok-dialog"), 0)
+    assert_eq(cmap_has(calls, dialog_key), 0)
+    assert_eq(cmap_has(calls, "dialog_keys|bye-ok-dialog"), 0)
 }
 
 fn TestDialogCacheCleanupRemovesTaggedDestination() {
@@ -316,6 +343,19 @@ fn TestDialogCacheCleanupRemovesTaggedDestination() {
     assert_eq(cmap_has(cache, "dialog_dst|cleanup-dialog|to1"), 0)
     assert_eq(cmap_has(cache, "dialog_branch|cleanup-dialog"), 0)
     assert_eq(cmap_has(cache, "dialog_non2xx|cleanup-dialog"), 0)
+}
+
+fn TestByeResponseCseqIdentifiesTermination() {
+    let response = "SIP/2.0 200 OK\r\n"
+        + "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-bye-response\r\n"
+        + "From: <sip:a@example.com>;tag=from1\r\n"
+        + "To: <sip:b@example.com>;tag=to1\r\n"
+        + "Call-ID: bye-response-dialog\r\n"
+        + "CSeq: 2 BYE\r\n"
+        + "Content-Length: 0\r\n\r\n"
+    let parts = str_split(str_trim_space(sip_header(response, "CSeq")), " ")
+    assert_eq(len(parts), 2)
+    assert_eq_str(str_to_upper(str_trim_space(parts[1])), "BYE")
 }
 
 fn TestInviteAckAndCancelConstruction() {
