@@ -124,11 +124,42 @@ func (c *Client) command(ctx context.Context, path string, body map[string]any, 
 	return c.request(ctx, http.MethodPost, path, body, nil, idem)
 }
 
+type PresentationOptions struct {
+	CallerURI         string
+	CallerID          string
+	CallerName        string
+	PAssertedIdentity string
+	Privacy           string
+}
+
+func applyPresentation(body map[string]any, opts PresentationOptions) {
+	if opts.CallerURI != "" {
+		body["caller_uri"] = opts.CallerURI
+	}
+	if opts.CallerID != "" {
+		body["caller_id"] = opts.CallerID
+	}
+	if opts.CallerName != "" {
+		body["caller_name"] = opts.CallerName
+	}
+	if opts.PAssertedIdentity != "" {
+		body["p_asserted_identity"] = opts.PAssertedIdentity
+	}
+	if opts.Privacy != "" {
+		body["privacy"] = opts.Privacy
+	}
+}
+
 func (c *Client) CreateCall(ctx context.Context, from, to string, applicationData any, idem string) (map[string]any, error) {
+	return c.CreateCallWithPresentation(ctx, from, to, applicationData, PresentationOptions{}, idem)
+}
+
+func (c *Client) CreateCallWithPresentation(ctx context.Context, from, to string, applicationData any, presentation PresentationOptions, idem string) (map[string]any, error) {
 	body := map[string]any{"from": from, "to": to}
 	if applicationData != nil {
 		body["application_data"] = applicationData
 	}
+	applyPresentation(body, presentation)
 	return c.command(ctx, "/api/v1/maf/calls", body, idem)
 }
 
@@ -177,37 +208,69 @@ func (c *Client) SendDTMF(ctx context.Context, callID, digit string, duration in
 }
 func (c *Client) RTPControl(ctx context.Context, callID, action, sdp, fromTag, toTag, flags, idem string) (map[string]any, error) {
 	body := map[string]any{"action": action}
-	if sdp != "" { body["sdp"] = sdp }
-	if fromTag != "" { body["from_tag"] = fromTag }
-	if toTag != "" { body["to_tag"] = toTag }
-	if flags != "" { body["flags"] = flags }
+	if sdp != "" {
+		body["sdp"] = sdp
+	}
+	if fromTag != "" {
+		body["from_tag"] = fromTag
+	}
+	if toTag != "" {
+		body["to_tag"] = toTag
+	}
+	if flags != "" {
+		body["flags"] = flags
+	}
 	return c.command(ctx, callPath(callID, "/rtp"), body, idem)
 }
 func (c *Client) RouteCall(ctx context.Context, callID, target, transport, idem string) (map[string]any, error) {
+	return c.RouteCallWithOptions(ctx, callID, target, transport, "", PresentationOptions{}, idem)
+}
+
+func (c *Client) RouteCallWithOptions(ctx context.Context, callID, target, transport, mode string, presentation PresentationOptions, idem string) (map[string]any, error) {
 	body := map[string]any{"target": target}
 	if transport != "" {
 		body["transport"] = transport
 	}
+	if mode != "" {
+		body["mode"] = mode
+	}
+	applyPresentation(body, presentation)
 	return c.command(ctx, callPath(callID, "/route"), body, idem)
 }
 func (c *Client) PublishEvent(ctx context.Context, eventType, callID, payload string) (map[string]any, error) {
 	body := map[string]any{"event_type": eventType}
-	if callID != "" { body["call_id"] = callID }
-	if payload != "" { body["payload"] = payload }
+	if callID != "" {
+		body["call_id"] = callID
+	}
+	if payload != "" {
+		body["payload"] = payload
+	}
 	return c.request(ctx, "POST", "/api/v1/maf/events", body, nil, "")
 }
 func (c *Client) Registrations(ctx context.Context, aor string, limit int) (map[string]any, error) {
-	if limit < 1 { limit = 1 }
-	if limit > 100 { limit = 100 }
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > 100 {
+		limit = 100
+	}
 	q := url.Values{"limit": {strconv.Itoa(limit)}}
-	if aor != "" { q.Set("aor", aor) }
+	if aor != "" {
+		q.Set("aor", aor)
+	}
 	return c.request(ctx, "GET", "/api/v1/maf/registrations", nil, q, "")
 }
 func (c *Client) CDR(ctx context.Context, callID string, limit int) (map[string]any, error) {
-	if limit < 1 { limit = 1 }
-	if limit > 100 { limit = 100 }
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > 100 {
+		limit = 100
+	}
 	q := url.Values{"limit": {strconv.Itoa(limit)}}
-	if callID != "" { q.Set("call_id", callID) }
+	if callID != "" {
+		q.Set("call_id", callID)
+	}
 	return c.request(ctx, "GET", "/api/v1/maf/cdr", nil, q, "")
 }
 func (c *Client) Bans(ctx context.Context) (map[string]any, error) {
@@ -215,7 +278,9 @@ func (c *Client) Bans(ctx context.Context) (map[string]any, error) {
 }
 func (c *Client) BanIP(ctx context.Context, sourceIP, reason string, permanent bool, durationMin int) (map[string]any, error) {
 	perm := "false"
-	if permanent { perm = "true" }
+	if permanent {
+		perm = "true"
+	}
 	return c.request(ctx, "POST", "/api/v1/maf/security/bans", map[string]any{"source_ip": sourceIP, "reason": reason, "permanent": perm, "duration_min": durationMin}, nil, "")
 }
 func (c *Client) UnbanIP(ctx context.Context, sourceIP string) (map[string]any, error) {
@@ -226,7 +291,9 @@ func (c *Client) SIPInspect(ctx context.Context, callID string) (map[string]any,
 }
 func (c *Client) Presence(ctx context.Context, aor string, limit int) (map[string]any, error) {
 	q := url.Values{"limit": {strconv.Itoa(limit)}}
-	if aor != "" { q.Set("aor", aor) }
+	if aor != "" {
+		q.Set("aor", aor)
+	}
 	return c.request(ctx, "GET", "/api/v1/maf/presence", nil, q, "")
 }
 func (c *Client) PresenceUser(ctx context.Context, aor string) (map[string]any, error) {
@@ -303,12 +370,20 @@ func (c *Client) Subscribe(ctx context.Context, cursor int, eventType, callID st
 		default:
 		}
 		q := url.Values{"cursor": {strconv.Itoa(cur)}, "limit": {"100"}}
-		if eventType != "" { q.Set("event_type", eventType) }
-		if callID != "" { q.Set("call_id", callID) }
+		if eventType != "" {
+			q.Set("event_type", eventType)
+		}
+		if callID != "" {
+			q.Set("call_id", callID)
+		}
 		page, err := c.request(ctx, "GET", "/api/v1/maf/events", nil, q, "")
 		if err != nil {
 			interval = 2 * time.Second
-			select { case <-ctx.Done(): return ctx.Err(); case <-time.After(interval): }
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(interval):
+			}
 			continue
 		}
 		events, _ := page["events"].([]any)
@@ -316,16 +391,28 @@ func (c *Client) Subscribe(ctx context.Context, cursor int, eventType, callID st
 			interval = 50 * time.Millisecond
 			for _, e := range events {
 				if evt, ok := e.(map[string]any); ok {
-					select { case ch <- evt: case <-ctx.Done(): return ctx.Err() }
+					select {
+					case ch <- evt:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
 				}
 			}
 			if next, ok := page["next_cursor"].(string); ok {
-				if n, err := strconv.Atoi(next); err == nil && n > cur { cur = n }
+				if n, err := strconv.Atoi(next); err == nil && n > cur {
+					cur = n
+				}
 			}
 		} else {
-			if interval < 2*time.Second { interval *= 2 }
+			if interval < 2*time.Second {
+				interval *= 2
+			}
 		}
-		select { case <-ctx.Done(): return ctx.Err(); case <-time.After(interval): }
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(interval):
+		}
 	}
 }
 
@@ -333,7 +420,19 @@ func (c *Client) Subscribe(ctx context.Context, cursor int, eventType, callID st
 func (c *Client) WSUrl(cursor int, eventType, callID string) string {
 	base := strings.Replace(strings.Replace(c.BaseURL, "https://", "wss://", 1), "http://", "ws://", 1)
 	q := url.Values{"cursor": {strconv.Itoa(cursor)}}
-	if eventType != "" { q.Set("event_type", eventType) }
-	if callID != "" { q.Set("call_id", callID) }
+	if eventType != "" {
+		q.Set("event_type", eventType)
+	}
+	if callID != "" {
+		q.Set("call_id", callID)
+	}
 	return base + "/api/v1/maf/events/ws?" + q.Encode()
+}
+
+func (c *Client) CapacityPolicies(ctx context.Context) (map[string]any, error) {
+	return c.request(ctx, "GET", "/api/v1/maf/capacity/policies", nil, nil, "")
+}
+
+func (c *Client) UpsertCapacityPolicy(ctx context.Context, body map[string]any) (map[string]any, error) {
+	return c.request(ctx, "POST", "/api/v1/maf/capacity/policies", body, nil, "")
 }

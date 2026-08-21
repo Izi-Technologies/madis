@@ -213,6 +213,8 @@ class OpenApiContractTests(unittest.TestCase):
         ("GET", "/api/v1/maf/calls/active"): "active_calls",
         ("POST", "/api/v1/maf/dispatch-members"): "create_dispatch_member",
         ("POST", "/api/v1/maf/calls/{call_id}/identity"): "identity",
+        ("GET", "/api/v1/maf/capacity/policies"): "capacity_policies",
+        ("POST", "/api/v1/maf/capacity/policies"): "upsert_capacity_policy",
     }
 
     def test_every_openapi_route_has_sdk_method(self):
@@ -253,7 +255,7 @@ class OpenApiContractTests(unittest.TestCase):
 
     def test_call_state_enum(self):
         spec_enums = _extract_enum(self.spec, "Call:", "state")
-        expected = ["created", "ringing", "answered", "bridged", "transferring", "ending", "ended", "failed"]
+        expected = ["created", "ringing", "answered", "bridged", "transferring", "ending", "ended", "failed", "canceled", "rejected", "timeout"]
         self.assertEqual(spec_enums, expected)
         self.assertIn(MOCK_CALL["state"], spec_enums)
 

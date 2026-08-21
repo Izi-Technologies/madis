@@ -53,6 +53,14 @@ These fields are the supported way for applications to control caller ID and
 presentation. Generic `calls.headers` rules still protect dialog-owned headers
 such as `From`, `To`, `Call-ID`, `CSeq`, `Via`, and `Contact`.
 
+Validation rules:
+
+- `caller_uri` and `p_asserted_identity` must be `sip:` or `sips:` URIs.
+- `caller_id` is reduced to digits plus `+` before a URI is generated.
+- `caller_name` and `privacy` are bounded text fields and cannot contain CR,
+  LF, null bytes, or escaped CR/LF sequences.
+- If `caller_uri` is omitted, `caller_id` uses the current From domain.
+
 ```sh
 curl -X POST "$MAF_BASE_URL/api/v1/maf/calls/$CALL_ID/route" \
   -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
@@ -184,11 +192,75 @@ curl -X POST "$MAF_BASE_URL/api/v1/maf/capacity/policies" \
 Applications can use source or target policies for their own admission logic,
 while Madis enforces the global active-call ceiling in the MAF create path.
 
+The current worker implementation enforces:
+
+- Environment-level global active-call limit from `SIP_MAF_MAX_ACTIVE_CALLS`.
+- Database-backed enabled global policies from `maf_capacity_policies`.
+- The lowest non-zero configured active-call limit wins.
+- API-originated calls over the active-call ceiling return `503`.
+
+Policy fields:
+
+| Field | Purpose |
+| --- | --- |
+| `name` | Tenant-scoped unique policy name |
+| `selector_type` | `global`, `tenant`, `source_ip`, or `target` |
+| `selector_value` | Optional selector value for application-side policy use |
+| `max_active_calls` | Maximum active calls; `0` disables this limit |
+| `max_cps` | Calls-per-second value stored for application-side policy use |
+| `reject_sip_code` | Preferred reject code for application-side policy use |
+| `enabled` | Enables or disables the policy |
+
 ### Route Attempts And Final State
 
 Call resources include `route_attempts`, `final_sip_code`, `final_reason`, and
 `ended_by`. This makes answered, rejected, canceled, failed, and timed-out calls
 visible without reconstructing state from command rows.
+
+Route attempts are inserted when a `calls.route` command starts worker-side
+delivery and are updated when delivery is sent, fails, receives a terminal SIP
+response, or times out. Each attempt records target URI, transport, mode,
+status, SIP code, error code, error message, and timestamps.
+
+Final states are normalized as:
+
+| Condition | Final state | Ended by |
+| --- | --- | --- |
+| BYE/CANCEL transaction completes | `ended` | `remote` |
+| 487 final response | `canceled` | `remote` |
+| 486 or 603 final response | `rejected` | `remote` |
+| Other 3xx-6xx final response | `failed` | `remote` |
+| INVITE transaction timeout | `timeout` or `canceled` | `timer` |
+| Application reject command | `rejected` | `application` |
+
+Example call resource fragment:
+
+```json
+{
+  "call_id": "call-abc",
+  "state": "failed",
+  "from_uri": "sip:alice@example.net",
+  "to_uri": "sip:bob@example.net",
+  "application_data": {
+    "rtp_status": "offered",
+    "rtp_action": "offer"
+  },
+  "final_sip_code": 503,
+  "final_reason": "Service Unavailable",
+  "ended_by": "remote",
+  "route_attempts": [
+    {
+      "target": "sip:gateway.example.net",
+      "transport": "udp",
+      "mode": "proxy",
+      "status": "failed",
+      "sip_code": 503,
+      "error_code": "sip_final_response",
+      "error_message": "Service Unavailable"
+    }
+  ]
+}
+```
 
 ### SDK-controlled routing
 
@@ -524,6 +596,11 @@ curl "$MAF_BASE_URL/api/v1/maf/calls/active" \
   -H "Authorization: Bearer $SIP_MAF_API_READ_TOKEN"
 ```
 
+The active-call list excludes `ended`, `failed`, `canceled`, `rejected`, and
+`timeout` calls. Each row includes from/to URI, application data, final state
+fields when present, and timestamps so dashboards can render live call state
+without fetching every individual call resource.
+
 ### Dispatch membership
 
 Add a gateway to an existing dispatch set:
@@ -770,6 +847,9 @@ Events are versioned, replayable, and durable:
 | `call.dtmf` | DTMF digit sent | `digit`, `duration` |
 | `call.ended` | BYE/CANCEL/terminal | `ended_by`, `duration_ms`, `sip_code` |
 | `call.failed` | Call failed | `sip_code`, `sip_reason` |
+| `call.canceled` | Call canceled before answer | `sip_code`, `reason`, `ended_by` |
+| `call.rejected` | Application or remote rejection | `sip_code`, `reason`, `ended_by` |
+| `call.timeout` | Worker timer expired before final answer | `sip_code`, `reason`, `ended_by` |
 | `command.accepted` | Command queued | `operation`, `command_id` |
 | `command.completed` | Worker finished | `command_id` |
 | `command.failed` | Worker failed | `error_code`, `error_message` |
@@ -936,6 +1016,22 @@ ua.start();
 - Bind every request to the configured tenant.
 - MAF private keys and privileged tokens stay in server-side services.
 
+## Metrics
+
+When the Prometheus exporter is enabled, MAF publishes counters that are useful
+for operational dashboards and alerts:
+
+| Metric | Labels | Meaning |
+| --- | --- | --- |
+| `madis_maf_commands_total` | `operation`, `status` | Command lifecycle counts |
+| `madis_maf_route_attempts_total` | `transport`, `status` | Worker route delivery attempts |
+| `madis_maf_rtp_actions_total` | `action`, `result` | RTPEngine command outcomes |
+| `madis_maf_stale_cleanups_total` | `reason` | Timer-driven stale call cleanup |
+
+Use these with active-call and event-stream data to monitor command failures,
+route failures, RTP failures, stale command cleanup, and unexpected service
+behavior.
+
 ## SDK clients
 
 Official MAF SDKs in [`../sdk/maf/`](../sdk/maf/):
@@ -1011,6 +1107,8 @@ body limit, 16-512 char token validation.
 | | Create group | `create_ani_group()` | `CreateANIGroup()` | `createANIGroup()` | `createANIGroup()` | `create_ani_group/3` |
 | **Calls** | Active | `active_calls()` | `ActiveCalls()` | `activeCalls()` | `activeCalls()` | `active_calls/2` |
 | **Dispatch** | Add member | `create_dispatch_member()` | `CreateDispatchMember()` | `createDispatchMember()` | `createDispatchMember()` | `create_dispatch_member/3` |
+| **Capacity** | List policies | `capacity_policies()` | `CapacityPolicies()` | `capacityPolicies()` | `capacityPolicies()` | `capacity_policies/2` |
+| | Upsert policy | `upsert_capacity_policy()` | `UpsertCapacityPolicy()` | `upsertCapacityPolicy()` | `upsertCapacityPolicy()` | `upsert_capacity_policy/3` |
 | **Events** | Publish | `publish_event()` | `PublishEvent()` | `publishEvent()` | `publishEvent()` | `publish_event/5` |
 | | List | `events()` | `Events()` | `events()` | `events()` | `events/3` |
 | | Subscribe | `subscribe()` | `Subscribe()` | `subscribe()` | `subscribe()` | — (use events/5) |
@@ -1041,6 +1139,7 @@ body limit, 16-512 char token validation.
 | `SIP_MAF_INBOUND_MODE` | `disabled` (default), `control`, or `route` |
 | `SIP_MAF_DB_URL` | Separate PostgreSQL for MAF tables; falls back to `SIP_DB_URL` |
 | `SIP_MAF_CONTACT_URI` | Override Contact URI in MAF-generated SIP responses |
+| `SIP_MAF_MAX_ACTIVE_CALLS` | Environment-level active-call admission ceiling; `0` disables |
 
 ## Worker-side implementation
 
@@ -1058,3 +1157,11 @@ body limit, 16-512 char token validation.
   per-transaction transport tracking, per-IP connection limits on WSS
 - **Tenant-scoped infrastructure**: routing rules, gateways, DIDs, dispatch
   sets, config, and registrations are all filtered by `SIP_MAF_TENANT`
+- **Caller presentation controls**: `calls.create` and `calls.route` can set
+  From display/name, P-Asserted-Identity, and Privacy through validated fields
+- **Route attempt accounting**: every worker route attempt records target,
+  transport, mode, terminal status, SIP code, and failure details
+- **Final call state**: rejected, canceled, failed, timed-out, and ended calls
+  carry final SIP code, reason, ending party, and ended timestamp
+- **RTP status tracking**: RTPEngine offer, answer, and delete update per-call
+  application data and metrics

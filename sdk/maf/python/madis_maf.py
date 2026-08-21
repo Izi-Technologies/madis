@@ -101,10 +101,25 @@ class MadisMaf:
 
     def create_call(self, from_uri: str, to_uri: str,
                     application_data: dict[str, object] | None = None,
-                    idempotency_key: str | None = None) -> object:
+                    idempotency_key: str | None = None,
+                    caller_uri: str | None = None,
+                    caller_id: str | None = None,
+                    caller_name: str | None = None,
+                    p_asserted_identity: str | None = None,
+                    privacy: str | None = None) -> object:
         body: dict[str, object] = {"from": from_uri, "to": to_uri}
         if application_data is not None:
             body["application_data"] = application_data
+        if caller_uri is not None:
+            body["caller_uri"] = caller_uri
+        if caller_id is not None:
+            body["caller_id"] = caller_id
+        if caller_name is not None:
+            body["caller_name"] = caller_name
+        if p_asserted_identity is not None:
+            body["p_asserted_identity"] = p_asserted_identity
+        if privacy is not None:
+            body["privacy"] = privacy
         return self._command("POST", "/api/v1/maf/calls", body, idempotency_key)
 
     def get_call(self, call_id: str) -> object:
@@ -215,10 +230,28 @@ class MadisMaf:
 
     def route_call(self, call_id: str, target: str,
                    transport: str | None = None,
-                   idempotency_key: str | None = None) -> object:
+                   idempotency_key: str | None = None,
+                   mode: str | None = None,
+                   caller_uri: str | None = None,
+                   caller_id: str | None = None,
+                   caller_name: str | None = None,
+                   p_asserted_identity: str | None = None,
+                   privacy: str | None = None) -> object:
         body = {"target": target}
         if transport is not None:
             body["transport"] = transport
+        if mode is not None:
+            body["mode"] = mode
+        if caller_uri is not None:
+            body["caller_uri"] = caller_uri
+        if caller_id is not None:
+            body["caller_id"] = caller_id
+        if caller_name is not None:
+            body["caller_name"] = caller_name
+        if p_asserted_identity is not None:
+            body["p_asserted_identity"] = p_asserted_identity
+        if privacy is not None:
+            body["privacy"] = privacy
         return self._command("POST", f"/api/v1/maf/calls/{quote(call_id, safe='')}/route",
                              body, idempotency_key)
 
@@ -387,6 +420,25 @@ class MadisMaf:
 
     def active_calls(self) -> object:
         return self._request("GET", "/api/v1/maf/calls/active")
+
+    def capacity_policies(self) -> object:
+        return self._request("GET", "/api/v1/maf/capacity/policies")
+
+    def upsert_capacity_policy(self, name: str,
+                               selector_type: str = "global",
+                               selector_value: str = "",
+                               max_active_calls: int = 0,
+                               max_cps: int = 0,
+                               reject_sip_code: int = 503,
+                               enabled: bool = True) -> object:
+        return self._request("POST", "/api/v1/maf/capacity/policies",
+                             body={"name": name,
+                                   "selector_type": selector_type,
+                                   "selector_value": selector_value,
+                                   "max_active_calls": max_active_calls,
+                                   "max_cps": max_cps,
+                                   "reject_sip_code": reject_sip_code,
+                                   "enabled": enabled})
 
     def create_dispatch_member(self, dispatch_set_id: int, gateway_id: int,
                                weight: int = 100, priority: int = 1) -> object:

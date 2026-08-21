@@ -10,6 +10,7 @@
          hold_call/3, hold_call/4,
          unhold_call/3, unhold_call/4,
          send_dtmf/4, send_dtmf/5,
+         capacity_policies/2, upsert_capacity_policy/3,
          events/2, events/3, events/4, events/5]).
 
 -define(MAF_VERSION, "0.7.0").
@@ -215,6 +216,12 @@ charge_authorize(Base, Token, CallId) ->
     request(Base, Token, post, call_path(CallId) ++ "/charge", none, none).
 charge_deny(Base, Token, CallId) ->
     request(Base, Token, post, call_path(CallId) ++ "/charge-deny", none, none).
+
+capacity_policies(Base, Token) ->
+    request(Base, Token, get, "/api/v1/maf/capacity/policies", none).
+
+upsert_capacity_policy(Base, Token, Json) ->
+    request(Base, Token, post, "/api/v1/maf/capacity/policies", Json, none).
 
 events(Base, Token) -> events(Base, Token, 0, none, 100).
 events(Base, Token, Cursor) -> events(Base, Token, Cursor, none, 100).

@@ -784,7 +784,18 @@ paths:
       summary: List active (non-ended) calls
       security: [{mafBearerAuth: []}]
       responses:
-        '200': {description: Active call list}
+        '200':
+          description: Active call list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [schema, calls]
+                properties:
+                  schema: {type: string, enum: [madis.maf.calls-active.v1]}
+                  calls:
+                    type: array
+                    items: {$ref: '#/components/schemas/CallSummary'}
   /api/v1/maf/dispatch-members:
     post:
       operationId: createDispatchMember
@@ -832,6 +843,43 @@ paths:
         '202': {description: Command accepted}
         '401': {description: Authentication failed}
         '404': {description: Call not found}
+  /api/v1/maf/capacity/policies:
+    get:
+      operationId: listCapacityPolicies
+      summary: List MAF call admission policies
+      security: [{mafBearerAuth: []}]
+      responses:
+        '200':
+          description: Capacity policy list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [schema, policies]
+                properties:
+                  schema: {type: string, enum: [madis.maf.capacity-policies.v1]}
+                  policies:
+                    type: array
+                    items: {$ref: '#/components/schemas/CapacityPolicy'}
+        '401': {description: Authentication failed}
+    post:
+      operationId: upsertCapacityPolicy
+      summary: Create or update a MAF call admission policy
+      security: [{mafBearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CapacityPolicyRequest'}
+      responses:
+        '201':
+          description: Capacity policy created or updated
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CapacityPolicy'}
+        '400': {description: Invalid policy}
+        '401': {description: Authentication failed}
+        '403': {description: Write scope required}
 components:
   securitySchemes:
     mafBearerAuth:
@@ -881,6 +929,11 @@ components:
             from: {type: string, minLength: 1, maxLength: 512}
             to: {type: string, minLength: 1, maxLength: 512}
             application_data: {type: object, additionalProperties: true}
+            caller_uri: {type: string, minLength: 5, maxLength: 512, description: SIP URI to use in From}
+            caller_id: {type: string, maxLength: 64, description: Digits and plus are used to build a From URI when caller_uri is omitted}
+            caller_name: {type: string, maxLength: 128, description: Display name for From}
+            p_asserted_identity: {type: string, minLength: 5, maxLength: 512, description: SIP URI for P-Asserted-Identity}
+            privacy: {type: string, maxLength: 64, description: Privacy header value}
     RejectCallRequest:
       allOf:
         - {$ref: '#/components/schemas/CommandRequest'}
@@ -954,6 +1007,12 @@ components:
           properties:
             target: {type: string, minLength: 1, maxLength: 512, description: SIP URI to route the call to}
             transport: {type: string, enum: [udp, tcp, tls, wss], description: Override outbound transport}
+            mode: {type: string, enum: [proxy, b2bua], default: proxy}
+            caller_uri: {type: string, minLength: 5, maxLength: 512, description: SIP URI to use in From}
+            caller_id: {type: string, maxLength: 64, description: Digits and plus are used to build a From URI when caller_uri is omitted}
+            caller_name: {type: string, maxLength: 128, description: Display name for From}
+            p_asserted_identity: {type: string, minLength: 5, maxLength: 512, description: SIP URI for P-Asserted-Identity}
+            privacy: {type: string, maxLength: 64, description: Privacy header value}
     RtpRequest:
       allOf:
         - {$ref: '#/components/schemas/CommandRequest'}
@@ -983,13 +1042,70 @@ components:
         schema: {type: string, enum: [madis.maf.call.v1]}
         call_id: {type: string}
         tenant_id: {type: string}
-        state: {type: string, enum: [created, ringing, answered, bridged, transferring, ending, ended, failed]}
+        state: {type: string, enum: [created, ringing, answered, bridged, transferring, ending, ended, failed, canceled, rejected, timeout]}
         version: {type: string}
+        from_uri: {type: string}
+        to_uri: {type: string}
+        application_data: {type: object, additionalProperties: true}
+        final_sip_code: {type: integer, nullable: true}
+        final_reason: {type: string}
+        ended_by: {type: string, enum: ["", application, remote, timer]}
+        route_attempts: {type: array, items: {$ref: '#/components/schemas/RouteAttempt'}}
         channels: {type: array, items: {$ref: '#/components/schemas/Channel'}}
         bridges: {type: array, items: {$ref: '#/components/schemas/Bridge'}}
         media: {type: array, items: {$ref: '#/components/schemas/MediaOperation'}}
         created_at: {type: string, format: date-time}
         updated_at: {type: string, format: date-time}
+        ended_at: {type: string, format: date-time, nullable: true}
+    CallSummary:
+      type: object
+      required: [call_id, state]
+      properties:
+        call_id: {type: string}
+        state: {type: string, enum: [created, ringing, answered, bridged, transferring, ending]}
+        from_uri: {type: string}
+        to_uri: {type: string}
+        application_data: {type: object, additionalProperties: true}
+        final_sip_code: {type: integer, nullable: true}
+        final_reason: {type: string}
+        ended_by: {type: string}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    RouteAttempt:
+      type: object
+      required: [attempt_id, target, transport, mode, status]
+      properties:
+        attempt_id: {type: integer}
+        command_id: {type: string}
+        target: {type: string, maxLength: 512}
+        transport: {type: string, enum: [udp, tcp, tls, ws, wss]}
+        mode: {type: string, enum: [proxy, b2bua]}
+        status: {type: string, enum: [attempted, sent, failed]}
+        sip_code: {type: integer, nullable: true}
+        error_code: {type: string}
+        error_message: {type: string}
+        started_at: {type: string, format: date-time}
+        completed_at: {type: string, format: date-time, nullable: true}
+    CapacityPolicyRequest:
+      type: object
+      required: [name]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 128}
+        selector_type: {type: string, enum: [global, tenant, source_ip, target], default: global}
+        selector_value: {type: string, maxLength: 256}
+        max_active_calls: {type: integer, minimum: 0, maximum: 1000000, default: 0}
+        max_cps: {type: integer, minimum: 0, maximum: 100000, default: 0}
+        reject_sip_code: {type: integer, minimum: 300, maximum: 699, default: 503}
+        enabled: {type: boolean, default: true}
+    CapacityPolicy:
+      allOf:
+        - {$ref: '#/components/schemas/CapacityPolicyRequest'}
+        - type: object
+          required: [policy_id, enabled]
+          properties:
+            policy_id: {type: integer}
+            created_at: {type: string, format: date-time}
+            updated_at: {type: string, format: date-time}
     Channel:
       type: object
       required: [channel_id, state]

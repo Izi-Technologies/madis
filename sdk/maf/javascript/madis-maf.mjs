@@ -47,8 +47,8 @@ export class MadisMaf {
     return this.request("POST", path, { command_id: key, ...body }, undefined, key);
   }
 
-  createCall(from, to, applicationData, idempotencyKey) {
-    const body = { from, to };
+  createCall(from, to, applicationData, idempotencyKey, presentation = {}) {
+    const body = { from, to, ...presentation };
     if (applicationData !== undefined) body.application_data = applicationData;
     return this.command("/api/v1/maf/calls", body, idempotencyKey);
   }
@@ -77,8 +77,8 @@ export class MadisMaf {
     const body = { action, ...opts };
     return this.command(this.callPath(callId, "/rtp"), body, key);
   }
-  routeCall(callId, target, transport, key) {
-    const body = { target };
+  routeCall(callId, target, transport, key, opts = {}) {
+    const body = { target, ...opts };
     if (transport !== undefined) body.transport = transport;
     return this.command(this.callPath(callId, "/route"), body, key);
   }
@@ -123,6 +123,8 @@ export class MadisMaf {
   setConfig(key, value, description = "") { return this.request("POST", "/api/v1/maf/config", { key, value, description }); }
   chargeAuthorize(callId) { return this.request("POST", this.callPath(callId, "/charge")); }
   chargeDeny(callId) { return this.request("POST", this.callPath(callId, "/charge-deny")); }
+  capacityPolicies() { return this.request("GET", "/api/v1/maf/capacity/policies"); }
+  upsertCapacityPolicy(body) { return this.request("POST", "/api/v1/maf/capacity/policies", body); }
 
   events(cursor = 0, eventType, limit = 100) {
     const query = { cursor: Math.max(cursor, 0), limit: Math.min(Math.max(limit, 1), 100) };

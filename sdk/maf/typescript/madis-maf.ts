@@ -13,6 +13,11 @@ export interface CreateCallRequest {
   from: string;
   to: string;
   application_data?: Record<string, unknown>;
+  caller_uri?: string;
+  caller_id?: string;
+  caller_name?: string;
+  p_asserted_identity?: string;
+  privacy?: string;
 }
 
 export interface AnswerRequest {
@@ -113,11 +118,54 @@ export interface Call {
   schema: "madis.maf.call.v1";
   call_id: string;
   tenant_id?: string;
-  state: "created" | "ringing" | "answered" | "bridged" | "transferring" | "ending" | "ended" | "failed";
+  state: "created" | "ringing" | "answered" | "bridged" | "transferring" | "ending" | "ended" | "failed" | "canceled" | "rejected" | "timeout";
   version: string;
+  from_uri?: string;
+  to_uri?: string;
+  application_data?: Record<string, unknown>;
+  final_sip_code?: number | null;
+  final_reason?: string;
+  ended_by?: "" | "application" | "remote" | "timer";
+  route_attempts?: RouteAttempt[];
   channels?: Channel[];
   bridges?: Bridge[];
   media?: MediaOperation[];
+  created_at?: string;
+  updated_at?: string;
+  ended_at?: string | null;
+}
+
+export interface RouteAttempt {
+  attempt_id: number;
+  command_id?: string;
+  target: string;
+  transport: "udp" | "tcp" | "tls" | "ws" | "wss";
+  mode: "proxy" | "b2bua";
+  status: "attempted" | "sent" | "failed";
+  sip_code?: number | null;
+  error_code?: string;
+  error_message?: string;
+  started_at?: string;
+  completed_at?: string | null;
+}
+
+export interface CallerPresentation {
+  caller_uri?: string;
+  caller_id?: string;
+  caller_name?: string;
+  p_asserted_identity?: string;
+  privacy?: string;
+}
+
+export interface CapacityPolicy {
+  policy_id?: number;
+  name: string;
+  selector_type?: "global" | "tenant" | "source_ip" | "target";
+  selector_value?: string;
+  max_active_calls?: number;
+  max_cps?: number;
+  reject_sip_code?: number;
+  enabled?: boolean;
   created_at?: string;
   updated_at?: string;
 }
@@ -262,8 +310,9 @@ export class MadisMaf {
     to: string,
     applicationData?: Record<string, unknown>,
     idempotencyKey?: string,
+    presentation?: CallerPresentation,
   ): Promise<CommandReceipt> {
-    const body: Record<string, unknown> = { from, to };
+    const body: Record<string, unknown> = { from, to, ...(presentation ?? {}) };
     if (applicationData !== undefined) body.application_data = applicationData;
     return this.command(`${API}/calls`, body, idempotencyKey);
   }
@@ -427,8 +476,9 @@ export class MadisMaf {
     target: string,
     transport?: string,
     idempotencyKey?: string,
+    opts?: CallerPresentation & { mode?: "proxy" | "b2bua" },
   ): Promise<CommandReceipt> {
-    const body: Record<string, string> = { target };
+    const body: Record<string, string> = { target, ...(opts ?? {}) };
     if (transport !== undefined) body.transport = transport;
     return this.command(
       `${API}/calls/${encPath(callId)}/route`,
@@ -531,6 +581,12 @@ export class MadisMaf {
   }
   async chargeDeny(callId: string): Promise<Record<string, unknown>> {
     return this.request("POST", `${API}/calls/${encPath(callId)}/charge-deny`);
+  }
+  async capacityPolicies(): Promise<Record<string, unknown>> {
+    return this.request("GET", `${API}/capacity/policies`);
+  }
+  async upsertCapacityPolicy(policy: CapacityPolicy): Promise<Record<string, unknown>> {
+    return this.request("POST", `${API}/capacity/policies`, policy);
   }
 
   async events(
