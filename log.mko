@@ -1,11 +1,88 @@
-// ============ LOGGING ============
+// ============ STRUCTURED LOGGING ============
+// Levels: error=0, warn=1, info=2, debug=3
+// Format: ISO timestamp + level + component + message + optional key=value pairs
+// Gated by SIP_LOG_LEVEL (default: info). Debug is opt-in and never on in production.
 
+fn log_level_configured() -> int {
+    let v = str_to_lower(str_trim_space(env_get_or("SIP_LOG_LEVEL", "info")))
+    if str_eq(v, "error") { return 0 }
+    if str_eq(v, "warn") { return 1 }
+    if str_eq(v, "debug") { return 3 }
+    return 2  // info
+}
+
+fn log_level_cached(cache: CMap) -> int {
+    if cmap_has(cache, "_log_level") == 1 {
+        return cmap_get_int(cache, "_log_level", 2)
+    }
+    let level = log_level_configured()
+    cmap_set_int(cache, "_log_level", level)
+    return level
+}
+
+fn log_level_name(level: int) -> string {
+    if level == 0 { return "ERROR" }
+    if level == 1 { return "WARN" }
+    if level == 3 { return "DEBUG" }
+    return "INFO"
+}
+
+// Core log function — all others delegate here
 fn slog(msg: string) -> int {
     print(f"{time_format(now_ms())} {msg}")
     return 0
 }
 
-fn log_info(component: string, msg: string) -> int {
-    print(f"{time_format(now_ms())} [{component}] {msg}")
+fn log_at(level: int, component: string, msg: string) -> int {
+    print(f"{time_format(now_ms())} [{log_level_name(level)}] [{component}] {msg}")
     return 0
+}
+
+fn log_info(component: string, msg: string) -> int {
+    return log_at(2, component, msg)
+}
+
+fn log_warn(component: string, msg: string) -> int {
+    return log_at(1, component, msg)
+}
+
+fn log_error(component: string, msg: string) -> int {
+    return log_at(0, component, msg)
+}
+
+fn log_debug(component: string, msg: string) -> int {
+    return log_at(3, component, msg)
+}
+
+// Gated variants — check level before building the message string.
+// Use these in hot paths to avoid string concatenation when the level is off.
+fn log_info_if(cache: CMap, component: string, msg: string) -> int {
+    if log_level_cached(cache) < 2 { return 0 }
+    return log_at(2, component, msg)
+}
+
+fn log_warn_if(cache: CMap, component: string, msg: string) -> int {
+    if log_level_cached(cache) < 1 { return 0 }
+    return log_at(1, component, msg)
+}
+
+fn log_debug_if(cache: CMap, component: string, msg: string) -> int {
+    if log_level_cached(cache) < 3 { return 0 }
+    return log_at(3, component, msg)
+}
+
+// Error is always logged regardless of level
+fn log_error_always(component: string, msg: string) -> int {
+    return log_at(0, component, msg)
+}
+
+// Structured key=value log for machine parsing (JSON-ish single line)
+fn log_structured(level: int, component: string, event: string, kv: string) -> int {
+    print(f"{time_format(now_ms())} [{log_level_name(level)}] [{component}] {event} {kv}")
+    return 0
+}
+
+fn log_event(cache: CMap, component: string, event: string, kv: string) -> int {
+    if log_level_cached(cache) < 2 { return 0 }
+    return log_structured(2, component, event, kv)
 }

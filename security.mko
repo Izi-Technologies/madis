@@ -31,6 +31,7 @@ fn sec_is_banned(db: SqlDB, db_ok: int, src_ip: string, cache: CMap) -> int {
         } else {
             let _ = bounded_cache_set(cache, "ban_seq", "ban_ring|", key, "1|" + string(now), 65536)
         }
+        let _ = log_debug_if(cache, "security", "banned ip=" + src_ip)
         return 1
     }
     let _ = bounded_cache_set(cache, "ban_seq", "ban_ring|", key, "0|" + string(now), 65536)
@@ -70,6 +71,7 @@ fn sec_auth_failure(db: SqlDB, db_ok: int, src_ip: string, sip_user: string, cac
             let _ = sql_exec_str4(db, "INSERT INTO security_bans (source_ip, reason, expires_at, permanent) VALUES ($1, $2, NOW() + ($3 || ' minutes')::interval, false) ON CONFLICT (source_ip) DO UPDATE SET ban_count = security_bans.ban_count + 1, reason = $2, expires_at = NOW() + ($3 || ' minutes')::interval, permanent = false", src_ip, "auth_failures:" + string(count), string(ban_dur), "")
         }
         let _ = bounded_cache_set(cache, "ban_seq", "ban_ring|", "ban|" + src_ip, "1|" + string(now_ms()), 16384)
+        let _ = log_warn_if(cache, "security", "ban-triggered ip=" + src_ip + " failures=" + string(count))
         return 1
     }
     // Log only every 5th failure to reduce DB write volume under attack

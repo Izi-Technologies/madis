@@ -1387,6 +1387,7 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
                 let fwd = nat_fix_sdp(proxy_hop(msg, ip, port, tr), len(msg), public_ip)
                 let _ = sip_forward_target(ecscf, fwd, sip_transport_param(ecscf, "udp"), cache, forward_fd)
                 let _ = db_cdr(db, db_ok, cid, from_user, sip_uri_user(ruri), "EMERGENCY:" + ecscf)
+                let _ = log_info_if(cache, "sip", "emergency-call ruri=" + sip_uri_user(ruri) + " target=" + ecscf + " ip=" + ip)
                 return sip_resp(100, "Trying", data, dl, "emergency")
             }
         }
@@ -1916,6 +1917,7 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
             let _ = sip_call_state_cleanup(calls, cid, sip_addr_tag(from), sip_addr_tag(to))
         }
         let sent = sip_forward_dialog_request(msg, cid, "BYE", next_hop, ip, port, tr, cache, forward_fd)
+        let _ = log_debug_if(cache, "sip", "bye cid=" + cid + " ip=" + ip)
         let _ = sip_dialog_cache_cleanup(cache, cid, msg)
         if sent == 1 { return "" }
         // Cluster failover: if this node doesn't own the dialog, check PG
@@ -1930,6 +1932,7 @@ fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, p
     } else {
     // === CANCEL ===
     if is_cancel == 1 {
+        let _ = log_debug_if(cache, "sip", "cancel cid=" + cid + " ip=" + ip)
         let _ = maf_worker_inbound_cancel_terminate(db, db_ok, data, cache, forward_fd)
         let _ = maf_worker_sync_sip(db, db_ok, data, cache)
         let _ = sip_send_fork_cancels(cid, "", cache, forward_fd)
