@@ -70,6 +70,12 @@ fn shaken_iat_from_payload(payload: string) int { return 0 }
 fn jwt_payload(token: string) string { return "" }
 fn time_format(ms: int) string { return "" }
 fn slog(msg: string) { let _ = msg }
+fn log_info_if(cache: CMap, component: string, msg: string) int { return 0 }
+fn log_warn_if(cache: CMap, component: string, msg: string) int { return 0 }
+fn log_debug_if(cache: CMap, component: string, msg: string) int { return 0 }
+fn log_error_always(component: string, msg: string) int { return 0 }
+fn log_event(cache: CMap, component: string, event: string, kv: string) int { return 0 }
+fn log_level_cached(cache: CMap) int { return 2 }
 pull . "../headers.mko"
 pull . "../maf_headers.mko"
 pull . "../maf_worker.mko"

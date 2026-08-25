@@ -5,6 +5,12 @@ pull . "../auth.mko"
 
 // Stub: hdr_set lives in headers.mko, pulled indirectly via nat.mko
 fn hdr_set(msg: string, name: string, value: string) -> string { return msg }
+fn log_info_if(cache: CMap, component: string, msg: string) int { return 0 }
+fn log_warn_if(cache: CMap, component: string, msg: string) int { return 0 }
+fn log_debug_if(cache: CMap, component: string, msg: string) int { return 0 }
+fn log_error_always(component: string, msg: string) int { return 0 }
+fn log_event(cache: CMap, component: string, event: string, kv: string) int { return 0 }
+fn log_level_cached(cache: CMap) int { return 2 }
 
 fn TestDigestQopAuthKnownAnswer() {
     let ha1 = "939e7578ed9e3c518a452acee763bce9"
