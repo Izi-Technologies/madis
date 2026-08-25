@@ -52,6 +52,7 @@ Use long, random values for every token. The installer generates these credentia
 | `SIP_REGION` | `default` | Optional region metadata. |
 | `SIP_DIGEST_ALGORITHM` | `md5` | Digest profile; SHA-256 profiles are supported by the authentication layer. |
 | `SIP_USER_RATE_LIMIT` | `100` | Bounded per-user security/rate policy value. |
+| `SIP_LOG_LEVEL` | `info` | Log verbosity: `error`, `warn`, `info`, `debug`. All log calls are cache-gated; zero overhead when the level is below the threshold. Changeable at runtime via `POST /maf/log-level`. |
 
 ## Worker HTTP and WebUI
 

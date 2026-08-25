@@ -523,7 +523,7 @@ curl -X DELETE "$MAF_BASE_URL/api/v1/maf/ip-auth/7" \
 
 ### Access control
 
-List and create access control entries (allow/deny rules by IP or subnet):
+Full CRUD for access control entries (allow/deny rules by IP or subnet):
 
 ```sh
 curl "$MAF_BASE_URL/api/v1/maf/access-control" \
@@ -533,11 +533,14 @@ curl -X POST "$MAF_BASE_URL/api/v1/maf/access-control" \
   -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
   -H "Content-Type: application/json" \
   --data '{"rule":"allow","source":"10.0.0.0/8","description":"Internal network"}'
+
+curl -X DELETE "$MAF_BASE_URL/api/v1/maf/access-control/5" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN"
 ```
 
 ### Global header rules
 
-Manage header manipulation rules applied globally (before per-call policies):
+Full CRUD for header manipulation rules applied globally:
 
 ```sh
 curl "$MAF_BASE_URL/api/v1/maf/header-rules" \
@@ -547,6 +550,9 @@ curl -X POST "$MAF_BASE_URL/api/v1/maf/header-rules" \
   -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
   -H "Content-Type: application/json" \
   --data '{"action":"remove","name":"X-Debug","direction":"outbound"}'
+
+curl -X DELETE "$MAF_BASE_URL/api/v1/maf/header-rules/3" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN"
 ```
 
 ### Billing event outbox
@@ -585,6 +591,9 @@ curl -X POST "$MAF_BASE_URL/api/v1/maf/ani-groups" \
   -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
   -H "Content-Type: application/json" \
   --data '{"name":"vip-callers","numbers":["+15551234567","+15559876543"]}'
+
+curl -X DELETE "$MAF_BASE_URL/api/v1/maf/ani-groups/2" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN"
 ```
 
 ### Active calls
@@ -603,14 +612,54 @@ without fetching every individual call resource.
 
 ### Dispatch membership
 
-Add a gateway to an existing dispatch set:
+Add or remove gateways from dispatch sets:
 
 ```sh
 curl -X POST "$MAF_BASE_URL/api/v1/maf/dispatch-members" \
   -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
   -H "Content-Type: application/json" \
   --data '{"dispatch_set_id":3,"gateway_id":7,"weight":100,"priority":1}'
+
+curl -X DELETE "$MAF_BASE_URL/api/v1/maf/dispatch-members/12" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN"
 ```
+
+### User management
+
+Full CRUD for SIP digest authentication users:
+
+```sh
+# List users
+curl "$MAF_BASE_URL/api/v1/maf/users" \
+  -H "Authorization: Bearer $SIP_MAF_API_READ_TOKEN"
+
+# Create or update a user (password is hashed to HA1 server-side)
+curl -X POST "$MAF_BASE_URL/api/v1/maf/users" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"username":"alice","password":"secret123"}'
+
+# Disable a user (soft delete — preserves CDR references)
+curl -X DELETE "$MAF_BASE_URL/api/v1/maf/users/42" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN"
+```
+
+Passwords are never stored in plaintext — the API computes the SIP Digest
+HA1 hash (`MD5(username:realm:password)`) server-side and stores only the hash.
+
+### Runtime log level
+
+Change the log verbosity at runtime without restarting:
+
+```sh
+curl -X POST "$MAF_BASE_URL/api/v1/maf/log-level" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"level":"debug"}'
+```
+
+Levels: `error` (quietest), `warn`, `info` (default), `debug` (verbose).
+Write scope required.
 
 ### Cluster health
 
@@ -740,6 +789,14 @@ POST   /admin/api/v1/maf/config                          — set config
 GET    /admin/api/v1/maf/events                           — event replay
 POST   /admin/api/v1/maf/events                          — publish custom event
 GET    /admin/api/v1/maf/events/ws                        — WebSocket subscription
+DELETE /admin/api/v1/maf/access-control/{id}              — delete ACL entry
+DELETE /admin/api/v1/maf/header-rules/{id}                — delete header rule
+DELETE /admin/api/v1/maf/ani-groups/{id}                  — delete ANI group
+DELETE /admin/api/v1/maf/dispatch-members/{id}            — remove dispatch member
+GET    /admin/api/v1/maf/users                            — list users
+POST   /admin/api/v1/maf/users                           — create/update user
+DELETE /admin/api/v1/maf/users/{id}                       — disable user
+POST   /admin/api/v1/maf/log-level                       — set log level
 GET    /admin/api/v1/maf/dialplans                        — list dialplans
 POST   /admin/api/v1/maf/dialplans                       — create dialplan
 DELETE /admin/api/v1/maf/dialplans/{id}                   — delete dialplan
@@ -1113,6 +1170,10 @@ body limit, 16-512 char token validation.
 | | List | `events()` | `Events()` | `events()` | `events()` | `events/3` |
 | | Subscribe | `subscribe()` | `Subscribe()` | `subscribe()` | `subscribe()` | — (use events/5) |
 | | WS URL | `ws_url()` | `WSUrl()` | `wsUrl()` | `wsUrl()` | `ws_url/4` |
+| **Users** | List | `users()` | `Users()` | `users()` | `users()` | — |
+| | Create | `create_user()` | `CreateUser()` | `createUser()` | `createUser()` | — |
+| | Delete | `delete_user()` | `DeleteUser()` | `deleteUser()` | `deleteUser()` | — |
+| **Logging** | Set level | `set_log_level()` | `SetLogLevel()` | `setLogLevel()` | `setLogLevel()` | — |
 
 ### Contract tests
 
