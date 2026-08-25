@@ -32,7 +32,7 @@ trap 'rm -rf "$BUILD_TMP"' EXIT
 rm -f "$GENERATED"
 
 BUILD_LOG="$BUILD_TMP/mako-build.log"
-if ! MAKO_RUNTIME="$RUNTIME_DIR" "$MAKO_BIN" build --emit-c --release --strip --no-incremental \
+if ! MAKO_RUNTIME="$RUNTIME_DIR" "$MAKO_BIN" build --backend c --emit-c --release --strip --no-incremental \
   "$SOURCE" -o "$BUILD_TMP/mako-ignored" >"$BUILD_LOG" 2>&1; then
   [[ -s "$GENERATED" ]] || { cat "$BUILD_LOG" >&2; exit 1; }
 fi
