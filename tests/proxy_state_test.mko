@@ -8,6 +8,14 @@ pull . "../headers.mko"
 // Stub: is_private_ip lives in nat.mko, called by registration.mko
 fn is_private_ip(ip: string) -> int { return 0 }
 
+fn log_info_if(cache: CMap, component: string, msg: string) int { return 0 }
+fn log_warn_if(cache: CMap, component: string, msg: string) int { return 0 }
+fn log_debug_if(cache: CMap, component: string, msg: string) int { return 0 }
+fn log_error_always(component: string, msg: string) int { return 0 }
+fn log_event(cache: CMap, component: string, event: string, kv: string) int { return 0 }
+fn log_level_cached(cache: CMap) int { return 2 }
+fn slog(msg: string) { let _ = msg }
+
 fn proxy_test_register_message(contact: string, expires: string) -> string {
     let headers = "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bKtest\r\n"
         + "From: <sip:alice@example.com>;tag=from1\r\n"

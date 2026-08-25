@@ -4,6 +4,14 @@ pull . "../stream.mko"
 // Stub: bounded_cache_set lives in auth.mko, called by stream.mko
 fn bounded_cache_set(cache: CMap, seq_key: string, ring_prefix: string, key: string, value: string, capacity: int) -> int { return 0 }
 
+fn log_info_if(cache: CMap, component: string, msg: string) int { return 0 }
+fn log_warn_if(cache: CMap, component: string, msg: string) int { return 0 }
+fn log_debug_if(cache: CMap, component: string, msg: string) int { return 0 }
+fn log_error_always(component: string, msg: string) int { return 0 }
+fn log_event(cache: CMap, component: string, event: string, kv: string) int { return 0 }
+fn log_level_cached(cache: CMap) int { return 2 }
+fn slog(msg: string) { let _ = msg }
+
 // --- Peer address parsing ---
 
 fn TestPeerSplitIPv4() {

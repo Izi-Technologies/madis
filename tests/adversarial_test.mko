@@ -14,6 +14,7 @@ fn log_debug_if(cache: CMap, component: string, msg: string) int { return 0 }
 fn log_error_always(component: string, msg: string) int { return 0 }
 fn log_event(cache: CMap, component: string, event: string, kv: string) int { return 0 }
 fn log_level_cached(cache: CMap) int { return 2 }
+fn slog(msg: string) { let _ = msg }
 
 fn adversarial_request(uri: string, cseq: string, body: string, extra: string) -> string {
     return "REGISTER " + uri + " SIP/2.0\r\n"
