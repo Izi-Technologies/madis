@@ -1522,7 +1522,7 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         if len(username) == 0 || len(username) > 128 || len(password) == 0 || len(password) > 256 {
             return maf_api_error(400, "username and password required")
         }
-        let ha1 = md5(username + ":" + env_get_or("SIP_REALM", "madis.local") + ":" + password)
+        let ha1 = sip_md5_hex(username + ":" + env_get_or("SIP_REALM", "madis.local") + ":" + password)
         let packed = "{\"username\":\"" + maf_api_json_escape(username) + "\",\"ha1\":\"" + ha1 + "\"}"
         let rc = sql_exec_str4(db, "INSERT INTO users (username, password_ha1, enabled) VALUES ($1::jsonb->>'username', $1::jsonb->>'ha1', true) ON CONFLICT (username) DO UPDATE SET password_ha1 = $1::jsonb->>'ha1'", packed, "", "", "")
         if rc < 0 { return maf_api_error(500, "user create failed") }
