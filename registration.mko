@@ -274,6 +274,7 @@ fn registration_store(reg: CMap, aor: string, contact: string, transport: string
     cmap_set(reg, prefix + string(slot), value)
     // Keep the legacy key as a fast compatibility path; new lookups use slots.
     cmap_set(reg, aor, value)
+    slog("  reg: store aor=" + aor + " contact=" + contact + " expires=" + string(expires_s))
     return 1
 }
 
@@ -300,6 +301,7 @@ fn registration_remove(reg: CMap, aor: string, contact: string) -> int {
     let _ = cmap_del(reg, aor)
     let remaining = registration_find(reg, aor)
     if len(remaining) > 0 { cmap_set(reg, aor, remaining) } else { let _ = cmap_del(reg, aor) }
+    slog("  reg: remove aor=" + aor + " contact=" + contact)
     return removed
 }
 
@@ -372,6 +374,7 @@ fn registration_sweep_expired(reg: CMap) -> int {
         i = i + 1
         if cleaned >= 512 { break }
     }
+    if cleaned > 0 { slog("  reg: swept " + string(cleaned) + " expired bindings") }
     return cleaned
 }
 

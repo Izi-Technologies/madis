@@ -129,6 +129,7 @@ fn db_dialplan(db: SqlDB, db_ok: int, caller: string, callee: string, direction:
                 if len(action_parts[1]) > 0 { out_caller = num_apply_chain(caller, action_parts[1]) }
             }
             let _ = bounded_cache_set(cache, "dp_seq", "dp_ring|", key, out_callee + "\x01" + out_caller, 16384)
+            let _ = log_debug_if(cache, "dialplan", "transform callee=" + callee + " result=" + out_callee)
             let mut result = make([]string, 2)
             result[0] = out_callee
             result[1] = out_caller

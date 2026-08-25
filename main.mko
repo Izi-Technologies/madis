@@ -172,6 +172,7 @@ fn sip_forward_udp(target: string, msg: string, cache: CMap, out_fd: int) -> int
     if owns_fd == 1 { let _ = udp_close(fd) }
     if sent >= 0 {
         cmap_set(cache, "last_forward_target", host + ":" + string(port))
+        let _ = log_debug_if(cache, "transport", "udp-sent host=" + host + " port=" + string(port))
         return 1
     }
     return 0

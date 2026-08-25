@@ -570,6 +570,9 @@ fn sip_forward_target(target: string, msg: string, transport: string, cache: CMa
             let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_branch|" + cid, branch, 131072)
         }
     }
+    if sent == 0 {
+        let _ = log_warn_if(cache, "transport", "forward-failed target=" + target + " transport=" + tr)
+    }
     if sent == 1 {
         let method = madis_method(msg)
         if not str_eq(method, "ACK") && not str_eq(method, "") {

@@ -283,6 +283,8 @@ fn event_package_handle_subscribe(data: string, dl: int, cache: CMap, reg: CMap)
     let proxy_contact = "Contact: <sip:" + env_get_or("SIP_HOST", "127.0.0.1") + ":" + env_get_or("SIP_PORT", "5060") + ";transport=udp>\r\n"
     let resp = sip_reply_with_to_tag(data, 200, "OK", "Expires: " + string(expires) + "\r\n" + proxy_contact + event_package_allow_events_header(), "", my_tag)
 
+    let _ = log_debug_if(cache, "event", "subscribe aor=" + resource + " package=" + event)
+
     // Defer initial NOTIFY so 200 OK is sent first (RFC 6665 §4.2.2)
     let _ = bounded_cache_set(cache, "evt_pending_seq", "evt_pending_ring|", "evt_pending_notify|" + sub_key, "1", 4096)
 

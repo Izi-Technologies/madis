@@ -239,7 +239,10 @@ fn shaken_verify_cfg(msg: string, msglen: int, cfg: []string, cache: CMap) -> st
         }
     }
 
-    if ok == 0 { return "" }
+    if ok == 0 {
+        let _ = log_debug_if(cache, "stir", "verify-fail")
+        return ""
+    }
     let payload = jwt_payload(token)
 
     // RFC 8224 §6.2.1: check iat freshness
@@ -250,7 +253,11 @@ fn shaken_verify_cfg(msg: string, msglen: int, cfg: []string, cache: CMap) -> st
         if age < 0 - 30 || age > shaken_iat_max_age_sec() { return "" }
     }
 
-    return shaken_attest_from_payload(payload)
+    let attest_result = shaken_attest_from_payload(payload)
+    if len(attest_result) > 0 {
+        let _ = log_debug_if(cache, "stir", "verify-ok attest=" + attest_result)
+    }
+    return attest_result
 }
 
 // Verify and annotate with orig/dest validation (RFC 8224 §6.2.2)

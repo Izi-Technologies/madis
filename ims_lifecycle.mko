@@ -779,6 +779,7 @@ fn ims_lifecycle_reconcile(reg: CMap, aor: string, private_identity: string, pub
     if expires_s <= 0 || len(contact) == 0 {
         let _ = ims_lifecycle_clear(reg, aor)
         let _ = ims_lifecycle_db_remove(db, db_ok, aor)
+        slog("  ims: lifecycle aor=" + aor + " state=deregistered")
         return 1
     }
     if len(registration_find(reg, aor)) == 0 {
@@ -806,5 +807,6 @@ fn ims_lifecycle_reconcile(reg: CMap, aor: string, private_identity: string, pub
             return 0
         }
     }
+    slog("  ims: lifecycle aor=" + aor + " state=registered")
     return 1
 }

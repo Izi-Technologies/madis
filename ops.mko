@@ -127,6 +127,7 @@ fn proxy_config_reload(cache: CMap) -> int {
     cmap_set(cache, "ipauth_seq", "0")
     cmap_set(cache, "config_reloaded_at", string(now_ms()))
     metric_add(7, 1)
+    let _ = log_info_if(cache, "ops", "config-reloaded epoch=" + string(epoch))
     return epoch
 }
 

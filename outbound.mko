@@ -94,6 +94,7 @@ fn outbound_flow_token_mint(cache: CMap, ip: string, port: int, transport: strin
     cmap_set(cache, "ob-flow|" + token, conn_val)
     // Reverse: conn -> token (latest wins for re-registration)
     cmap_set(cache, "ob-conn|" + conn_val, token)
+    let _ = log_debug_if(cache, "outbound", "flow-token-mint ip=" + ip + " port=" + string(port))
     return token
 }
 

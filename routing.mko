@@ -401,6 +401,7 @@ fn db_route_call(db: SqlDB, db_ok: int, callee: string, caller: string, src_ip: 
         }
 
         // --- Rule matched: execute action ---
+        let _ = log_debug_if(cache, "routing", "rule-match prefix=" + r_prefix + " action=" + r_action)
 
         // continue → skip to next rule
         if str_eq(r_action, "continue") {
@@ -500,11 +501,13 @@ fn db_route_call(db: SqlDB, db_ok: int, callee: string, caller: string, src_ip: 
     if len(gw) > 0 {
         let lpm_result = "route|" + gw
         let _ = bounded_cache_set(cache, "lpm_seq", "lpm_ring|", lpm_key, lpm_result, 16384)
+        let _ = log_debug_if(cache, "routing", "lpm-match callee=" + callee + " gw=" + gw)
         return lpm_result
     }
     // Default route
     let def = sql_query_str(db, "SELECT g.address || ':' || g.port FROM routes r JOIN gateways g ON r.gateway_id = g.id WHERE r.prefix = '*' AND r.enabled = true AND g.enabled = true ORDER BY r.priority ASC LIMIT 1", "")
     if len(def) > 0 { return "route|" + def }
 
+    let _ = log_debug_if(cache, "routing", "no-route callee=" + callee)
     return ""
 }

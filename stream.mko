@@ -142,7 +142,10 @@ fn sip_per_ip_conn_check(cache: CMap, ip: string) -> int {
     if cmap_has(cache, key) == 1 {
         match parse_int(cmap_get(cache, key)) { Ok(v) => { count = v } Err(_) => {} }
     }
-    if count >= sip_per_ip_conn_limit() { return 0 }
+    if count >= sip_per_ip_conn_limit() {
+        let _ = log_warn_if(cache, "stream", "conn-limit-exceeded ip=" + ip + " count=" + string(count))
+        return 0
+    }
     // Use bounded ring so connection-scan from many IPs doesn't grow unbounded
     // ponytail: evicted IPs lose their counter and restart at 1; 65536 slots
     // covers production cardinality. Switch to cmap_set + periodic sweep if not.

@@ -294,5 +294,6 @@ fn ims_flow_register_path(cache: CMap, msg: string, ip: string, port: int, trans
     if len(token) == 0 { return "__IMS_PATH_INVALID__" }
     let path = ims_flow_path_with_token(base, token)
     if len(path) == 0 { return "__IMS_PATH_INVALID__" }
+    let _ = log_debug_if(cache, "ims-flow", "flow-created ip=" + ip + " port=" + string(port))
     return path
 }
