@@ -447,6 +447,32 @@ class MadisMaf:
                                    "gateway_id": gateway_id,
                                    "weight": weight, "priority": priority})
 
+    def delete_access_control(self, acl_id: int) -> object:
+        return self._request("DELETE", f"/api/v1/maf/access-control/{acl_id}")
+
+    def delete_header_rule(self, rule_id: int) -> object:
+        return self._request("DELETE", f"/api/v1/maf/header-rules/{rule_id}")
+
+    def delete_ani_group(self, group_id: int) -> object:
+        return self._request("DELETE", f"/api/v1/maf/ani-groups/{group_id}")
+
+    def delete_dispatch_member(self, member_id: int) -> object:
+        return self._request("DELETE", f"/api/v1/maf/dispatch-members/{member_id}")
+
+    def users(self) -> object:
+        return self._request("GET", "/api/v1/maf/users")
+
+    def create_user(self, username: str, password: str) -> object:
+        return self._request("POST", "/api/v1/maf/users",
+                             body={"username": username, "password": password})
+
+    def delete_user(self, user_id: int) -> object:
+        return self._request("DELETE", f"/api/v1/maf/users/{user_id}")
+
+    def set_log_level(self, level: str) -> object:
+        return self._request("POST", "/api/v1/maf/log-level",
+                             body={"level": level})
+
     def events(self, cursor: int = 0, event_type: str | None = None,
                limit: int = 100) -> object:
         query: dict[str, object] = {"cursor": max(cursor, 0),

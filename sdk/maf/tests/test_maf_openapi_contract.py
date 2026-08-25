@@ -215,6 +215,14 @@ class OpenApiContractTests(unittest.TestCase):
         ("POST", "/api/v1/maf/calls/{call_id}/identity"): "identity",
         ("GET", "/api/v1/maf/capacity/policies"): "capacity_policies",
         ("POST", "/api/v1/maf/capacity/policies"): "upsert_capacity_policy",
+        ("DELETE", "/api/v1/maf/access-control/{acl_id}"): "delete_access_control",
+        ("DELETE", "/api/v1/maf/header-rules/{rule_id}"): "delete_header_rule",
+        ("DELETE", "/api/v1/maf/ani-groups/{group_id}"): "delete_ani_group",
+        ("DELETE", "/api/v1/maf/dispatch-members/{member_id}"): "delete_dispatch_member",
+        ("GET", "/api/v1/maf/users"): "users",
+        ("POST", "/api/v1/maf/users"): "create_user",
+        ("DELETE", "/api/v1/maf/users/{user_id}"): "delete_user",
+        ("POST", "/api/v1/maf/log-level"): "set_log_level",
     }
 
     def test_every_openapi_route_has_sdk_method(self):

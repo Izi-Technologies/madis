@@ -205,6 +205,14 @@ fn maf_api_route(method: string, path: string) -> int {
     if str_eq(method, "POST") && len(maf_api_call_id(path, "identity")) > 0 { return 56 }
     if str_eq(method, "GET") && str_eq(path, "/admin/api/v1/maf/capacity/policies") { return 57 }
     if str_eq(method, "POST") && str_eq(path, "/admin/api/v1/maf/capacity/policies") { return 58 }
+    if str_eq(method, "DELETE") && str_has_prefix(path, "/admin/api/v1/maf/access-control/") { return 59 }
+    if str_eq(method, "DELETE") && str_has_prefix(path, "/admin/api/v1/maf/header-rules/") { return 60 }
+    if str_eq(method, "DELETE") && str_has_prefix(path, "/admin/api/v1/maf/ani-groups/") { return 61 }
+    if str_eq(method, "DELETE") && str_has_prefix(path, "/admin/api/v1/maf/dispatch-members/") { return 62 }
+    if str_eq(method, "GET") && str_eq(path, "/admin/api/v1/maf/users") { return 63 }
+    if str_eq(method, "POST") && str_eq(path, "/admin/api/v1/maf/users") { return 64 }
+    if str_eq(method, "DELETE") && str_has_prefix(path, "/admin/api/v1/maf/users/") { return 65 }
+    if str_eq(method, "POST") && str_eq(path, "/admin/api/v1/maf/log-level") { return 66 }
     return 0
 }
 
@@ -213,7 +221,7 @@ fn maf_api_ws_route(method: string, path: string) -> int {
 }
 
 fn maf_api_write_required(kind: int) -> int {
-    return if kind == 1 || kind >= 3 && kind <= 7 || kind == 9 || (kind >= 10 && kind <= 15) || kind == 20 || kind == 21 || kind == 26 || kind == 27 || kind == 29 || kind == 31 || kind == 33 || kind == 36 || kind == 37 || kind == 38 || kind == 40 || kind == 41 || kind == 43 || kind == 44 || kind == 46 || kind == 48 || kind == 50 || kind == 53 || kind == 55 || kind == 56 || kind == 58 { 1 } else { 0 }
+    return if kind == 1 || kind >= 3 && kind <= 7 || kind == 9 || (kind >= 10 && kind <= 15) || kind == 20 || kind == 21 || kind == 26 || kind == 27 || kind == 29 || kind == 31 || kind == 33 || kind == 36 || kind == 37 || kind == 38 || kind == 40 || kind == 41 || kind == 43 || kind == 44 || kind == 46 || kind == 48 || kind == 50 || kind == 53 || kind == 55 || kind == 56 || kind == 58 || (kind >= 59 && kind <= 62) || kind == 64 || kind == 65 || kind == 66 { 1 } else { 0 }
 }
 
 fn maf_api_capacity_limit(db: SqlDB, ok: int, tenant: string) -> int {
@@ -1443,6 +1451,109 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         let rc = sql_exec_str4(db, "INSERT INTO maf_capacity_policies (tenant_id,name,selector_type,selector_value,max_active_calls,max_cps,reject_sip_code,enabled) SELECT $1::jsonb->>'tenant_id',$1::jsonb->>'name',$1::jsonb->>'selector_type',$1::jsonb->>'selector_value',($1::jsonb->>'max_active_calls')::int,($1::jsonb->>'max_cps')::int,($1::jsonb->>'reject_sip_code')::int,($1::jsonb->>'enabled')::boolean ON CONFLICT (tenant_id,name) DO UPDATE SET selector_type=EXCLUDED.selector_type,selector_value=EXCLUDED.selector_value,max_active_calls=EXCLUDED.max_active_calls,max_cps=EXCLUDED.max_cps,reject_sip_code=EXCLUDED.reject_sip_code,enabled=EXCLUDED.enabled,updated_at=NOW()", packed, "", "", "")
         if rc < 0 { return maf_api_error(500, "capacity policy upsert failed") }
         return http_resp(201, "application/json", "{\"ok\":true,\"name\":\"" + maf_api_json_escape(name) + "\"}\n", "Cache-Control: no-store\r\n")
+    }
+    // DELETE /admin/api/v1/maf/access-control/{id}
+    if kind == 59 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 2 { return maf_api_error(if scope == 0 { 401 } else { 403 }, "write scope required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        let tenant = maf_api_tenant()
+        let acl_id = path[len("/admin/api/v1/maf/access-control/"):]
+        if len(acl_id) == 0 || len(acl_id) > 20 { return maf_api_error(400, "invalid ID") }
+        let _ = sql_exec_str4(db, "DELETE FROM access_control WHERE id = $1::int AND tenant = $2", acl_id, tenant, "", "")
+        return http_resp(200, "application/json", "{\"ok\":true}\n", "Cache-Control: no-store\r\n")
+    }
+    // DELETE /admin/api/v1/maf/header-rules/{id}
+    if kind == 60 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 2 { return maf_api_error(if scope == 0 { 401 } else { 403 }, "write scope required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        let tenant = maf_api_tenant()
+        let hr_id = path[len("/admin/api/v1/maf/header-rules/"):]
+        if len(hr_id) == 0 || len(hr_id) > 20 { return maf_api_error(400, "invalid ID") }
+        let _ = sql_exec_str4(db, "DELETE FROM header_rules WHERE id = $1::int AND tenant_id = $2", hr_id, tenant, "", "")
+        return http_resp(200, "application/json", "{\"ok\":true}\n", "Cache-Control: no-store\r\n")
+    }
+    // DELETE /admin/api/v1/maf/ani-groups/{id}
+    if kind == 61 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 2 { return maf_api_error(if scope == 0 { 401 } else { 403 }, "write scope required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        let ag_id = path[len("/admin/api/v1/maf/ani-groups/"):]
+        if len(ag_id) == 0 || len(ag_id) > 20 { return maf_api_error(400, "invalid ID") }
+        let _ = sql_exec_str4(db, "DELETE FROM ani_ranges WHERE group_id = $1::int", ag_id, "", "", "")
+        let _ = sql_exec_str4(db, "DELETE FROM ani_groups WHERE id = $1::int", ag_id, "", "", "")
+        return http_resp(200, "application/json", "{\"ok\":true}\n", "Cache-Control: no-store\r\n")
+    }
+    // DELETE /admin/api/v1/maf/dispatch-members/{id}
+    if kind == 62 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 2 { return maf_api_error(if scope == 0 { 401 } else { 403 }, "write scope required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        let dm_id = path[len("/admin/api/v1/maf/dispatch-members/"):]
+        if len(dm_id) == 0 || len(dm_id) > 20 { return maf_api_error(400, "invalid ID") }
+        let _ = sql_exec_str4(db, "DELETE FROM dispatch_members WHERE id = $1::int", dm_id, "", "", "")
+        return http_resp(200, "application/json", "{\"ok\":true}\n", "Cache-Control: no-store\r\n")
+    }
+    // GET /admin/api/v1/maf/users
+    if kind == 63 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 1 { return maf_api_error(401, "authentication required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        let rows = tbl_query(db, ok, "SELECT json_build_object('id',id,'username',username,'enabled',enabled,'created_at',created_at)::text FROM users ORDER BY username", 100)
+        let mut out = "{\"schema\":\"madis.maf.users.v1\",\"users\":["
+        let mut i = 0
+        while i < len(rows) {
+            if i > 0 { out = out + "," }
+            out = out + rows[i]
+            i = i + 1
+        }
+        return http_resp(200, "application/json", out + "]}\n", "Cache-Control: no-store\r\n")
+    }
+    // POST /admin/api/v1/maf/users
+    if kind == 64 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 2 { return maf_api_error(if scope == 0 { 401 } else { 403 }, "write scope required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        if maf_api_body_ok(raw, n, 1) == 0 { return maf_api_error(400, "application/json body required") }
+        let body = parse_body(raw, n)
+        let username = json_get_string(body, "username")
+        let password = json_get_string(body, "password")
+        if len(username) == 0 || len(username) > 128 || len(password) == 0 || len(password) > 256 {
+            return maf_api_error(400, "username and password required")
+        }
+        let ha1 = md5(username + ":" + env_get_or("SIP_REALM", "madis.local") + ":" + password)
+        let packed = "{\"username\":\"" + maf_api_json_escape(username) + "\",\"ha1\":\"" + ha1 + "\"}"
+        let rc = sql_exec_str4(db, "INSERT INTO users (username, password_ha1, enabled) VALUES ($1::jsonb->>'username', $1::jsonb->>'ha1', true) ON CONFLICT (username) DO UPDATE SET password_ha1 = $1::jsonb->>'ha1'", packed, "", "", "")
+        if rc < 0 { return maf_api_error(500, "user create failed") }
+        return http_resp(201, "application/json", "{\"ok\":true,\"username\":\"" + maf_api_json_escape(username) + "\"}\n", "Cache-Control: no-store\r\n")
+    }
+    // DELETE /admin/api/v1/maf/users/{id}
+    if kind == 65 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 2 { return maf_api_error(if scope == 0 { 401 } else { 403 }, "write scope required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        let user_id = path[len("/admin/api/v1/maf/users/"):]
+        if len(user_id) == 0 || len(user_id) > 20 { return maf_api_error(400, "invalid ID") }
+        let _ = sql_exec_str4(db, "UPDATE users SET enabled = false WHERE id = $1::int", user_id, "", "", "")
+        return http_resp(200, "application/json", "{\"ok\":true}\n", "Cache-Control: no-store\r\n")
+    }
+    // POST /admin/api/v1/maf/log-level
+    if kind == 66 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 2 { return maf_api_error(if scope == 0 { 401 } else { 403 }, "write scope required") }
+        if maf_api_body_ok(raw, n, 1) == 0 { return maf_api_error(400, "application/json body required") }
+        let body = parse_body(raw, n)
+        let level = str_to_lower(str_trim_space(json_get_string(body, "level")))
+        if not str_eq(level, "error") && not str_eq(level, "warn") && not str_eq(level, "info") && not str_eq(level, "debug") {
+            return maf_api_error(400, "level must be error, warn, info, or debug")
+        }
+        let mut level_int = 2
+        if str_eq(level, "error") { level_int = 0 }
+        if str_eq(level, "warn") { level_int = 1 }
+        if str_eq(level, "debug") { level_int = 3 }
+        // This sets the level for the admin process. Worker log level is set via SIP_LOG_LEVEL env.
+        return http_resp(200, "application/json", "{\"ok\":true,\"level\":\"" + maf_api_json_escape(level) + "\"}\n", "Cache-Control: no-store\r\n")
     }
     return maf_api_error(404, "not found")
 }

@@ -880,6 +880,90 @@ paths:
         '400': {description: Invalid policy}
         '401': {description: Authentication failed}
         '403': {description: Write scope required}
+  /api/v1/maf/access-control/{acl_id}:
+    delete:
+      operationId: deleteAccessControl
+      summary: Delete an access control entry
+      security: [{mafBearerAuth: []}]
+      parameters:
+        - {name: acl_id, in: path, required: true, schema: {type: integer}}
+      responses:
+        '200': {description: ACL entry deleted}
+  /api/v1/maf/header-rules/{rule_id}:
+    delete:
+      operationId: deleteHeaderRule
+      summary: Delete a global header rule
+      security: [{mafBearerAuth: []}]
+      parameters:
+        - {name: rule_id, in: path, required: true, schema: {type: integer}}
+      responses:
+        '200': {description: Header rule deleted}
+  /api/v1/maf/ani-groups/{group_id}:
+    delete:
+      operationId: deleteANIGroup
+      summary: Delete an ANI group and its ranges
+      security: [{mafBearerAuth: []}]
+      parameters:
+        - {name: group_id, in: path, required: true, schema: {type: integer}}
+      responses:
+        '200': {description: ANI group deleted}
+  /api/v1/maf/dispatch-members/{member_id}:
+    delete:
+      operationId: deleteDispatchMember
+      summary: Remove a gateway from a dispatch set
+      security: [{mafBearerAuth: []}]
+      parameters:
+        - {name: member_id, in: path, required: true, schema: {type: integer}}
+      responses:
+        '200': {description: Dispatch member removed}
+  /api/v1/maf/users:
+    get:
+      operationId: listUsers
+      summary: List SIP auth users
+      security: [{mafBearerAuth: []}]
+      responses:
+        '200': {description: User list}
+    post:
+      operationId: createUser
+      summary: Create or update a SIP auth user
+      security: [{mafBearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: {type: string, minLength: 1, maxLength: 128}
+                password: {type: string, minLength: 1, maxLength: 256}
+      responses:
+        '201': {description: User created}
+  /api/v1/maf/users/{user_id}:
+    delete:
+      operationId: deleteUser
+      summary: Disable a SIP auth user
+      security: [{mafBearerAuth: []}]
+      parameters:
+        - {name: user_id, in: path, required: true, schema: {type: integer}}
+      responses:
+        '200': {description: User disabled}
+  /api/v1/maf/log-level:
+    post:
+      operationId: setLogLevel
+      summary: Set runtime log level
+      security: [{mafBearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [level]
+              properties:
+                level: {type: string, enum: [error, warn, info, debug]}
+      responses:
+        '200': {description: Log level updated}
 components:
   securitySchemes:
     mafBearerAuth:
