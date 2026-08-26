@@ -145,6 +145,10 @@ fn maf_worker_bootstrap(db: SqlDB) -> int {
     let _ = sql_exec_plain(db, "CREATE OR REPLACE FUNCTION maf_notify_event() RETURNS trigger AS $$ BEGIN PERFORM pg_notify('maf_events', NEW.tenant_id || '|' || NEW.event_type || '|' || NEW.call_id || '|' || NEW.sequence::text); RETURN NEW; END; $$ LANGUAGE plpgsql")
     let _ = sql_exec_plain(db, "DROP TRIGGER IF EXISTS maf_event_notify ON maf_events")
     let _ = sql_exec_plain(db, "CREATE TRIGGER maf_event_notify AFTER INSERT ON maf_events FOR EACH ROW EXECUTE FUNCTION maf_notify_event()")
+    // Webhook registrations for push-based event delivery
+    let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS maf_webhooks (webhook_id SERIAL PRIMARY KEY, tenant_id TEXT NOT NULL, url TEXT NOT NULL, events_json JSONB NOT NULL DEFAULT '[]'::jsonb, secret TEXT NOT NULL DEFAULT '', enabled BOOLEAN DEFAULT true, created_at TIMESTAMP DEFAULT NOW())")
+    // Number intelligence for carrier/spam lookups
+    let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS number_intelligence (number TEXT PRIMARY KEY, carrier TEXT DEFAULT '', type TEXT DEFAULT '', country TEXT DEFAULT '', spam_score INT DEFAULT 0, updated_at TIMESTAMP DEFAULT NOW())")
     return 1
 }
 
@@ -159,6 +163,69 @@ fn maf_worker_emit_event(db: SqlDB, ok: int, tenant: string, event_type: string,
     let event_id = sha256("madis.maf.event.v1|" + tenant + "|" + event_type + "|" + call_id + "|" + trace + "|" + string(mono_ms()) + "|" + sha256(payload))
     let packed = "{\"event_id\":\"" + maf_worker_json_escape(event_id) + "\",\"tenant_id\":\"" + maf_worker_json_escape(tenant) + "\",\"event_type\":\"" + maf_worker_json_escape(event_type) + "\",\"call_id\":\"" + maf_worker_json_escape(call_id) + "\",\"channel_id\":\"\",\"trace_id\":\"" + maf_worker_json_escape(trace) + "\",\"payload\":" + payload + "}"
     return sql_exec_str4(db, "INSERT INTO maf_events (event_id, tenant_id, event_type, event_version, call_id, channel_id, payload_json, trace_id) SELECT $1::jsonb->>'event_id', $1::jsonb->>'tenant_id', $1::jsonb->>'event_type', 1, $1::jsonb->>'call_id', $1::jsonb->>'channel_id', $1::jsonb->'payload', $1::jsonb->>'trace_id' ON CONFLICT (event_id) DO NOTHING", packed, "", "", "")
+}
+
+// maf_worker_fire_webhooks delivers event payloads to registered webhook URLs.
+// Cache is refreshed every 30s per tenant. Fire-and-forget — no retries.
+fn maf_worker_fire_webhooks(db: SqlDB, ok: int, tenant: string, event_type: string, payload: string, cache: CMap) -> int {
+    if ok == 0 { return 0 }
+    // Cache webhook list for 30s
+    let wh_key = "maf_webhooks|" + tenant
+    let wh_ts = "maf_webhooks_ts|" + tenant
+    let now = mono_ms()
+    let mut webhooks = ""
+    if cmap_has(cache, wh_key) == 1 && cmap_has(cache, wh_ts) == 1 {
+        let mut at = 0
+        match parse_int(cmap_get(cache, wh_ts)) { Ok(v) => { at = v } Err(_) => {} }
+        if at > 0 && now - at < 30000 { webhooks = cmap_get(cache, wh_key) }
+    }
+    if len(webhooks) == 0 {
+        let rows = sql_query_rows_str(db, "SELECT url || chr(1) || events_json::text || chr(1) || COALESCE(secret,'') FROM maf_webhooks WHERE tenant_id = $1 AND enabled = true", tenant)
+        let mut b = str_builder()
+        if sql_rows_ok(rows) == 1 {
+            let mut first = 1
+            while sql_rows_next(rows) == 1 {
+                if first == 0 { builder_write(b, "\n") }
+                builder_write(b, sql_rows_str(rows, 0))
+                first = 0
+            }
+        }
+        let _ = sql_rows_close(rows)
+        webhooks = builder_string(b)
+        cmap_set(cache, wh_key, webhooks)
+        cmap_set(cache, wh_ts, string(now))
+    }
+    if len(webhooks) == 0 { return 0 }
+    // Fire each matching webhook
+    let lines = str_split(webhooks, "\n")
+    let mut fired = 0
+    let mut i = 0
+    while i < len(lines) {
+        let line = lines[i]
+        let sep1 = str_index(line, "\x01")
+        if sep1 > 0 {
+            let url = line[0:sep1]
+            let rest = line[sep1 + 1:]
+            let sep2 = str_index(rest, "\x01")
+            let events_json = if sep2 >= 0 { rest[0:sep2] } else { rest }
+            let secret = if sep2 >= 0 { "" + rest[sep2 + 1:] } else { "" }
+            // Check if this webhook subscribes to this event type
+            if str_contains(events_json, event_type) || str_eq(events_json, "[]") {
+                // Fire webhook — best-effort POST
+                let mut headers = "Content-Type: application/json\r\n"
+                if len(secret) > 0 {
+                    let sig = sha256(secret + "|" + payload)
+                    headers = headers + "X-Madis-Signature: sha256=" + sig + "\r\n"
+                }
+                if str_has_prefix(url, "https://") {
+                    let _ = https_post(url, payload, headers, 3000)
+                }
+                fired = fired + 1
+            }
+        }
+        i = i + 1
+    }
+    return fired
 }
 
 fn maf_worker_call_state(db: SqlDB, ok: int, tenant: string, call_id: string, state: string, trace: string) -> int {

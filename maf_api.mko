@@ -219,6 +219,15 @@ fn maf_api_route(method: string, path: string) -> int {
     if str_eq(method, "DELETE") && str_has_prefix(path, "/admin/api/v1/maf/config/") { return 70 }
     if str_eq(method, "GET") && str_eq(path, "/admin/api/v1/maf/health") { return 71 }
     if str_eq(method, "POST") && str_eq(path, "/admin/api/v1/maf/reload") { return 72 }
+    // Webhooks
+    if str_eq(method, "POST") && str_eq(path, "/admin/api/v1/maf/webhooks") { return 73 }
+    if str_eq(method, "GET") && str_eq(path, "/admin/api/v1/maf/webhooks") { return 74 }
+    if str_eq(method, "DELETE") && str_has_prefix(path, "/admin/api/v1/maf/webhooks/") { return 75 }
+    // Call tags
+    if str_eq(method, "POST") && len(maf_api_call_id(path, "tags")) > 0 { return 76 }
+    // Number intelligence
+    if str_eq(method, "GET") && str_has_prefix(path, "/admin/api/v1/maf/number/") { return 77 }
+    if str_eq(method, "POST") && str_eq(path, "/admin/api/v1/maf/number") { return 78 }
     return 0
 }
 
@@ -227,7 +236,7 @@ fn maf_api_ws_route(method: string, path: string) -> int {
 }
 
 fn maf_api_write_required(kind: int) -> int {
-    return if kind == 1 || kind >= 3 && kind <= 7 || kind == 9 || (kind >= 10 && kind <= 15) || kind == 20 || kind == 21 || kind == 26 || kind == 27 || kind == 29 || kind == 31 || kind == 33 || kind == 36 || kind == 37 || kind == 38 || kind == 40 || kind == 41 || kind == 43 || kind == 44 || kind == 46 || kind == 48 || kind == 50 || kind == 53 || kind == 55 || kind == 56 || kind == 58 || (kind >= 59 && kind <= 62) || kind == 64 || kind == 65 || kind == 66 || kind == 67 || kind == 68 || kind == 69 || kind == 70 || kind == 72 { 1 } else { 0 }
+    return if kind == 1 || kind >= 3 && kind <= 7 || kind == 9 || (kind >= 10 && kind <= 15) || kind == 20 || kind == 21 || kind == 26 || kind == 27 || kind == 29 || kind == 31 || kind == 33 || kind == 36 || kind == 37 || kind == 38 || kind == 40 || kind == 41 || kind == 43 || kind == 44 || kind == 46 || kind == 48 || kind == 50 || kind == 53 || kind == 55 || kind == 56 || kind == 58 || (kind >= 59 && kind <= 62) || kind == 64 || kind == 65 || kind == 66 || kind == 67 || kind == 68 || kind == 69 || kind == 70 || kind == 72 || kind == 73 || kind == 75 || kind == 76 || kind == 78 { 1 } else { 0 }
 }
 
 fn maf_api_capacity_limit(db: SqlDB, ok: int, tenant: string) -> int {
@@ -1624,6 +1633,102 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         // Flush all cached config so next access re-reads from DB
         if ok == 1 { let _ = proxy_config_sync_db(db, ok, cache) }
         return http_resp(200, "application/json", "{\"ok\":true,\"reloaded\":true}\n", "Cache-Control: no-store\r\n")
+    }
+    // POST /admin/api/v1/maf/webhooks — register a webhook
+    if kind == 73 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 2 { return maf_api_error(if scope == 0 { 401 } else { 403 }, "write scope required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        if maf_api_body_ok(raw, n, 1) == 0 { return maf_api_error(400, "application/json body required") }
+        let body = parse_body(raw, n)
+        let url = str_trim_space(json_get_string(body, "url"))
+        let events = str_trim_space(json_get_string(body, "events"))
+        let secret = str_trim_space(json_get_string(body, "secret"))
+        if len(url) == 0 || len(url) > 512 { return maf_api_error(400, "url required (max 512 chars)") }
+        if not str_has_prefix(url, "https://") { return maf_api_error(400, "url must use https") }
+        if len(events) == 0 { events = "[]" }
+        if len(secret) > 256 { return maf_api_error(400, "secret too long (max 256)") }
+        let tenant = maf_api_tenant()
+        let packed = "{\"tenant\":\"" + maf_api_json_escape(tenant) + "\",\"url\":\"" + maf_api_json_escape(url) + "\",\"events\":" + events + ",\"secret\":\"" + maf_api_json_escape(secret) + "\"}"
+        let wh_id = sql_query_str2(db, "INSERT INTO maf_webhooks (tenant_id, url, events_json, secret) VALUES ($1::jsonb->>'tenant', $1::jsonb->>'url', ($1::jsonb->'events')::jsonb, $1::jsonb->>'secret') RETURNING webhook_id::text", packed, "")
+        if len(wh_id) == 0 { return maf_api_error(500, "webhook create failed") }
+        return http_resp(201, "application/json", "{\"ok\":true,\"webhook_id\":" + wh_id + "}\n", "Cache-Control: no-store\r\n")
+    }
+    // GET /admin/api/v1/maf/webhooks — list webhooks
+    if kind == 74 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 1 { return maf_api_error(401, "authentication required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        let tenant = maf_api_tenant()
+        let rows = tbl_query_param(db, ok, "SELECT json_build_object('webhook_id',webhook_id,'url',url,'events',events_json,'secret',CASE WHEN length(secret)>0 THEN '***' ELSE '' END,'enabled',enabled,'created_at',created_at)::text FROM maf_webhooks WHERE tenant_id = $1 ORDER BY created_at DESC", tenant, 100)
+        let mut out = "{\"schema\":\"madis.maf.webhooks.v1\",\"webhooks\":["
+        let mut i = 0
+        while i < len(rows) {
+            if i > 0 { out = out + "," }
+            out = out + rows[i]
+            i = i + 1
+        }
+        return http_resp(200, "application/json", out + "]}\n", "Cache-Control: no-store\r\n")
+    }
+    // DELETE /admin/api/v1/maf/webhooks/{id}
+    if kind == 75 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 2 { return maf_api_error(if scope == 0 { 401 } else { 403 }, "write scope required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        let wh_del_id = path[len("/admin/api/v1/maf/webhooks/"):]
+        if len(wh_del_id) == 0 || len(wh_del_id) > 20 { return maf_api_error(400, "invalid webhook ID") }
+        let tenant = maf_api_tenant()
+        let _ = sql_exec_str4(db, "DELETE FROM maf_webhooks WHERE webhook_id = $1::int AND tenant_id = $2", wh_del_id, tenant, "", "")
+        return http_resp(200, "application/json", "{\"ok\":true}\n", "Cache-Control: no-store\r\n")
+    }
+    // POST /admin/api/v1/maf/calls/{call_id}/tags — attach metadata tags to a call
+    if kind == 76 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 2 { return maf_api_error(if scope == 0 { 401 } else { 403 }, "write scope required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        if maf_api_body_ok(raw, n, 1) == 0 { return maf_api_error(400, "application/json body required") }
+        let body = parse_body(raw, n)
+        let tags = json_get_string(body, "tags")
+        if len(tags) == 0 || int(tags[0]) != 123 { return maf_api_error(400, "tags must be a JSON object") }
+        if len(tags) > 4096 { return maf_api_error(400, "tags exceed 4KB limit") }
+        let call_id = maf_api_call_id(path, "tags")
+        let tenant = maf_api_tenant()
+        let rc = sql_exec_str4(db, "UPDATE maf_calls SET application_data = application_data || $2::jsonb, updated_at = NOW() WHERE tenant_id = $1 AND call_id = $3", tenant, tags, call_id, "")
+        if rc <= 0 { return maf_api_error(if rc == 0 { 404 } else { 500 }, if rc == 0 { "call not found" } else { "tag update failed" }) }
+        return http_resp(200, "application/json", "{\"ok\":true,\"call_id\":\"" + maf_api_json_escape(call_id) + "\"}\n", "Cache-Control: no-store\r\n")
+    }
+    // GET /admin/api/v1/maf/number/{number} — number intelligence lookup
+    if kind == 77 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 1 { return maf_api_error(401, "authentication required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        let number = path[len("/admin/api/v1/maf/number/"):]
+        if len(number) == 0 || len(number) > 32 { return maf_api_error(400, "invalid number") }
+        let result = sql_query_str2(db, "SELECT json_build_object('number',number,'carrier',carrier,'type',type,'country',country,'spam_score',spam_score,'updated_at',updated_at)::text FROM number_intelligence WHERE number = $1", number, "")
+        if len(result) == 0 { return maf_api_error(404, "number not found") }
+        return http_resp(200, "application/json", result + "\n", "Cache-Control: no-store\r\n")
+    }
+    // POST /admin/api/v1/maf/number — upsert number intelligence
+    if kind == 78 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 2 { return maf_api_error(if scope == 0 { 401 } else { 403 }, "write scope required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        if maf_api_body_ok(raw, n, 1) == 0 { return maf_api_error(400, "application/json body required") }
+        let body = parse_body(raw, n)
+        let number = str_trim_space(json_get_string(body, "number"))
+        let carrier = str_trim_space(json_get_string(body, "carrier"))
+        let ntype = str_trim_space(json_get_string(body, "type"))
+        let country = str_trim_space(json_get_string(body, "country"))
+        let spam_str = str_trim_space(json_get_string(body, "spam_score"))
+        if len(number) == 0 || len(number) > 32 { return maf_api_error(400, "number required (max 32 chars)") }
+        if len(carrier) > 128 || len(ntype) > 32 || len(country) > 8 { return maf_api_error(400, "field too long") }
+        let mut spam_score = 0
+        if len(spam_str) > 0 { match parse_int(spam_str) { Ok(v) => { spam_score = v } Err(_) => {} } }
+        if spam_score < 0 || spam_score > 100 { return maf_api_error(400, "spam_score must be 0-100") }
+        let packed = "{\"number\":\"" + maf_api_json_escape(number) + "\",\"carrier\":\"" + maf_api_json_escape(carrier) + "\",\"type\":\"" + maf_api_json_escape(ntype) + "\",\"country\":\"" + maf_api_json_escape(country) + "\",\"spam_score\":" + string(spam_score) + "}"
+        let rc = sql_exec_str4(db, "INSERT INTO number_intelligence (number, carrier, type, country, spam_score, updated_at) VALUES ($1::jsonb->>'number', $1::jsonb->>'carrier', $1::jsonb->>'type', $1::jsonb->>'country', ($1::jsonb->>'spam_score')::int, NOW()) ON CONFLICT (number) DO UPDATE SET carrier = EXCLUDED.carrier, type = EXCLUDED.type, country = EXCLUDED.country, spam_score = EXCLUDED.spam_score, updated_at = NOW()", packed, "", "", "")
+        if rc < 0 { return maf_api_error(500, "upsert failed") }
+        return http_resp(201, "application/json", "{\"ok\":true,\"number\":\"" + maf_api_json_escape(number) + "\"}\n", "Cache-Control: no-store\r\n")
     }
     return maf_api_error(404, "not found")
 }

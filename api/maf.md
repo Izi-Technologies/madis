@@ -661,6 +661,118 @@ curl -X POST "$MAF_BASE_URL/api/v1/maf/log-level" \
 Levels: `error` (quietest), `warn`, `info` (default), `debug` (verbose).
 Write scope required.
 
+### Call webhooks
+
+Register HTTP endpoints that receive real-time push notifications when call
+events occur. No polling needed — Madis POSTs to your URL.
+
+```sh
+# Register a webhook
+curl -X POST "$MAF_BASE_URL/api/v1/maf/webhooks" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{
+    "url": "https://app.example.com/webhooks/calls",
+    "events": ["call.created", "call.answered", "call.ended"],
+    "secret": "whsec_your_signing_secret"
+  }'
+
+# List webhooks
+curl "$MAF_BASE_URL/api/v1/maf/webhooks" \
+  -H "Authorization: Bearer $SIP_MAF_API_READ_TOKEN"
+
+# Delete a webhook
+curl -X DELETE "$MAF_BASE_URL/api/v1/maf/webhooks/3" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN"
+```
+
+When a matching event fires, Madis POSTs the event JSON to the webhook URL
+with HMAC-SHA256 signature verification:
+
+```http
+POST /webhooks/calls HTTP/1.1
+Content-Type: application/json
+X-Madis-Signature: sha256=abc123...
+
+{"call_id":"call-abc","state":"answered","sip_code":200,...}
+```
+
+Verify the signature in your handler: `sha256(secret + "|" + body)`.
+
+### Call tags
+
+Attach arbitrary key-value metadata to any call. Tags are stored in
+`application_data` and visible in the call resource and SIP inspection:
+
+```sh
+curl -X POST "$MAF_BASE_URL/api/v1/maf/calls/$CALL_ID/tags" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"tags":{"priority":"high","department":"sales","campaign_id":"camp-2026Q3","customer_id":"cust-42"}}'
+```
+
+Use tags for:
+- Call routing decisions (`calls.route` based on tag values)
+- Billing correlation (attach account/rate-card IDs)
+- Analytics (department, campaign, priority tracking)
+- Custom business logic in your event handlers
+
+### Number intelligence
+
+Built-in number database for carrier, type, country, and spam scoring.
+Query during call routing for intelligent decisions:
+
+```sh
+# Look up a number
+curl "$MAF_BASE_URL/api/v1/maf/number/+15551234567" \
+  -H "Authorization: Bearer $SIP_MAF_API_READ_TOKEN"
+
+# Response:
+# {"number":"+15551234567","carrier":"AT&T","type":"mobile","country":"US","spam_score":0}
+
+# Populate number intelligence
+curl -X POST "$MAF_BASE_URL/api/v1/maf/number" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"number":"+15551234567","carrier":"AT&T","type":"mobile","country":"US","spam_score":0}'
+```
+
+Use number intelligence for:
+- Spam call blocking (reject calls with high spam_score)
+- Carrier-specific routing (route AT&T numbers through AT&T trunk)
+- Geographic routing (route US numbers to US gateways)
+- Number type handling (mobile vs landline vs VoIP)
+
+**SDK example — intelligent call routing:**
+
+```python
+from madis_maf import MadisMaf
+
+client = MadisMaf("https://proxy.example.net/admin", token)
+
+for event in client.subscribe(event_type="call.created"):
+    call_id = event["call_id"]
+    caller = event["payload"].get("from", "")
+    
+    # Look up the caller's number
+    info = client.number_lookup(caller)
+    
+    # Tag the call with intelligence
+    client.tag_call(call_id, {
+        "carrier": info.get("carrier", "unknown"),
+        "spam_score": info.get("spam_score", 0),
+        "country": info.get("country", "unknown"),
+    })
+    
+    # Route based on intelligence
+    if info.get("spam_score", 0) > 80:
+        client.reject_call(call_id, sip_code=603)
+    elif info.get("country") == "US":
+        client.route_call(call_id, "sip:us-gateway.example.com")
+    else:
+        client.route_call(call_id, "sip:intl-gateway.example.com")
+```
+
 ### Cluster health
 
 ```sh

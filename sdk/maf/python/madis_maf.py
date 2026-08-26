@@ -491,6 +491,44 @@ class MadisMaf:
     def reload(self) -> object:
         return self._request("POST", "/api/v1/maf/reload")
 
+    # --- Webhooks ---
+
+    def webhooks(self) -> object:
+        return self._request("GET", "/api/v1/maf/webhooks")
+
+    def create_webhook(self, url: str, events: list[str] | None = None,
+                       secret: str = "") -> object:
+        body: dict[str, object] = {"url": url}
+        if events is not None:
+            body["events"] = events
+        if secret:
+            body["secret"] = secret
+        return self._request("POST", "/api/v1/maf/webhooks", body=body)
+
+    def delete_webhook(self, webhook_id: int) -> object:
+        return self._request("DELETE", f"/api/v1/maf/webhooks/{webhook_id}")
+
+    # --- Call Tags ---
+
+    def tag_call(self, call_id: str, tags: dict[str, object]) -> object:
+        return self._request("POST",
+                             f"/api/v1/maf/calls/{quote(call_id, safe='')}/tags",
+                             body={"tags": tags})
+
+    # --- Number Intelligence ---
+
+    def number_lookup(self, number: str) -> object:
+        return self._request("GET",
+                             f"/api/v1/maf/number/{quote(number, safe='')}")
+
+    def upsert_number(self, number: str, carrier: str = "",
+                      number_type: str = "", country: str = "",
+                      spam_score: int = 0) -> object:
+        return self._request("POST", "/api/v1/maf/number",
+                             body={"number": number, "carrier": carrier,
+                                   "type": number_type, "country": country,
+                                   "spam_score": spam_score})
+
     def events(self, cursor: int = 0, event_type: str | None = None,
                limit: int = 100) -> object:
         query: dict[str, object] = {"cursor": max(cursor, 0),
