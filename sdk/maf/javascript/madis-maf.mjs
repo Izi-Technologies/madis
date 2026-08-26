@@ -126,6 +126,44 @@ export class MadisMaf {
   capacityPolicies() { return this.request("GET", "/api/v1/maf/capacity/policies"); }
   upsertCapacityPolicy(body) { return this.request("POST", "/api/v1/maf/capacity/policies", body); }
 
+  deleteGateway(gatewayId) { return this.request("DELETE", `/api/v1/maf/gateways/${gatewayId}`); }
+  deleteDid(didId) { return this.request("DELETE", `/api/v1/maf/dids/${didId}`); }
+  deleteDispatchSet(setId) { return this.request("DELETE", `/api/v1/maf/dispatch-sets/${setId}`); }
+  deleteConfig(key) { return this.request("DELETE", `/api/v1/maf/config/${encodeURIComponent(key)}`); }
+  dialplans() { return this.request("GET", "/api/v1/maf/dialplans"); }
+  createDialplan(body) { return this.request("POST", "/api/v1/maf/dialplans", body); }
+  deleteDialplan(dialplanId) { return this.request("DELETE", `/api/v1/maf/dialplans/${dialplanId}`); }
+  ipAuth() { return this.request("GET", "/api/v1/maf/ip-auth"); }
+  createIpAuth(ip, description = "") { return this.request("POST", "/api/v1/maf/ip-auth", { ip, description }); }
+  deleteIpAuth(ipAuthId) { return this.request("DELETE", `/api/v1/maf/ip-auth/${ipAuthId}`); }
+  accessControl() { return this.request("GET", "/api/v1/maf/access-control"); }
+  createAccessControl(rule, source, description = "") { return this.request("POST", "/api/v1/maf/access-control", { rule, source, description }); }
+  deleteAccessControl(aclId) { return this.request("DELETE", `/api/v1/maf/access-control/${aclId}`); }
+  headerRules() { return this.request("GET", "/api/v1/maf/header-rules"); }
+  createHeaderRule(body) { return this.request("POST", "/api/v1/maf/header-rules", body); }
+  deleteHeaderRule(ruleId) { return this.request("DELETE", `/api/v1/maf/header-rules/${ruleId}`); }
+  billingEvents() { return this.request("GET", "/api/v1/maf/billing/events"); }
+  billingAck(eventIds) { return this.request("POST", "/api/v1/maf/billing/events/ack", { event_ids: eventIds }); }
+  securityEvents() { return this.request("GET", "/api/v1/maf/security/events"); }
+  aniGroups() { return this.request("GET", "/api/v1/maf/ani-groups"); }
+  createAniGroup(name, numbers) { return this.request("POST", "/api/v1/maf/ani-groups", { name, numbers }); }
+  deleteAniGroup(groupId) { return this.request("DELETE", `/api/v1/maf/ani-groups/${groupId}`); }
+  activeCalls() { return this.request("GET", "/api/v1/maf/calls/active"); }
+  createDispatchMember(dispatchSetId, gatewayId, weight = 100, priority = 1) { return this.request("POST", "/api/v1/maf/dispatch-members", { dispatch_set_id: dispatchSetId, gateway_id: gatewayId, weight, priority }); }
+  deleteDispatchMember(memberId) { return this.request("DELETE", `/api/v1/maf/dispatch-members/${memberId}`); }
+  users() { return this.request("GET", "/api/v1/maf/users"); }
+  createUser(username, password) { return this.request("POST", "/api/v1/maf/users", { username, password }); }
+  deleteUser(userId) { return this.request("DELETE", `/api/v1/maf/users/${userId}`); }
+  setLogLevel(level) { return this.request("POST", "/api/v1/maf/log-level", { level }); }
+  health() { return this.request("GET", "/api/v1/maf/health"); }
+  reload() { return this.request("POST", "/api/v1/maf/reload"); }
+  identity(callId, action, identity, attest, key) {
+    const body = { action };
+    if (identity !== undefined) body.identity = identity;
+    if (attest !== undefined) body.attest = attest;
+    return this.command(this.callPath(callId, "/identity"), body, key);
+  }
+
   events(cursor = 0, eventType, limit = 100) {
     const query = { cursor: Math.max(cursor, 0), limit: Math.min(Math.max(limit, 1), 100) };
     if (eventType !== undefined) query.event_type = eventType;

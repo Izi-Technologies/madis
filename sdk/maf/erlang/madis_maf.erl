@@ -10,8 +10,36 @@
          hold_call/3, hold_call/4,
          unhold_call/3, unhold_call/4,
          send_dtmf/4, send_dtmf/5,
+         rtp_control/4, rtp_control/5,
+         route_call/4, route_call/5,
+         publish_event/5,
+         registrations/2, registrations/4,
+         cdr/2, cdr/4,
+         bans/2, ban_ip/6, unban_ip/3,
+         sip_inspect/3,
+         presence/2, presence/4, presence_user/3,
+         routing_rules/2, create_routing_rule/3, delete_routing_rule/3,
+         gateways/2, create_gateway/3,
+         dids/2, create_did/3,
+         dispatch_sets/2, create_dispatch_set/3,
+         cluster/2, config/2, set_config/3,
+         charge_authorize/3, charge_deny/3,
          capacity_policies/2, upsert_capacity_policy/3,
-         events/2, events/3, events/4, events/5]).
+         delete_gateway/3, delete_did/3, delete_dispatch_set/3, delete_config/3,
+         dialplans/2, create_dialplan/3, delete_dialplan/3,
+         ip_auth/2, create_ip_auth/4, delete_ip_auth/3,
+         access_control/2, create_access_control/5, delete_access_control/3,
+         header_rules/2, create_header_rule/3, delete_header_rule/3,
+         billing_events/2, billing_ack/3,
+         security_events/2,
+         ani_groups/2, create_ani_group/4, delete_ani_group/3,
+         active_calls/2,
+         create_dispatch_member/6, delete_dispatch_member/3,
+         users/2, create_user/4, delete_user/3,
+         set_log_level/3, health/2, reload/2,
+         identity/4, identity/5,
+         events/2, events/3, events/4, events/5,
+         ws_url/4]).
 
 -define(MAF_VERSION, "0.7.0").
 -define(MAX_BODY, 65536).
@@ -234,6 +262,112 @@ events(Base, Token, Cursor, EventType, Limit) ->
         T -> "&event_type=" ++ uri_string:percent_encode(T, uri_string:urlchar_reserved())
     end,
     request(Base, Token, get, "/api/v1/maf/events" ++ Q ++ TypeQ, none).
+
+delete_gateway(Base, Token, GatewayId) ->
+    request(Base, Token, delete, "/api/v1/maf/gateways/" ++ integer_to_list(GatewayId), none).
+
+delete_did(Base, Token, DidId) ->
+    request(Base, Token, delete, "/api/v1/maf/dids/" ++ integer_to_list(DidId), none).
+
+delete_dispatch_set(Base, Token, SetId) ->
+    request(Base, Token, delete, "/api/v1/maf/dispatch-sets/" ++ integer_to_list(SetId), none).
+
+delete_config(Base, Token, Key) ->
+    request(Base, Token, delete, "/api/v1/maf/config/" ++ uri_string:percent_encode(Key, uri_string:urlchar_reserved()), none).
+
+dialplans(Base, Token) ->
+    request(Base, Token, get, "/api/v1/maf/dialplans", none).
+
+create_dialplan(Base, Token, Body) ->
+    request(Base, Token, post, "/api/v1/maf/dialplans", Body, none).
+
+delete_dialplan(Base, Token, DialplanId) ->
+    request(Base, Token, delete, "/api/v1/maf/dialplans/" ++ integer_to_list(DialplanId), none).
+
+ip_auth(Base, Token) ->
+    request(Base, Token, get, "/api/v1/maf/ip-auth", none).
+
+create_ip_auth(Base, Token, Ip, Description) ->
+    Body = jsx:encode(#{<<"ip">> => list_to_binary(Ip), <<"description">> => list_to_binary(Description)}),
+    request(Base, Token, post, "/api/v1/maf/ip-auth", Body, none).
+
+delete_ip_auth(Base, Token, IpAuthId) ->
+    request(Base, Token, delete, "/api/v1/maf/ip-auth/" ++ integer_to_list(IpAuthId), none).
+
+access_control(Base, Token) ->
+    request(Base, Token, get, "/api/v1/maf/access-control", none).
+
+create_access_control(Base, Token, Rule, Source, Description) ->
+    Body = jsx:encode(#{<<"rule">> => list_to_binary(Rule), <<"source">> => list_to_binary(Source), <<"description">> => list_to_binary(Description)}),
+    request(Base, Token, post, "/api/v1/maf/access-control", Body, none).
+
+delete_access_control(Base, Token, AclId) ->
+    request(Base, Token, delete, "/api/v1/maf/access-control/" ++ integer_to_list(AclId), none).
+
+header_rules(Base, Token) ->
+    request(Base, Token, get, "/api/v1/maf/header-rules", none).
+
+create_header_rule(Base, Token, Body) ->
+    request(Base, Token, post, "/api/v1/maf/header-rules", Body, none).
+
+delete_header_rule(Base, Token, RuleId) ->
+    request(Base, Token, delete, "/api/v1/maf/header-rules/" ++ integer_to_list(RuleId), none).
+
+billing_events(Base, Token) ->
+    request(Base, Token, get, "/api/v1/maf/billing/events", none).
+
+billing_ack(Base, Token, EventIds) ->
+    Body = jsx:encode(#{<<"event_ids">> => [list_to_binary(Id) || Id <- EventIds]}),
+    request(Base, Token, post, "/api/v1/maf/billing/events/ack", Body, none).
+
+security_events(Base, Token) ->
+    request(Base, Token, get, "/api/v1/maf/security/events", none).
+
+ani_groups(Base, Token) ->
+    request(Base, Token, get, "/api/v1/maf/ani-groups", none).
+
+create_ani_group(Base, Token, Name, Numbers) ->
+    Body = jsx:encode(#{<<"name">> => list_to_binary(Name), <<"numbers">> => [list_to_binary(N) || N <- Numbers]}),
+    request(Base, Token, post, "/api/v1/maf/ani-groups", Body, none).
+
+delete_ani_group(Base, Token, GroupId) ->
+    request(Base, Token, delete, "/api/v1/maf/ani-groups/" ++ integer_to_list(GroupId), none).
+
+active_calls(Base, Token) ->
+    request(Base, Token, get, "/api/v1/maf/calls/active", none).
+
+create_dispatch_member(Base, Token, DispatchSetId, GatewayId, Weight, Priority) ->
+    Body = jsx:encode(#{<<"dispatch_set_id">> => DispatchSetId, <<"gateway_id">> => GatewayId, <<"weight">> => Weight, <<"priority">> => Priority}),
+    request(Base, Token, post, "/api/v1/maf/dispatch-members", Body, none).
+
+delete_dispatch_member(Base, Token, MemberId) ->
+    request(Base, Token, delete, "/api/v1/maf/dispatch-members/" ++ integer_to_list(MemberId), none).
+
+users(Base, Token) ->
+    request(Base, Token, get, "/api/v1/maf/users", none).
+
+create_user(Base, Token, Username, Password) ->
+    Body = jsx:encode(#{<<"username">> => list_to_binary(Username), <<"password">> => list_to_binary(Password)}),
+    request(Base, Token, post, "/api/v1/maf/users", Body, none).
+
+delete_user(Base, Token, UserId) ->
+    request(Base, Token, delete, "/api/v1/maf/users/" ++ integer_to_list(UserId), none).
+
+set_log_level(Base, Token, Level) ->
+    Body = jsx:encode(#{<<"level">> => list_to_binary(Level)}),
+    request(Base, Token, post, "/api/v1/maf/log-level", Body, none).
+
+health(Base, Token) ->
+    request(Base, Token, get, "/api/v1/maf/health", none).
+
+reload(Base, Token) ->
+    request(Base, Token, post, "/api/v1/maf/reload", none, none).
+
+identity(Base, Token, CallId, Json) ->
+    identity(Base, Token, CallId, Json, none).
+identity(Base, Token, CallId, Json, IdempotencyKey) ->
+    Key = idempotency_key(IdempotencyKey),
+    request(Base, Token, post, call_path(CallId) ++ "/identity", Json, Key).
 
 %% Build the WebSocket URL for direct connection with gun or websocket_client.
 ws_url(Base, Cursor, EventType, CallId) ->

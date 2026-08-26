@@ -1276,7 +1276,13 @@ body limit, 16-512 char token validation.
 | **Users** | List | `users()` | `Users()` | `users()` | `users()` | — |
 | | Create | `create_user()` | `CreateUser()` | `createUser()` | `createUser()` | — |
 | | Delete | `delete_user()` | `DeleteUser()` | `deleteUser()` | `deleteUser()` | — |
-| **Logging** | Set level | `set_log_level()` | `SetLogLevel()` | `setLogLevel()` | `setLogLevel()` | — |
+| **Logging** | Set level | `set_log_level()` | `SetLogLevel()` | `setLogLevel()` | `setLogLevel()` | `set_log_level/3` |
+| **Ops** | Health | `health()` | `Health()` | `health()` | `health()` | `health/2` |
+| | Reload | `reload()` | `Reload()` | `reload()` | `reload()` | `reload/2` |
+| | Delete GW | `delete_gateway()` | `DeleteGateway()` | `deleteGateway()` | `deleteGateway()` | `delete_gateway/3` |
+| | Delete DID | `delete_did()` | `DeleteDID()` | `deleteDid()` | `deleteDid()` | `delete_did/3` |
+| | Delete set | `delete_dispatch_set()` | `DeleteDispatchSet()` | `deleteDispatchSet()` | `deleteDispatchSet()` | `delete_dispatch_set/3` |
+| | Delete config | `delete_config()` | `DeleteConfig()` | `deleteConfig()` | `deleteConfig()` | `delete_config/3` |
 
 ### Contract tests
 

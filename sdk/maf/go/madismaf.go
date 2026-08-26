@@ -436,3 +436,107 @@ func (c *Client) CapacityPolicies(ctx context.Context) (map[string]any, error) {
 func (c *Client) UpsertCapacityPolicy(ctx context.Context, body map[string]any) (map[string]any, error) {
 	return c.request(ctx, "POST", "/api/v1/maf/capacity/policies", body, nil, "")
 }
+
+func (c *Client) DeleteGateway(ctx context.Context, gatewayID int) (map[string]any, error) {
+	return c.request(ctx, "DELETE", fmt.Sprintf("/api/v1/maf/gateways/%d", gatewayID), nil, nil, "")
+}
+func (c *Client) DeleteDID(ctx context.Context, didID int) (map[string]any, error) {
+	return c.request(ctx, "DELETE", fmt.Sprintf("/api/v1/maf/dids/%d", didID), nil, nil, "")
+}
+func (c *Client) DeleteDispatchSet(ctx context.Context, setID int) (map[string]any, error) {
+	return c.request(ctx, "DELETE", fmt.Sprintf("/api/v1/maf/dispatch-sets/%d", setID), nil, nil, "")
+}
+func (c *Client) DeleteConfig(ctx context.Context, key string) (map[string]any, error) {
+	return c.request(ctx, "DELETE", "/api/v1/maf/config/"+url.PathEscape(key), nil, nil, "")
+}
+func (c *Client) Dialplans(ctx context.Context) (map[string]any, error) {
+	return c.request(ctx, "GET", "/api/v1/maf/dialplans", nil, nil, "")
+}
+func (c *Client) CreateDialplan(ctx context.Context, body map[string]any) (map[string]any, error) {
+	return c.request(ctx, "POST", "/api/v1/maf/dialplans", body, nil, "")
+}
+func (c *Client) DeleteDialplan(ctx context.Context, dialplanID int) (map[string]any, error) {
+	return c.request(ctx, "DELETE", fmt.Sprintf("/api/v1/maf/dialplans/%d", dialplanID), nil, nil, "")
+}
+func (c *Client) IPAuth(ctx context.Context) (map[string]any, error) {
+	return c.request(ctx, "GET", "/api/v1/maf/ip-auth", nil, nil, "")
+}
+func (c *Client) CreateIPAuth(ctx context.Context, ip, description string) (map[string]any, error) {
+	return c.request(ctx, "POST", "/api/v1/maf/ip-auth", map[string]any{"ip": ip, "description": description}, nil, "")
+}
+func (c *Client) DeleteIPAuth(ctx context.Context, ipAuthID int) (map[string]any, error) {
+	return c.request(ctx, "DELETE", fmt.Sprintf("/api/v1/maf/ip-auth/%d", ipAuthID), nil, nil, "")
+}
+func (c *Client) AccessControl(ctx context.Context) (map[string]any, error) {
+	return c.request(ctx, "GET", "/api/v1/maf/access-control", nil, nil, "")
+}
+func (c *Client) CreateAccessControl(ctx context.Context, rule, source, description string) (map[string]any, error) {
+	return c.request(ctx, "POST", "/api/v1/maf/access-control", map[string]any{"rule": rule, "source": source, "description": description}, nil, "")
+}
+func (c *Client) DeleteAccessControl(ctx context.Context, aclID int) (map[string]any, error) {
+	return c.request(ctx, "DELETE", fmt.Sprintf("/api/v1/maf/access-control/%d", aclID), nil, nil, "")
+}
+func (c *Client) HeaderRules(ctx context.Context) (map[string]any, error) {
+	return c.request(ctx, "GET", "/api/v1/maf/header-rules", nil, nil, "")
+}
+func (c *Client) CreateHeaderRule(ctx context.Context, body map[string]any) (map[string]any, error) {
+	return c.request(ctx, "POST", "/api/v1/maf/header-rules", body, nil, "")
+}
+func (c *Client) DeleteHeaderRule(ctx context.Context, ruleID int) (map[string]any, error) {
+	return c.request(ctx, "DELETE", fmt.Sprintf("/api/v1/maf/header-rules/%d", ruleID), nil, nil, "")
+}
+func (c *Client) BillingEvents(ctx context.Context) (map[string]any, error) {
+	return c.request(ctx, "GET", "/api/v1/maf/billing/events", nil, nil, "")
+}
+func (c *Client) BillingAck(ctx context.Context, eventIDs []string) (map[string]any, error) {
+	return c.request(ctx, "POST", "/api/v1/maf/billing/events/ack", map[string]any{"event_ids": eventIDs}, nil, "")
+}
+func (c *Client) SecurityEvents(ctx context.Context) (map[string]any, error) {
+	return c.request(ctx, "GET", "/api/v1/maf/security/events", nil, nil, "")
+}
+func (c *Client) ANIGroups(ctx context.Context) (map[string]any, error) {
+	return c.request(ctx, "GET", "/api/v1/maf/ani-groups", nil, nil, "")
+}
+func (c *Client) CreateANIGroup(ctx context.Context, name string, numbers []string) (map[string]any, error) {
+	return c.request(ctx, "POST", "/api/v1/maf/ani-groups", map[string]any{"name": name, "numbers": numbers}, nil, "")
+}
+func (c *Client) DeleteANIGroup(ctx context.Context, groupID int) (map[string]any, error) {
+	return c.request(ctx, "DELETE", fmt.Sprintf("/api/v1/maf/ani-groups/%d", groupID), nil, nil, "")
+}
+func (c *Client) ActiveCalls(ctx context.Context) (map[string]any, error) {
+	return c.request(ctx, "GET", "/api/v1/maf/calls/active", nil, nil, "")
+}
+func (c *Client) CreateDispatchMember(ctx context.Context, dispatchSetID, gatewayID, weight, priority int) (map[string]any, error) {
+	return c.request(ctx, "POST", "/api/v1/maf/dispatch-members", map[string]any{"dispatch_set_id": dispatchSetID, "gateway_id": gatewayID, "weight": weight, "priority": priority}, nil, "")
+}
+func (c *Client) DeleteDispatchMember(ctx context.Context, memberID int) (map[string]any, error) {
+	return c.request(ctx, "DELETE", fmt.Sprintf("/api/v1/maf/dispatch-members/%d", memberID), nil, nil, "")
+}
+func (c *Client) Users(ctx context.Context) (map[string]any, error) {
+	return c.request(ctx, "GET", "/api/v1/maf/users", nil, nil, "")
+}
+func (c *Client) CreateUser(ctx context.Context, username, password string) (map[string]any, error) {
+	return c.request(ctx, "POST", "/api/v1/maf/users", map[string]any{"username": username, "password": password}, nil, "")
+}
+func (c *Client) DeleteUser(ctx context.Context, userID int) (map[string]any, error) {
+	return c.request(ctx, "DELETE", fmt.Sprintf("/api/v1/maf/users/%d", userID), nil, nil, "")
+}
+func (c *Client) SetLogLevel(ctx context.Context, level string) (map[string]any, error) {
+	return c.request(ctx, "POST", "/api/v1/maf/log-level", map[string]any{"level": level}, nil, "")
+}
+func (c *Client) Health(ctx context.Context) (map[string]any, error) {
+	return c.request(ctx, "GET", "/api/v1/maf/health", nil, nil, "")
+}
+func (c *Client) Reload(ctx context.Context) (map[string]any, error) {
+	return c.request(ctx, "POST", "/api/v1/maf/reload", nil, nil, "")
+}
+func (c *Client) Identity(ctx context.Context, callID, action, identity, attest, idem string) (map[string]any, error) {
+	body := map[string]any{"action": action}
+	if identity != "" {
+		body["identity"] = identity
+	}
+	if attest != "" {
+		body["attest"] = attest
+	}
+	return c.command(ctx, callPath(callID, "/identity"), body, idem)
+}

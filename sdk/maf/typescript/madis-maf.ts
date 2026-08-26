@@ -589,6 +589,112 @@ export class MadisMaf {
     return this.request("POST", `${API}/capacity/policies`, policy);
   }
 
+  async deleteGateway(gatewayId: number): Promise<Record<string, unknown>> {
+    return this.request("DELETE", `${API}/gateways/${gatewayId}`);
+  }
+  async deleteDid(didId: number): Promise<Record<string, unknown>> {
+    return this.request("DELETE", `${API}/dids/${didId}`);
+  }
+  async deleteDispatchSet(setId: number): Promise<Record<string, unknown>> {
+    return this.request("DELETE", `${API}/dispatch-sets/${setId}`);
+  }
+  async deleteConfig(key: string): Promise<Record<string, unknown>> {
+    return this.request("DELETE", `${API}/config/${encPath(key)}`);
+  }
+  async dialplans(): Promise<Record<string, unknown>> {
+    return this.request("GET", `${API}/dialplans`);
+  }
+  async createDialplan(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.request("POST", `${API}/dialplans`, body);
+  }
+  async deleteDialplan(dialplanId: number): Promise<Record<string, unknown>> {
+    return this.request("DELETE", `${API}/dialplans/${dialplanId}`);
+  }
+  async ipAuth(): Promise<Record<string, unknown>> {
+    return this.request("GET", `${API}/ip-auth`);
+  }
+  async createIpAuth(ip: string, description = ""): Promise<Record<string, unknown>> {
+    return this.request("POST", `${API}/ip-auth`, { ip, description });
+  }
+  async deleteIpAuth(ipAuthId: number): Promise<Record<string, unknown>> {
+    return this.request("DELETE", `${API}/ip-auth/${ipAuthId}`);
+  }
+  async accessControl(): Promise<Record<string, unknown>> {
+    return this.request("GET", `${API}/access-control`);
+  }
+  async createAccessControl(rule: string, source: string, description = ""): Promise<Record<string, unknown>> {
+    return this.request("POST", `${API}/access-control`, { rule, source, description });
+  }
+  async deleteAccessControl(aclId: number): Promise<Record<string, unknown>> {
+    return this.request("DELETE", `${API}/access-control/${aclId}`);
+  }
+  async headerRules(): Promise<Record<string, unknown>> {
+    return this.request("GET", `${API}/header-rules`);
+  }
+  async createHeaderRule(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.request("POST", `${API}/header-rules`, body);
+  }
+  async deleteHeaderRule(ruleId: number): Promise<Record<string, unknown>> {
+    return this.request("DELETE", `${API}/header-rules/${ruleId}`);
+  }
+  async billingEvents(): Promise<Record<string, unknown>> {
+    return this.request("GET", `${API}/billing/events`);
+  }
+  async billingAck(eventIds: string[]): Promise<Record<string, unknown>> {
+    return this.request("POST", `${API}/billing/events/ack`, { event_ids: eventIds });
+  }
+  async securityEvents(): Promise<Record<string, unknown>> {
+    return this.request("GET", `${API}/security/events`);
+  }
+  async aniGroups(): Promise<Record<string, unknown>> {
+    return this.request("GET", `${API}/ani-groups`);
+  }
+  async createAniGroup(name: string, numbers: string[]): Promise<Record<string, unknown>> {
+    return this.request("POST", `${API}/ani-groups`, { name, numbers });
+  }
+  async deleteAniGroup(groupId: number): Promise<Record<string, unknown>> {
+    return this.request("DELETE", `${API}/ani-groups/${groupId}`);
+  }
+  async activeCalls(): Promise<Record<string, unknown>> {
+    return this.request("GET", `${API}/calls/active`);
+  }
+  async createDispatchMember(dispatchSetId: number, gatewayId: number, weight = 100, priority = 1): Promise<Record<string, unknown>> {
+    return this.request("POST", `${API}/dispatch-members`, { dispatch_set_id: dispatchSetId, gateway_id: gatewayId, weight, priority });
+  }
+  async deleteDispatchMember(memberId: number): Promise<Record<string, unknown>> {
+    return this.request("DELETE", `${API}/dispatch-members/${memberId}`);
+  }
+  async users(): Promise<Record<string, unknown>> {
+    return this.request("GET", `${API}/users`);
+  }
+  async createUser(username: string, password: string): Promise<Record<string, unknown>> {
+    return this.request("POST", `${API}/users`, { username, password });
+  }
+  async deleteUser(userId: number): Promise<Record<string, unknown>> {
+    return this.request("DELETE", `${API}/users/${userId}`);
+  }
+  async setLogLevel(level: string): Promise<Record<string, unknown>> {
+    return this.request("POST", `${API}/log-level`, { level });
+  }
+  async health(): Promise<Record<string, unknown>> {
+    return this.request("GET", `${API}/health`);
+  }
+  async reload(): Promise<Record<string, unknown>> {
+    return this.request("POST", `${API}/reload`);
+  }
+  async identity(
+    callId: string,
+    action: string,
+    identity?: string,
+    attest?: string,
+    idempotencyKey?: string,
+  ): Promise<CommandReceipt> {
+    const body: Record<string, unknown> = { action };
+    if (identity !== undefined) body.identity = identity;
+    if (attest !== undefined) body.attest = attest;
+    return this.command(`${API}/calls/${encPath(callId)}/identity`, body, idempotencyKey);
+  }
+
   async events(
     cursor = 0,
     eventType?: string,
