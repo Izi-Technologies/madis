@@ -223,6 +223,12 @@ class OpenApiContractTests(unittest.TestCase):
         ("POST", "/api/v1/maf/users"): "create_user",
         ("DELETE", "/api/v1/maf/users/{user_id}"): "delete_user",
         ("POST", "/api/v1/maf/log-level"): "set_log_level",
+        ("DELETE", "/api/v1/maf/gateways/{gateway_id}"): "delete_gateway",
+        ("DELETE", "/api/v1/maf/dids/{did_id}"): "delete_did",
+        ("DELETE", "/api/v1/maf/dispatch-sets/{set_id}"): "delete_dispatch_set",
+        ("DELETE", "/api/v1/maf/config/{config_key}"): "delete_config",
+        ("GET", "/api/v1/maf/health"): "health",
+        ("POST", "/api/v1/maf/reload"): "reload",
     }
 
     def test_every_openapi_route_has_sdk_method(self):

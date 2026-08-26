@@ -964,6 +964,38 @@ paths:
                 level: {type: string, enum: [error, warn, info, debug]}
       responses:
         '200': {description: Log level updated}
+  /api/v1/maf/dispatch-sets/{set_id}:
+    delete:
+      operationId: deleteDispatchSet
+      summary: Delete a dispatch set and its members
+      security: [{mafBearerAuth: []}]
+      parameters:
+        - {name: set_id, in: path, required: true, schema: {type: integer}}
+      responses:
+        '200': {description: Dispatch set deleted}
+  /api/v1/maf/config/{config_key}:
+    delete:
+      operationId: deleteConfig
+      summary: Delete a config key
+      security: [{mafBearerAuth: []}]
+      parameters:
+        - {name: config_key, in: path, required: true, schema: {type: string, maxLength: 128}}
+      responses:
+        '200': {description: Config key deleted}
+  /api/v1/maf/health:
+    get:
+      operationId: healthCheck
+      summary: MAF health check
+      security: [{mafBearerAuth: []}]
+      responses:
+        '200': {description: Health status}
+  /api/v1/maf/reload:
+    post:
+      operationId: reloadConfig
+      summary: Force reload config from database
+      security: [{mafBearerAuth: []}]
+      responses:
+        '200': {description: Config reloaded}
 components:
   securitySchemes:
     mafBearerAuth:

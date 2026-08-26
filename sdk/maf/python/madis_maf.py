@@ -473,6 +473,24 @@ class MadisMaf:
         return self._request("POST", "/api/v1/maf/log-level",
                              body={"level": level})
 
+    def delete_gateway(self, gateway_id: int) -> object:
+        return self._request("DELETE", f"/api/v1/maf/gateways/{gateway_id}")
+
+    def delete_did(self, did_id: int) -> object:
+        return self._request("DELETE", f"/api/v1/maf/dids/{did_id}")
+
+    def delete_dispatch_set(self, set_id: int) -> object:
+        return self._request("DELETE", f"/api/v1/maf/dispatch-sets/{set_id}")
+
+    def delete_config(self, key: str) -> object:
+        return self._request("DELETE", f"/api/v1/maf/config/{quote(key, safe='')}")
+
+    def health(self) -> object:
+        return self._request("GET", "/api/v1/maf/health")
+
+    def reload(self) -> object:
+        return self._request("POST", "/api/v1/maf/reload")
+
     def events(self, cursor: int = 0, event_type: str | None = None,
                limit: int = 100) -> object:
         query: dict[str, object] = {"cursor": max(cursor, 0),

@@ -213,6 +213,12 @@ fn maf_api_route(method: string, path: string) -> int {
     if str_eq(method, "POST") && str_eq(path, "/admin/api/v1/maf/users") { return 64 }
     if str_eq(method, "DELETE") && str_has_prefix(path, "/admin/api/v1/maf/users/") { return 65 }
     if str_eq(method, "POST") && str_eq(path, "/admin/api/v1/maf/log-level") { return 66 }
+    if str_eq(method, "DELETE") && str_has_prefix(path, "/admin/api/v1/maf/gateways/") { return 67 }
+    if str_eq(method, "DELETE") && str_has_prefix(path, "/admin/api/v1/maf/dids/") { return 68 }
+    if str_eq(method, "DELETE") && str_has_prefix(path, "/admin/api/v1/maf/dispatch-sets/") { return 69 }
+    if str_eq(method, "DELETE") && str_has_prefix(path, "/admin/api/v1/maf/config/") { return 70 }
+    if str_eq(method, "GET") && str_eq(path, "/admin/api/v1/maf/health") { return 71 }
+    if str_eq(method, "POST") && str_eq(path, "/admin/api/v1/maf/reload") { return 72 }
     return 0
 }
 
@@ -221,7 +227,7 @@ fn maf_api_ws_route(method: string, path: string) -> int {
 }
 
 fn maf_api_write_required(kind: int) -> int {
-    return if kind == 1 || kind >= 3 && kind <= 7 || kind == 9 || (kind >= 10 && kind <= 15) || kind == 20 || kind == 21 || kind == 26 || kind == 27 || kind == 29 || kind == 31 || kind == 33 || kind == 36 || kind == 37 || kind == 38 || kind == 40 || kind == 41 || kind == 43 || kind == 44 || kind == 46 || kind == 48 || kind == 50 || kind == 53 || kind == 55 || kind == 56 || kind == 58 || (kind >= 59 && kind <= 62) || kind == 64 || kind == 65 || kind == 66 { 1 } else { 0 }
+    return if kind == 1 || kind >= 3 && kind <= 7 || kind == 9 || (kind >= 10 && kind <= 15) || kind == 20 || kind == 21 || kind == 26 || kind == 27 || kind == 29 || kind == 31 || kind == 33 || kind == 36 || kind == 37 || kind == 38 || kind == 40 || kind == 41 || kind == 43 || kind == 44 || kind == 46 || kind == 48 || kind == 50 || kind == 53 || kind == 55 || kind == 56 || kind == 58 || (kind >= 59 && kind <= 62) || kind == 64 || kind == 65 || kind == 66 || kind == 67 || kind == 68 || kind == 69 || kind == 70 || kind == 72 { 1 } else { 0 }
 }
 
 fn maf_api_capacity_limit(db: SqlDB, ok: int, tenant: string) -> int {
@@ -1558,6 +1564,66 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         if str_eq(level, "debug") { level_int = 3 }
         // This sets the level for the admin process. Worker log level is set via SIP_LOG_LEVEL env.
         return http_resp(200, "application/json", "{\"ok\":true,\"level\":\"" + maf_api_json_escape(level) + "\"}\n", "Cache-Control: no-store\r\n")
+    }
+    // DELETE /admin/api/v1/maf/gateways/{id}
+    if kind == 67 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 2 { return maf_api_error(if scope == 0 { 401 } else { 403 }, "write scope required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        let tenant = maf_api_tenant()
+        let gw_id = path[len("/admin/api/v1/maf/gateways/"):]
+        if len(gw_id) == 0 || len(gw_id) > 20 { return maf_api_error(400, "invalid ID") }
+        let _ = sql_exec_str4(db, "DELETE FROM gateways WHERE id = $1::int AND tenant_id = $2", gw_id, tenant, "", "")
+        return http_resp(200, "application/json", "{\"ok\":true}\n", "Cache-Control: no-store\r\n")
+    }
+    // DELETE /admin/api/v1/maf/dids/{id}
+    if kind == 68 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 2 { return maf_api_error(if scope == 0 { 401 } else { 403 }, "write scope required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        let tenant = maf_api_tenant()
+        let did_id = path[len("/admin/api/v1/maf/dids/"):]
+        if len(did_id) == 0 || len(did_id) > 20 { return maf_api_error(400, "invalid ID") }
+        let _ = sql_exec_str4(db, "DELETE FROM dids WHERE id = $1::int AND tenant_id = $2", did_id, tenant, "", "")
+        return http_resp(200, "application/json", "{\"ok\":true}\n", "Cache-Control: no-store\r\n")
+    }
+    // DELETE /admin/api/v1/maf/dispatch-sets/{id}
+    if kind == 69 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 2 { return maf_api_error(if scope == 0 { 401 } else { 403 }, "write scope required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        let tenant = maf_api_tenant()
+        let ds_id = path[len("/admin/api/v1/maf/dispatch-sets/"):]
+        if len(ds_id) == 0 || len(ds_id) > 20 { return maf_api_error(400, "invalid ID") }
+        let _ = sql_exec_str4(db, "DELETE FROM dispatch_members WHERE set_id = $1::int", ds_id, "", "", "")
+        let _ = sql_exec_str4(db, "DELETE FROM dispatch_sets WHERE id = $1::int AND tenant_id = $2", ds_id, tenant, "", "")
+        return http_resp(200, "application/json", "{\"ok\":true}\n", "Cache-Control: no-store\r\n")
+    }
+    // DELETE /admin/api/v1/maf/config/{key}
+    if kind == 70 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 2 { return maf_api_error(if scope == 0 { 401 } else { 403 }, "write scope required") }
+        if ok == 0 { return maf_api_error(503, "database unavailable") }
+        let tenant = maf_api_tenant()
+        let cfg_del_key = path[len("/admin/api/v1/maf/config/"):]
+        if len(cfg_del_key) == 0 || len(cfg_del_key) > 128 { return maf_api_error(400, "invalid key") }
+        let _ = sql_exec_str4(db, "DELETE FROM config WHERE key = $1 AND tenant_id = $2", cfg_del_key, tenant, "", "")
+        return http_resp(200, "application/json", "{\"ok\":true}\n", "Cache-Control: no-store\r\n")
+    }
+    // GET /admin/api/v1/maf/health
+    if kind == 71 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 1 { return maf_api_error(401, "authentication required") }
+        let db_status = if ok == 1 { "connected" } else { "unavailable" }
+        return http_resp(200, "application/json", "{\"ok\":true,\"db\":\"" + db_status + "\"}\n", "Cache-Control: no-store\r\n")
+    }
+    // POST /admin/api/v1/maf/reload
+    if kind == 72 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 2 { return maf_api_error(if scope == 0 { 401 } else { 403 }, "write scope required") }
+        // Flush all cached config so next access re-reads from DB
+        if ok == 1 { let _ = proxy_config_sync_db(db, ok, cache) }
+        return http_resp(200, "application/json", "{\"ok\":true,\"reloaded\":true}\n", "Cache-Control: no-store\r\n")
     }
     return maf_api_error(404, "not found")
 }
