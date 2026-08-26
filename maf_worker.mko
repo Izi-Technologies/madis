@@ -227,7 +227,7 @@ fn maf_worker_fire_webhooks(db: SqlDB, ok: int, tenant: string, event_type: stri
                     headers = headers + "X-Madis-Signature: sha256=" + sig + "\r\n"
                 }
                 if str_has_prefix(url, "https://") {
-                    let _ = https_post(url, payload, headers, 3000)
+                    let _ = https_post(url, payload, headers, "", 3000)
                 }
                 fired = fired + 1
             }
