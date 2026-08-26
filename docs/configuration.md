@@ -86,6 +86,20 @@ Terminate public HTTPS and WebSocket traffic in nginx, Caddy, HAProxy, or an equ
 | `SIP_UPSTREAM_TLS_INSECURE=1` | Explicit lab-only bypass of outbound certificate verification. Do not use as a production fix. |
 | `SIP_WSS_IDLE_MS` | Idle lifetime for reusable outbound WSS associations; the usual default is 600000 ms. |
 
+## RTPEngine
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SIP_RTPENGINE_ENABLED` | `false` | Enable RTPEngine ng protocol integration. Also settable via DB `rtpengine_enabled`. |
+| `SIP_RTPENGINE_HOST` | `127.0.0.1` | RTPEngine host. Set to a unix socket path (e.g., `/var/run/rtpengine/rtpengine.sock`) for zero-overhead local IPC. |
+| `SIP_RTPENGINE_PORT` | `2223` | RTPEngine ng control port. Ignored when using unix socket. |
+| `SIP_RTPENGINE_NODES` | — | Comma-separated multi-node list (`host:port,host2:port2`). Supports unix socket paths. |
+| `SIP_RTPENGINE_PROFILE` | — | Named media profile: `ice-srtp`, `srtp`, `ice`, `dtls-srtp`, `plain`. |
+| `SIP_RTPENGINE_FLAGS` | — | Raw ng-protocol flags (overrides profile). |
+| `SIP_RTPENGINE_DEBUG` | `0` | Log ng-protocol exchanges for troubleshooting. |
+
+Unix socket mode eliminates UDP loopback overhead for co-located RTPEngine deployments.
+
 ## Worker scaling
 
 | Variable | Default | Purpose |

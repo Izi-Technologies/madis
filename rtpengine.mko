@@ -5,10 +5,10 @@
 //
 // Config (DB config table):
 //   rtpengine_enabled = true/false
-//   rtpengine_host = 127.0.0.1
-//   rtpengine_port = 2223
+//   rtpengine_host = 127.0.0.1  (or /var/run/rtpengine/rtpengine.sock for unix socket)
+//   rtpengine_port = 2223       (ignored when host is a unix socket path)
 //
-// Protocol: bencode over UDP (ng control protocol)
+// Protocol: bencode over UDP or unix socket (ng control protocol)
 // Commands: offer, answer, delete
 
 // Build a bencode dictionary string
@@ -213,7 +213,23 @@ fn rtp_policy_flags() -> string {
 // Single attempt with evloop-based wait to avoid blocking the SIP worker.
 // Total worst-case latency: 50ms (down from 250ms).
 fn rtp_send(host: string, port: int, command: string) -> string {
-    if len(host) == 0 || port <= 0 || port > 65535 || len(command) > 65500 { return "" }
+    if len(host) == 0 || len(command) > 65500 { return "" }
+    // Unix socket: host is a path (starts with /)
+    if str_has_prefix(host, "/") {
+        let fd = unix_connect(host)
+        if fd < 0 { return "" }
+        let cookie = rtp_cookie()
+        let msg = cookie + " " + command
+        let _ = unix_write(fd, msg)
+        let resp = unix_read(fd, 65536)
+        let _ = unix_close(fd)
+        if len(resp) == 0 { return "" }
+        let prefix = cookie + " "
+        if str_has_prefix(resp, prefix) { return resp[len(prefix):] }
+        return ""
+    }
+    // UDP path
+    if port <= 0 || port > 65535 { return "" }
     let fd = nb_udp_bind(0)
     if fd < 0 { return "" }
     let cookie = rtp_cookie()
