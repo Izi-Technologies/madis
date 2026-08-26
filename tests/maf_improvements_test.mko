@@ -84,6 +84,9 @@ fn shaken_dest_from_payload(payload: string) string { return "" }
 fn shaken_iat_from_payload(payload: string) int { return 0 }
 fn jwt_payload(token: string) string { return "" }
 fn time_format(ms: int) string { return "" }
+fn routing_record_outcome(cache: CMap, gateway: string, prefix: string, answered: int, duration_sec: int, pdd_ms: int) int { return 0 }
+fn routing_gateway_score(cache: CMap, gateway: string, prefix: string) int { return 500 }
+fn https_post(url: string, body: string, headers: string, ca: string, timeout_ms: int) string { return "" }
 fn slog(msg: string) { let _ = msg }
 fn log_info_if(cache: CMap, component: string, msg: string) int { return 0 }
 fn log_warn_if(cache: CMap, component: string, msg: string) int { return 0 }
