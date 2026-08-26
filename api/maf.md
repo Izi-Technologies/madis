@@ -773,6 +773,112 @@ for event in client.subscribe(event_type="call.created"):
         client.route_call(call_id, "sip:intl-gateway.example.com")
 ```
 
+### Declarative call flows
+
+Define call logic as a JSON state machine. The proxy executes steps
+sequentially — if a step times out or is rejected, it advances to the next:
+
+```sh
+curl -X POST "$MAF_BASE_URL/api/v1/maf/calls/$CALL_ID/flow" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: flow-$CALL_ID" \
+  --data '{
+    "steps": [
+      {"action": "ring", "target": "sip:alice@example.com", "timeout": 30},
+      {"action": "ring", "target": "sip:bob@example.com", "timeout": 20},
+      {"action": "play", "resource": "voicemail-greeting.wav"},
+      {"action": "record", "max_duration": 60},
+      {"action": "hangup"}
+    ]
+  }'
+```
+
+**SDK example — ring group with voicemail fallback:**
+
+```python
+client.set_call_flow(call_id, steps=[
+    {"action": "ring", "target": "sip:sales-1@pbx.example.com", "timeout": 15},
+    {"action": "ring", "target": "sip:sales-2@pbx.example.com", "timeout": 15},
+    {"action": "ring", "target": "sip:sales-3@pbx.example.com", "timeout": 15},
+    {"action": "play", "resource": "all-agents-busy.wav"},
+    {"action": "hangup"},
+])
+```
+
+### Scheduled calls
+
+Schedule outbound calls for a future time. The proxy originates the call
+at the scheduled time:
+
+```sh
+# Schedule a call for 3pm today
+curl -X POST "$MAF_BASE_URL/api/v1/maf/scheduled-calls" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{
+    "from": "sip:reminder@example.com",
+    "to": "sip:+15551234567@carrier.example.com",
+    "scheduled_at": "2026-08-26T15:00:00Z",
+    "application_data": {"purpose": "appointment-reminder", "patient_id": "P-12345"}
+  }'
+
+# List scheduled calls
+curl "$MAF_BASE_URL/api/v1/maf/scheduled-calls" \
+  -H "Authorization: Bearer $SIP_MAF_API_READ_TOKEN"
+
+# Cancel a scheduled call
+curl -X DELETE "$MAF_BASE_URL/api/v1/maf/scheduled-calls/42" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN"
+```
+
+Use cases: appointment reminders, scheduled callbacks, time-zone-aware
+outbound campaigns, automated follow-up calls.
+
+### Call queues
+
+Programmable call queues with agent routing strategies:
+
+```sh
+# Create a queue
+curl -X POST "$MAF_BASE_URL/api/v1/maf/queues" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"name":"support","strategy":"round-robin","max_wait_sec":300}'
+
+# Add agents to the queue
+curl -X POST "$MAF_BASE_URL/api/v1/maf/queues/1/members" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"agent_uri":"sip:agent1@pbx.example.com","priority":1}'
+
+# List queues
+curl "$MAF_BASE_URL/api/v1/maf/queues" \
+  -H "Authorization: Bearer $SIP_MAF_API_READ_TOKEN"
+
+# Remove an agent
+curl -X DELETE "$MAF_BASE_URL/api/v1/maf/queues/1/members/3" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN"
+```
+
+Strategies: `round-robin`, `ring-all`, `longest-idle`, `random`.
+
+### Conference rooms
+
+Programmable conference bridges with PIN access and recording:
+
+```sh
+# Create a conference room
+curl -X POST "$MAF_BASE_URL/api/v1/maf/conferences" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"name":"standup","pin":"1234","max_participants":10,"record":true}'
+
+# List conferences
+curl "$MAF_BASE_URL/api/v1/maf/conferences" \
+  -H "Authorization: Bearer $SIP_MAF_API_READ_TOKEN"
+```
+
 ### Cluster health
 
 ```sh

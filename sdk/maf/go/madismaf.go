@@ -530,6 +530,52 @@ func (c *Client) Health(ctx context.Context) (map[string]any, error) {
 func (c *Client) Reload(ctx context.Context) (map[string]any, error) {
 	return c.request(ctx, "POST", "/api/v1/maf/reload", nil, nil, "")
 }
+// --- Call Flows ---
+
+func (c *Client) SetCallFlow(ctx context.Context, callID string, steps []map[string]any, idem string) (map[string]any, error) {
+	return c.command(ctx, callPath(callID, "/flow"), map[string]any{"steps": steps}, idem)
+}
+
+// --- Scheduled Calls ---
+
+func (c *Client) ScheduledCalls(ctx context.Context) (map[string]any, error) {
+	return c.request(ctx, "GET", "/api/v1/maf/scheduled-calls", nil, nil, "")
+}
+func (c *Client) ScheduleCall(ctx context.Context, from, to, scheduledAt string, applicationData any) (map[string]any, error) {
+	body := map[string]any{"from": from, "to": to, "scheduled_at": scheduledAt}
+	if applicationData != nil {
+		body["application_data"] = applicationData
+	}
+	return c.request(ctx, "POST", "/api/v1/maf/scheduled-calls", body, nil, "")
+}
+func (c *Client) CancelScheduledCall(ctx context.Context, scheduleID int) (map[string]any, error) {
+	return c.request(ctx, "DELETE", fmt.Sprintf("/api/v1/maf/scheduled-calls/%d", scheduleID), nil, nil, "")
+}
+
+// --- Queues ---
+
+func (c *Client) Queues(ctx context.Context) (map[string]any, error) {
+	return c.request(ctx, "GET", "/api/v1/maf/queues", nil, nil, "")
+}
+func (c *Client) CreateQueue(ctx context.Context, name, strategy string, maxWaitSec int) (map[string]any, error) {
+	return c.request(ctx, "POST", "/api/v1/maf/queues", map[string]any{"name": name, "strategy": strategy, "max_wait_sec": maxWaitSec}, nil, "")
+}
+func (c *Client) AddQueueMember(ctx context.Context, queueID int, agentURI string, priority int) (map[string]any, error) {
+	return c.request(ctx, "POST", fmt.Sprintf("/api/v1/maf/queues/%d/members", queueID), map[string]any{"agent_uri": agentURI, "priority": priority}, nil, "")
+}
+func (c *Client) RemoveQueueMember(ctx context.Context, queueID, memberID int) (map[string]any, error) {
+	return c.request(ctx, "DELETE", fmt.Sprintf("/api/v1/maf/queues/%d/members/%d", queueID, memberID), nil, nil, "")
+}
+
+// --- Conferences ---
+
+func (c *Client) Conferences(ctx context.Context) (map[string]any, error) {
+	return c.request(ctx, "GET", "/api/v1/maf/conferences", nil, nil, "")
+}
+func (c *Client) CreateConference(ctx context.Context, name, pin string, maxParticipants int, record bool) (map[string]any, error) {
+	return c.request(ctx, "POST", "/api/v1/maf/conferences", map[string]any{"name": name, "pin": pin, "max_participants": maxParticipants, "record": record}, nil, "")
+}
+
 func (c *Client) Identity(ctx context.Context, callID, action, identity, attest, idem string) (map[string]any, error) {
 	body := map[string]any{"action": action}
 	if identity != "" {

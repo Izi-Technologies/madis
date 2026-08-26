@@ -38,6 +38,10 @@
          users/2, create_user/4, delete_user/3,
          set_log_level/3, health/2, reload/2,
          identity/4, identity/5,
+         set_call_flow/4, set_call_flow/5,
+         scheduled_calls/2, schedule_call/3, cancel_scheduled_call/3,
+         queues/2, create_queue/3, add_queue_member/5, remove_queue_member/4,
+         conferences/2, create_conference/3,
          events/2, events/3, events/4, events/5,
          ws_url/4]).
 
@@ -362,6 +366,48 @@ health(Base, Token) ->
 
 reload(Base, Token) ->
     request(Base, Token, post, "/api/v1/maf/reload", none, none).
+
+%% --- Call Flows ---
+
+set_call_flow(Base, Token, CallId, Json) ->
+    set_call_flow(Base, Token, CallId, Json, none).
+set_call_flow(Base, Token, CallId, Json, IdempotencyKey) ->
+    Key = idempotency_key(IdempotencyKey),
+    request(Base, Token, post, call_path(CallId) ++ "/flow", Json, Key).
+
+%% --- Scheduled Calls ---
+
+scheduled_calls(Base, Token) ->
+    request(Base, Token, get, "/api/v1/maf/scheduled-calls", none).
+
+schedule_call(Base, Token, Json) ->
+    request(Base, Token, post, "/api/v1/maf/scheduled-calls", Json, none).
+
+cancel_scheduled_call(Base, Token, ScheduleId) ->
+    request(Base, Token, delete, "/api/v1/maf/scheduled-calls/" ++ integer_to_list(ScheduleId), none).
+
+%% --- Queues ---
+
+queues(Base, Token) ->
+    request(Base, Token, get, "/api/v1/maf/queues", none).
+
+create_queue(Base, Token, Json) ->
+    request(Base, Token, post, "/api/v1/maf/queues", Json, none).
+
+add_queue_member(Base, Token, QueueId, AgentUri, Priority) ->
+    Body = jsx:encode(#{<<"agent_uri">> => list_to_binary(AgentUri), <<"priority">> => Priority}),
+    request(Base, Token, post, "/api/v1/maf/queues/" ++ integer_to_list(QueueId) ++ "/members", Body, none).
+
+remove_queue_member(Base, Token, QueueId, MemberId) ->
+    request(Base, Token, delete, "/api/v1/maf/queues/" ++ integer_to_list(QueueId) ++ "/members/" ++ integer_to_list(MemberId), none).
+
+%% --- Conferences ---
+
+conferences(Base, Token) ->
+    request(Base, Token, get, "/api/v1/maf/conferences", none).
+
+create_conference(Base, Token, Json) ->
+    request(Base, Token, post, "/api/v1/maf/conferences", Json, none).
 
 identity(Base, Token, CallId, Json) ->
     identity(Base, Token, CallId, Json, none).

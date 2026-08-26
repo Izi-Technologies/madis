@@ -157,6 +157,28 @@ export class MadisMaf {
   setLogLevel(level) { return this.request("POST", "/api/v1/maf/log-level", { level }); }
   health() { return this.request("GET", "/api/v1/maf/health"); }
   reload() { return this.request("POST", "/api/v1/maf/reload"); }
+  // --- Call Flows ---
+  setCallFlow(callId, steps, key) { return this.command(this.callPath(callId, "/flow"), { steps }, key); }
+
+  // --- Scheduled Calls ---
+  scheduledCalls() { return this.request("GET", "/api/v1/maf/scheduled-calls"); }
+  scheduleCall(from, to, scheduledAt, applicationData) {
+    const body = { from, to, scheduled_at: scheduledAt };
+    if (applicationData !== undefined) body.application_data = applicationData;
+    return this.request("POST", "/api/v1/maf/scheduled-calls", body);
+  }
+  cancelScheduledCall(scheduleId) { return this.request("DELETE", `/api/v1/maf/scheduled-calls/${scheduleId}`); }
+
+  // --- Queues ---
+  queues() { return this.request("GET", "/api/v1/maf/queues"); }
+  createQueue(name, strategy = "round-robin", maxWaitSec = 300) { return this.request("POST", "/api/v1/maf/queues", { name, strategy, max_wait_sec: maxWaitSec }); }
+  addQueueMember(queueId, agentUri, priority = 1) { return this.request("POST", `/api/v1/maf/queues/${queueId}/members`, { agent_uri: agentUri, priority }); }
+  removeQueueMember(queueId, memberId) { return this.request("DELETE", `/api/v1/maf/queues/${queueId}/members/${memberId}`); }
+
+  // --- Conferences ---
+  conferences() { return this.request("GET", "/api/v1/maf/conferences"); }
+  createConference(name, pin = "", maxParticipants = 10, record = false) { return this.request("POST", "/api/v1/maf/conferences", { name, pin, max_participants: maxParticipants, record }); }
+
   identity(callId, action, identity, attest, key) {
     const body = { action };
     if (identity !== undefined) body.identity = identity;

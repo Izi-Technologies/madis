@@ -149,6 +149,15 @@ fn maf_worker_bootstrap(db: SqlDB) -> int {
     let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS maf_webhooks (webhook_id SERIAL PRIMARY KEY, tenant_id TEXT NOT NULL, url TEXT NOT NULL, events_json JSONB NOT NULL DEFAULT '[]'::jsonb, secret TEXT NOT NULL DEFAULT '', enabled BOOLEAN DEFAULT true, created_at TIMESTAMP DEFAULT NOW())")
     // Number intelligence for carrier/spam lookups
     let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS number_intelligence (number TEXT PRIMARY KEY, carrier TEXT DEFAULT '', type TEXT DEFAULT '', country TEXT DEFAULT '', spam_score INT DEFAULT 0, updated_at TIMESTAMP DEFAULT NOW())")
+    // Scheduled calls for time-delayed origination
+    let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS maf_scheduled_calls (schedule_id SERIAL PRIMARY KEY, tenant_id TEXT NOT NULL, from_uri TEXT NOT NULL, to_uri TEXT NOT NULL, scheduled_at TIMESTAMP NOT NULL, application_data JSONB DEFAULT '{}'::jsonb, status TEXT DEFAULT 'pending', call_id TEXT DEFAULT '', created_at TIMESTAMP DEFAULT NOW())")
+    let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_maf_scheduled_calls_pending ON maf_scheduled_calls (tenant_id, status, scheduled_at)")
+    // Call queues for programmable agent routing
+    let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS maf_queues (queue_id SERIAL PRIMARY KEY, tenant_id TEXT NOT NULL, name TEXT NOT NULL, strategy TEXT DEFAULT 'round-robin', max_wait_sec INT DEFAULT 300, music_on_hold TEXT DEFAULT '', enabled BOOLEAN DEFAULT true, created_at TIMESTAMP DEFAULT NOW(), UNIQUE(tenant_id, name))")
+    let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS maf_queue_members (member_id SERIAL PRIMARY KEY, queue_id INT NOT NULL REFERENCES maf_queues(queue_id) ON DELETE CASCADE, tenant_id TEXT NOT NULL, agent_uri TEXT NOT NULL, priority INT DEFAULT 1, enabled BOOLEAN DEFAULT true, created_at TIMESTAMP DEFAULT NOW())")
+    let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_maf_queue_members_queue ON maf_queue_members (queue_id, enabled, priority)")
+    // Conference rooms
+    let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS maf_conferences (conference_id SERIAL PRIMARY KEY, tenant_id TEXT NOT NULL, name TEXT NOT NULL, pin TEXT DEFAULT '', max_participants INT DEFAULT 10, record BOOLEAN DEFAULT false, muted_on_join BOOLEAN DEFAULT false, enabled BOOLEAN DEFAULT true, created_at TIMESTAMP DEFAULT NOW(), UNIQUE(tenant_id, name))")
     return 1
 }
 

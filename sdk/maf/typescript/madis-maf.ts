@@ -682,6 +682,54 @@ export class MadisMaf {
   async reload(): Promise<Record<string, unknown>> {
     return this.request("POST", `${API}/reload`);
   }
+  // --- Call Flows ---
+
+  async setCallFlow(
+    callId: string,
+    steps: Record<string, unknown>[],
+    idempotencyKey?: string,
+  ): Promise<CommandReceipt> {
+    return this.command(`${API}/calls/${encPath(callId)}/flow`, { steps }, idempotencyKey);
+  }
+
+  // --- Scheduled Calls ---
+
+  async scheduledCalls(): Promise<Record<string, unknown>> {
+    return this.request("GET", `${API}/scheduled-calls`);
+  }
+  async scheduleCall(from: string, to: string, scheduledAt: string, applicationData?: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const body: Record<string, unknown> = { from, to, scheduled_at: scheduledAt };
+    if (applicationData !== undefined) body.application_data = applicationData;
+    return this.request("POST", `${API}/scheduled-calls`, body);
+  }
+  async cancelScheduledCall(scheduleId: number): Promise<Record<string, unknown>> {
+    return this.request("DELETE", `${API}/scheduled-calls/${scheduleId}`);
+  }
+
+  // --- Queues ---
+
+  async queues(): Promise<Record<string, unknown>> {
+    return this.request("GET", `${API}/queues`);
+  }
+  async createQueue(name: string, strategy = "round-robin", maxWaitSec = 300): Promise<Record<string, unknown>> {
+    return this.request("POST", `${API}/queues`, { name, strategy, max_wait_sec: maxWaitSec });
+  }
+  async addQueueMember(queueId: number, agentUri: string, priority = 1): Promise<Record<string, unknown>> {
+    return this.request("POST", `${API}/queues/${queueId}/members`, { agent_uri: agentUri, priority });
+  }
+  async removeQueueMember(queueId: number, memberId: number): Promise<Record<string, unknown>> {
+    return this.request("DELETE", `${API}/queues/${queueId}/members/${memberId}`);
+  }
+
+  // --- Conferences ---
+
+  async conferences(): Promise<Record<string, unknown>> {
+    return this.request("GET", `${API}/conferences`);
+  }
+  async createConference(name: string, pin = "", maxParticipants = 10, record = false): Promise<Record<string, unknown>> {
+    return this.request("POST", `${API}/conferences`, { name, pin, max_participants: maxParticipants, record });
+  }
+
   async identity(
     callId: string,
     action: string,

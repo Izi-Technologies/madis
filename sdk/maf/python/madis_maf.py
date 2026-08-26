@@ -529,6 +529,65 @@ class MadisMaf:
                                    "type": number_type, "country": country,
                                    "spam_score": spam_score})
 
+    # --- Call Flows ---
+
+    def set_call_flow(self, call_id: str, steps: list[dict],
+                      idempotency_key: str | None = None) -> object:
+        return self._command("POST",
+                             f"/api/v1/maf/calls/{quote(call_id, safe='')}/flow",
+                             {"steps": steps}, idempotency_key)
+
+    # --- Scheduled Calls ---
+
+    def scheduled_calls(self) -> object:
+        return self._request("GET", "/api/v1/maf/scheduled-calls")
+
+    def schedule_call(self, from_uri: str, to_uri: str, scheduled_at: str,
+                      application_data: dict | None = None) -> object:
+        body: dict[str, object] = {"from": from_uri, "to": to_uri,
+                                    "scheduled_at": scheduled_at}
+        if application_data is not None:
+            body["application_data"] = application_data
+        return self._request("POST", "/api/v1/maf/scheduled-calls", body=body)
+
+    def cancel_scheduled_call(self, schedule_id: int) -> object:
+        return self._request("DELETE",
+                             f"/api/v1/maf/scheduled-calls/{schedule_id}")
+
+    # --- Call Queues ---
+
+    def queues(self) -> object:
+        return self._request("GET", "/api/v1/maf/queues")
+
+    def create_queue(self, name: str, strategy: str = "round-robin",
+                     max_wait_sec: int = 300) -> object:
+        return self._request("POST", "/api/v1/maf/queues",
+                             body={"name": name, "strategy": strategy,
+                                   "max_wait_sec": max_wait_sec})
+
+    def add_queue_member(self, queue_id: int, agent_uri: str,
+                         priority: int = 1) -> object:
+        return self._request("POST",
+                             f"/api/v1/maf/queues/{queue_id}/members",
+                             body={"agent_uri": agent_uri, "priority": priority})
+
+    def remove_queue_member(self, queue_id: int, member_id: int) -> object:
+        return self._request("DELETE",
+                             f"/api/v1/maf/queues/{queue_id}/members/{member_id}")
+
+    # --- Conferences ---
+
+    def conferences(self) -> object:
+        return self._request("GET", "/api/v1/maf/conferences")
+
+    def create_conference(self, name: str, pin: str = "",
+                          max_participants: int = 10,
+                          record: bool = False) -> object:
+        return self._request("POST", "/api/v1/maf/conferences",
+                             body={"name": name, "pin": pin,
+                                   "max_participants": max_participants,
+                                   "record": record})
+
     def events(self, cursor: int = 0, event_type: str | None = None,
                limit: int = 100) -> object:
         query: dict[str, object] = {"cursor": max(cursor, 0),
