@@ -242,6 +242,9 @@ fn maf_api_route(method: string, path: string) -> int {
     // Conferences
     if str_eq(method, "POST") && str_eq(path, "/admin/api/v1/maf/conferences") { return 87 }
     if str_eq(method, "GET") && str_eq(path, "/admin/api/v1/maf/conferences") { return 88 }
+    // Routing intelligence
+    if str_eq(method, "GET") && str_eq(path, "/admin/api/v1/maf/routing/intelligence") { return 89 }
+    if str_eq(method, "POST") && str_eq(path, "/admin/api/v1/maf/routing/intelligence/record") { return 90 }
     return 0
 }
 
@@ -250,7 +253,7 @@ fn maf_api_ws_route(method: string, path: string) -> int {
 }
 
 fn maf_api_write_required(kind: int) -> int {
-    return if kind == 1 || kind >= 3 && kind <= 7 || kind == 9 || (kind >= 10 && kind <= 15) || kind == 20 || kind == 21 || kind == 26 || kind == 27 || kind == 29 || kind == 31 || kind == 33 || kind == 36 || kind == 37 || kind == 38 || kind == 40 || kind == 41 || kind == 43 || kind == 44 || kind == 46 || kind == 48 || kind == 50 || kind == 53 || kind == 55 || kind == 56 || kind == 58 || (kind >= 59 && kind <= 62) || kind == 64 || kind == 65 || kind == 66 || kind == 67 || kind == 68 || kind == 69 || kind == 70 || kind == 72 || kind == 73 || kind == 75 || kind == 76 || kind == 78 || kind == 79 || kind == 80 || kind == 82 || kind == 83 || kind == 85 || kind == 86 || kind == 87 { 1 } else { 0 }
+    return if kind == 1 || kind >= 3 && kind <= 7 || kind == 9 || (kind >= 10 && kind <= 15) || kind == 20 || kind == 21 || kind == 26 || kind == 27 || kind == 29 || kind == 31 || kind == 33 || kind == 36 || kind == 37 || kind == 38 || kind == 40 || kind == 41 || kind == 43 || kind == 44 || kind == 46 || kind == 48 || kind == 50 || kind == 53 || kind == 55 || kind == 56 || kind == 58 || (kind >= 59 && kind <= 62) || kind == 64 || kind == 65 || kind == 66 || kind == 67 || kind == 68 || kind == 69 || kind == 70 || kind == 72 || kind == 73 || kind == 75 || kind == 76 || kind == 78 || kind == 79 || kind == 80 || kind == 82 || kind == 83 || kind == 85 || kind == 86 || kind == 87 || kind == 90 { 1 } else { 0 }
 }
 
 fn maf_api_capacity_limit(db: SqlDB, ok: int, tenant: string) -> int {
@@ -1932,6 +1935,79 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
             i = i + 1
         }
         return http_resp(200, "application/json", out + "]}\n", "Cache-Control: no-store\r\n")
+    }
+    // GET /admin/api/v1/maf/routing/intelligence — view gateway scores
+    if kind == 89 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 1 { return maf_api_error(401, "authentication required") }
+        // Read gateway stats registry and build JSON array
+        let mut out = "{\"schema\":\"madis.maf.routing.intelligence.v1\",\"gateways\":["
+        let mut entries = make([]string, 0, 64)
+        if cmap_has(cache, "gw_stats_reg") == 1 {
+            entries = str_split(cmap_get(cache, "gw_stats_reg"), ",")
+        }
+        let mut i = 0
+        let mut first = 1
+        while i < len(entries) {
+            let entry = entries[i]
+            // entry format: gateway|prefix
+            let sep = str_index(entry, "|")
+            let mut gw = entry
+            let mut pfx = ""
+            if sep > 0 { gw = entry[0:sep]; pfx = entry[sep + 1:] }
+            let cache_key = "gw_stats|" + gw + "|" + pfx
+            if cmap_has(cache, cache_key) == 0 { i = i + 1; continue }
+            let raw_val = cmap_get(cache, cache_key)
+            let mut attempts = 0
+            let mut ans = 0
+            let mut dur = 0
+            let mut pdd_total = 0
+            let p1 = str_index(raw_val, "|")
+            if p1 > 0 {
+                match parse_int(raw_val[0:p1]) { Ok(v) => { attempts = v } Err(_) => {} }
+                let r1 = raw_val[p1 + 1:]
+                let p2 = str_index(r1, "|")
+                if p2 > 0 {
+                    match parse_int(r1[0:p2]) { Ok(v) => { ans = v } Err(_) => {} }
+                    let r2 = r1[p2 + 1:]
+                    let p3 = str_index(r2, "|")
+                    if p3 > 0 {
+                        match parse_int(r2[0:p3]) { Ok(v) => { dur = v } Err(_) => {} }
+                        match parse_int(r2[p3 + 1:]) { Ok(v) => { pdd_total = v } Err(_) => {} }
+                    }
+                }
+            }
+            let score = routing_gateway_score(cache, gw, pfx)
+            let mut asr_pct = 0
+            if attempts > 0 { asr_pct = (ans * 100) / attempts }
+            let mut acd_avg = 0
+            if ans > 0 { acd_avg = dur / ans }
+            let mut pdd_avg = 0
+            if attempts > 0 { pdd_avg = pdd_total / attempts }
+            if first == 0 { out = out + "," }
+            first = 0
+            out = out + "{\"gateway\":\"" + maf_api_json_escape(gw) + "\",\"prefix\":\"" + maf_api_json_escape(pfx) + "\",\"score\":" + string(score) + ",\"attempts\":" + string(attempts) + ",\"asr_pct\":" + string(asr_pct) + ",\"acd_avg_sec\":" + string(acd_avg) + ",\"pdd_avg_ms\":" + string(pdd_avg) + "}"
+            i = i + 1
+        }
+        return http_resp(200, "application/json", out + "]}\n", "Cache-Control: no-store\r\n")
+    }
+    // POST /admin/api/v1/maf/routing/intelligence/record — manually record outcome
+    if kind == 90 {
+        let scope = maf_api_scope(raw, n)
+        if scope < 1 { return maf_api_error(401, "authentication required") }
+        let body = http_body(raw, n)
+        let gw = json_get_string(body, "gateway")
+        let pfx = json_get_string(body, "prefix")
+        if len(gw) == 0 { return maf_api_error(400, "gateway required") }
+        let mut answered = 0
+        let mut duration_sec = 0
+        let mut pdd_ms = 0
+        if str_eq(json_get_string(body, "answered"), "true") || str_contains(body, "\"answered\":true") { answered = 1 }
+        match parse_int(json_get_string(body, "duration_sec")) { Ok(v) => { duration_sec = v } Err(_) => {} }
+        match parse_int(json_get_string(body, "pdd_ms")) { Ok(v) => { pdd_ms = v } Err(_) => {} }
+        let _ = routing_record_outcome(cache, gw, pfx, answered, duration_sec, pdd_ms)
+        let score = routing_gateway_score(cache, gw, pfx)
+        return http_resp(200, "application/json", "{\"ok\":true,\"score\":" + string(score) + "}\n", "Cache-Control: no-store\r\n")
     }
     return maf_api_error(404, "not found")
 }

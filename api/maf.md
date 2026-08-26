@@ -262,6 +262,57 @@ Example call resource fragment:
 }
 ```
 
+### Autonomous routing intelligence
+
+The proxy learns which gateways perform best and automatically routes
+calls to the highest-quality path. No manual configuration needed.
+
+**How it works:**
+1. Every call outcome (answered, failed, duration, post-dial delay) is
+   recorded per gateway per destination prefix
+2. Each gateway gets a real-time quality score (0-1000) based on:
+   - **ASR** (0-500) — answer seizure ratio, higher = more calls answered
+   - **ACD** (0-300) — average call duration, longer = better quality
+   - **PDD** (0-200) — post-dial delay, lower = faster connect
+3. Dispatch sets with `strategy: "quality"` automatically prefer the
+   highest-scoring gateway
+4. Scores decay over time — recent performance matters more than history
+5. Recovery is automatic — when a degraded gateway improves, it rises back
+
+```sh
+# Create a quality-optimized dispatch set
+curl -X POST "$MAF_BASE_URL/api/v1/maf/dispatch-sets" \
+  -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"name":"us-smart","algorithm":"quality"}'
+
+# View real-time gateway scores
+curl "$MAF_BASE_URL/api/v1/maf/routing/intelligence" \
+  -H "Authorization: Bearer $SIP_MAF_API_READ_TOKEN"
+
+# Response:
+# {"schema":"madis.maf.routing-intelligence.v1","gateways":[
+#   {"gateway":"10.0.1.100:5060","score":850,"attempts":1200,"asr_pct":92,"acd_avg":180,"pdd_avg":350},
+#   {"gateway":"10.0.2.100:5060","score":620,"attempts":800,"asr_pct":71,"acd_avg":120,"pdd_avg":1200}
+# ]}
+```
+
+**SDK example — monitor routing quality:**
+
+```python
+# Check which gateways are performing well
+intel = client.routing_intelligence()
+for gw in intel.get("gateways", []):
+    if gw["asr_pct"] < 50:
+        print(f"WARNING: {gw['gateway']} ASR is {gw['asr_pct']}%")
+        # Optionally disable the gateway
+        # client.set_config("rtpengine_enabled", "0")
+```
+
+No other SIP proxy does this. Operators using static routing lose money
+on failed calls and don't know which gateway is degrading until customers
+complain. Madis learns in real-time and adapts automatically.
+
 ### SDK-controlled routing
 
 With `SIP_MAF_INBOUND_MODE=control` or `SIP_MAF_INBOUND_MODE=route`, an

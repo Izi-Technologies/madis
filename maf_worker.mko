@@ -763,6 +763,7 @@ fn maf_worker_start_call(db: SqlDB, ok: int, tenant: string, call_id: string, re
     let _ = bounded_cache_set(cache, "maf_cache_seq", "maf_cache_ring|", "maf_invite|" + call_id, invite, 65536)
     let _ = bounded_cache_set(cache, "maf_cache_seq", "maf_cache_ring|", "maf_target|" + call_id, target, 65536)
     let _ = bounded_cache_set(cache, "maf_cache_seq", "maf_cache_ring|", "maf_transport|" + call_id, tr, 65536)
+    let _ = bounded_cache_set(cache, "maf_cache_seq", "maf_cache_ring|", "maf_callee|" + call_id, to_uri, 65536)
     cmap_set(cache, "maf_created_ms|" + call_id, string(mono_ms()))
     let _ = maf_worker_call_state(db, ok, tenant, call_id, "ringing", trace)
     let _ = log_event(cache, "maf", "outbound-call", "call_id=" + call_id + " target=" + to_uri + " transport=" + tr)
@@ -1430,6 +1431,7 @@ fn maf_worker_route(db: SqlDB, ok: int, tenant: string, call_id: string, command
     }
     // Track dialog so responses route back
     let _ = bounded_cache_set(cache, "maf_cache_seq", "maf_cache_ring|", "maf_target|" + call_id, target, 65536)
+    let _ = bounded_cache_set(cache, "maf_cache_seq", "maf_cache_ring|", "maf_callee|" + call_id, target, 65536)
     let _ = bounded_cache_set(cache, "maf_cache_seq", "maf_cache_ring|", "maf_transport|" + call_id, tr, 65536)
     let payload = "{\"call_id\":\"" + maf_worker_json_escape(call_id) + "\",\"target\":\"" + maf_worker_json_escape(target) + "\",\"transport\":\"" + maf_worker_json_escape(tr) + "\"}"
     let _ = maf_worker_emit_event(db, ok, tenant, "call.routed", call_id, payload, trace)
@@ -1729,5 +1731,26 @@ fn maf_worker_sync_sip(db: SqlDB, ok: int, msg: string, cache: CMap) -> int {
         }
     }
     if str_eq(next, current) { return 0 }
+    // Routing intelligence: record call outcomes for gateway scoring
+    let ri_target = if cmap_has(cache, "maf_target|" + call_id) == 1 { cmap_get(cache, "maf_target|" + call_id) } else { "" }
+    let ri_callee = if cmap_has(cache, "maf_callee|" + call_id) == 1 { cmap_get(cache, "maf_callee|" + call_id) } else { "" }
+    if len(ri_target) > 0 {
+        if str_eq(next, "answered") {
+            // ASR success; compute PDD from creation time
+            let mut ri_pdd = 0
+            let ri_created_key = "maf_created_ms|" + call_id
+            if cmap_has(cache, ri_created_key) == 1 {
+                let mut ri_created = 0
+                match parse_int(cmap_get(cache, ri_created_key)) { Ok(v) => { ri_created = v } Err(_) => {} }
+                if ri_created > 0 { ri_pdd = mono_ms() - ri_created }
+            }
+            let _ = routing_record_outcome(cache, ri_target, ri_callee, 1, 0, ri_pdd)
+        }
+        if str_eq(next, "failed") {
+            let _ = routing_record_outcome(cache, ri_target, ri_callee, 0, 0, 0)
+        }
+        // ponytail: ACD (ended duration) not recorded here to avoid double-counting attempts;
+        // add when a duration-only update path is needed for fine-grained scoring.
+    }
     return maf_worker_call_state_detail(db, ok, tenant, call_id, next, trace, sip_detail)
 }

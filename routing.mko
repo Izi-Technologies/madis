@@ -243,6 +243,28 @@ fn resolve_dispatch_set(db: SqlDB, set_name: string, from_user: string, call_id:
     if str_eq(algo, "round-robin") { start_idx = dispatch_next_rr(set_id, count, cache) }
     if str_eq(algo, "hash") { start_idx = dispatch_hash(call_id, count) }
     if str_eq(algo, "hash-user") { start_idx = dispatch_hash(from_user, count) }
+    if str_eq(algo, "quality") || str_eq(algo, "smart") {
+        // Sort members by routing intelligence score (highest first).
+        // ponytail: selection sort, max 8 members — no need for anything fancier.
+        let mut si = 0
+        while si < count - 1 {
+            let mut best = si
+            let mut best_score = routing_gateway_score(cache, members[si], "")
+            let mut sj = si + 1
+            while sj < count {
+                let score = routing_gateway_score(cache, members[sj], "")
+                if score > best_score { best = sj; best_score = score }
+                sj = sj + 1
+            }
+            if best != si {
+                let tmp = members[si]
+                members[si] = members[best]
+                members[best] = tmp
+            }
+            si = si + 1
+        }
+        start_idx = 0
+    }
 
     let mut result = members[start_idx]
     let mut i = 1
@@ -510,4 +532,109 @@ fn db_route_call(db: SqlDB, db_ok: int, callee: string, caller: string, src_ip: 
 
     let _ = log_debug_if(cache, "routing", "no-route callee=" + callee)
     return ""
+}
+
+// ============ ROUTING INTELLIGENCE ENGINE ============
+// Self-learning quality scoring: tracks ASR, ACD, PDD per gateway+prefix.
+// Gateways with better metrics rise; bad gateways sink automatically.
+
+fn routing_record_outcome(cache: CMap, gateway: string, prefix: string, answered: int, duration_sec: int, pdd_ms: int) -> int {
+    if len(gateway) == 0 { return 0 }
+    // ponytail: 3-char prefix bucket; finer granularity when volume justifies it
+    let mut pfx = prefix
+    if len(pfx) > 3 { pfx = pfx[0:3] }
+    let key = "gw_stats|" + gateway + "|" + pfx
+    let mut attempts = 0
+    let mut ans = 0
+    let mut dur = 0
+    let mut pdd_total = 0
+    if cmap_has(cache, key) == 1 {
+        let cached = cmap_get(cache, key)
+        let p1 = str_index(cached, "|")
+        if p1 > 0 {
+            match parse_int(cached[0:p1]) { Ok(v) => { attempts = v } Err(_) => {} }
+            let r1 = cached[p1 + 1:]
+            let p2 = str_index(r1, "|")
+            if p2 > 0 {
+                match parse_int(r1[0:p2]) { Ok(v) => { ans = v } Err(_) => {} }
+                let r2 = r1[p2 + 1:]
+                let p3 = str_index(r2, "|")
+                if p3 > 0 {
+                    match parse_int(r2[0:p3]) { Ok(v) => { dur = v } Err(_) => {} }
+                    match parse_int(r2[p3 + 1:]) { Ok(v) => { pdd_total = v } Err(_) => {} }
+                }
+            }
+        }
+    }
+    // Decay: halve counters every 1000 attempts to favor recent data
+    if attempts > 1000 {
+        attempts = attempts / 2
+        ans = ans / 2
+        dur = dur / 2
+        pdd_total = pdd_total / 2
+    }
+    attempts = attempts + 1
+    if answered == 1 {
+        ans = ans + 1
+        dur = dur + duration_sec
+    }
+    if pdd_ms > 0 { pdd_total = pdd_total + pdd_ms }
+    let value = string(attempts) + "|" + string(ans) + "|" + string(dur) + "|" + string(pdd_total)
+    cmap_set(cache, key, value)
+    // Track this key in the registry so the API can enumerate all gateways
+    let reg_key = "gw_stats_reg"
+    let entry = gateway + "|" + pfx
+    if cmap_has(cache, reg_key) == 1 {
+        let reg = cmap_get(cache, reg_key)
+        if str_contains("," + reg + ",", "," + entry + ",") == 0 {
+            cmap_set(cache, reg_key, reg + "," + entry)
+        }
+    } else {
+        cmap_set(cache, reg_key, entry)
+    }
+    return 1
+}
+
+fn routing_gateway_score(cache: CMap, gateway: string, prefix: string) -> int {
+    let mut pfx = prefix
+    if len(pfx) > 3 { pfx = pfx[0:3] }
+    let key = "gw_stats|" + gateway + "|" + pfx
+    if cmap_has(cache, key) == 0 { return 500 }  // no data = neutral
+    let cached = cmap_get(cache, key)
+    let mut attempts = 0
+    let mut ans = 0
+    let mut dur = 0
+    let mut pdd_total = 0
+    let p1 = str_index(cached, "|")
+    if p1 > 0 {
+        match parse_int(cached[0:p1]) { Ok(v) => { attempts = v } Err(_) => {} }
+        let r1 = cached[p1 + 1:]
+        let p2 = str_index(r1, "|")
+        if p2 > 0 {
+            match parse_int(r1[0:p2]) { Ok(v) => { ans = v } Err(_) => {} }
+            let r2 = r1[p2 + 1:]
+            let p3 = str_index(r2, "|")
+            if p3 > 0 {
+                match parse_int(r2[0:p3]) { Ok(v) => { dur = v } Err(_) => {} }
+                match parse_int(r2[p3 + 1:]) { Ok(v) => { pdd_total = v } Err(_) => {} }
+            }
+        }
+    }
+    if attempts < 5 { return 500 }  // not enough data
+    // ASR component (0-500): higher answer rate = better
+    let asr = (ans * 500) / attempts
+    // ACD component (0-300): longer calls = better quality, cap at 300s avg
+    let mut acd = 0
+    if ans > 0 { acd = dur / ans }
+    if acd > 300 { acd = 300 }
+    let acd_score = acd
+    // PDD component (0-200): lower delay = better, lose 1 pt per 50ms
+    let mut pdd_avg = 0
+    if attempts > 0 { pdd_avg = pdd_total / attempts }
+    let mut pdd_score = 200
+    if pdd_avg > 0 {
+        pdd_score = 200 - (pdd_avg / 50)
+        if pdd_score < 0 { pdd_score = 0 }
+    }
+    return asr + acd_score + pdd_score
 }

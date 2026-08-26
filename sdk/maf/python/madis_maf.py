@@ -588,6 +588,22 @@ class MadisMaf:
                                    "max_participants": max_participants,
                                    "record": record})
 
+    # --- Routing Intelligence ---
+
+    def routing_intelligence(self) -> object:
+        """Get real-time gateway quality scores (ASR, ACD, PDD)."""
+        return self._request("GET", "/api/v1/maf/routing/intelligence")
+
+    def record_routing_outcome(self, gateway: str, prefix: str,
+                               answered: bool, duration_sec: int = 0,
+                               pdd_ms: int = 0) -> object:
+        """Manually record a call outcome for routing intelligence."""
+        return self._request("POST", "/api/v1/maf/routing/intelligence/record",
+                             body={"gateway": gateway, "prefix": prefix,
+                                   "answered": answered,
+                                   "duration_sec": duration_sec,
+                                   "pdd_ms": pdd_ms})
+
     def events(self, cursor: int = 0, event_type: str | None = None,
                limit: int = 100) -> object:
         query: dict[str, object] = {"cursor": max(cursor, 0),
