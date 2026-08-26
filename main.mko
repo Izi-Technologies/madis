@@ -471,6 +471,16 @@ fn app_command_apply(msg: string, raw: string) -> string {
 // Cache env values that never change at runtime — env_get_or is not free at 10K+ CPS.
 fn cached_env(cache: CMap, cache_key: string, env_key: string, fallback: string) -> string {
     if cmap_has(cache, cache_key) == 1 { return cmap_get(cache, cache_key) }
+    // Check DB config cache (loaded by proxy_config_sync_db every 5s).
+    // Config keys use lowercase with underscores; map env key to config key.
+    let cfg_key = "_cfg|" + str_to_lower(env_key)
+    if cmap_has(cache, cfg_key) == 1 {
+        let db_val = cmap_get(cache, cfg_key)
+        if len(db_val) > 0 {
+            cmap_set(cache, cache_key, db_val)
+            return db_val
+        }
+    }
     let v = env_get_or(env_key, fallback)
     cmap_set(cache, cache_key, v)
     return v
@@ -3237,9 +3247,11 @@ fn main() {
                 break
             }
 
-            // Minimal idle maintenance mode: keep SIP listeners alive without
-            // running background sweeps every second. Sweeps are re-enabled
-            // after the idle memory leak is fixed upstream.
+            // Sync DB config into worker cache so MAF config changes take
+            // effect without restart. Runs every 5s (gated internally).
+            if hb_db_ok == 1 {
+                let _ = proxy_config_sync_db(hb_db, hb_db_ok, cache)
+            }
         }
         if shutdown_requested() == 1 {
             // Graceful drain: stop accepting new connections (listeners

@@ -131,6 +131,40 @@ fn proxy_config_reload(cache: CMap) -> int {
     return epoch
 }
 
+// Bulk-load DB config keys into the worker CMap so MAF config changes
+// take effect without restart. Called every heartbeat (1s). Keys are
+// cached with a _cfg| prefix to avoid collision with other cache entries.
+// The worker code can read these via cached_env which checks CMap first.
+fn proxy_config_sync_db(db: SqlDB, db_ok: int, cache: CMap) -> int {
+    if db_ok == 0 { return 0 }
+    let ts_key = "_cfg_sync_ts"
+    let now = mono_ms()
+    if cmap_has(cache, ts_key) == 1 {
+        let mut last = 0
+        match parse_int(cmap_get(cache, ts_key)) { Ok(v) => { last = v } Err(_) => {} }
+        if now - last < 5000 { return 0 }
+    }
+    cmap_set(cache, ts_key, string(now))
+    let rows = sql_query_rows_str(db, "SELECT key || chr(1) || value FROM config LIMIT 200", "")
+    if sql_rows_ok(rows) == 0 { return 0 }
+    let mut loaded = 0
+    while sql_rows_next(rows) == 1 {
+        let row = sql_rows_str(rows, 0)
+        let sep = str_index(row, "\x01")
+        if sep > 0 {
+            let k = row[0:sep]
+            let v = row[sep + 1:]
+            // Map config key to the cache key that cached_env uses
+            // Config keys use underscore naming; env vars use uppercase.
+            // Store with the _cfg| prefix so cached_env can check it.
+            cmap_set(cache, "_cfg|" + k, v)
+        }
+        loaded = loaded + 1
+    }
+    let _ = sql_rows_close(rows)
+    return loaded
+}
+
 fn proxy_metric_message(msg: string, reply: string, elapsed: int, calls: CMap) -> int {
     metric_add(0, 1) // sip_messages_total
     if sip_is_response(msg) == 1 {
