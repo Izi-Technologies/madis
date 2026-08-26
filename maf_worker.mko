@@ -148,7 +148,7 @@ fn maf_worker_bootstrap(db: SqlDB) -> int {
     // Webhook registrations for push-based event delivery
     let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS maf_webhooks (webhook_id SERIAL PRIMARY KEY, tenant_id TEXT NOT NULL, url TEXT NOT NULL, events_json JSONB NOT NULL DEFAULT '[]'::jsonb, secret TEXT NOT NULL DEFAULT '', enabled BOOLEAN DEFAULT true, created_at TIMESTAMP DEFAULT NOW())")
     // Number intelligence for carrier/spam lookups
-    let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS number_intelligence (number TEXT PRIMARY KEY, carrier TEXT DEFAULT '', type TEXT DEFAULT '', country TEXT DEFAULT '', spam_score INT DEFAULT 0, updated_at TIMESTAMP DEFAULT NOW())")
+    let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS number_intelligence (number TEXT NOT NULL, tenant_id TEXT NOT NULL DEFAULT 'default', carrier TEXT DEFAULT '', type TEXT DEFAULT '', country TEXT DEFAULT '', spam_score INT DEFAULT 0, updated_at TIMESTAMP DEFAULT NOW(), PRIMARY KEY (tenant_id, number))")
     // Scheduled calls for time-delayed origination
     let _ = sql_exec_plain(db, "CREATE TABLE IF NOT EXISTS maf_scheduled_calls (schedule_id SERIAL PRIMARY KEY, tenant_id TEXT NOT NULL, from_uri TEXT NOT NULL, to_uri TEXT NOT NULL, scheduled_at TIMESTAMP NOT NULL, application_data JSONB DEFAULT '{}'::jsonb, status TEXT DEFAULT 'pending', call_id TEXT DEFAULT '', created_at TIMESTAMP DEFAULT NOW())")
     let _ = sql_exec_plain(db, "CREATE INDEX IF NOT EXISTS idx_maf_scheduled_calls_pending ON maf_scheduled_calls (tenant_id, status, scheduled_at)")

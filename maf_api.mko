@@ -1633,6 +1633,8 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         let tenant = maf_api_tenant()
         let cfg_del_key = path[len("/admin/api/v1/maf/config/"):]
         if len(cfg_del_key) == 0 || len(cfg_del_key) > 128 { return maf_api_error(400, "invalid key") }
+        let maf_cfg_ok = str_has_prefix(cfg_del_key, "rtpengine_") || str_has_prefix(cfg_del_key, "security_") || str_has_prefix(cfg_del_key, "stir_shaken_enabled") || str_has_prefix(cfg_del_key, "stir_shaken_attestation") || str_has_prefix(cfg_del_key, "stir_shaken_cert_url") || str_has_prefix(cfg_del_key, "stir_shaken_mode") || str_has_prefix(cfg_del_key, "sip_realm") || str_has_prefix(cfg_del_key, "sip_rate_limit") || str_has_prefix(cfg_del_key, "sip_invite_rate_limit") || str_has_prefix(cfg_del_key, "sip_register_rate_limit") || str_has_prefix(cfg_del_key, "sip_max_message_size") || str_has_prefix(cfg_del_key, "sip_fraud_prefixes") || str_has_prefix(cfg_del_key, "sip_scanner_ua_list") || str_has_prefix(cfg_del_key, "sip_emergency") || str_has_prefix(cfg_del_key, "sip_digest_algorithm") || str_has_prefix(cfg_del_key, "sip_session_timer") || str_has_prefix(cfg_del_key, "sip_max_reg_expires") || str_has_prefix(cfg_del_key, "sip_min_expires") || str_has_prefix(cfg_del_key, "sip_user_rate_limit") || str_has_prefix(cfg_del_key, "sip_conn_idle_timeout") || str_has_prefix(cfg_del_key, "sip_per_ip_conn_limit") || str_has_prefix(cfg_del_key, "sip_call_state_capacity") || str_has_prefix(cfg_del_key, "sip_outbound") || str_has_prefix(cfg_del_key, "sip_event_package") || str_has_prefix(cfg_del_key, "sip_tls_reuse") || str_has_prefix(cfg_del_key, "sip_b2bua") || str_has_prefix(cfg_del_key, "sip_cluster") || str_has_prefix(cfg_del_key, "sip_hep_") || str_has_prefix(cfg_del_key, "sip_ims_")
+        if not maf_cfg_ok { return maf_api_error(403, "config key not in MAF allowlist") }
         let _ = sql_exec_str4(db, "DELETE FROM config WHERE key = $1 AND tenant_id = $2", cfg_del_key, tenant, "", "")
         return http_resp(200, "application/json", "{\"ok\":true}\n", "Cache-Control: no-store\r\n")
     }
@@ -1663,6 +1665,25 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         let secret = str_trim_space(json_get_string(body, "secret"))
         if len(url) == 0 || len(url) > 512 { return maf_api_error(400, "url required (max 512 chars)") }
         if not str_has_prefix(url, "https://") { return maf_api_error(400, "url must use https") }
+        // Block webhooks to private/internal IPs (SSRF protection)
+        let wh_after = url[8:]
+        let wh_slash = str_index(wh_after, "/")
+        let wh_host = if wh_slash >= 0 { wh_after[0:wh_slash] } else { wh_after }
+        let wh_colon = str_index(wh_host, ":")
+        let wh_hostname = if wh_colon >= 0 { wh_host[0:wh_colon] } else { wh_host }
+        if str_has_prefix(wh_hostname, "10.") || str_has_prefix(wh_hostname, "192.168.") || str_has_prefix(wh_hostname, "127.") || str_has_prefix(wh_hostname, "169.254.") || str_eq(wh_hostname, "localhost") || str_has_prefix(wh_hostname, "0.") {
+            return maf_api_error(400, "webhook URL must not target private addresses")
+        }
+        // 172.16-31 private range
+        if str_has_prefix(wh_hostname, "172.") {
+            let wh_dot2 = str_index(wh_hostname[4:], ".")
+            if wh_dot2 > 0 {
+                match parse_int(wh_hostname[4:4 + wh_dot2]) {
+                    Ok(v) => { if v >= 16 && v <= 31 { return maf_api_error(400, "webhook URL must not target private addresses") } }
+                    Err(_) => {}
+                }
+            }
+        }
         if len(events) == 0 { events = "[]" }
         if len(secret) > 256 { return maf_api_error(400, "secret too long (max 256)") }
         let tenant = maf_api_tenant()
@@ -1721,7 +1742,8 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         if ok == 0 { return maf_api_error(503, "database unavailable") }
         let number = path[len("/admin/api/v1/maf/number/"):]
         if len(number) == 0 || len(number) > 32 { return maf_api_error(400, "invalid number") }
-        let result = sql_query_str2(db, "SELECT json_build_object('number',number,'carrier',carrier,'type',type,'country',country,'spam_score',spam_score,'updated_at',updated_at)::text FROM number_intelligence WHERE number = $1", number, "")
+        let tenant = maf_api_tenant()
+        let result = sql_query_str2(db, "SELECT json_build_object('number',number,'carrier',carrier,'type',type,'country',country,'spam_score',spam_score,'updated_at',updated_at)::text FROM number_intelligence WHERE number = $1 AND tenant_id = $2", number, tenant)
         if len(result) == 0 { return maf_api_error(404, "number not found") }
         return http_resp(200, "application/json", result + "\n", "Cache-Control: no-store\r\n")
     }
@@ -1742,8 +1764,9 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         let mut spam_score = 0
         if len(spam_str) > 0 { match parse_int(spam_str) { Ok(v) => { spam_score = v } Err(_) => {} } }
         if spam_score < 0 || spam_score > 100 { return maf_api_error(400, "spam_score must be 0-100") }
-        let packed = "{\"number\":\"" + maf_api_json_escape(number) + "\",\"carrier\":\"" + maf_api_json_escape(carrier) + "\",\"type\":\"" + maf_api_json_escape(ntype) + "\",\"country\":\"" + maf_api_json_escape(country) + "\",\"spam_score\":" + string(spam_score) + "}"
-        let rc = sql_exec_str4(db, "INSERT INTO number_intelligence (number, carrier, type, country, spam_score, updated_at) VALUES ($1::jsonb->>'number', $1::jsonb->>'carrier', $1::jsonb->>'type', $1::jsonb->>'country', ($1::jsonb->>'spam_score')::int, NOW()) ON CONFLICT (number) DO UPDATE SET carrier = EXCLUDED.carrier, type = EXCLUDED.type, country = EXCLUDED.country, spam_score = EXCLUDED.spam_score, updated_at = NOW()", packed, "", "", "")
+        let tenant = maf_api_tenant()
+        let packed = "{\"number\":\"" + maf_api_json_escape(number) + "\",\"tenant_id\":\"" + maf_api_json_escape(tenant) + "\",\"carrier\":\"" + maf_api_json_escape(carrier) + "\",\"type\":\"" + maf_api_json_escape(ntype) + "\",\"country\":\"" + maf_api_json_escape(country) + "\",\"spam_score\":" + string(spam_score) + "}"
+        let rc = sql_exec_str4(db, "INSERT INTO number_intelligence (number, tenant_id, carrier, type, country, spam_score, updated_at) VALUES ($1::jsonb->>'number', $1::jsonb->>'tenant_id', $1::jsonb->>'carrier', $1::jsonb->>'type', $1::jsonb->>'country', ($1::jsonb->>'spam_score')::int, NOW()) ON CONFLICT (tenant_id, number) DO UPDATE SET carrier = EXCLUDED.carrier, type = EXCLUDED.type, country = EXCLUDED.country, spam_score = EXCLUDED.spam_score, updated_at = NOW()", packed, "", "", "")
         if rc < 0 { return maf_api_error(500, "upsert failed") }
         return http_resp(201, "application/json", "{\"ok\":true,\"number\":\"" + maf_api_json_escape(number) + "\"}\n", "Cache-Control: no-store\r\n")
     }
@@ -1994,7 +2017,7 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
     // POST /admin/api/v1/maf/routing/intelligence/record — manually record outcome
     if kind == 90 {
         let scope = maf_api_scope(raw, n)
-        if scope < 1 { return maf_api_error(401, "authentication required") }
+        if scope < 2 { return maf_api_error(if scope == 0 { 401 } else { 403 }, "write scope required") }
         let body = http_body(raw, n)
         let gw = json_get_string(body, "gateway")
         let pfx = json_get_string(body, "prefix")
