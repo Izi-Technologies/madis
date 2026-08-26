@@ -53,6 +53,10 @@ Use long, random values for every token. The installer generates these credentia
 | `SIP_DIGEST_ALGORITHM` | `md5` | Digest profile; SHA-256 profiles are supported by the authentication layer. |
 | `SIP_USER_RATE_LIMIT` | `100` | Bounded per-user security/rate policy value. |
 | `SIP_LOG_LEVEL` | `info` | Log verbosity: `error`, `warn`, `info`, `debug`. All log calls are cache-gated; zero overhead when the level is below the threshold. Changeable at runtime via `POST /maf/log-level`. |
+| `SIP_STATELESS_OPTIONS` | `0` | When `1`, reply to OPTIONS without creating a transaction. Reduces overhead for keepalive probes. |
+| `SIP_MAF_MAX_ACTIVE_CALLS` | `0` | Global active-call ceiling for MAF-originated calls. `0` = unlimited. |
+| `SIP_HOST` | — | Fallback hostname when `SIP_PUBLIC_IP` is not set. |
+| `SIP_PORT` | — | Fallback port alias. |
 
 ## Worker HTTP and WebUI
 
@@ -278,6 +282,9 @@ Additional IMS control env:
 | `SIP_IMS_PATH_DYNAMIC` | `0` | P-CSCF flow tokens + dynamic Path |
 | `SIP_IMS_FLOW_KEEPALIVE_S` | `120` | Flow lifetime bound |
 | `SIP_IMS_3PREG` | `0` | Third-party REGISTER to AS targets |
+| `SIP_IMS_3PREG_TIMEOUT_MS` | `5000` | Timeout for third-party REGISTER delivery |
+| `SIP_IMS_FLOW_CAPACITY` | `16384` | Maximum flow token entries in the P-CSCF cache |
+| `SIP_IMS_IPSEC_PORT_S` | `5061` | IPsec server port for SA export |
 | `SIP_RTPENGINE_NODES` | empty | Multi-node `host:port,...` control list |
 | `SIP_RTPENGINE_FLAGS` | empty | Optional ng policy flags string |
 | `SIP_DRAIN` | `0` | Reject new REGISTER/initial INVITE |
@@ -374,3 +381,114 @@ A full queue, socket error, or collector outage drops HEP capture only and
 does not change SIP responses or transaction handling. There are no retries or
 collector acknowledgements, so HEP is not durable recording. Use a local or
 nearby collector and scale collectors independently.
+
+## Deployment scenario templates
+
+### Basic SIP proxy (carrier trunk + phones)
+
+```sh
+SIP_DB_URL='postgres://madis:secret@db:5432/madis'
+SIP_BIND_IP=0.0.0.0
+SIP_UDP_PORT=5060
+SIP_TLS_PORT=5061
+SIP_REALM=example.net
+SIP_NODE_ID=proxy-1
+SIP_PUBLIC_IP=203.0.113.10
+SIP_ADMIN_PORT=9090
+SIP_UDP_WORKERS=4
+SIP_TCP_WORKERS=2
+SIP_LOG_LEVEL=info
+```
+
+### WebRTC gateway (SIP.js/JsSIP)
+
+```sh
+SIP_DB_URL='postgres://madis:secret@db:5432/madis'
+SIP_BIND_IP=0.0.0.0
+SIP_UDP_PORT=5060
+SIP_TLS_PORT=5061
+SIP_WSS_PORT=8443
+SIP_WSS_WORKERS=4
+SIP_TLS_CERT=/etc/madis/tls/cert.pem
+SIP_TLS_KEY=/etc/madis/tls/key.pem
+SIP_REALM=example.net
+SIP_PUBLIC_IP=203.0.113.10
+SIP_RTPENGINE_ENABLED=1
+SIP_RTPENGINE_HOST=10.0.1.50
+SIP_RTPENGINE_PORT=2223
+```
+
+### IMS S-CSCF with HSS
+
+```sh
+SIP_DB_URL='postgres://madis:secret@db:5432/madis'
+SIP_BIND_IP=0.0.0.0
+SIP_UDP_PORT=5060
+SIP_TLS_PORT=5061
+SIP_REALM=ims.example.net
+SIP_NODE_ID=scscf-1
+SIP_IMS_ROLE=scscf
+SIP_IMS_CX=1
+SIP_IMS_AKA=1
+SIP_IMS_AKA_SCHEME=Digest-AKAv1-MD5
+SIP_IMS_SERVER_NAME=sip:scscf.ims.example.net
+SIP_IMS_VISITED_NETWORK=ims.example.net
+SIP_DIAMETER_HOST=hss.ims.example.net
+SIP_DIAMETER_PORT=3868
+SIP_DIAMETER_TLS=1
+SIP_DIAMETER_ORIGIN_HOST=scscf.ims.example.net
+SIP_DIAMETER_ORIGIN_REALM=ims.example.net
+SIP_DIAMETER_DEST_REALM=ims.example.net
+```
+
+### MAF-controlled programmable proxy
+
+```sh
+SIP_DB_URL='postgres://madis:secret@db:5432/madis'
+SIP_BIND_IP=0.0.0.0
+SIP_UDP_PORT=5060
+SIP_REALM=example.net
+SIP_PUBLIC_IP=203.0.113.10
+SIP_MAF_INBOUND_MODE=route
+SIP_MAF_API_TOKEN=<write-token>
+SIP_MAF_API_READ_TOKEN=<read-token>
+SIP_MAF_TENANT=default
+SIP_ADMIN_PORT=9090
+```
+
+### High-CPS carrier with STIR/SHAKEN
+
+```sh
+SIP_DB_URL='postgres://madis:secret@db:5432/madis'
+SIP_BIND_IP=0.0.0.0
+SIP_UDP_PORT=5060
+SIP_UDP_WORKERS=8
+SIP_TCP_WORKERS=4
+SIP_TLS_WORKERS=4
+SIP_REALM=carrier.example.net
+SIP_PUBLIC_IP=203.0.113.10
+SIP_CALL_STATE_CAPACITY=1048576
+STIR_SHAKEN_ENABLED=true
+STIR_SHAKEN_MODE=es256
+STIR_SHAKEN_CERT_URL=https://certs.example.net/sti.pem
+STIR_SHAKEN_PRIVATE_KEY=/etc/madis/sti-key.pem
+STIR_SHAKEN_ATTESTATION=A
+SIP_RTPENGINE_ENABLED=1
+SIP_RTPENGINE_NODES=rtp1.example.net:2223,rtp2.example.net:2223
+SIP_LOG_LEVEL=warn
+```
+
+### Multi-node cluster
+
+```sh
+# Same on all nodes, different SIP_NODE_ID
+SIP_DB_URL='postgres://madis:secret@db:5432/madis'
+SIP_NODE_ID=edge-1          # edge-2, edge-3, etc.
+SIP_NODE_ADDR=10.0.1.11     # per-node
+SIP_REGION=us-east
+SIP_CLUSTER_CALLS=1
+SIP_BIND_IP=0.0.0.0
+SIP_UDP_PORT=5060
+SIP_REALM=example.net
+SIP_PUBLIC_IP=203.0.113.10  # VIP or per-node
+```
