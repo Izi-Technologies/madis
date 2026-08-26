@@ -1169,6 +1169,30 @@ GET    /admin/api/v1/maf/users                            — list users
 POST   /admin/api/v1/maf/users                           — create/update user
 DELETE /admin/api/v1/maf/users/{id}                       — disable user
 POST   /admin/api/v1/maf/log-level                       — set log level
+DELETE /admin/api/v1/maf/gateways/{id}                    — delete gateway
+DELETE /admin/api/v1/maf/dids/{id}                        — delete DID
+DELETE /admin/api/v1/maf/dispatch-sets/{id}               — delete dispatch set
+DELETE /admin/api/v1/maf/config/{key}                     — delete config key
+GET    /admin/api/v1/maf/health                           — health check
+POST   /admin/api/v1/maf/reload                          — force config reload
+POST   /admin/api/v1/maf/webhooks                        — register webhook
+GET    /admin/api/v1/maf/webhooks                         — list webhooks
+DELETE /admin/api/v1/maf/webhooks/{id}                    — delete webhook
+POST   /admin/api/v1/maf/calls/{call_id}/tags             — tag a call
+GET    /admin/api/v1/maf/number/{number}                  — number intelligence lookup
+POST   /admin/api/v1/maf/number                          — upsert number intelligence
+POST   /admin/api/v1/maf/calls/{call_id}/flow             — set call flow
+POST   /admin/api/v1/maf/scheduled-calls                 — schedule a call
+GET    /admin/api/v1/maf/scheduled-calls                  — list scheduled calls
+DELETE /admin/api/v1/maf/scheduled-calls/{id}             — cancel scheduled call
+POST   /admin/api/v1/maf/queues                          — create queue
+GET    /admin/api/v1/maf/queues                           — list queues
+POST   /admin/api/v1/maf/queues/{id}/members             — add queue member
+DELETE /admin/api/v1/maf/queues/{id}/members/{mid}        — remove queue member
+POST   /admin/api/v1/maf/conferences                     — create conference
+GET    /admin/api/v1/maf/conferences                      — list conferences
+GET    /admin/api/v1/maf/routing/intelligence              — gateway quality scores
+POST   /admin/api/v1/maf/routing/intelligence/record      — record routing outcome
 GET    /admin/api/v1/maf/dialplans                        — list dialplans
 POST   /admin/api/v1/maf/dialplans                       — create dialplan
 DELETE /admin/api/v1/maf/dialplans/{id}                   — delete dialplan

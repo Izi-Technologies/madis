@@ -730,6 +730,45 @@ export class MadisMaf {
     return this.request("POST", `${API}/conferences`, { name, pin, max_participants: maxParticipants, record });
   }
 
+  // --- Webhooks ---
+
+  async webhooks(): Promise<Record<string, unknown>> {
+    return this.request("GET", `${API}/webhooks`);
+  }
+  async createWebhook(url: string, events?: string[], secret = ""): Promise<Record<string, unknown>> {
+    const body: Record<string, unknown> = { url };
+    if (events !== undefined) body.events = events;
+    if (secret) body.secret = secret;
+    return this.request("POST", `${API}/webhooks`, body);
+  }
+  async deleteWebhook(webhookId: number): Promise<Record<string, unknown>> {
+    return this.request("DELETE", `${API}/webhooks/${webhookId}`);
+  }
+
+  // --- Call Tags ---
+
+  async tagCall(callId: string, tags: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.request("POST", `${API}/calls/${encPath(callId)}/tags`, { tags });
+  }
+
+  // --- Number Intelligence ---
+
+  async numberLookup(number: string): Promise<Record<string, unknown>> {
+    return this.request("GET", `${API}/number/${encPath(number)}`);
+  }
+  async upsertNumber(number: string, carrier = "", numberType = "", country = "", spamScore = 0): Promise<Record<string, unknown>> {
+    return this.request("POST", `${API}/number`, { number, carrier, type: numberType, country, spam_score: spamScore });
+  }
+
+  // --- Routing Intelligence ---
+
+  async routingIntelligence(): Promise<Record<string, unknown>> {
+    return this.request("GET", `${API}/routing/intelligence`);
+  }
+  async recordRoutingOutcome(gateway: string, prefix: string, answered: boolean, durationSec = 0, pddMs = 0): Promise<Record<string, unknown>> {
+    return this.request("POST", `${API}/routing/intelligence/record`, { gateway, prefix, answered, duration_sec: durationSec, pdd_ms: pddMs });
+  }
+
   async identity(
     callId: string,
     action: string,

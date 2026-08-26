@@ -179,6 +179,31 @@ export class MadisMaf {
   conferences() { return this.request("GET", "/api/v1/maf/conferences"); }
   createConference(name, pin = "", maxParticipants = 10, record = false) { return this.request("POST", "/api/v1/maf/conferences", { name, pin, max_participants: maxParticipants, record }); }
 
+  // --- Webhooks ---
+  webhooks() { return this.request("GET", "/api/v1/maf/webhooks"); }
+  createWebhook(url, events, secret = "") {
+    const body = { url };
+    if (events !== undefined) body.events = events;
+    if (secret) body.secret = secret;
+    return this.request("POST", "/api/v1/maf/webhooks", body);
+  }
+  deleteWebhook(webhookId) { return this.request("DELETE", `/api/v1/maf/webhooks/${webhookId}`); }
+
+  // --- Call Tags ---
+  tagCall(callId, tags) { return this.request("POST", this.callPath(callId, "/tags"), { tags }); }
+
+  // --- Number Intelligence ---
+  numberLookup(number) { return this.request("GET", `/api/v1/maf/number/${encodeURIComponent(number)}`); }
+  upsertNumber(number, carrier = "", numberType = "", country = "", spamScore = 0) {
+    return this.request("POST", "/api/v1/maf/number", { number, carrier, type: numberType, country, spam_score: spamScore });
+  }
+
+  // --- Routing Intelligence ---
+  routingIntelligence() { return this.request("GET", "/api/v1/maf/routing/intelligence"); }
+  recordRoutingOutcome(gateway, prefix, answered, durationSec = 0, pddMs = 0) {
+    return this.request("POST", "/api/v1/maf/routing/intelligence/record", { gateway, prefix, answered, duration_sec: durationSec, pdd_ms: pddMs });
+  }
+
   identity(callId, action, identity, attest, key) {
     const body = { action };
     if (identity !== undefined) body.identity = identity;

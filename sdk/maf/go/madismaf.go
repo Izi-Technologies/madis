@@ -576,6 +576,49 @@ func (c *Client) CreateConference(ctx context.Context, name, pin string, maxPart
 	return c.request(ctx, "POST", "/api/v1/maf/conferences", map[string]any{"name": name, "pin": pin, "max_participants": maxParticipants, "record": record}, nil, "")
 }
 
+// --- Webhooks ---
+
+func (c *Client) Webhooks(ctx context.Context) (map[string]any, error) {
+	return c.request(ctx, "GET", "/api/v1/maf/webhooks", nil, nil, "")
+}
+func (c *Client) CreateWebhook(ctx context.Context, url string, events []string, secret string) (map[string]any, error) {
+	body := map[string]any{"url": url}
+	if events != nil {
+		body["events"] = events
+	}
+	if secret != "" {
+		body["secret"] = secret
+	}
+	return c.request(ctx, "POST", "/api/v1/maf/webhooks", body, nil, "")
+}
+func (c *Client) DeleteWebhook(ctx context.Context, webhookID int) (map[string]any, error) {
+	return c.request(ctx, "DELETE", fmt.Sprintf("/api/v1/maf/webhooks/%d", webhookID), nil, nil, "")
+}
+
+// --- Call Tags ---
+
+func (c *Client) TagCall(ctx context.Context, callID string, tags map[string]any) (map[string]any, error) {
+	return c.request(ctx, "POST", callPath(callID, "/tags"), map[string]any{"tags": tags}, nil, "")
+}
+
+// --- Number Intelligence ---
+
+func (c *Client) NumberLookup(ctx context.Context, number string) (map[string]any, error) {
+	return c.request(ctx, "GET", "/api/v1/maf/number/"+url.PathEscape(number), nil, nil, "")
+}
+func (c *Client) UpsertNumber(ctx context.Context, number, carrier, numberType, country string, spamScore int) (map[string]any, error) {
+	return c.request(ctx, "POST", "/api/v1/maf/number", map[string]any{"number": number, "carrier": carrier, "type": numberType, "country": country, "spam_score": spamScore}, nil, "")
+}
+
+// --- Routing Intelligence ---
+
+func (c *Client) RoutingIntelligence(ctx context.Context) (map[string]any, error) {
+	return c.request(ctx, "GET", "/api/v1/maf/routing/intelligence", nil, nil, "")
+}
+func (c *Client) RecordRoutingOutcome(ctx context.Context, gateway, prefix string, answered bool, durationSec, pddMs int) (map[string]any, error) {
+	return c.request(ctx, "POST", "/api/v1/maf/routing/intelligence/record", map[string]any{"gateway": gateway, "prefix": prefix, "answered": answered, "duration_sec": durationSec, "pdd_ms": pddMs}, nil, "")
+}
+
 func (c *Client) Identity(ctx context.Context, callID, action, identity, attest, idem string) (map[string]any, error) {
 	body := map[string]any{"action": action}
 	if identity != "" {

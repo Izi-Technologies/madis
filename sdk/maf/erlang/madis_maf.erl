@@ -42,6 +42,10 @@
          scheduled_calls/2, schedule_call/3, cancel_scheduled_call/3,
          queues/2, create_queue/3, add_queue_member/5, remove_queue_member/4,
          conferences/2, create_conference/3,
+         webhooks/2, create_webhook/3, delete_webhook/3,
+         tag_call/4,
+         number_lookup/3, upsert_number/3,
+         routing_intelligence/2, record_routing_outcome/3,
          events/2, events/3, events/4, events/5,
          ws_url/4]).
 
@@ -408,6 +412,38 @@ conferences(Base, Token) ->
 
 create_conference(Base, Token, Json) ->
     request(Base, Token, post, "/api/v1/maf/conferences", Json, none).
+
+%% --- Webhooks ---
+
+webhooks(Base, Token) ->
+    request(Base, Token, get, "/api/v1/maf/webhooks", none).
+
+create_webhook(Base, Token, Json) ->
+    request(Base, Token, post, "/api/v1/maf/webhooks", Json, none).
+
+delete_webhook(Base, Token, WebhookId) ->
+    request(Base, Token, delete, "/api/v1/maf/webhooks/" ++ integer_to_list(WebhookId), none).
+
+%% --- Call Tags ---
+
+tag_call(Base, Token, CallId, Json) ->
+    request(Base, Token, post, call_path(CallId) ++ "/tags", Json, none).
+
+%% --- Number Intelligence ---
+
+number_lookup(Base, Token, Number) ->
+    request(Base, Token, get, "/api/v1/maf/number/" ++ uri_string:percent_encode(Number, uri_string:urlchar_reserved()), none).
+
+upsert_number(Base, Token, Json) ->
+    request(Base, Token, post, "/api/v1/maf/number", Json, none).
+
+%% --- Routing Intelligence ---
+
+routing_intelligence(Base, Token) ->
+    request(Base, Token, get, "/api/v1/maf/routing/intelligence", none).
+
+record_routing_outcome(Base, Token, Json) ->
+    request(Base, Token, post, "/api/v1/maf/routing/intelligence/record", Json, none).
 
 identity(Base, Token, CallId, Json) ->
     identity(Base, Token, CallId, Json, none).
