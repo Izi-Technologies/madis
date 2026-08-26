@@ -671,7 +671,10 @@ curl "$MAF_BASE_URL/api/v1/maf/cluster" \
 Returns all cluster nodes with ID, address, port, region, status
 (`active`/`stale`), last heartbeat, and start time.
 
-### Runtime config
+### Runtime config — programmable proxy behavior
+
+Operators configure Madis entirely through the MAF API. Config changes take
+effect within 5 seconds via the heartbeat DB sync — no restart needed.
 
 ```sh
 # Read all config
@@ -682,13 +685,113 @@ curl "$MAF_BASE_URL/api/v1/maf/config" \
 curl -X POST "$MAF_BASE_URL/api/v1/maf/config" \
   -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
   -H "Content-Type: application/json" \
-  --data '{"key":"security_max_auth_failures","value":"10","description":"Raised threshold"}'
+  --data '{"key":"sip_invite_rate_limit","value":"50"}'
 ```
 
-Config writes use an **allowlist** — only these key prefixes can be set via MAF:
-- `rtpengine_*` — RTPEngine configuration
-- `security_*` — security thresholds, ban durations
-- `stir_shaken_enabled`, `stir_shaken_attestation`, `stir_shaken_cert_url`, `stir_shaken_mode`
+**Configurable at runtime via MAF (no restart):**
+
+| Category | Keys | Examples |
+| --- | --- | --- |
+| Rate limits | `sip_rate_limit`, `sip_invite_rate_limit`, `sip_register_rate_limit`, `sip_user_rate_limit` | Per-IP and per-method throttling |
+| Security | `security_*` | Auth failure threshold, ban duration, whitelist IPs |
+| Fraud | `sip_fraud_prefixes` | Comma-separated premium/IRSF prefixes |
+| Scanners | `sip_scanner_ua_list` | Comma-separated scanner User-Agent substrings |
+| Emergency | `sip_emergency_*` | Emergency numbers, E-CSCF target |
+| Registration | `sip_max_reg_expires`, `sip_min_expires` | Registration expiry bounds |
+| Capacity | `sip_call_state_capacity`, `sip_per_ip_conn_limit`, `sip_conn_idle_timeout`, `sip_max_message_size` | Call and connection limits |
+| Media | `rtpengine_*` | RTPEngine host/port/flags/profile |
+| STIR/SHAKEN | `stir_shaken_enabled`, `stir_shaken_attestation`, `stir_shaken_cert_url`, `stir_shaken_mode` | Identity signing and verification |
+| Session timers | `sip_session_timer_*` | RFC 4028 session interval bounds |
+| Auth | `sip_digest_algorithm` | Digest authentication profile |
+| Features | `sip_outbound`, `sip_event_package*`, `sip_tls_reuse`, `sip_b2bua`, `sip_cluster*`, `sip_drain` | Feature toggles |
+| IMS | `sip_ims_*` | All IMS configuration |
+| HEP | `sip_hep_*` | HEP capture settings |
+| Apps/modules | `sip_app_*`, `sip_module_*` | External application and module endpoints |
+
+**Not changeable at runtime (requires restart):**
+bind IP, ports, worker counts, TLS cert/key paths, DB URLs, private keys.
+
+#### SDK examples
+
+```python
+# Python — configure a carrier's rate limits and fraud protection
+client = MadisMaf("https://proxy.example.net/admin", token)
+client.set_config("sip_invite_rate_limit", "30")
+client.set_config("sip_register_rate_limit", "5")
+client.set_config("sip_fraud_prefixes", "+900,+809,+870,+881")
+client.set_config("sip_scanner_ua_list", "sipvicious,friendly-scanner")
+client.set_config("sip_max_reg_expires", "1800")
+```
+
+```typescript
+// TypeScript — enable STIR/SHAKEN for a deployment
+await client.setConfig("stir_shaken_enabled", "true");
+await client.setConfig("stir_shaken_mode", "es256");
+await client.setConfig("stir_shaken_cert_url", "https://certs.example.com/sti.pem");
+await client.setConfig("stir_shaken_attestation", "A");
+```
+
+```go
+// Go — configure RTPEngine and enable features
+client.SetConfig(ctx, "rtpengine_enabled", "true", "")
+client.SetConfig(ctx, "rtpengine_host", "10.0.1.50", "")
+client.SetConfig(ctx, "rtpengine_port", "2223", "")
+client.SetConfig(ctx, "sip_event_packages", "1", "")
+client.SetConfig(ctx, "sip_b2bua", "1", "")
+```
+
+#### Full programmable proxy example
+
+A complete operator setup using only the SDK — no config files, no restarts:
+
+```python
+from madis_maf import MadisMaf
+
+client = MadisMaf("https://proxy.example.net/admin", "write-token-here")
+
+# 1. Configure the proxy
+client.set_config("sip_invite_rate_limit", "100")
+client.set_config("sip_register_rate_limit", "20")
+client.set_config("sip_fraud_prefixes", "+900,+809")
+client.set_config("stir_shaken_enabled", "true")
+client.set_config("stir_shaken_mode", "es256")
+client.set_config("rtpengine_enabled", "true")
+client.set_config("rtpengine_host", "10.0.1.50")
+
+# 2. Add infrastructure
+client.create_gateway("carrier-a", "10.0.1.100", 5060, "UDP")
+client.create_gateway("carrier-b", "10.0.2.100", 5060, "UDP")
+client.create_dispatch_set("us-carriers", "round-robin")
+client.create_dispatch_member(dispatch_set_id=1, gateway_id=1, weight=100)
+client.create_dispatch_member(dispatch_set_id=1, gateway_id=2, weight=50)
+
+# 3. Add routing
+client.create_routing_rule(action="dispatch:us-carriers", match_prefix="+1", priority=5)
+client.create_routing_rule(action="reject:403:Blocked", match_prefix="+900", priority=1)
+client.create_dialplan(match_prefix="+1", callee_action="strip:1", direction="outbound")
+
+# 4. Add DIDs and users
+client.create_did("+15551234567", "alice")
+client.create_did("+15559876543", "bob")
+client.create_user("alice", "alice-secret")
+client.create_user("bob", "bob-secret")
+
+# 5. Add IP auth for carrier trunks
+client.create_ip_auth("10.0.1.100", description="Carrier A trunk")
+client.create_ip_auth("10.0.2.100", description="Carrier B trunk")
+
+# 6. Add access control
+client.create_access_control("allow", "10.0.0.0/8", description="Internal")
+client.create_access_control("deny", "192.0.2.0/24", description="Known bad range")
+
+# 7. Monitor
+for event in client.subscribe(event_type="call.created"):
+    print(f"New call: {event['payload']}")
+```
+
+This replaces config files entirely. Each carrier runs the same Madis binary
+with different SDK-driven configuration. The proxy is a programmable platform,
+not a config-file appliance.
 
 All other keys (TLS paths, credentials, DB URLs, private keys) are blocked
 with `403`.
