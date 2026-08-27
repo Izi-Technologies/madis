@@ -1,0 +1,398 @@
+// Madis MAF SDK for Weft
+// Bearer-authenticated HTTP client for the MADIS Application Fabric.
+// Usage:
+//   use "madis_maf" as maf
+//   client := maf.new("https://proxy.example.net/admin", "your-token")
+//   call := client.create_call("sip:alice@example.net", "sip:bob@example.net")?
+
+MAF_VERSION := "0.7.3"
+MAX_BODY := 65536
+
+fn new(base_url, token) -> Result {
+    if !str.has_prefix(base_url, "http://") && !str.has_prefix(base_url, "https://") {
+        return Err("base_url must use HTTP or HTTPS")
+    }
+    if len(token) < 16 || len(token) > 512 {
+        return Err("MAF token must be 16..512 characters")
+    }
+    Ok({
+        "base_url": str.trim_suffix(base_url, "/"),
+        "token": token,
+    })
+}
+
+fn _headers(client) {
+    {
+        "Authorization": "Bearer " + client.token,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "X-MAF-Version": MAF_VERSION,
+    }
+}
+
+fn _key {
+    str.slice(str.replace(str.replace(string(rand.float()), "0.", ""), ".", ""), 0, 16) + "-" + string(time.unix_ms())
+}
+
+fn _request(client, method, path, body, idem_key) -> Result {
+    url := client.base_url + path
+    mut headers := _headers(client)
+    if idem_key != null && idem_key != "" {
+        headers["Idempotency-Key"] = idem_key
+    }
+    opts := {"headers": headers, "timeout": 10}
+    mut res := null
+    match method {
+        "GET" { res = http.fetch(url, {"method": "GET", "headers": headers, "timeout": 10})? }
+        "POST" {
+            payload := if body != null { json.stringify(body) } else { "{}" }
+            if len(payload) > MAX_BODY { return Err("body exceeds 64KB") }
+            res = http.fetch(url, {"method": "POST", "headers": headers, "body": payload, "timeout": 10})?
+        }
+        "PUT" {
+            payload := if body != null { json.stringify(body) } else { "{}" }
+            res = http.fetch(url, {"method": "PUT", "headers": headers, "body": payload, "timeout": 10})?
+        }
+        "DELETE" { res = http.fetch(url, {"method": "DELETE", "headers": headers, "timeout": 10})? }
+        _ { return Err("unsupported method: " + method) }
+    }
+    if res.status >= 400 {
+        return Err("MAF " + string(res.status) + ": " + str.slice(res.body, 0, 200))
+    }
+    if res.body != null && len(res.body) > 0 {
+        return json.parse(res.body)
+    }
+    Ok({})
+}
+
+fn _command(client, path, body, idem_key) -> Result {
+    key := if idem_key != null && idem_key != "" { idem_key } else { _key() }
+    mut b := if body != null { body } else { {} }
+    if b["command_id"] == null { b["command_id"] = key }
+    _request(client, "POST", path, b, key)
+}
+
+fn _call_path(call_id, suffix) {
+    "/api/v1/maf/calls/" + call_id + suffix
+}
+
+// === Call lifecycle ===
+
+fn create_call(client, from_uri, to_uri, app_data, idem_key) -> Result {
+    mut body := {"from": from_uri, "to": to_uri}
+    if app_data != null { body["application_data"] = app_data }
+    _command(client, "/api/v1/maf/calls", body, idem_key)
+}
+
+fn get_call(client, call_id) -> Result {
+    _request(client, "GET", _call_path(call_id, ""), null, null)
+}
+
+fn answer_call(client, call_id, answer_sdp, idem_key) -> Result {
+    _command(client, _call_path(call_id, "/answer"), {"answer_sdp": answer_sdp}, idem_key)
+}
+
+fn reject_call(client, call_id, sip_code, idem_key) -> Result {
+    mut body := {}
+    if sip_code != null { body["sip_code"] = sip_code }
+    _command(client, _call_path(call_id, "/reject"), body, idem_key)
+}
+
+fn hangup_call(client, call_id, idem_key) -> Result {
+    _command(client, _call_path(call_id, "/hangup"), {}, idem_key)
+}
+
+fn route_call(client, call_id, target, transport, mode, idem_key) -> Result {
+    mut body := {"target": target}
+    if transport != null { body["transport"] = transport }
+    if mode != null { body["mode"] = mode }
+    _command(client, _call_path(call_id, "/route"), body, idem_key)
+}
+
+fn bridge_call(client, call_id, channel_ids, idem_key) -> Result {
+    _command(client, _call_path(call_id, "/bridges"), {"channel_ids": channel_ids}, idem_key)
+}
+
+fn transfer_call(client, call_id, target, transfer_type, other_call_id, idem_key) -> Result {
+    mut body := {"target": target, "type": transfer_type}
+    if other_call_id != null { body["other_call_id"] = other_call_id }
+    _command(client, _call_path(call_id, "/transfer"), body, idem_key)
+}
+
+fn hold_call(client, call_id, idem_key) -> Result {
+    _command(client, _call_path(call_id, "/hold"), {}, idem_key)
+}
+
+fn unhold_call(client, call_id, idem_key) -> Result {
+    _command(client, _call_path(call_id, "/unhold"), {}, idem_key)
+}
+
+fn send_dtmf(client, call_id, digit, duration, idem_key) -> Result {
+    dur := if duration != null { duration } else { 250 }
+    _command(client, _call_path(call_id, "/dtmf"), {"digit": digit, "duration": dur}, idem_key)
+}
+
+fn media(client, call_id, operation, resource, idem_key) -> Result {
+    mut body := {"operation": operation}
+    if resource != null { body["resource"] = resource }
+    _command(client, _call_path(call_id, "/media"), body, idem_key)
+}
+
+fn set_headers(client, call_id, headers, idem_key) -> Result {
+    _command(client, _call_path(call_id, "/headers"), {"headers": headers}, idem_key)
+}
+
+fn rtp_control(client, call_id, action, opts, idem_key) -> Result {
+    mut body := {"action": action}
+    if opts != null {
+        if opts["sdp"] != null { body["sdp"] = opts["sdp"] }
+        if opts["from_tag"] != null { body["from_tag"] = opts["from_tag"] }
+        if opts["to_tag"] != null { body["to_tag"] = opts["to_tag"] }
+        if opts["flags"] != null { body["flags"] = opts["flags"] }
+    }
+    _command(client, _call_path(call_id, "/rtp"), body, idem_key)
+}
+
+fn identity(client, call_id, action, identity_val, attest, idem_key) -> Result {
+    mut body := {"action": action}
+    if identity_val != null { body["identity"] = identity_val }
+    if attest != null { body["attest"] = attest }
+    _command(client, _call_path(call_id, "/identity"), body, idem_key)
+}
+
+fn tag_call(client, call_id, tags) -> Result {
+    _request(client, "POST", _call_path(call_id, "/tags"), {"tags": tags}, null)
+}
+
+fn set_call_flow(client, call_id, steps, idem_key) -> Result {
+    _command(client, _call_path(call_id, "/flow"), {"steps": steps}, idem_key)
+}
+
+fn sip_inspect(client, call_id) -> Result {
+    _request(client, "GET", _call_path(call_id, "/sip"), null, null)
+}
+
+fn charge_authorize(client, call_id) -> Result {
+    _request(client, "POST", _call_path(call_id, "/charge"), null, null)
+}
+
+fn charge_deny(client, call_id) -> Result {
+    _request(client, "POST", _call_path(call_id, "/charge-deny"), null, null)
+}
+
+// === Infrastructure ===
+
+fn registrations(client, aor, limit) -> Result {
+    mut q := "?limit=" + string(if limit != null { limit } else { 100 })
+    if aor != null { q = q + "&aor=" + aor }
+    _request(client, "GET", "/api/v1/maf/registrations" + q, null, null)
+}
+
+fn presence(client, aor) -> Result {
+    if aor != null { return _request(client, "GET", "/api/v1/maf/presence/" + aor, null, null) }
+    _request(client, "GET", "/api/v1/maf/presence", null, null)
+}
+
+fn cdr(client, call_id, limit) -> Result {
+    mut q := "?limit=" + string(if limit != null { limit } else { 50 })
+    if call_id != null { q = q + "&call_id=" + call_id }
+    _request(client, "GET", "/api/v1/maf/cdr" + q, null, null)
+}
+
+fn active_calls(client) -> Result { _request(client, "GET", "/api/v1/maf/calls/active", null, null) }
+fn cluster(client) -> Result { _request(client, "GET", "/api/v1/maf/cluster", null, null) }
+fn config(client) -> Result { _request(client, "GET", "/api/v1/maf/config", null, null) }
+fn set_config(client, key, value) -> Result { _request(client, "POST", "/api/v1/maf/config", {"key": key, "value": value}, null) }
+fn delete_config(client, key) -> Result { _request(client, "DELETE", "/api/v1/maf/config/" + key, null, null) }
+fn health(client) -> Result { _request(client, "GET", "/api/v1/maf/health", null, null) }
+fn reload(client) -> Result { _request(client, "POST", "/api/v1/maf/reload", null, null) }
+fn set_log_level(client, level) -> Result { _request(client, "POST", "/api/v1/maf/log-level", {"level": level}, null) }
+
+// === Gateways ===
+
+fn gateways(client) -> Result { _request(client, "GET", "/api/v1/maf/gateways", null, null) }
+fn create_gateway(client, name, address, port, transport) -> Result {
+    _request(client, "POST", "/api/v1/maf/gateways", {"name": name, "address": address, "port": port, "transport": transport}, null)
+}
+fn delete_gateway(client, id) -> Result { _request(client, "DELETE", "/api/v1/maf/gateways/" + string(id), null, null) }
+
+// === DIDs ===
+
+fn dids(client) -> Result { _request(client, "GET", "/api/v1/maf/dids", null, null) }
+fn create_did(client, number, dest_user, desc) -> Result {
+    _request(client, "POST", "/api/v1/maf/dids", {"number": number, "destination_user": dest_user, "description": desc}, null)
+}
+fn delete_did(client, id) -> Result { _request(client, "DELETE", "/api/v1/maf/dids/" + string(id), null, null) }
+
+// === Dispatch ===
+
+fn dispatch_sets(client) -> Result { _request(client, "GET", "/api/v1/maf/dispatch-sets", null, null) }
+fn create_dispatch_set(client, name, algorithm) -> Result {
+    _request(client, "POST", "/api/v1/maf/dispatch-sets", {"name": name, "algorithm": algorithm}, null)
+}
+fn delete_dispatch_set(client, id) -> Result { _request(client, "DELETE", "/api/v1/maf/dispatch-sets/" + string(id), null, null) }
+fn create_dispatch_member(client, set_id, gw_id, weight, priority) -> Result {
+    _request(client, "POST", "/api/v1/maf/dispatch-members", {"dispatch_set_id": set_id, "gateway_id": gw_id, "weight": weight, "priority": priority}, null)
+}
+fn delete_dispatch_member(client, id) -> Result { _request(client, "DELETE", "/api/v1/maf/dispatch-members/" + string(id), null, null) }
+
+// === Routing ===
+
+fn routing_rules(client) -> Result { _request(client, "GET", "/api/v1/maf/routing/rules", null, null) }
+fn create_routing_rule(client, body) -> Result { _request(client, "POST", "/api/v1/maf/routing/rules", body, null) }
+fn delete_routing_rule(client, id) -> Result { _request(client, "DELETE", "/api/v1/maf/routing/rules/" + string(id), null, null) }
+fn routing_intelligence(client) -> Result { _request(client, "GET", "/api/v1/maf/routing/intelligence", null, null) }
+
+// === Dialplans ===
+
+fn dialplans(client) -> Result { _request(client, "GET", "/api/v1/maf/dialplans", null, null) }
+fn create_dialplan(client, body) -> Result { _request(client, "POST", "/api/v1/maf/dialplans", body, null) }
+fn delete_dialplan(client, id) -> Result { _request(client, "DELETE", "/api/v1/maf/dialplans/" + string(id), null, null) }
+
+// === Security ===
+
+fn bans(client) -> Result { _request(client, "GET", "/api/v1/maf/security/bans", null, null) }
+fn ban_ip(client, source_ip, reason, permanent, duration_min) -> Result {
+    perm := if permanent { "true" } else { "false" }
+    _request(client, "POST", "/api/v1/maf/security/bans", {"source_ip": source_ip, "reason": reason, "permanent": perm, "duration_min": duration_min}, null)
+}
+fn unban_ip(client, source_ip) -> Result { _request(client, "DELETE", "/api/v1/maf/security/bans/" + source_ip, null, null) }
+fn security_events(client) -> Result { _request(client, "GET", "/api/v1/maf/security/events", null, null) }
+
+// === Users ===
+
+fn users(client) -> Result { _request(client, "GET", "/api/v1/maf/users", null, null) }
+fn create_user(client, username, password) -> Result {
+    _request(client, "POST", "/api/v1/maf/users", {"username": username, "password": password}, null)
+}
+fn delete_user(client, id) -> Result { _request(client, "DELETE", "/api/v1/maf/users/" + string(id), null, null) }
+
+// === IP Auth ===
+
+fn ip_auth(client) -> Result { _request(client, "GET", "/api/v1/maf/ip-auth", null, null) }
+fn create_ip_auth(client, ip, desc) -> Result { _request(client, "POST", "/api/v1/maf/ip-auth", {"ip": ip, "description": desc}, null) }
+fn delete_ip_auth(client, id) -> Result { _request(client, "DELETE", "/api/v1/maf/ip-auth/" + string(id), null, null) }
+
+// === Access Control ===
+
+fn access_control(client) -> Result { _request(client, "GET", "/api/v1/maf/access-control", null, null) }
+fn create_access_control(client, rule, source, desc) -> Result {
+    _request(client, "POST", "/api/v1/maf/access-control", {"rule": rule, "source": source, "description": desc}, null)
+}
+fn delete_access_control(client, id) -> Result { _request(client, "DELETE", "/api/v1/maf/access-control/" + string(id), null, null) }
+
+// === Header Rules ===
+
+fn header_rules(client) -> Result { _request(client, "GET", "/api/v1/maf/header-rules", null, null) }
+fn create_header_rule(client, body) -> Result { _request(client, "POST", "/api/v1/maf/header-rules", body, null) }
+fn delete_header_rule(client, id) -> Result { _request(client, "DELETE", "/api/v1/maf/header-rules/" + string(id), null, null) }
+
+// === ANI Groups ===
+
+fn ani_groups(client) -> Result { _request(client, "GET", "/api/v1/maf/ani-groups", null, null) }
+fn create_ani_group(client, name, numbers) -> Result {
+    _request(client, "POST", "/api/v1/maf/ani-groups", {"name": name, "numbers": numbers}, null)
+}
+fn delete_ani_group(client, id) -> Result { _request(client, "DELETE", "/api/v1/maf/ani-groups/" + string(id), null, null) }
+
+// === Billing ===
+
+fn billing_events(client) -> Result { _request(client, "GET", "/api/v1/maf/billing/events", null, null) }
+fn billing_ack(client, event_ids) -> Result { _request(client, "POST", "/api/v1/maf/billing/events/ack", {"event_ids": event_ids}, null) }
+
+// === Number Intelligence ===
+
+fn number_lookup(client, number) -> Result { _request(client, "GET", "/api/v1/maf/number/" + number, null, null) }
+fn upsert_number(client, number, carrier, number_type, country, spam_score) -> Result {
+    _request(client, "POST", "/api/v1/maf/number", {"number": number, "carrier": carrier, "type": number_type, "country": country, "spam_score": spam_score}, null)
+}
+
+// === Webhooks ===
+
+fn webhooks(client) -> Result { _request(client, "GET", "/api/v1/maf/webhooks", null, null) }
+fn create_webhook(client, url, events, secret) -> Result {
+    mut body := {"url": url}
+    if events != null { body["events"] = events }
+    if secret != null && secret != "" { body["secret"] = secret }
+    _request(client, "POST", "/api/v1/maf/webhooks", body, null)
+}
+fn delete_webhook(client, id) -> Result { _request(client, "DELETE", "/api/v1/maf/webhooks/" + string(id), null, null) }
+
+// === Queues ===
+
+fn queues(client) -> Result { _request(client, "GET", "/api/v1/maf/queues", null, null) }
+fn create_queue(client, name, strategy, max_wait) -> Result {
+    _request(client, "POST", "/api/v1/maf/queues", {"name": name, "strategy": strategy, "max_wait_sec": max_wait}, null)
+}
+fn add_queue_member(client, queue_id, agent_uri, priority) -> Result {
+    _request(client, "POST", "/api/v1/maf/queues/" + string(queue_id) + "/members", {"agent_uri": agent_uri, "priority": priority}, null)
+}
+fn remove_queue_member(client, queue_id, member_id) -> Result {
+    _request(client, "DELETE", "/api/v1/maf/queues/" + string(queue_id) + "/members/" + string(member_id), null, null)
+}
+
+// === Conferences ===
+
+fn conferences(client) -> Result { _request(client, "GET", "/api/v1/maf/conferences", null, null) }
+fn create_conference(client, name, pin, max_participants, record) -> Result {
+    _request(client, "POST", "/api/v1/maf/conferences", {"name": name, "pin": pin, "max_participants": max_participants, "record": record}, null)
+}
+
+// === Scheduled Calls ===
+
+fn scheduled_calls(client) -> Result { _request(client, "GET", "/api/v1/maf/scheduled-calls", null, null) }
+fn schedule_call(client, from_uri, to_uri, scheduled_at, app_data) -> Result {
+    mut body := {"from": from_uri, "to": to_uri, "scheduled_at": scheduled_at}
+    if app_data != null { body["application_data"] = app_data }
+    _request(client, "POST", "/api/v1/maf/scheduled-calls", body, null)
+}
+fn cancel_scheduled_call(client, id) -> Result { _request(client, "DELETE", "/api/v1/maf/scheduled-calls/" + string(id), null, null) }
+
+// === Events ===
+
+fn events(client, cursor, event_type, limit) -> Result {
+    mut q := "?cursor=" + string(if cursor != null { cursor } else { 0 })
+    q = q + "&limit=" + string(if limit != null { limit } else { 100 })
+    if event_type != null { q = q + "&event_type=" + event_type }
+    _request(client, "GET", "/api/v1/maf/events" + q, null, null)
+}
+
+fn publish_event(client, event_type, call_id, payload) -> Result {
+    mut body := {"event_type": event_type}
+    if call_id != null { body["call_id"] = call_id }
+    if payload != null { body["payload"] = if type_of(payload) == "string" { payload } else { json.stringify(payload) } }
+    _request(client, "POST", "/api/v1/maf/events", body, null)
+}
+
+fn ws_url(client, cursor, event_type, call_id) -> string {
+    base := str.replace(str.replace(client.base_url, "https://", "wss://"), "http://", "ws://")
+    mut q := "?cursor=" + string(if cursor != null { cursor } else { 0 })
+    if event_type != null { q = q + "&event_type=" + event_type }
+    if call_id != null { q = q + "&call_id=" + call_id }
+    base + "/api/v1/maf/events/ws" + q
+}
+
+// === Subscribe (HTTP long-poll) ===
+
+fn subscribe(client, event_type, call_id, handler) -> Result {
+    mut cursor := 0
+    mut interval := 200
+    loop {
+        mut q := "?cursor=" + string(cursor) + "&limit=100"
+        if event_type != null { q = q + "&event_type=" + event_type }
+        if call_id != null { q = q + "&call_id=" + call_id }
+        page := _request(client, "GET", "/api/v1/maf/events" + q, null, null)?
+        evts := if page["events"] != null { page["events"] } else { [] }
+        if len(evts) > 0 {
+            interval = 200
+            for evt in evts { handler(evt) }
+            if page["next_cursor"] != null {
+                nc := int(page["next_cursor"])
+                if nc > cursor { cursor = nc }
+            }
+        } else {
+            interval = if interval * 2 > 2000 { 2000 } else { interval * 2 }
+        }
+        time.sleep_ms(interval)
+    }
+}
