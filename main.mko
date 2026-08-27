@@ -510,7 +510,7 @@ fn sip_emergency_target(cache: CMap) -> string {
     return cached_env(cache, "_ecscf_target", "SIP_EMERGENCY_TARGET", "")
 }
 
-fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, port: int, source_port: int, tr: string, forward_fd: int, db: SqlDB, db_ok: int, cache: CMap, realm: string, node_id: string, diameter_lock: Mutex) -> string {
+live fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: string, port: int, source_port: int, tr: string, forward_fd: int, db: SqlDB, db_ok: int, cache: CMap, realm: string, node_id: string, diameter_lock: Mutex) -> string {
     // Cache public IP — env_get_or is not free at 10K+ CPS.
     // Only cache if SIP_PUBLIC_IP is explicitly set; the fallback (source IP)
     // is per-message and must not be cached.

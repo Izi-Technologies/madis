@@ -2,15 +2,15 @@
 set -euo pipefail
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-MAKO_BIN="${MAKO_BIN:-${MAKO:-mako}}"
+MAKO_BIN="${MAKO_BIN:-${MAKO:-$(command -v makori 2>/dev/null || echo mako)}}"
 SOURCE="${1:-main.mko}"
 OUTPUT="${2:-main}"
 CC_BIN="${CC:-cc}"
 
 VERSION=$($MAKO_BIN --version 2>/dev/null || true)
 case "$VERSION" in
-  *0.5.*) ;;
-  *) echo "Mako 0.5.x is required (found: ${VERSION:-unknown})" >&2; exit 1 ;;
+  *0.5.*|*0.6.*) ;;
+  *) echo "Mako 0.5.x or 0.6.x is required (found: ${VERSION:-unknown})" >&2; exit 1 ;;
 esac
 
 RUNTIME_DIR="${MAKO_RUNTIME_PATH:-${MAKO_RUNTIME:-}}"

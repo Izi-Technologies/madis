@@ -246,7 +246,7 @@ fn registration_track_aor(reg: CMap, aor: string) -> int {
     return 1
 }
 
-fn registration_store(reg: CMap, aor: string, contact: string, transport: string, expires_s: int, ip: string, port: int) -> int {
+fn registration_store(reg: CMap, aor: string, contact: string, transport: string, expires_s: int, ip: string, port: int) -> int prove len(aor) > 0 {
     if len(aor) == 0 || len(aor) > 512 || len(contact) == 0 || len(contact) > 2048 { return -1 }
     if len(transport) > 16 || len(ip) > 128 || port < 0 || port > 65535 { return -1 }
     let _ = registration_track_aor(reg, aor)

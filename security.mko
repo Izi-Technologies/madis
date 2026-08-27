@@ -1,7 +1,7 @@
 // ============ SIP SECURITY ============
 
 // Check if IP is auto-banned
-fn sec_is_banned(db: SqlDB, db_ok: int, src_ip: string, cache: CMap) -> int {
+fn sec_is_banned(db: SqlDB, db_ok: int, src_ip: string, cache: CMap) -> int prove len(src_ip) > 0 {
     // Short TTL cache — check DB every ~5 seconds so unbans take effect quickly
     let key = "ban|" + src_ip
     let now = now_ms()
