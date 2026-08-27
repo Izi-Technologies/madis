@@ -1111,6 +1111,7 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         if not maf_cfg_ok { return maf_api_error(403, "config key not in MAF allowlist") }
         let desc = json_get_string(body, "description")
         let tenant = maf_api_tenant()
+        if len(tenant) == 0 { return maf_api_error(400, "tenant required") }
         let packed = "{\"tenant_id\":\"" + maf_api_json_escape(tenant) + "\",\"key\":\"" + maf_api_json_escape(cfg_key) + "\",\"value\":\"" + maf_api_json_escape(cfg_value) + "\",\"description\":\"" + maf_api_json_escape(desc) + "\"}"
         let rc = sql_exec_str4(db, "INSERT INTO config (tenant_id, key, value, description) VALUES (($1::jsonb->>'tenant_id'), ($1::jsonb->>'key'), ($1::jsonb->>'value'), ($1::jsonb->>'description')) ON CONFLICT (key) DO UPDATE SET value = ($1::jsonb->>'value'), description = COALESCE(NULLIF(($1::jsonb->>'description'),''), config.description)", packed, "", "", "")
         if rc < 0 { return maf_api_error(500, "config update failed") }
@@ -1666,6 +1667,9 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         if len(url) == 0 || len(url) > 512 { return maf_api_error(400, "url required (max 512 chars)") }
         if not str_has_prefix(url, "https://") { return maf_api_error(400, "url must use https") }
         // Block webhooks to private/internal IPs (SSRF protection)
+        // ponytail: DNS rebinding not mitigated at the proxy level.
+        // Operators should route webhook delivery through an egress proxy
+        // that validates resolved IPs (e.g., Smokescreen, egress-gateway).
         let wh_after = url[8:]
         let wh_slash = str_index(wh_after, "/")
         let wh_host = if wh_slash >= 0 { wh_after[0:wh_slash] } else { wh_after }
@@ -1685,6 +1689,7 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
             }
         }
         if len(wh_events) == 0 { wh_events = "[]" }
+        if len(wh_events) > 0 && int(wh_events[0]) != 91 { return maf_api_error(400, "events must be a JSON array") }
         if len(secret) > 256 { return maf_api_error(400, "secret too long (max 256)") }
         let tenant = maf_api_tenant()
         let packed = "{\"tenant\":\"" + maf_api_json_escape(tenant) + "\",\"url\":\"" + maf_api_json_escape(url) + "\",\"wh_events\":" + wh_events + ",\"secret\":\"" + maf_api_json_escape(secret) + "\"}"

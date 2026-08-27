@@ -538,7 +538,7 @@ fn db_route_call(db: SqlDB, db_ok: int, callee: string, caller: string, src_ip: 
 // Self-learning quality scoring: tracks ASR, ACD, PDD per gateway+prefix.
 // Gateways with better metrics rise; bad gateways sink automatically.
 
-fn routing_record_outcome(cache: CMap, gateway: string, prefix: string, answered: int, duration_sec: int, pdd_ms: int) -> int prove len(gateway) > 0 {
+fn routing_record_outcome(cache: CMap, gateway: string, prefix: string, answered: int, duration_sec: int, pdd_ms: int) -> int {
     if len(gateway) == 0 { return 0 }
     // ponytail: 3-char prefix bucket; finer granularity when volume justifies it
     let mut pfx = prefix

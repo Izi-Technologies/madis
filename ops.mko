@@ -146,7 +146,7 @@ fn proxy_config_sync_db(db: SqlDB, db_ok: int, cache: CMap) -> int {
     }
     cmap_set(cache, ts_key, string(now))
     let tenant = env_get_or("SIP_MAF_TENANT", "default")
-    let rows = sql_query_rows_str(db, "SELECT key || chr(1) || value FROM config WHERE tenant_id = $1 OR tenant_id = '' LIMIT 200", tenant)
+    let rows = sql_query_rows_str(db, "SELECT key || chr(1) || value FROM config WHERE tenant_id = $1 LIMIT 200", tenant)
     if sql_rows_ok(rows) == 0 { return 0 }
     let mut loaded = 0
     while sql_rows_next(rows) == 1 {

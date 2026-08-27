@@ -274,7 +274,7 @@ fn db_digest_valid(db: SqlDB, db_ok: int, msg: string, n: int, method: string, f
 
 // IP-based auth: check if source IP is trusted (carriers, trunks, PBXes)
 // Returns: 1=trusted (skip digest), 0=not trusted (require digest)
-fn db_ip_auth(db: SqlDB, db_ok: int, src_ip: string, cache: CMap) -> int prove len(src_ip) > 0 {
+fn db_ip_auth(db: SqlDB, db_ok: int, src_ip: string, cache: CMap) -> int {
     let key = "ipauth|" + src_ip
     if cmap_has(cache, key) == 1 {
         let cached = cmap_get(cache, key)

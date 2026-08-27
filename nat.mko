@@ -168,7 +168,7 @@ fn nat_fix_contact(msg: string, source_ip: string, source_port: int) -> string {
 // Full NAT traversal: rewrite private SDP c=/o= addresses with public IP.
 // Also handles per-media c= lines (RFC 4566 §5.7) when the session-level
 // c= is public but a media-level c= carries a private address.
-fn nat_fix_sdp(msg: string, msglen: int, source_ip: string) -> string prove len(msg) > 0 {
+fn nat_fix_sdp(msg: string, msglen: int, source_ip: string) -> string {
     let _ = msglen
     let sdp = sip_body(msg)
     if len(sdp) == 0 { return msg }
