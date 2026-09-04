@@ -104,8 +104,7 @@ fn hdr_remove(msg: string, name: string) -> string {
 // Set header value (remove existing + add new)
 fn hdr_set(msg: string, name: string, value: string) -> string {
     if hdr_name_safe(name) == 0 || hdr_text_safe(value) == 0 { return msg }
-    let cleaned = hdr_remove(msg, name)
-    return hdr_add(cleaned, name, value)
+    return msg |> hdr_remove(name) |> hdr_add(name, value)
 }
 
 // Apply DB-driven header rules

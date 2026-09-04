@@ -19,7 +19,7 @@ fn ims_ifc_target_valid(target: string) -> int {
 // default_handling: 0=continue, 1=terminate on AS failure
 
 fn ims_ifc_method_ok(method: string) -> int {
-    let m = str_to_upper(str_trim_space(method))
+    let m = method |> str_trim_space() |> str_to_upper()
     if len(m) == 0 || len(m) > 16 { return 0 }
     let mut i = 0
     while i < len(m) {
@@ -35,7 +35,7 @@ fn ims_ifc_rule_encode_ok(priority: int, session_case: int, method: string, defa
     if session_case < 0 || session_case > 2 { return "" }
     if default_handling < 0 || default_handling > 1 { return "" }
     if ims_ifc_target_valid(as_uri) == 0 { return "" }
-    let mut m = str_to_upper(str_trim_space(method))
+    let mut m = method |> str_trim_space() |> str_to_upper()
     if len(m) == 0 { m = "*" }
     if ims_ifc_method_ok(m) == 0 { return "" }
     return string(priority) + "|" + string(session_case) + "|" + m + "|" + string(default_handling) + "|" + as_uri
@@ -88,7 +88,7 @@ fn ims_ifc_rule_matches(rule: string, session_case: int, method: string) -> int 
     if sc != 2 && sc != session_case { return 0 }
     let rm = ims_ifc_rule_method(rule)
     if str_eq(rm, "*") { return 1 }
-    return if str_eq(rm, str_to_upper(str_trim_space(method))) { 1 } else { 0 }
+    return if str_eq(rm, method |> str_trim_space() |> str_to_upper()) { 1 } else { 0 }
 }
 
 // Legacy comma-separated targets still accepted as priority-order any-case INVITE rules.
@@ -234,7 +234,7 @@ fn ims_ifc_profile_targets(response: string) -> string {
         if len(spt) > 0 {
             let m = str_trim_space(json_get_string(spt, "method"))
             if len(m) > 0 { method = m }
-            let sc = str_to_lower(str_trim_space(json_get_string(spt, "session_case")))
+            let sc = json_get_string(spt, "session_case") |> str_trim_space() |> str_to_lower()
             if len(sc) > 0 {
                 if str_eq(sc, "originating") || str_eq(sc, "0") { session_case = 0 }
                 else if str_eq(sc, "terminating") || str_eq(sc, "1") { session_case = 1 }
@@ -381,7 +381,7 @@ fn ims_ifc_reconcile_registration(reg: CMap, aor: string, targets: string) -> in
 // No body secrets. Timeout via env SIP_IMS_3PREG_TIMEOUT_MS (default 200, max 2000).
 // Failure policy: default_handling 1 on any AS → report failure (caller may clear).
 fn ims_ifc_3preg_enabled() -> int {
-    let v = str_to_lower(str_trim_space(env_get_or("SIP_IMS_3PREG", "0")))
+    let v = env_get_or("SIP_IMS_3PREG", "0") |> str_trim_space() |> str_to_lower()
     return if str_eq(v, "1") || str_eq(v, "true") || str_eq(v, "yes") { 1 } else { 0 }
 }
 
@@ -424,7 +424,7 @@ fn ims_ifc_3preg_host() -> string {
     }
     let mut host = str_to_lower(t[0:end])
     if len(host) == 0 {
-        host = str_to_lower(str_trim_space(env_get_or("SIP_REALM", "")))
+        host = env_get_or("SIP_REALM", "") |> str_trim_space() |> str_to_lower()
     }
     if len(host) < 1 || len(host) > 253 { return "" }
     let mut j = 0

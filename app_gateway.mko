@@ -131,7 +131,7 @@ fn app_gateway_enabled() -> int {
     // Plain HTTP is only accepted when explicitly enabled. HTTPS uses the
     // platform trust store or SIP_APP_CA and is the required production mode.
     if app_url_is_https(url) == 0 {
-        let allow = str_to_lower(str_trim_space(env_get_or("SIP_APP_ALLOW_HTTP", "0")))
+        let allow = env_get_or("SIP_APP_ALLOW_HTTP", "0") |> str_trim_space() |> str_to_lower()
         if not str_eq(allow, "1") && not str_eq(allow, "true") && not str_eq(allow, "yes") { return 0 }
     }
     return 1
@@ -149,7 +149,7 @@ fn app_gateway_timeout_ms() -> int {
 }
 
 fn app_gateway_fail_closed() -> int {
-    let value = str_to_lower(str_trim_space(env_get_or("SIP_APP_FAIL_MODE", "open")))
+    let value = env_get_or("SIP_APP_FAIL_MODE", "open") |> str_trim_space() |> str_to_lower()
     if str_eq(value, "closed") || str_eq(value, "fail-closed") || str_eq(value, "1") { return 1 }
     return 0
 }
@@ -245,7 +245,7 @@ fn app_gateway_call(msg: string, ip: string, port: int, tr: string, event: strin
 }
 
 fn app_gateway_command_signature(raw: string, token: string, request_id: string) -> string {
-    let action = str_to_lower(str_trim_space(json_get_string(raw, "action")))
+    let action = json_get_string(raw, "action") |> str_trim_space() |> str_to_lower()
     let target = json_get_string(raw, "target")
     let status = json_get_int(raw, "status")
     let reason = json_get_string(raw, "reason")
@@ -309,7 +309,7 @@ fn app_gateway_target_safe(target: string, list_ok: int) -> int {
 }
 
 fn app_gateway_protected_header(name: string) -> int {
-    let low = str_to_lower(str_trim_space(name))
+    let low = name |> str_trim_space() |> str_to_lower()
     if str_eq(low, "via") || str_eq(low, "from") || str_eq(low, "to") || str_eq(low, "call-id") { return 1 }
     if str_eq(low, "cseq") || str_eq(low, "content-length") || str_eq(low, "max-forwards") { return 1 }
     if str_eq(low, "route") || str_eq(low, "record-route") { return 1 }
@@ -367,7 +367,7 @@ fn app_gateway_command_valid_token(raw: string, request_id: string, for_response
     if not str_eq(json_get_string(raw, "request_id"), request_id) { return 0 }
     let signature = json_get_string(raw, "signature")
     if len(signature) != 64 || app_gateway_signature_equal(signature, app_gateway_command_signature(raw, token, request_id)) == 0 { return 0 }
-    let action = str_to_lower(str_trim_space(json_get_string(raw, "action")))
+    let action = json_get_string(raw, "action") |> str_trim_space() |> str_to_lower()
     if str_eq(action, "continue") || str_eq(action, "drop") { }
     else {
         if str_eq(action, "proxy") || str_eq(action, "route") || str_eq(action, "dispatch") {
@@ -406,7 +406,7 @@ fn app_gateway_action(raw: string, request_id: string, for_response: int) -> str
     if len(raw) == 0 { return "continue" }
     if str_eq(raw, "__APP_FAIL_CLOSED__") { return "fail" }
     if app_gateway_command_valid(raw, request_id, for_response) == 0 { return if app_gateway_fail_closed() == 1 { "fail" } else { "continue" } }
-    return str_to_lower(str_trim_space(json_get_string(raw, "action")))
+    return json_get_string(raw, "action") |> str_trim_space() |> str_to_lower()
 }
 
 fn app_gateway_apply_headers(msg: string, raw: string) -> string {

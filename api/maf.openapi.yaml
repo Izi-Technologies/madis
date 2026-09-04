@@ -585,7 +585,7 @@ paths:
     post:
       operationId: setConfig
       summary: Set a configuration value
-      description: Only allowlisted keys (rtpengine_*, security_*, select stir_shaken_*) can be set via MAF.
+      description: Only allowlisted keys can be set via MAF. Permitted prefixes include rtpengine_*, sip_rate_limit*, sip_fraud_prefixes, sip_emergency*, sip_ims_*, sip_hep_*, sip_cluster*, select stir_shaken_*, and specific security keys (security_fail2ban_threshold, security_geo_block, security_ua_block). Process-level keys (bind IP, ports, workers, TLS, DB) are blocked.
       security: [{mafBearerAuth: []}]
       requestBody:
         required: true

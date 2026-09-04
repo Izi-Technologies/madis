@@ -82,7 +82,7 @@ fn rtp_dialog_tag_safe(value: string) -> int {
 }
 
 fn rtp_sdp_content_type_safe(msg: string) -> int {
-    let raw = str_to_lower(str_trim_space(sip_header(msg, "Content-Type")))
+    let raw = sip_header(msg, "Content-Type") |> str_trim_space() |> str_to_lower()
     if len(raw) == 0 { return 1 }
     let semi = str_index(raw, ";")
     let mut media = raw
@@ -190,7 +190,7 @@ fn rtp_node_index_for(call_id: string) -> int {
 //   plain     → (empty)
 // SIP_RTPENGINE_FLAGS overrides / extends the profile when both set.
 fn rtp_profile_flags() -> string {
-    let profile = str_to_lower(str_trim_space(env_get_or("SIP_RTPENGINE_PROFILE", "")))
+    let profile = env_get_or("SIP_RTPENGINE_PROFILE", "") |> str_trim_space() |> str_to_lower()
     if len(profile) == 0 || str_eq(profile, "plain") || str_eq(profile, "none") { return "" }
     if str_eq(profile, "ice-srtp") || str_eq(profile, "webrtc") { return "ICE,SRTP,DTLS" }
     if str_eq(profile, "srtp") || str_eq(profile, "sdes") { return "SRTP" }
@@ -297,7 +297,7 @@ fn rtp_config_apply_env(result: []string) []string {
     adjusted[0] = result[0]
     adjusted[1] = result[1]
     adjusted[2] = result[2]
-    let env_enabled = str_to_lower(str_trim_space(env_get_or("SIP_RTPENGINE_ENABLED", "")))
+    let env_enabled = env_get_or("SIP_RTPENGINE_ENABLED", "") |> str_trim_space() |> str_to_lower()
     if len(env_enabled) > 0 {
         adjusted[0] = "0"
         if str_eq(env_enabled, "1") || str_eq(env_enabled, "true") || str_eq(env_enabled, "yes") {
@@ -422,7 +422,7 @@ fn rtp_answer(host: string, port: int, call_id: string, from_tag: string, to_tag
 
 // Optional operator-visible ng exchange diagnostics; off by default.
 fn rtp_debug_enabled() -> int {
-    let v = str_to_lower(str_trim_space(env_get_or("SIP_RTPENGINE_DEBUG", "0")))
+    let v = env_get_or("SIP_RTPENGINE_DEBUG", "0") |> str_trim_space() |> str_to_lower()
     return if str_eq(v, "1") || str_eq(v, "true") || str_eq(v, "yes") { 1 } else { 0 }
 }
 

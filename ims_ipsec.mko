@@ -7,9 +7,9 @@
 
 fn ims_ipsec_export_enabled() -> int {
     // Requires both export and store-keys; do not call ims_aka helpers (load order).
-    let store = str_to_lower(str_trim_space(env_get_or("SIP_IMS_AKA_STORE_KEYS", "0")))
+    let store = env_get_or("SIP_IMS_AKA_STORE_KEYS", "0") |> str_trim_space() |> str_to_lower()
     if not (str_eq(store, "1") || str_eq(store, "true") || str_eq(store, "yes")) { return 0 }
-    let v = str_to_lower(str_trim_space(env_get_or("SIP_IMS_IPSEC_EXPORT", "0")))
+    let v = env_get_or("SIP_IMS_IPSEC_EXPORT", "0") |> str_trim_space() |> str_to_lower()
     return if str_eq(v, "1") || str_eq(v, "true") || str_eq(v, "yes") { 1 } else { 0 }
 }
 

@@ -6,7 +6,7 @@
 // through the original flow.
 
 fn outbound_enabled() -> int {
-    let v = str_to_lower(str_trim_space(env_get_or("SIP_OUTBOUND", "0")))
+    let v = env_get_or("SIP_OUTBOUND", "0") |> str_trim_space() |> str_to_lower()
     return if str_eq(v, "1") || str_eq(v, "true") || str_eq(v, "yes") { 1 } else { 0 }
 }
 

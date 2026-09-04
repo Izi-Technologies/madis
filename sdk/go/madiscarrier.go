@@ -68,6 +68,10 @@ func (c *Client) request(ctx context.Context, method, path string, value any) (m
 	return out, err
 }
 
+func (c *Client) Request(ctx context.Context, method, path string, value any) (map[string]any, error) {
+	return c.request(ctx, method, path, value)
+}
+
 func (c *Client) Capabilities(ctx context.Context) (map[string]any, error) {
 	return c.request(ctx, http.MethodGet, "/api/v1/capabilities", nil)
 }

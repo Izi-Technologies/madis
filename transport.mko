@@ -213,39 +213,50 @@ fn sip_srv_resolve_targets(target: string, transport: string, cache: CMap) -> st
     // to the next weighted target without another DNS query.
     let raw = str_split(records, ",")
     let mut remaining = make([]string, 0, 8)
+    let mut used = make([]int, 0, 8)
     let mut i = 0
     while i < len(raw) {
-        if sip_srv_record_target(str_trim_space(raw[i])) != "" { remaining = append(remaining, str_trim_space(raw[i])) }
+        let item = str_trim_space(raw[i])
+        if sip_srv_record_target(item) != "" {
+            remaining = append(remaining, item)
+            used = append(used, 0)
+        }
         i = i + 1
     }
     let mut result = ""
-    while len(remaining) > 0 {
+    let mut picked_count = 0
+    let total_records = len(remaining)
+    while picked_count < total_records {
         let mut priority = 65536
         i = 0
         while i < len(remaining) {
-            let p = sip_srv_record_priority(remaining[i])
-            if p >= 0 && p < priority { priority = p }
+            if used[i] == 0 {
+                let p = sip_srv_record_priority(remaining[i])
+                if p >= 0 && p < priority { priority = p }
+            }
             i = i + 1
         }
         let mut total = 0
         i = 0
         while i < len(remaining) {
-            if sip_srv_record_priority(remaining[i]) == priority { total = total + sip_srv_record_weight(remaining[i]) }
+            if used[i] == 0 && sip_srv_record_priority(remaining[i]) == priority {
+                total = total + sip_srv_record_weight(remaining[i])
+            }
             i = i + 1
         }
         let pick = if total > 0 { mono_ms() % total } else { 0 }
         let mut chosen = -1
         i = 0
         while i < len(remaining) {
-            if sip_srv_record_priority(remaining[i]) == priority {
+            if used[i] == 0 && sip_srv_record_priority(remaining[i]) == priority {
                 if total == 0 && chosen < 0 { chosen = i }
                 if total > 0 {
-                    // cursor is intentionally recomputed below to keep this
-                    // helper compatible with the value semantics of arrays.
                     let mut running = 0
                     let mut j = 0
                     while j <= i {
-                        if sip_srv_record_priority(remaining[j]) == priority { running = running + sip_srv_record_weight(remaining[j]) }
+                        if used[j] == 0 && sip_srv_record_priority(remaining[j]) == priority {
+                            running = running + sip_srv_record_weight(remaining[j])
+                        }
                         j = j + 1
                     }
                     if pick < running { chosen = i; break }
@@ -254,18 +265,13 @@ fn sip_srv_resolve_targets(target: string, transport: string, cache: CMap) -> st
             i = i + 1
         }
         if chosen < 0 { break }
+        used[chosen] = 1
+        picked_count = picked_count + 1
         let picked = sip_srv_record_target(remaining[chosen])
         if len(picked) > 0 {
             if len(result) > 0 { result = result + "," }
             result = result + picked
         }
-        let mut next = make([]string, 0, 8)
-        i = 0
-        while i < len(remaining) {
-            if i != chosen { next = append(next, remaining[i]) }
-            i = i + 1
-        }
-        remaining = next
     }
     return result
 }

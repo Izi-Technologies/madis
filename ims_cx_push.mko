@@ -3,7 +3,7 @@
 
 fn ims_cx_push_enabled() -> int {
     if ims_cx_registration_enabled() == 0 { return 0 }
-    let value = str_to_lower(str_trim_space(env_get_or("SIP_IMS_CX_PUSH", "0")))
+    let value = env_get_or("SIP_IMS_CX_PUSH", "0") |> str_trim_space() |> str_to_lower()
     return if str_eq(value, "1") || str_eq(value, "true") || str_eq(value, "yes") { 1 } else { 0 }
 }
 
@@ -181,7 +181,7 @@ fn ims_cx_push_server_session(conn: TlsConn, reg: CMap, db: SqlDB, db_ok: int) -
 
 fn ims_cx_push_listen_enabled() -> int {
     if ims_cx_push_enabled() == 0 { return 0 }
-    let value = str_to_lower(str_trim_space(env_get_or("SIP_IMS_CX_PUSH_LISTEN", "0")))
+    let value = env_get_or("SIP_IMS_CX_PUSH_LISTEN", "0") |> str_trim_space() |> str_to_lower()
     return if str_eq(value, "1") || str_eq(value, "true") || str_eq(value, "yes") { 1 } else { 0 }
 }
 

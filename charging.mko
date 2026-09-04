@@ -54,13 +54,13 @@ fn charging_timeout_ms() -> int {
 }
 
 fn charging_fail_open() -> int {
-    let v = str_to_lower(str_trim_space(env_get_or("SIP_CHARGING_FAIL_OPEN", "0")))
+    let v = env_get_or("SIP_CHARGING_FAIL_OPEN", "0") |> str_trim_space() |> str_to_lower()
     if str_eq(v, "1") || str_eq(v, "true") || str_eq(v, "yes") { return 1 }
     return 0
 }
 
 fn charging_protocol() -> string {
-    let protocol = str_to_lower(str_trim_space(env_get_or("SIP_CHARGING_PROTOCOL", "http")))
+    let protocol = env_get_or("SIP_CHARGING_PROTOCOL", "http") |> str_trim_space() |> str_to_lower()
     if str_eq(protocol, "diameter") { return "diameter" }
     return "http"
 }
@@ -133,7 +133,7 @@ fn charging_exchange(cid: string, caller: string, callee: string, kind: string, 
     if status < 200 || status >= 300 || len(response) == 0 || len(response) > 65536 {
         return if charging_fail_open() == 1 { 1 } else { 0 }
     }
-    let decision = str_to_lower(str_trim_space(json_get_string(response, "decision")))
+    let decision = json_get_string(response, "decision") |> str_trim_space() |> str_to_lower()
     if str_eq(decision, "allow") || str_eq(decision, "authorized") { return 1 }
     return 0
 }

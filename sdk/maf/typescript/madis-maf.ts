@@ -170,10 +170,76 @@ export interface CapacityPolicy {
   updated_at?: string;
 }
 
-export interface Event {
+export type MafEventType =
+  | "call.created"
+  | "call.invite"
+  | "call.ringing"
+  | "call.answered"
+  | "call.bridged"
+  | "call.transferring"
+  | "call.held"
+  | "call.unheld"
+  | "call.dtmf"
+  | "call.routed"
+  | "call.ending"
+  | "call.ended"
+  | "call.failed"
+  | "call.canceled"
+  | "call.rejected"
+  | "call.timeout"
+  | "bridge.created"
+  | "media.accepted"
+  | "media.processing"
+  | "media.completed"
+  | "media.failed"
+  | "rtp.offer"
+  | "rtp.answer"
+  | "rtp.deleted"
+  | "rtp.query"
+  | "identity.signed"
+  | "identity.verified"
+  | "identity.attest"
+  | "identity.cleared"
+  | "command.completed"
+  | "command.failed"
+  | (string & {});
+
+export interface CallInvitePayload {
+  from_uri?: string;
+  to_uri?: string;
+  caller_id?: string;
+  caller_name?: string;
+  sdp?: string;
+  direction?: "inbound" | "outbound";
+  sip_headers?: Record<string, string>;
+  [key: string]: unknown;
+}
+
+export interface CallDtmfPayload {
+  digit: string;
+  duration?: number;
+  direction?: "inbound" | "outbound";
+  [key: string]: unknown;
+}
+
+export interface CallAnsweredPayload {
+  answer_sdp?: string;
+  sip_code?: number;
+  [key: string]: unknown;
+}
+
+export interface CallRoutedPayload {
+  target: string;
+  transport?: string;
+  mode?: "proxy" | "b2bua";
+  status?: string;
+  [key: string]: unknown;
+}
+
+export interface Event<T = Record<string, unknown>> {
   schema: "madis.maf.event.v1";
   event_id: string;
-  event_type: string;
+  event_type: MafEventType;
   event_version: number;
   tenant_id?: string;
   call_id?: string;
@@ -181,12 +247,12 @@ export interface Event {
   sequence: number;
   occurred_at: string;
   trace_id?: string;
-  payload: Record<string, unknown>;
+  payload: T;
 }
 
-export interface EventPage {
+export interface EventPage<T = Record<string, unknown>> {
   schema: "madis.maf.event-page.v1";
-  events: Event[];
+  events: Event<T>[];
   next_cursor: string;
   truncated: boolean;
 }
@@ -194,14 +260,17 @@ export interface EventPage {
 // --- Error ---
 
 export class MafError extends Error {
-  constructor(
-    public readonly status: number,
-    public readonly payload: unknown,
-  ) {
+  readonly status: number;
+  readonly payload: unknown;
+
+  constructor(status: number, payload: unknown) {
     super(`MAF request failed with HTTP ${status}: ${JSON.stringify(payload)}`);
     this.name = "MafError";
+    this.status = status;
+    this.payload = payload;
   }
 }
+
 
 // --- Client ---
 
@@ -257,6 +326,7 @@ export class MadisMaf {
     const headers: Record<string, string> = {
       Authorization: `Bearer ${this.token}`,
       Accept: "application/json",
+      "X-MAF-Version": MAF_VERSION,
     };
     if (payload !== undefined) headers["Content-Type"] = "application/json";
     if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
@@ -782,31 +852,31 @@ export class MadisMaf {
     return this.command(`${API}/calls/${encPath(callId)}/identity`, body, idempotencyKey);
   }
 
-  async events(
+  async events<T = Record<string, unknown>>(
     cursor = 0,
-    eventType?: string,
+    eventType?: MafEventType,
     limit = 100,
-  ): Promise<EventPage> {
+  ): Promise<EventPage<T>> {
     const query: Record<string, string | number> = {
       cursor: Math.max(cursor, 0),
       limit: Math.min(Math.max(limit, 1), 100),
     };
     if (eventType !== undefined) query.event_type = eventType;
-    return this.request("GET", `${API}/events`, undefined, query);
+    return this.request("GET", `${API}/events`, undefined, query) as Promise<EventPage<T>>;
   }
 
   /**
    * Subscribe to events using HTTP long-poll with adaptive backoff.
    * Yields events as an async iterable. For native WebSocket, use wsUrl().
    */
-  async *subscribe(opts?: {
+  async *subscribe<T = Record<string, unknown>>(opts?: {
     cursor?: number;
-    eventType?: string;
+    eventType?: MafEventType;
     callId?: string;
     pollMs?: number;
     maxPollMs?: number;
     signal?: AbortSignal;
-  }): AsyncGenerator<Record<string, unknown>> {
+  }): AsyncGenerator<Event<T>> {
     let cur = opts?.cursor ?? 0;
     let interval = opts?.pollMs ?? 200;
     const maxInterval = opts?.maxPollMs ?? 2000;
@@ -819,7 +889,7 @@ export class MadisMaf {
         const events = (page as Record<string, unknown>).events;
         if (Array.isArray(events) && events.length > 0) {
           interval = opts?.pollMs ?? 200;
-          for (const evt of events) yield evt as Record<string, unknown>;
+          for (const evt of events) yield evt as Event<T>;
           const next = (page as Record<string, unknown>).next_cursor;
           const n = typeof next === "string" ? parseInt(next, 10) : typeof next === "number" ? next : cur;
           if (n > cur) cur = n;
@@ -846,7 +916,7 @@ export class MadisMaf {
    *     headers: { Authorization: `Bearer ${token}` }
    *   });
    */
-  wsUrl(opts?: { cursor?: number; eventType?: string; callId?: string }): string {
+  wsUrl(opts?: { cursor?: number; eventType?: MafEventType; callId?: string }): string {
     const base = this.baseUrl
       .replace(/^https:\/\//, "wss://")
       .replace(/^http:\/\//, "ws://");
@@ -857,3 +927,4 @@ export class MadisMaf {
     return `${base}${API}/events/ws?${params.toString()}`;
   }
 }
+

@@ -105,7 +105,7 @@ fn sec_is_scanner(msg: string, msglen: int) -> int {
         let items = str_split(extra, ",")
         let mut i = 0
         while i < len(items) {
-            let pattern = str_to_lower(str_trim_space(items[i]))
+            let pattern = items[i] |> str_trim_space() |> str_to_lower()
             if len(pattern) > 0 && str_contains(ua_low, pattern) { return 1 }
             i = i + 1
         }

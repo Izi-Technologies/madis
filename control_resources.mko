@@ -36,7 +36,7 @@ fn control_resource_int_ok(body: string, key: string, min: int, max: int, requir
 fn control_resource_bool_ok(body: string, key: string) -> int {
     let present = str_index(body, "\"" + key + "\"") >= 0
     if not present { return 1 }
-    let value = str_to_lower(str_trim_space(json_get_string(body, key)))
+    let value = json_get_string(body, key) |> str_trim_space() |> str_to_lower()
     if len(value) == 0 {
         let compact = str_replace(body, " ", "")
         let marker = "\"" + key + "\":"
@@ -80,7 +80,7 @@ fn control_resource_algorithm_ok(value: string) -> int {
 }
 
 fn control_resource_transport_ok(value: string) -> int {
-    let v = str_to_lower(str_trim_space(value))
+    let v = value |> str_trim_space() |> str_to_lower()
     return if str_eq(v, "udp") || str_eq(v, "tcp") || str_eq(v, "tls") || str_eq(v, "ws") || str_eq(v, "wss") { 1 } else { 0 }
 }
 
@@ -127,7 +127,7 @@ fn control_resource_json_ok(resource: string, body: string) -> int {
         return if len(control_resource_text(body, "description", 512, 0)) == 0 && len(json_get_string(body, "description")) > 0 { 0 } else { 1 }
     }
     if str_eq(resource, "header-rules") {
-        let action = str_to_lower(str_trim_space(control_resource_text(body, "action", 16, 1)))
+        let action = control_resource_text(body, "action", 16, 1) |> str_trim_space() |> str_to_lower()
         let name = control_resource_text(body, "header_name", 128, 1)
         if action != "add" && action != "remove" && action != "set" { return 0 }
         if len(name) == 0 || str_contains(name, ":") || str_contains(name, " ") { return 0 }
@@ -137,7 +137,7 @@ fn control_resource_json_ok(resource: string, body: string) -> int {
         return 1
     }
     if str_eq(resource, "access-control") {
-        let action = str_to_lower(str_trim_space(control_resource_text(body, "action", 16, 1)))
+        let action = control_resource_text(body, "action", 16, 1) |> str_trim_space() |> str_to_lower()
         if action != "allow" && action != "deny" { return 0 }
         if len(control_resource_text(body, "source_ip", 128, 0)) == 0 && len(json_get_string(body, "source_ip")) > 0 { return 0 }
         if len(control_resource_text(body, "sip_user", 256, 0)) == 0 && len(json_get_string(body, "sip_user")) > 0 { return 0 }

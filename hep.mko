@@ -3,7 +3,7 @@
 // SIP_HEP_ENABLE=1; failures never change SIP request handling.
 
 fn hep_enabled() -> int {
-    let value = str_to_lower(str_trim_space(env_get_or("SIP_HEP_ENABLE", "0")))
+    let value = env_get_or("SIP_HEP_ENABLE", "0") |> str_trim_space() |> str_to_lower()
     if str_eq(value, "1") || str_eq(value, "true") || str_eq(value, "yes") {
         return 1
     }
@@ -96,7 +96,7 @@ fn hep_write_ipv4(b: Buf, typ: int, ip: string) {
 }
 
 fn hep_ip_protocol(transport: string) -> int {
-    let value = str_to_lower(str_trim_space(transport))
+    let value = transport |> str_trim_space() |> str_to_lower()
     if str_eq(value, "tcp") || str_eq(value, "tls") || str_eq(value, "ws") || str_eq(value, "wss") {
         return 6
     }

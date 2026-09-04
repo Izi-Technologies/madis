@@ -18,23 +18,29 @@ resilience, scale, and compliance.
 - **IMS**: Full Cx/Sh Diameter, AKA auth, iFC, RTR/PPR push, IPsec SA
   export, Rx, P-/I-/S-CSCF roles, charging vectors, subscriber lifecycle,
   emergency call handling (TS 23.167), P-Access-Network-Info (TS 24.229).
-- **MAF**: 59 HTTP endpoints, 5 SDKs (Python/Go/TypeScript/JavaScript/Erlang),
+- **MAF**: 90 HTTP endpoints, 6 SDKs (Python/Go/TypeScript/JavaScript/Erlang/Weft),
   WebSocket streaming, full platform control (calls, routing, gateways, DIDs,
   dispatch, presence, CDR, security, config, charging, RTPEngine, B2BUA,
-  STIR/SHAKEN external signing, headers, billing, events).
+  STIR/SHAKEN external signing, headers, billing, webhooks, queues,
+  conferences, scheduled calls, number intelligence, routing intelligence,
+  call flows, events).
 - **Performance**: 10ms poll, 16K transaction rings, zero-alloc header
   scanning, cached routing/dispatch/gateway lookups, 50ms RTPEngine evloop.
-- **Security**: adversarially hardened across 4 audit passes — payload
+- **Security**: adversarially hardened across 8 audit passes — payload
   injection, cache collision, SDP leak, SSRF, SQL LIKE injection, HS256
-  downgrade, CRLF injection, tenant scoping, config allowlist, bounded rings.
+  downgrade, CRLF injection, tenant scoping, config allowlist hardening
+  (process-level keys excluded, broad prefixes narrowed), bounded rings,
+  media redirect prevention, cluster membership protection.
 - **Infrastructure**: PostgreSQL, RTPEngine, HEP/Homer, DEB/RPM packages,
   GitHub Actions CI/CD, clustering, graceful shutdown.
 
 ### Test coverage
 
-- 45 Mako unit tests
+- 45 Mako unit test files (1507 assertions)
 - 56 Python MAF SDK contract tests
-- 39 Python unit tests (lab HSS, MMTel, media)
+- 39 Python lab tests (HSS, MMTel, IMS end-to-end)
+- 10 Python media tests (RTP module)
+- 150 total tests across all suites
 - Containerized IMS smoke (P-/I-/S-CSCF chain, Cx/AKA, SDP/RTP, ACK/BYE)
 
 ---
@@ -196,7 +202,7 @@ All of the above, proven in production.
 
 | Version | Focus | Gate |
 |---------|-------|------|
-| **v0.7.0** | Feature complete | All features implemented, 140 tests pass ✅ |
+| **v0.7.0** | Feature complete | All features implemented, 150 tests pass ✅ |
 | **v0.8.0** | Interoperability | Works with real peers, captured traces |
 | **v0.8.5** | Resilience | Recovers from failures, documented drills |
 | **v0.9.0** | Scale | Beats baseline proxy targets on measured benchmarks |
@@ -272,7 +278,7 @@ All of the above, proven in production.
 
 ### MAF — Full platform control
 
-- [x] 59 HTTP endpoints with tenant-scoped authentication.
+- [x] 90 HTTP endpoints with tenant-scoped authentication.
 - [x] Call lifecycle (13 operations), media (3), identity (1), inspection (2).
 - [x] Infrastructure CRUD (22): routing, dialplans, gateways, DIDs, dispatch,
   ip-auth, access-control, header-rules, ANI groups.

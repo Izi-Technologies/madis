@@ -42,12 +42,16 @@ fn ims_u32_avp(code: int, value: int) -> string {
     return diameter_avp_vendor_u32(code, ims_3gpp_vendor(), value)
 }
 
-fn ims_grouped_avp(code: int, children: string) -> string {
+fn ims_grouped_avp(code: int, children: string) -> string
+prove len(children) > 0
+{
     if len(children) == 0 { return "" }
     return diameter_grouped_vendor(code, ims_3gpp_vendor(), children)
 }
 
-fn ims_octets_avp(code: int, value: string) -> string {
+fn ims_octets_avp(code: int, value: string) -> string
+prove len(value) >= 1 && len(value) <= 65519
+{
     if len(value) < 1 || len(value) > 65519 { return "" }
     return diameter_avp_vendor_m(code, ims_3gpp_vendor(), value)
 }
@@ -84,7 +88,9 @@ fn ims_base_request_body(session_id: string, application: int) -> string {
     return body
 }
 
-fn ims_request(application: int, command: int, session_id: string, body: string) -> string {
+fn ims_request(application: int, command: int, session_id: string, body: string) -> string
+prove len(body) > 0 && len(session_id) > 0
+{
     if len(body) == 0 || len(session_id) == 0 { return "" }
     if diameter_identity_ok(diameter_origin_host()) == 0 || diameter_identity_ok(diameter_origin_realm()) == 0 || diameter_identity_ok(diameter_destination_realm()) == 0 { return "" }
     let hop = diameter_id("ims-hop|" + session_id + "|" + string(application) + "|" + string(command))
@@ -371,7 +377,7 @@ fn ims_sh_udr_accepted(cache: CMap, peer_lock: Mutex, public_identity: string, d
 }
 
 fn ims_cx_registration_enabled() -> int {
-    let value = str_to_lower(str_trim_space(env_get_or("SIP_IMS_CX", "0")))
+    let value = env_get_or("SIP_IMS_CX", "0") |> str_trim_space() |> str_to_lower()
     return if str_eq(value, "1") || str_eq(value, "true") || str_eq(value, "yes") { 1 } else { 0 }
 }
 

@@ -23,7 +23,9 @@ built-in gRPC listener.
 Set `SIP_MAF_INBOUND_MODE=control` on the SIP worker to opt into MAF ownership
 of authenticated initial INVITEs. MADIS persists each accepted INVITE as a
 tenant-scoped `ringing` call and emits `call.created`; it does not intercept
-normal proxy traffic while the mode is `disabled`.
+normal proxy traffic while the mode is `disabled`. Set
+`SIP_MAF_INBOUND_MODE=route` for full SDK-controlled routing where the
+application must call `calls.route` to forward each inbound call.
 
 An application answers with `POST /admin/api/v1/maf/calls/{call_id}/answer` and
 a bounded `answer_sdp`. The SIP worker validates the SDP, creates the local

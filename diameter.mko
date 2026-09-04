@@ -6,7 +6,7 @@
 // or pretend to implement relays, peer failover, or media quota timers.
 
 fn diameter_transport() -> string {
-    let transport = str_to_lower(str_trim_space(env_get_or("SIP_DIAMETER_TRANSPORT", "tcp")))
+    let transport = env_get_or("SIP_DIAMETER_TRANSPORT", "tcp") |> str_trim_space() |> str_to_lower()
     return if str_eq(transport, "sctp") { "sctp" } else { "tcp" }
 }
 
@@ -475,7 +475,7 @@ fn diameter_cc_time_group(code: int, seconds: int) -> string {
 }
 
 fn diameter_cc_request_type(kind: string) -> int {
-    let low = str_to_lower(str_trim_space(kind))
+    let low = kind |> str_trim_space() |> str_to_lower()
     if str_eq(low, "initial") { return 1 }
     if str_eq(low, "update") { return 2 }
     if str_eq(low, "termination") { return 3 }
@@ -661,7 +661,7 @@ fn diameter_cc_exchange(cid: string, caller: string, callee: string, kind: strin
         return diameter_sctp_exchange_once(ccr, 4, 272)
     }
     let wait_ms = diameter_timeout_ms()
-    let use_tls = str_to_lower(str_trim_space(env_get_or("SIP_DIAMETER_TLS", "1")))
+    let use_tls = env_get_or("SIP_DIAMETER_TLS", "1") |> str_trim_space() |> str_to_lower()
     let secure = str_eq(use_tls, "1") || str_eq(use_tls, "true") || str_eq(use_tls, "yes")
     let mut port = 3868
     if secure { port = 5658 }
@@ -1093,7 +1093,7 @@ fn diameter_peer_close_locked(cache: CMap) -> int {
 
 fn diameter_peer_open_one(cache: CMap, application: int, host: string, port: int) -> int {
     if len(host) == 0 || port < 1 || tls_client_available() != 1 { return -1 }
-    let use_tls = str_to_lower(str_trim_space(env_get_or("SIP_DIAMETER_TLS", "1")))
+    let use_tls = env_get_or("SIP_DIAMETER_TLS", "1") |> str_trim_space() |> str_to_lower()
     if not (str_eq(use_tls, "1") || str_eq(use_tls, "true") || str_eq(use_tls, "yes")) { return -1 }
     let client_cert = env_get_or("SIP_DIAMETER_CLIENT_CERT", "")
     let client_key = env_get_or("SIP_DIAMETER_CLIENT_KEY", "")
@@ -1334,7 +1334,7 @@ fn diameter_peer_exchange(cache: CMap, peer_lock: Mutex, request: string, applic
         mutex_unlock(peer_lock)
         return response
     }
-    let use_tls = str_to_lower(str_trim_space(env_get_or("SIP_DIAMETER_TLS", "1")))
+    let use_tls = env_get_or("SIP_DIAMETER_TLS", "1") |> str_trim_space() |> str_to_lower()
     let plaintext = str_eq(use_tls, "0") || str_eq(use_tls, "false") || str_eq(use_tls, "no")
     if plaintext && str_eq(env_get_or("SIP_DIAMETER_ALLOW_PLAINTEXT", "0"), "1") {
         mutex_lock(peer_lock)
@@ -1430,7 +1430,7 @@ fn diameter_peer_is_open(cache: CMap) -> int {
 }
 
 fn diameter_cc_exchange_shared(cid: string, caller: string, callee: string, kind: string, request_number: int, used_seconds: int, cache: CMap, peer_lock: Mutex) -> string {
-    let persistent = str_to_lower(str_trim_space(env_get_or("SIP_DIAMETER_PERSISTENT", "0")))
+    let persistent = env_get_or("SIP_DIAMETER_PERSISTENT", "0") |> str_trim_space() |> str_to_lower()
     if not (str_eq(persistent, "1") || str_eq(persistent, "true") || str_eq(persistent, "yes")) {
         return diameter_cc_exchange(cid, caller, callee, kind, request_number, used_seconds)
     }

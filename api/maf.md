@@ -410,7 +410,7 @@ Configure additional emergency numbers via the MAF config API:
 curl -X POST "$MAF_BASE_URL/api/v1/maf/config" \
   -H "Authorization: Bearer $SIP_MAF_API_TOKEN" \
   -H "Content-Type: application/json" \
-  --data '{"key":"security_emergency_numbers","value":"933,988,211"}'
+  --data '{"key":"sip_emergency_numbers","value":"933,988,211"}'
 ```
 
 ### Registration and presence
@@ -962,7 +962,7 @@ curl -X POST "$MAF_BASE_URL/api/v1/maf/config" \
 | Category | Keys | Examples |
 | --- | --- | --- |
 | Rate limits | `sip_rate_limit`, `sip_invite_rate_limit`, `sip_register_rate_limit`, `sip_user_rate_limit` | Per-IP and per-method throttling |
-| Security | `security_*` | Auth failure threshold, ban duration, whitelist IPs |
+| Security | `security_fail2ban_threshold`, `security_geo_block`, `security_ua_block` | Tunable security knobs (core security controls like `security_enabled` require direct DB access) |
 | Fraud | `sip_fraud_prefixes` | Comma-separated premium/IRSF prefixes |
 | Scanners | `sip_scanner_ua_list` | Comma-separated scanner User-Agent substrings |
 | Emergency | `sip_emergency_*` | Emergency numbers, E-CSCF target |
@@ -972,10 +972,9 @@ curl -X POST "$MAF_BASE_URL/api/v1/maf/config" \
 | STIR/SHAKEN | `stir_shaken_enabled`, `stir_shaken_attestation`, `stir_shaken_cert_url`, `stir_shaken_mode` | Identity signing and verification |
 | Session timers | `sip_session_timer_*` | RFC 4028 session interval bounds |
 | Auth | `sip_digest_algorithm` | Digest authentication profile |
-| Features | `sip_outbound`, `sip_event_package*`, `sip_tls_reuse`, `sip_b2bua`, `sip_cluster*`, `sip_drain` | Feature toggles |
+| Features | `sip_outbound`, `sip_event_package*`, `sip_tls_reuse`, `sip_b2bua`, `sip_cluster*` | Feature toggles |
 | IMS | `sip_ims_*` | All IMS configuration |
 | HEP | `sip_hep_*` | HEP capture settings |
-| Apps/modules | `sip_app_*`, `sip_module_*` | External application and module endpoints |
 
 **Not changeable at runtime (requires restart):**
 bind IP, ports, worker counts, TLS cert/key paths, DB URLs, private keys.
@@ -1464,8 +1463,7 @@ ua.start();
 - Put the admin listener behind HTTPS with TLS 1.3.
 - Keep MAF credentials separate from admin, carrier, and control credentials.
 - Use short-lived edge-issued credentials in production.
-- Config writes use an allowlist (`rtpengine_*`, `security_*`, select
-  `stir_shaken_*`). All other config keys are blocked.
+- Config writes use an allowlist: `rtpengine_*`, `sip_rate_limit*`, `sip_fraud_prefixes`, `sip_emergency*`, `sip_ims_*`, `sip_hep_*`, `sip_cluster*`, select `stir_shaken_*`, and three specific `security_*` keys. Process-level keys (bind IP, ports, worker counts, TLS paths, DB URLs) and core security controls (`security_enabled`, `security_whitelist_ips`) are blocked — they require direct DB access.
 - Bind every request to the configured tenant.
 - MAF private keys and privileged tokens stay in server-side services.
 

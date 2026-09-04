@@ -48,425 +48,14 @@ pull . "./maf_worker.mko"
 pull . "./hep.mko"
 pull . "./cluster.mko"
 pull . "./event_package.mko"
+pull . "./sip_forwarding.mko"
+pull . "./sip_dialog.mko"
+pull . "./workers.mko"
 
 fn ims_ifc_prepare_outbound(msg: string) -> string {
     return ims_identity_apply_privacy(msg)
 }
 
-fn sip_target_authority(target: string) -> string {
-    let mut t = target
-    let lt = str_index(t, "<")
-    if lt >= 0 {
-        let gt = str_index(t, ">")
-        if gt > lt { t = t[lt + 1:gt] }
-    }
-    // Fast path: most URIs are lowercase. Only str_to_lower the scheme (≤6 bytes).
-    if str_has_prefix(t, "sip:") { t = t[4:] }
-    else if str_has_prefix(t, "sips:") { t = t[5:] }
-    else if str_has_prefix(t, "tcp://") { t = t[6:] }
-    else if str_has_prefix(t, "tls://") { t = t[6:] }
-    else if str_has_prefix(t, "ws://") { t = t[5:] }
-    else if str_has_prefix(t, "wss://") { t = t[6:] }
-    else if len(t) >= 4 {
-        let mut scheme_len = 6
-        if len(t) < 6 { scheme_len = len(t) }
-        let low = str_to_lower(t[0:scheme_len])
-        if str_has_prefix(low, "sip:") { t = t[4:] }
-        else if str_has_prefix(low, "sips:") { t = t[5:] }
-        else if str_has_prefix(low, "tcp://") { t = t[6:] }
-        else if str_has_prefix(low, "tls://") { t = t[6:] }
-        else if str_has_prefix(low, "ws://") { t = t[5:] }
-        else if str_has_prefix(low, "wss://") { t = t[6:] }
-    }
-    let at = str_index(t, "@")
-    if at >= 0 { t = t[at + 1:] }
-    let semi = str_index(t, ";")
-    if semi >= 0 { t = t[0:semi] }
-    let query = str_index(t, "?")
-    if query >= 0 { t = t[0:query] }
-    let slash = str_index(t, "/")
-    if slash >= 0 { t = t[0:slash] }
-    return t
-}
-
-fn sip_target_host(target: string) -> string {
-    let t = sip_target_authority(target)
-    if len(t) == 0 { return "" }
-    if int(t[0]) == 91 {
-        let close = str_index(t, "]")
-        if close > 1 { return t[1:close] }
-    }
-    let colon = str_index(t, ":")
-    if colon >= 0 {
-        // An unbracketed IPv6 literal is invalid in a SIP hostport, but
-        // retaining it here lets the transport layer fail closed rather than
-        // truncating it to the first hextet.
-        if str_index(t[colon + 1:], ":") >= 0 { return t }
-        return t[0:colon]
-    }
-    return t
-}
-
-// Returns 1 for a valid explicit port, 0 when no port is present, and -1 for
-// a malformed/out-of-range explicit port. Callers must reject -1 instead of
-// silently falling back to a different service port.
-fn sip_target_port_state(target: string) -> int {
-    let t = sip_target_authority(target)
-    if len(t) == 0 { return 0 }
-    let mut colon = str_index(t, ":")
-    if int(t[0]) == 91 {
-        let close = str_index(t, "]")
-        if close >= 0 && close + 1 < len(t) && int(t[close + 1]) == 58 { colon = close + 1 }
-        else { colon = -1 }
-    } else if colon >= 0 && str_index(t[colon + 1:], ":") >= 0 {
-        colon = -1
-    }
-    if colon < 0 { return 0 }
-    match parse_int(t[colon + 1:]) {
-        Ok(v) => { if v > 0 && v <= 65535 { return 1 } }
-        Err(_) => {}
-    }
-    return -1
-}
-
-fn sip_target_port(target: string, default_port: int) -> int {
-    let t = sip_target_authority(target)
-    let state = sip_target_port_state(target)
-    if state == 0 { return default_port }
-    if state < 0 { return -1 }
-    let mut colon = str_index(t, ":")
-    if len(t) > 0 && int(t[0]) == 91 {
-        let close = str_index(t, "]")
-        colon = close + 1
-    }
-    let mut port = -1
-    match parse_int(t[colon + 1:]) {
-        Ok(v) => { port = v }
-        Err(_) => {}
-    }
-    return port
-}
-
-fn sip_forward_udp(target: string, msg: string, cache: CMap, out_fd: int) -> int {
-    let host = sip_target_host(target)
-    let port = sip_target_port(target, 5060)
-    if len(host) == 0 || port <= 0 { return 0 }
-    if sip_outbound_target_safe(host) == 0 { return 0 }
-    // Reuse the worker's UDP socket when available. Creating and closing an
-    // ephemeral socket for every forwarded request is expensive under load.
-    let mut fd = out_fd
-    let mut owns_fd = 0
-    if fd < 0 {
-        fd = nb_udp_bind(0)
-        owns_fd = 1
-    }
-    if fd < 0 { return 0 }
-    let mut sent = udp_send_to(fd, host, port, msg)
-    if owns_fd == 0 && sent < 0 {
-        let retry_fd = nb_udp_bind(0)
-        if retry_fd >= 0 {
-            sent = udp_send_to(retry_fd, host, port, msg)
-            let _ = udp_close(retry_fd)
-        }
-    }
-    if owns_fd == 1 { let _ = udp_close(fd) }
-    if sent >= 0 {
-        cmap_set(cache, "last_forward_target", host + ":" + string(port))
-        let _ = log_debug_if(cache, "transport", "udp-sent host=" + host + " port=" + string(port))
-        return 1
-    }
-    return 0
-}
-
-fn sip_forward_first(targets: string, msg: string, cache: CMap, cid: string, out_fd: int) -> string {
-    let target_list = str_split(targets, ",")
-    if len(target_list) == 0 { return "" }
-    let primary = str_trim_space(target_list[0])
-    if len(primary) == 0 { return "" }
-    let ok = sip_forward_target(primary, msg, "udp", cache, out_fd)
-    if ok == 1 {
-        let method = madis_method(msg)
-        if not str_eq(method, "ACK") && not str_eq(method, "") {
-            let _ = sip_client_txn_record(msg, primary, sip_transport_param(primary, "udp"), out_fd, cache)
-        }
-        let _ = bounded_cache_set(cache, "dispatch_seq", "dispatch_ring|", "dispatch|" + cid, targets, 65536)
-        let _ = bounded_cache_set(cache, "dispatch_idx_seq", "dispatch_idx_ring|", "dispatch_idx|" + cid, "0", 65536)
-        return primary
-    }
-    return ""
-}
-
-fn sip_forward_fork(targets: string, base_msg: string, ip: string, port: int, tr: string, public_ip: string, cache: CMap, cid: string, out_fd: int) -> string {
-    let target_list = str_split(targets, ",")
-    let mut primary = ""
-    let mut expected = 0
-    let mut i = 0
-    while i < len(target_list) {
-        let target = str_trim_space(target_list[i])
-        if len(target) > 0 {
-            let out_tr = sip_transport_param(target, tr)
-            let raw = proxy_hop(base_msg, ip, port, out_tr)
-            let fwd = nat_fix_sdp(raw, len(raw), public_ip)
-            if sip_forward_target(target, fwd, out_tr, cache, out_fd) == 1 {
-                if len(primary) == 0 { primary = target }
-                let branch = sip_via_branch(sip_header(fwd, "Via"))
-                if sip_fork_register_branch(cid, branch, target, cache) == 1 {
-                    let _ = sip_fork_store_request(cid, branch, fwd, cache)
-                    expected = expected + 1
-                }
-            }
-        }
-        i = i + 1
-    }
-    if expected > 0 {
-        cmap_set(cache, "fork_expected|" + cid, string(expected))
-        cmap_set(cache, "fork_done|" + cid, "0")
-        cmap_set(cache, "fork_complete|" + cid, "0")
-    }
-    return primary
-}
-
-// RFC 3261 §16.7: after a fork produces a 2xx, cancel all still-pending
-// branches. The CANCEL is derived from the exact forwarded INVITE so it uses
-// the same branch and hop-by-hop transaction identifiers.
-fn sip_send_fork_cancels(cid: string, except_branch: string, cache: CMap, out_fd: int) -> int {
-    let list_key = "fork_branches|" + cid
-    if cmap_has(cache, list_key) == 0 { return 0 }
-    let branches = str_split(cmap_get(cache, list_key), ",")
-    let mut sent = 0
-    let mut i = 0
-    while i < len(branches) {
-        let branch = str_trim_space(branches[i])
-        if len(branch) > 0 && not str_eq(branch, except_branch) && sip_fork_is_pending(cid, branch, cache) == 1 {
-            let req_key = "fork_request|" + cid + "|" + branch
-            if cmap_has(cache, req_key) == 1 {
-                let cancel = sip_build_cancel(cmap_get(cache, req_key))
-                let target = cmap_get(cache, "fork_target|" + cid + "|" + branch)
-                let tr = sip_transport_param(target, "udp")
-                if len(cancel) > 0 && len(target) > 0 {
-                    let _ = sip_forward_target(target, cancel, tr, cache, out_fd)
-                    sent = sent + 1
-                }
-                let _ = sip_fork_mark_cancelled(cid, branch, cache)
-            }
-        }
-        i = i + 1
-    }
-    return sent
-}
-
-// Reply next-hop after our Via is stripped (RFC 3261 / 3581)
-fn proxy_reply_host(msg: string) -> string {
-    return sip_msg_response_host(msg)
-}
-
-fn proxy_reply_port(msg: string) -> int {
-    let p = sip_msg_response_port(msg)
-    if p > 0 { return p }
-    return 5060
-}
-
-fn sip_proxy_hop_with_branch(msg: string, ip: string, port: int, tr: string, branch: string) -> string {
-    return sip_insert_via(msg, sip_via_value_rport(tr, ip, port, branch))
-}
-
-fn sip_dialog_target_for_request(msg: string, cid: string, route_target: string, cache: CMap) -> string {
-    let mut target = route_target
-    if len(target) == 0 {
-        let to_tag = sip_addr_tag(sip_header(msg, "To"))
-        if len(to_tag) > 0 {
-            let tagged_key = "dialog_dst|" + cid + "|" + to_tag
-            if cmap_has(cache, tagged_key) == 1 {
-                target = cmap_get(cache, tagged_key)
-            }
-        }
-    }
-    if len(target) == 0 {
-        let key = "dialog_dst|" + cid
-        if cmap_has(cache, key) == 0 { return "" }
-        target = cmap_get(cache, key)
-    }
-    return target
-}
-
-// Mid-dialog requests must be sent to the dialog's terminating contact. The
-// worker sends non-response return values back to the ingress peer, so forward
-// these requests here and return an empty string once the datagram is sent.
-fn sip_forward_dialog_request(msg: string, cid: string, method: string, route_target: string, ip: string, port: int, tr: string, cache: CMap, out_fd: int) -> int {
-    let target = sip_dialog_target_for_request(msg, cid, route_target, cache)
-    if len(target) == 0 { return 0 }
-    let mut forwarded = proxy_hop_via(msg, ip, port, tr)
-    let branch_key = "dialog_branch|" + cid
-    if str_eq(method, "CANCEL") || (str_eq(method, "ACK") && cmap_has(cache, "dialog_non2xx|" + cid) == 1) {
-        if cmap_has(cache, branch_key) == 1 {
-            forwarded = sip_proxy_hop_with_branch(msg, ip, port, tr, cmap_get(cache, branch_key))
-        }
-    }
-    let sent = sip_forward_target(target, forwarded, sip_transport_param(target, "udp"), cache, out_fd)
-    return sent
-}
-
-fn sip_client_txn_tick(cache: CMap, out_fd: int, calls: CMap, db: SqlDB, db_ok: int) -> int {
-    let now = mono_ms()
-    let mut acted = 0
-    let owner_s = string(out_fd)
-    if cmap_get_int2(cache, "client_active|", owner_s, 0) <= 0 { return 0 }
-    let mut start = cmap_get_int2(cache, "client_scan|", owner_s, 0)
-    let mut scanned = 0
-    let mut live_seen = 0
-    // Sweep a small bounded slice of the 16384-slot ring per tick.
-    // Idle workers call this on a timer; large scans here can allocate heavily.
-    while scanned < 64 {
-        let slot = (start + scanned) - ((start + scanned) / 16384) * 16384
-        if cmap_has3i(cache, "client_ring|", "", slot) == 1 {
-            let key = cmap_get3i(cache, "client_ring|", "", slot)
-            if len(key) > 2 && cmap_has2(cache, "client_req|", key) == 1 {
-                let owner = cmap_get_int2(cache, "client_owner|", key, -1)
-                if owner == out_fd {
-                    live_seen = 1
-                    let expiry = cmap_get_int2(cache, "client_exp|", key, 0)
-                    if expiry > 0 && now >= expiry {
-                        let req = cmap_get2(cache, "client_req|", key)
-                        if str_eq(madis_method(req), "CANCEL") {
-                            let _ = sip_client_txn_cleanup(key, cache)
-                            scanned = scanned + 1
-                            continue
-                        }
-                        let via = sip_header(req, "Via")
-                        let branch = sip_via_branch(via)
-                        // 3pREG transactions belong to the worker; expire them
-                        // without generating an upstream 408.
-                        if ims_ifc_3preg_branch(branch) == 1 {
-                            let _ = sip_client_txn_cleanup(key, cache)
-                            scanned = scanned + 1
-                            continue
-                        }
-                        // RFC 3261 §16.10: if the INVITE was cancelled, the
-                        // proxy generates 487 instead of 408.
-                        let timeout_cid = sip_header(req, "Call-ID")
-                        let mut timeout_code = 408
-                        let mut timeout_reason = "Request Timeout"
-                        if cmap_has(cache, "cancelled|" + timeout_cid) == 1 {
-                            timeout_code = 487
-                            timeout_reason = "Request Terminated"
-                            let _ = cmap_del(cache, "cancelled|" + timeout_cid)
-                        }
-                        let timeout_resp = sip_reply(req, timeout_code, timeout_reason, "", "")
-                        let mut selected_timeout = timeout_resp
-                        if len(branch) > 0 && cmap_has2(cache, "fork_branch|", branch) == 1 {
-                            selected_timeout = sip_fork_collect_response(timeout_resp, cache)
-                        }
-                        if len(selected_timeout) > 0 {
-                            let upstream = sip_strip_top_via(selected_timeout)
-                            if len(sip_header(upstream, "Via")) > 0 {
-                                let _ = sip_forward_reply(upstream, cache, out_fd)
-                            }
-                        }
-                        if str_eq(madis_method(req), "INVITE") {
-                            let mut caller = sip_uri_user(sip_header(req, "From"))
-                            let mut callee = sip_uri_user(sip_header(req, "To"))
-                            if cmap_has(calls, timeout_cid) == 1 {
-                                let parts = str_split(cmap_get(calls, timeout_cid), "|")
-                                if len(parts) >= 2 {
-                                    caller = parts[0]
-                                    callee = parts[1]
-                                }
-                            }
-                            let _ = db_cdr(db, db_ok, timeout_cid, caller, callee, "TIMEOUT:" + string(timeout_code))
-                            let _ = rtp_process_delete(timeout_cid, db, db_ok, cache)
-                            let mut maf_timeout_call = maf_worker_inbound_call_for_wire(cache, maf_worker_tenant(), timeout_cid)
-                            if len(maf_timeout_call) == 0 {
-                                let at = str_index(timeout_cid, "@")
-                                let candidate = if at > 0 { timeout_cid[0:at] } else { timeout_cid }
-                                if len(candidate) > 0 && len(maf_worker_inbound_cache_get(cache, candidate)) > 0 {
-                                    maf_timeout_call = candidate
-                                }
-                            }
-                            if len(maf_timeout_call) > 0 {
-                                let packed = maf_worker_inbound_cache_get(cache, maf_timeout_call)
-                                let inbound_invite = maf_worker_cached_invite(packed)
-                                if len(inbound_invite) > 0 {
-                                    let _ = sip_call_state_timeout_cleanup(calls, cache, inbound_invite)
-                                }
-                                let timeout_state = if timeout_code == 487 { "canceled" } else { "timeout" }
-                                let _ = maf_worker_call_final(db, db_ok, maf_worker_tenant(), maf_timeout_call, timeout_state, timeout_code, timeout_reason, "timer", sha256("madis.maf.inbound.timeout|" + maf_timeout_call)[0:32])
-                                let _ = maf_worker_route_attempt_finish(db, db_ok, maf_worker_tenant(), maf_timeout_call, "failed", timeout_code, "timer_expired", timeout_reason)
-                                let _ = cmap_incr(cache, "prom|maf_stale_cleanups|reason=\"timer_expired\"", 1)
-                                let _ = cmap_del(cache, "maf_inbound|" + maf_timeout_call)
-                                let _ = cmap_del(cache, "maf_created_ms|" + maf_timeout_call)
-                                let _ = cmap_del(cache, "maf_invite|" + maf_timeout_call)
-                                let _ = cmap_del(cache, "maf_target|" + maf_timeout_call)
-                                let _ = cmap_del(cache, "maf_transport|" + maf_timeout_call)
-                                let _ = cmap_del(cache, "maf_response|" + maf_timeout_call)
-                            }
-                            let _ = sip_call_state_timeout_cleanup(calls, cache, req)
-                        }
-                        let _ = sip_client_txn_cleanup(key, cache)
-                        acted = acted + 1
-                    } else {
-                        let transport = cmap_get2(cache, "client_transport|", key)
-                        if str_eq(transport, "udp") {
-                            let next = cmap_get_int2(cache, "client_next|", key, 0)
-                            if next > 0 && now >= next {
-                                let req = cmap_get2(cache, "client_req|", key)
-                                let target = cmap_get2(cache, "client_target|", key)
-                                let _ = sip_resend_target(target, req, transport, cache, out_fd)
-                                let mut attempt = cmap_get_int2(cache, "client_attempt|", key, 0)
-                                attempt = attempt + 1
-                                let mut interval = sip_t1_ms()
-                                let mut i = 0
-                                while i < attempt {
-                                    if interval >= sip_t2_ms() { interval = sip_t2_ms(); break }
-                                    interval = interval * 2
-                                    if interval > sip_t2_ms() { interval = sip_t2_ms() }
-                                    i = i + 1
-                                }
-                                cmap_set_int2(cache, "client_attempt|", key, attempt)
-                                cmap_set_int2(cache, "client_next|", key, now + interval)
-                                acted = acted + 1
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        scanned = scanned + 1
-    }
-    cmap_set_int2(cache, "client_scan|", owner_s, (start + scanned) - ((start + scanned) / 16384) * 16384)
-    if live_seen == 0 {
-        let empty = cmap_get_int2(cache, "client_empty_scan|", owner_s, 0) + 1
-        if empty >= 256 {
-            cmap_set_int2(cache, "client_active|", owner_s, 0)
-            cmap_set_int2(cache, "client_empty_scan|", owner_s, 0)
-        } else {
-            cmap_set_int2(cache, "client_empty_scan|", owner_s, empty)
-        }
-    } else {
-        cmap_set_int2(cache, "client_empty_scan|", owner_s, 0)
-    }
-    return acted
-}
-
-fn app_command_reply(msg: string, raw: string) -> string {
-    let action = str_to_lower(str_trim_space(json_get_string(raw, "action")))
-    let mut status = json_get_int(raw, "status")
-    let mut reason = json_get_string(raw, "reason")
-    let mut extra = app_gateway_reply_headers(raw)
-    if str_eq(action, "redirect") {
-        status = 302
-        reason = "Moved Temporarily"
-        extra = extra + "Contact: <" + json_get_string(raw, "target") + ">\r\n"
-    }
-    if len(reason) == 0 { reason = "SIP Application Response" }
-    let body = json_get_string(raw, "body")
-    return sip_reply(msg, status, reason, extra, body)
-}
-
-fn app_command_apply(msg: string, raw: string) -> string {
-    let updated = app_gateway_apply_headers(msg, raw)
-    if sip_validate_message(updated, len(updated)) == 0 { return "__APP_INVALID_MESSAGE__" }
-    return updated
-}
 
 // Cache env values that never change at runtime — env_get_or is not free at 10K+ CPS.
 fn cached_env(cache: CMap, cache_key: string, env_key: string, fallback: string) -> string {
@@ -551,11 +140,11 @@ live fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: stri
         }
         let b2_key = b2bua_lookup_out(data, cache)
         if len(b2_key) > 0 {
-            let cseq_parts = str_split(str_trim_space(sip_header(data, "CSeq")), " ")
-            if len(cseq_parts) >= 2 && str_eq(str_to_upper(str_trim_space(cseq_parts[1])), "INVITE") {
+            let cseq_parts = data |> sip_header("CSeq") |> str_trim_space() |> str_split(" ")
+            if len(cseq_parts) >= 2 && str_eq(cseq_parts[1] |> str_trim_space() |> str_to_upper(), "INVITE") {
                 let original_cid = b2bua_in_cid(b2_key, cache)
                 let original_from_tag = sip_addr_tag(b2bua_in_from(b2_key, cache))
-                let remote_tag = sip_addr_tag(sip_header(data, "To"))
+                let remote_tag = data |> sip_header("To") |> sip_addr_tag()
                 let media_response = rtp_process_answer(data, len(data), original_cid, original_from_tag, remote_tag, db, db_ok, cache)
                 let mut translated = b2bua_translate_response(media_response, b2_key, cache)
                 let mut app_drop = 0
@@ -584,7 +173,7 @@ live fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: stri
                 if len(translated) > 0 { return translated }
             } else {
                 let _ = sip_client_txn_finish(data, cache)
-                if len(cseq_parts) >= 2 && str_eq(str_to_upper(str_trim_space(cseq_parts[1])), "BYE") { let _ = b2bua_cleanup(b2_key, cache) }
+                if len(cseq_parts) >= 2 && str_eq(cseq_parts[1] |> str_trim_space() |> str_to_upper(), "BYE") { let _ = b2bua_cleanup(b2_key, cache) }
                 return ""
             }
         }
@@ -620,7 +209,7 @@ live fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: stri
         // provisional response. Bind by Call-ID + To-tag. Forked legs use the
         // fork target map; non-fork legs reuse the existing dialog_dst.
         if response_code >= 180 && response_code < 300 {
-            let early_to_tag = sip_addr_tag(sip_header(response_input, "To"))
+            let early_to_tag = response_input |> sip_header("To") |> sip_addr_tag()
             let early_cid = sip_header(response_input, "Call-ID")
             if len(early_to_tag) > 0 && len(early_cid) > 0 {
                 let mut early_target = ""
@@ -694,11 +283,11 @@ live fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: stri
         }
         let response_cid = sip_header(response_input, "Call-ID")
         if response_code >= 200 && response_code < 700 {
-            let response_cseq = str_split(str_trim_space(sip_header(response_input, "CSeq")), " ")
+            let response_cseq = response_input |> sip_header("CSeq") |> str_trim_space() |> str_split(" ")
             let mut response_method = ""
-            if len(response_cseq) >= 2 { response_method = str_to_upper(str_trim_space(response_cseq[1])) }
+            if len(response_cseq) >= 2 { response_method = response_cseq[1] |> str_trim_space() |> str_to_upper() }
             if str_eq(response_method, "BYE") || str_eq(response_method, "CANCEL") {
-                let _ = sip_call_state_cleanup(calls, response_cid, sip_addr_tag(sip_header(response_input, "From")), sip_addr_tag(sip_header(response_input, "To")))
+                let _ = sip_call_state_cleanup(calls, response_cid, response_input |> sip_header("From") |> sip_addr_tag(), response_input |> sip_header("To") |> sip_addr_tag())
                 let _ = sip_dialog_cache_cleanup(cache, response_cid, response_input)
             }
         }
@@ -709,8 +298,8 @@ live fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: stri
         if len(sip_header(resp, "Via")) == 0 { return "" }
         resp = nat_fix_sdp(resp, len(resp), public_ip)
         let resp_cid = sip_header(resp, "Call-ID")
-        let resp_from_tag = sip_addr_tag(sip_header(resp, "From"))
-        let resp_to_tag = sip_addr_tag(sip_header(resp, "To"))
+        let resp_from_tag = resp |> sip_header("From") |> sip_addr_tag()
+        let resp_to_tag = resp |> sip_header("To") |> sip_addr_tag()
         resp = rtp_process_answer(resp, len(resp), resp_cid, resp_from_tag, resp_to_tag, db, db_ok, cache)
         let resp_code = string(response_code)
         let resp_code_int = response_code
@@ -1047,6 +636,21 @@ live fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: stri
             let _ = cmap_del(cache, "maf_created_ms|" + maf_inbound_call)
             let _ = sip_call_state_cleanup(calls, cid, sip_addr_tag(from), sip_addr_tag(to))
             let _ = sip_dialog_cache_cleanup(cache, cid, data)
+            return sip_reply(data, 200, "OK", "", "")
+        }
+        if str_eq(method, "INFO") {
+            let body = sip_body(data)
+            let sig_pos = str_index(body, "Signal=")
+            let mut digit = ""
+            if sig_pos >= 0 && len(body) >= sig_pos + 8 {
+                let ch = body[sig_pos + 7:sig_pos + 8]
+                if not str_eq(ch, " ") && not str_eq(ch, "\t") && not str_eq(ch, "\r") && not str_eq(ch, "\n") {
+                    digit = ch
+                }
+            }
+            let trace = sha256("madis.maf.inbound.dtmf|" + maf_inbound_call + "|" + string(mono_ms()))[0:32]
+            let payload = "{\"call_id\":\"" + maf_worker_json_escape(maf_inbound_call) + "\",\"digit\":\"" + maf_worker_json_escape(digit) + "\",\"body\":\"" + maf_worker_json_escape(body) + "\",\"direction\":\"inbound\"}"
+            let _ = maf_worker_emit_event(db, db_ok, maf_worker_tenant(), "call.dtmf", maf_inbound_call, payload, trace)
             return sip_reply(data, 200, "OK", "", "")
         }
     }
@@ -1440,8 +1044,8 @@ live fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: stri
             let _ = sec_auth_fail_clear(ip, cache)
         }
 
-        let maf_inbound_mode = if cmap_has(cache, "_maf_mode") == 1 { cmap_get(cache, "_maf_mode") } else { let v = str_to_lower(env_get_or("SIP_MAF_INBOUND_MODE", "disabled")); cmap_set(cache, "_maf_mode", v); v }
-        if ims_initial_dialog_request(data, dl) == 1 && (str_eq(maf_inbound_mode, "control") || str_eq(maf_inbound_mode, "route")) {
+        let maf_inbound_mode = cached_env(cache, "_maf_mode", "SIP_MAF_INBOUND_MODE", "disabled") |> str_trim_space() |> str_to_lower()
+        if ims_initial_dialog_request(data, dl) == 1 && (str_eq(maf_inbound_mode, "control") || str_eq(maf_inbound_mode, "route") || str_eq(maf_inbound_mode, "1") || str_eq(maf_inbound_mode, "true") || str_eq(maf_inbound_mode, "yes") || str_eq(maf_inbound_mode, "enabled")) {
             let maf_call_id = maf_worker_ingress_invite(db, db_ok, maf_worker_tenant(), data, ip, source_port, tr, cache)
             if len(maf_call_id) == 0 { return sip_resp(503, "MAF Inbound Unavailable", data, dl, "maf-inbound") }
             return sip_resp(100, "Trying", data, dl, "maf-inbound")
@@ -1461,6 +1065,14 @@ live fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: stri
             let sent = sip_forward_dialog_request(dialog_msg, cid, "INVITE", next_hop, ip, port, tr, cache, forward_fd)
             let _ = ims_session_glare_end(cache, cid)
             if sent == 1 { return "" }
+            if len(maf_inbound_call) > 0 && cmap_has(cache, "maf_inbound_answer|" + maf_inbound_call) == 1 {
+                let prev_resp = cmap_get(cache, "maf_inbound_answer|" + maf_inbound_call)
+                let prev_sdp = sip_body(prev_resp)
+                let to_tag = sip_addr_tag(sip_header(prev_resp, "To"))
+                let contact = sip_header(prev_resp, "Contact")
+                let extra = if len(contact) > 0 { "Contact: " + contact + "\r\nContent-Type: application/sdp\r\n" } else { "Content-Type: application/sdp\r\n" }
+                return sip_reply_with_to_tag(data, 200, "OK", extra, prev_sdp, to_tag)
+            }
             return sip_resp(481, "Call/Transaction Does Not Exist", data, dl, "ims-dialog")
         }
         // P-Charging-Vector on originating initial INVITE + optional PAI.
@@ -1984,6 +1596,36 @@ live fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: stri
         if sent == 1 { return "" }
         return sip_resp(481, "Call/Transaction Does Not Exist", data, dl, "dialog-method")
     }
+    if len(next_hop) > 0 {
+        let forwarded = proxy_hop_via(msg, ip, port, tr)
+        let sent = sip_forward_target(next_hop, forwarded, sip_transport_param(next_hop, "udp"), cache, forward_fd)
+        if sent == 1 { return "" }
+        return sip_resp(503, "Service Unavailable", data, dl, "route-failed")
+    }
+    if str_eq(method, "MESSAGE") || str_eq(method, "PUBLISH") || str_eq(method, "NOTIFY") || str_eq(method, "REFER") || str_eq(method, "SUBSCRIBE") {
+        let ruri = sip_request_uri(data)
+        let mut target_aor = sip_user(to) + "@" + sip_domain(to)
+        if len(sip_user(ruri)) > 0 { target_aor = sip_user(ruri) + "@" + sip_domain(ruri) }
+        let binding = registration_find(reg, target_aor)
+        if len(binding) > 0 {
+            let cp1 = str_index(binding, "|")
+            let contact_uri = if cp1 >= 0 { binding[0:cp1] } else { binding }
+            let mut contact_tr = "udp"
+            if cp1 >= 0 {
+                let rest1 = binding[cp1 + 1:]
+                let cp2 = str_index(rest1, "|")
+                contact_tr = if cp2 >= 0 { rest1[0:cp2] } else { rest1 }
+            }
+            let mut term_target = contact_uri
+            let nat_target = registration_nat_target(binding)
+            if len(nat_target) > 0 { term_target = nat_target }
+            let fwd = proxy_hop_via(msg, ip, port, tr)
+            let sent = sip_forward_target(term_target, fwd, contact_tr, cache, forward_fd)
+            if sent == 1 { return "" }
+            return sip_resp(503, "Service Unavailable", data, dl, "forward-failed")
+        }
+        return sip_resp(404, "Not Found", data, dl, "user-not-registered")
+    }
     return sip_method_not_allowed(data)
     }}}}}}}
 
@@ -2095,710 +1737,6 @@ fn process_sip(data: string, dl: int, reg: CMap, calls: CMap, ip: string, port: 
     return reply
 }
 
-// Drain responses arriving on pooled outbound TCP associations. SIP over a
-// reliable transport may return the response on the same connection, so a
-// write-only pool is not sufficient. UDP workers poll these associations at
-// the same cadence as client timers and route each response through the normal
-// transaction/fork path.
-fn sip_tls_stream_poll(owner: int, reg: CMap, calls: CMap, db: SqlDB, db_ok: int, cache: CMap, outbox: chan[string], realm: string, node_id: string, diameter_lock: Mutex) -> int {
-    let list_key = "tls_assoc_list|" + string(owner)
-    if cmap_has(cache, list_key) == 0 { return 0 }
-    let targets = str_split(cmap_get(cache, list_key), ",")
-    let mut acted = 0
-    let mut i = 0
-    while i < len(targets) {
-        let item = str_trim_space(targets[i])
-        let assoc_key = "tls_assoc|" + string(owner) + "|" + item
-        if cmap_has(cache, assoc_key) == 1 {
-            let mut handle = -1
-            match parse_int(cmap_get(cache, assoc_key)) { Ok(v) => { handle = v } Err(_) => {} }
-            let fd = tls_pool_fd(handle)
-            if fd >= 0 {
-                let el = evloop_new()
-                let _ = evloop_add(el, fd, 1)
-                let ready = evloop_wait(el, 0)
-                let _ = evloop_close(el)
-                if ready > 0 {
-                    let raw = tls_pool_recv(handle, 65536)
-                    if len(raw) == 0 {
-                        let _ = tls_pool_close(handle)
-                        let _ = cmap_del(cache, assoc_key)
-                        let _ = cmap_del(cache, "tls_buf|" + string(owner) + "|" + item)
-                        let _ = sip_assoc_list_remove(cache, list_key, item)
-                    } else {
-                        let buf_key = "tls_buf|" + string(owner) + "|" + item
-                        let mut buf = ""
-                        if cmap_has(cache, buf_key) == 1 { buf = cmap_get(cache, buf_key) }
-                        buf = stream_append(buf, raw)
-                        if len(buf) == 0 {
-                            let _ = tls_pool_close(handle)
-                            let _ = cmap_del(cache, assoc_key)
-                            let _ = cmap_del(cache, buf_key)
-                            let _ = sip_assoc_list_remove(cache, list_key, item)
-                        } else {
-                            while stream_has_complete(buf) == 1 {
-                                let parts = stream_next_msg(buf)
-                                let msg = parts[0]
-                                buf = parts[1]
-                                if len(msg) == 0 { break }
- let reply = process_sip(msg, len(msg), reg, calls, peer_host(fd), peer_port(fd), peer_port(fd), "TLS", owner, db, db_ok, cache, outbox, realm, node_id, diameter_lock)
-                                if len(reply) > 0 { let _ = sip_forward_reply(reply, cache, owner) }
-                                acted = acted + 1
-                            }
-                            cmap_set(cache, buf_key, buf)
-                        }
-                    }
-                }
-            }
-        }
-        i = i + 1
-    }
-    return acted
-}
-
-fn sip_wss_drop_assoc(owner: int, item: string, handle: int, cache: CMap) -> int {
-    if handle > 0 { let _ = wss_pool_close(handle) }
-    let assoc_key = "wss_assoc|" + string(owner) + "|" + item
-    let _ = cmap_del(cache, assoc_key)
-    let _ = cmap_del(cache, "wss_at|" + assoc_key)
-    let _ = cmap_del(cache, "wss_buf|" + string(owner) + "|" + item)
-    let list_key = "wss_assoc_list|" + string(owner)
-    let _ = sip_assoc_list_remove(cache, list_key, item)
-    return 0
-}
-
-// Drain responses arriving on persistent outbound WSS associations. Mako's
-// WSS pool exposes the underlying TLS fd for readiness polling while keeping
-// RFC 6455 framing (including ping/pong, masking, fragmentation, and close
-// handling) inside the runtime.
-fn sip_wss_stream_poll(owner: int, reg: CMap, calls: CMap, db: SqlDB, db_ok: int, cache: CMap, outbox: chan[string], realm: string, node_id: string, diameter_lock: Mutex) -> int {
-    let list_key = "wss_assoc_list|" + string(owner)
-    if cmap_has(cache, list_key) == 0 { return 0 }
-    let targets = str_split(cmap_get(cache, list_key), ",")
-    let mut acted = 0
-    let mut idle_ms = 600000
-    match parse_int(env_get_or("SIP_WSS_IDLE_MS", "600000")) {
-        Ok(v) => { idle_ms = v }
-        Err(_) => {}
-    }
-    if idle_ms < 60000 { idle_ms = 60000 }
-    if idle_ms > 86400000 { idle_ms = 86400000 }
-    let now = mono_ms()
-    let mut i = 0
-    while i < len(targets) {
-        let item = str_trim_space(targets[i])
-        let assoc_key = "wss_assoc|" + string(owner) + "|" + item
-        if cmap_has(cache, assoc_key) == 1 {
-            let mut handle = -1
-            match parse_int(cmap_get(cache, assoc_key)) { Ok(v) => { handle = v } Err(_) => {} }
-            let mut last = now
-            if cmap_has(cache, "wss_at|" + assoc_key) == 1 {
-                match parse_int(cmap_get(cache, "wss_at|" + assoc_key)) { Ok(v) => { last = v } Err(_) => {} }
-            }
-            let mut expired = 0
-            if last > 0 && now - last > idle_ms { expired = 1 }
-            let fd = wss_pool_fd(handle)
-            if expired == 1 || fd < 0 {
-                let _ = sip_wss_drop_assoc(owner, item, handle, cache)
-            } else {
-                let el = evloop_new()
-                let _ = evloop_add(el, fd, 1)
-                let ready = evloop_wait(el, 0)
-                let _ = evloop_close(el)
-                if ready > 0 {
-                    let raw = wss_pool_recv(handle, 65536)
-                    if len(raw) == 0 {
-                        let _ = sip_wss_drop_assoc(owner, item, handle, cache)
-                    } else {
-                        cmap_set(cache, "wss_at|" + assoc_key, string(now))
-                        let buf_key = "wss_buf|" + string(owner) + "|" + item
-                        let mut buf = ""
-                        if cmap_has(cache, buf_key) == 1 { buf = cmap_get(cache, buf_key) }
-                        buf = stream_append(buf, raw)
-                        if len(buf) == 0 {
-                            let _ = sip_wss_drop_assoc(owner, item, handle, cache)
-                        } else {
-                            while stream_has_complete(buf) == 1 {
-                                let parts = stream_next_msg(buf)
-                                let msg = parts[0]
-                                buf = parts[1]
-                                if len(msg) == 0 { break }
- let reply = process_sip(msg, len(msg), reg, calls, peer_host(fd), peer_port(fd), peer_port(fd), "WSS", owner, db, db_ok, cache, outbox, realm, node_id, diameter_lock)
-                                if len(reply) > 0 { let _ = sip_forward_reply(reply, cache, owner) }
-                                acted = acted + 1
-                            }
-                            cmap_set(cache, buf_key, buf)
-                        }
-                    }
-                }
-            }
-        }
-        i = i + 1
-    }
-    return acted
-}
-
-// Drain responses arriving on pooled outbound TCP and TLS associations.  A
-// reliable SIP transport is framed by Content-Length, so each association has
-// an independent reassembly buffer before responses enter transaction logic.
-fn sip_stream_poll(owner: int, reg: CMap, calls: CMap, db: SqlDB, db_ok: int, cache: CMap, outbox: chan[string], realm: string, node_id: string, diameter_lock: Mutex) -> int {
-    let mut acted = sip_wss_stream_poll(owner, reg, calls, db, db_ok, cache, outbox, realm, node_id, diameter_lock)
-    acted = acted + sip_tls_stream_poll(owner, reg, calls, db, db_ok, cache, outbox, realm, node_id, diameter_lock)
-    let list_key = "tcp_assoc_list|" + string(owner)
-    if cmap_has(cache, list_key) == 0 { return acted }
-    let targets = str_split(cmap_get(cache, list_key), ",")
-    let mut i = 0
-    while i < len(targets) {
-        let item = str_trim_space(targets[i])
-        let assoc_key = "tcp_assoc|" + string(owner) + "|" + item
-        if cmap_has(cache, assoc_key) == 1 {
-            let mut fd = -1
-            match parse_int(cmap_get(cache, assoc_key)) { Ok(v) => { fd = v } Err(_) => {} }
-            if fd >= 0 {
-                let el = evloop_new()
-                let _ = evloop_add(el, fd, 1)
-                let ready = evloop_wait(el, 0)
-                let _ = evloop_close(el)
-                if ready > 0 {
-                    let raw = tcp_read(fd)
-                    if len(raw) == 0 {
-                        let _ = tcp_close(fd)
-                        let _ = cmap_del(cache, assoc_key)
-                        let _ = cmap_del(cache, "tcp_buf|" + string(owner) + "|" + item)
-                        let _ = sip_assoc_list_remove(cache, list_key, item)
-                    } else {
-                        let buf_key = "tcp_buf|" + string(owner) + "|" + item
-                        let mut buf = ""
-                        if cmap_has(cache, buf_key) == 1 { buf = cmap_get(cache, buf_key) }
-                        buf = stream_append(buf, raw)
-                        if len(buf) == 0 {
-                            let _ = tcp_close(fd)
-                            let _ = cmap_del(cache, assoc_key)
-                            let _ = cmap_del(cache, buf_key)
-                            let _ = sip_assoc_list_remove(cache, list_key, item)
-                        } else {
-                            while stream_has_complete(buf) == 1 {
-                                let parts = stream_next_msg(buf)
-                                let msg = parts[0]
-                                buf = parts[1]
-                                if len(msg) == 0 { break }
- let reply = process_sip(msg, len(msg), reg, calls, peer_host(fd), peer_port(fd), peer_port(fd), "TCP", owner, db, db_ok, cache, outbox, realm, node_id, diameter_lock)
-                                if len(reply) > 0 { let _ = sip_forward_reply(reply, cache, owner) }
-                                acted = acted + 1
-                            }
-                            cmap_set(cache, buf_key, buf)
-                        }
-                    }
-                }
-            }
-        }
-        i = i + 1
-    }
-    return acted
-}
-
-// Track the downstream TCP connection for response routing. Both the global
-// transaction map and each connection's cleanup list are capped so a client
-// cannot retain state forever by keeping one stream open and sending unique
-// transactions.
-// RFC 7118 §5: track transport type alongside FD so responses use the
-// correct framing (WebSocket text frame vs raw TCP).
-fn sip_server_conn_track_transport(cache: CMap, txn: string, c: int, transport: string) -> int {
-    if len(txn) <= 2 { return 0 }
-    cmap_set(cache, "server_conn_tr|" + txn, transport)
-    return sip_server_conn_track(cache, txn, c)
-}
-
-fn sip_server_conn_track_tls(cache: CMap, txn: string, c: int, handle: int) -> int {
-    if len(txn) <= 2 || handle < 0 { return 0 }
-    cmap_set(cache, "server_conn_tls_handle|" + txn, string(handle))
-    return sip_server_conn_track_transport(cache, txn, c, "TLS")
-}
-
-fn sip_server_conn_track(cache: CMap, txn: string, c: int) -> int {
-    if len(txn) <= 2 { return 0 }
-    let seq = cmap_incr(cache, "server_conn_seq", 1)
-    if seq < 0 { return 0 }
-    let slot = seq - (seq / 8192) * 8192
-    let ring_key = "server_conn_ring|" + string(slot)
-    if cmap_has(cache, ring_key) == 1 {
-        let old = cmap_get(cache, ring_key)
-        if len(old) > 0 && not str_eq(old, txn) { let _ = cmap_del(cache, "server_conn|" + old); let _ = cmap_del(cache, "server_conn_tr|" + old); let _ = cmap_del(cache, "server_conn_tls_handle|" + old) }
-    }
-    cmap_set(cache, ring_key, txn)
-    cmap_set(cache, "server_conn|" + txn, string(c))
-
-    let list_key = "server_conn_list|" + string(c)
-    let mut list = ""
-    if cmap_has(cache, list_key) == 1 { list = cmap_get(cache, list_key) }
-    if str_contains("," + list + ",", "," + txn + ",") { return 1 }
-    let values = str_split(list, ",")
-    let mut start = 0
-    if len(values) >= 1024 {
-        let old_txn = str_trim_space(values[0])
-        if len(old_txn) > 0 && cmap_has(cache, "server_conn|" + old_txn) == 1 {
-            if str_eq(cmap_get(cache, "server_conn|" + old_txn), string(c)) { let _ = cmap_del(cache, "server_conn|" + old_txn) }
-            let _ = cmap_del(cache, "server_conn_tr|" + old_txn)
-            let _ = cmap_del(cache, "server_conn_tls_handle|" + old_txn)
-        }
-        start = 1
-    }
-    let mut next = ""
-    let mut i = start
-    while i < len(values) {
-        let value = str_trim_space(values[i])
-        if len(value) > 0 {
-            if len(next) > 0 { next = next + "," }
-            next = next + value
-        }
-        i = i + 1
-    }
-    if len(next) > 0 { next = next + "," }
-    cmap_set(cache, list_key, next + txn)
-    return 1
-}
-
-// ============ WORKERS ============
-
-fn udp_worker(id: int, fd: int, port: int, reg: CMap, calls: CMap, cache: CMap, outbox: chan[string], diameter_lock: Mutex) -> int {
-    let _ = id
-    let db_url = env_get_or("SIP_DB_URL", "")
-    let realm = env_get_or("SIP_REALM", "mako.local")
-    let nid = env_get_or("SIP_NODE_ID", "node1")
-    let mut db_ok = 0
-    let mut db = sql_open_postgres(db_url)
-    if len(db_url) > 0 { db_ok = 1 }
-    let mut last_txn_tick = mono_ms()
-    while shutdown_requested() == 0 {
-        // Drain up to 256 datagrams per evloop wakeup. A single epoll/kqueue
-        // event can mean many packets queued; reading one per wakeup adds
-        // syscall overhead on busy sockets.
-        let mut ei = 0
-        while ei < 256 {
-            let data = udp_recv(fd, 65535)
-            let dl = len(data)
-            if dl <= 0 { break }
-            let mut peer_ip = udp_last_sender_host()
-            let mut peer_port = udp_last_sender_port()
-            if len(peer_ip) == 0 {
-                let via = sip_header(data, "Via")
-                peer_ip = sip_via_host(via)
-                peer_port = sip_via_port(via)
-                if peer_port <= 0 { peer_port = 5060 }
-            }
- let reply = process_sip(data, dl, reg, calls, peer_ip, port, peer_port, "UDP", fd, db, db_ok, cache, outbox, realm, nid, diameter_lock)
-            if len(reply) > 0 {
-                if sip_is_response(data) == 1 {
-                    if sip_forward_reply(reply, cache, fd) == 1 {
-                        ei = ei + 1
-                        continue
-                    }
-                }
-                let _ = udp_send_to(fd, peer_ip, peer_port, reply)
-            }
-            ei = ei + 1
-        }
-        let tick_now = mono_ms()
-        if tick_now - last_txn_tick >= 1000 {
-            let _ = sip_stream_poll(fd, reg, calls, db, db_ok, cache, outbox, realm, nid, diameter_lock)
-            let _ = sip_client_txn_tick(cache, fd, calls, db, db_ok)
-            let _ = sip_server_txn_tick(cache, fd)
-            last_txn_tick = tick_now
-        }
-        if ei == 0 {
-            sleep_ms(10)
-        }
-    }
-    return 0
-}
-
-fn maf_poll_worker(fd: int, cache: CMap, calls: CMap) -> int {
-    let db_url = env_get_or("SIP_DB_URL", "")
-    let nid = env_get_or("SIP_NODE_ID", "node1")
-    let mut db_ok = 0
-    let mut db = sql_open_postgres(db_url)
-    if len(db_url) > 0 { db_ok = 1 }
-    let mut last_txn_tick = mono_ms()
-    slog("  MAF:     command poll worker started")
-    while shutdown_requested() == 0 {
-        let acted = maf_worker_poll(db, db_ok, cache, fd, nid)
-        if acted > 0 { slog("  MAF:     processed " + string(acted) + " command(s)") }
-        let tick_now = mono_ms()
-        if tick_now - last_txn_tick >= 1000 {
-            let _ = sip_client_txn_tick(cache, fd, calls, db, db_ok)
-            last_txn_tick = tick_now
-        }
-        sleep_ms(1000)
-    }
-    return 0
-}
-
-fn tls_apply_sni(srv: TlsServer, spec: string) -> int {
-    if len(spec) == 0 { return 0 }
-    let entries = str_split(spec, ",")
-    let mut i = 0
-    while i < len(entries) {
-        let e = str_trim_space(entries[i])
-        let eq = str_index(e, "=")
-        if eq > 0 {
-            let host = e[0:eq]
-            let rest = e[eq + 1:]
-            let colon = str_index(rest, ":")
-            if colon > 0 {
-                let cert = rest[0:colon]
-                let key = rest[colon + 1:]
-                let rc = tls_server_sni_add(srv, host, cert, key)
-                if rc != 0 {
-                    slog("  TLS SNI add failed for " + host)
-                }
-            }
-        }
-        i = i + 1
-    }
-    return 0
-}
-
-// Server-side TLS uses Mako 0.5.5 builtins — no C bridge needed.
-fn tls_srv_cleanup(handle: int, el: EvLoop, tls_handles: map[string]int, buffers: map[string]string, peers: map[string]string, peer_ports: map[string]int, tls_states: map[string]int, cache: CMap) -> int {
-    let tls_fd = tls_server_pool_fd(handle)
-    if tls_fd >= 0 { let _ = evloop_del(el, tls_fd) }
-    let fd_key = string(tls_fd)
-    let _ = ims_flow_clear_conn(cache, peers[fd_key], peer_ports[fd_key], "TLS")
-    let _ = proxy_conn_decr(cache, "TLS")
-    if len(peers[fd_key]) > 0 { let _ = sip_per_ip_conn_release(cache, peers[fd_key]) }
-    let conn_list_key = "server_conn_list|" + fd_key
-    if cmap_has(cache, conn_list_key) == 1 {
-        let conn_list = str_split(cmap_get(cache, conn_list_key), ",")
-        let mut ci = 0
-        while ci < len(conn_list) {
-            let key = str_trim_space(conn_list[ci])
-            if len(key) > 0 && cmap_has(cache, "server_conn|" + key) == 1 {
-                if str_eq(cmap_get(cache, "server_conn|" + key), fd_key) {
-                    let _ = cmap_del(cache, "server_conn|" + key)
-                    let _ = cmap_del(cache, "server_conn_tr|" + key)
-                    let _ = cmap_del(cache, "server_conn_tls_handle|" + key)
-                }
-            }
-            ci = ci + 1
-        }
-        let _ = cmap_del(cache, conn_list_key)
-    }
-    // RFC 5923: clear any alias entries for this closing connection
-    let _ = tls_reuse_clear(cache, handle)
-    let _ = tls_server_pool_close(handle)
-    delete(tls_handles, fd_key)
-    delete(buffers, fd_key)
-    delete(peers, fd_key)
-    delete(peer_ports, fd_key)
-    delete(tls_states, fd_key)
-    return 1
-}
-
-// TLS worker: multiplexed via integer handles. Falls back to serial if
-// the C bridge returns -1 (test/non-OpenSSL builds use stubs).
-fn tls_worker(fd: int, srv: TlsServer, port: int, reg: CMap, calls: CMap, cache: CMap, outbox: chan[string], diameter_lock: Mutex) -> int {
-    let db_url = env_get_or("SIP_DB_URL", "")
-    let realm = env_get_or("SIP_REALM", "mako.local")
-    let nid = env_get_or("SIP_NODE_ID", "node1")
-    let mut db_ok = 0
-    let mut db = sql_open_postgres(db_url)
-    if len(db_url) > 0 { db_ok = 1 }
-    let forward_fd = nb_udp_bind(0)
-    let el = evloop_new()
-    let _ = evloop_add(el, fd, 1)
-    let mut buffers = make(map[string]string)
-    let mut peers = make(map[string]string)
-    let mut peer_ports = make(map[string]int)
-    let mut tls_states = make(map[string]int)
-    let mut tls_handles = make(map[string]int)
-    let max_connections = sip_tcp_connection_limit()
-    let pp_enabled = proxy_protocol_enabled()
-    let mut last_txn_tick = mono_ms()
-
-    while shutdown_requested() == 0 {
-        let ready = evloop_wait(el, 250)
-        if ready < 0 { break }
-        let mut event_i = 0
-        while event_i < ready {
-            let event_fd = evloop_event_fd(el, event_i)
-            if event_fd == fd {
-                let mut accepted = 0
-                while accepted < 64 {
-                    let c = tcp_accept_nb(fd)
-                    if c < 0 { break }
-                    if len(buffers) >= max_connections {
-                        let _ = tcp_close(c)
-                    } else if io_set_nonblocking(c, 0) < 0 || tcp_nodelay(c) < 0 {
-                        let _ = tcp_close(c)
-                    } else {
-                        let mut peer_ip = peer_host(c)
-                        if len(peer_ip) == 0 { peer_ip = "0.0.0.0" }
-                        if sip_per_ip_conn_check(cache, peer_ip) == 0 {
-                            let _ = tcp_close(c)
-                            accepted = accepted + 1
-                            continue
-                        }
-                        let mut pp_port = peer_port(c)
-                        if pp_enabled == 1 && proxy_protocol_peer_trusted(peer_ip) == 1 {
-                            if io_read_ready(c, 500) > 0 {
-                                let pp_raw = tcp_read(c)
-                                if len(pp_raw) > 0 && str_has_prefix(pp_raw, "PROXY ") {
-                                    let pp = proxy_protocol_parse(pp_raw)
-                                    if len(pp[0]) > 0 { peer_ip = pp[0] }
-                                    if len(pp[1]) > 0 {
-                                        match parse_int(pp[1]) { Ok(v) => { pp_port = v } Err(_) => {} }
-                                    }
-                                }
-                            }
-                        }
-                        let handle = tls_server_pool_accept(srv, c)
-                        if handle < 0 {
-                            slog("  TLS:     accept failed from " + peer_ip)
-                            let _ = sip_per_ip_conn_release(cache, peer_ip)
-                            let _ = tcp_close(c)
-                        } else {
-                            let tls_fd = tls_server_pool_fd(handle)
-                            if tls_fd < 0 {
-                                slog("  TLS:     accept returned invalid fd from " + peer_ip)
-                                let _ = sip_per_ip_conn_release(cache, peer_ip)
-                                let _ = tls_server_pool_close(handle)
-                            } else {
-                                let _ = io_set_nonblocking(tls_fd, 1)
-                                let fk = string(tls_fd)
-                                buffers[fk] = ""
-                                peers[fk] = peer_ip
-                                peer_ports[fk] = pp_port
-                                tls_states[fk] = 1
-                                tls_handles[fk] = handle
-                                let _ = proxy_conn_incr(cache, "TLS")
-                                let _ = evloop_add(el, tls_fd, 1)
-                            }
-                        }
-                    }
-                    accepted = accepted + 1
-                }
-            } else if event_fd >= 0 {
-                let fd_key = string(event_fd)
-                let handle = tls_handles[fd_key]
-                {
-                    let raw = tls_server_pool_read(handle, 65536)
-                    let mut close_conn = 0
-                    if len(raw) == 0 { close_conn = 1 }
-                    if close_conn == 0 {
-                        let combined = stream_append(buffers[fd_key], raw)
-                        if len(combined) == 0 {
-                            close_conn = 1
-                        } else {
-                            buffers[fd_key] = combined
-                            let mut budget = 64
-                            while budget > 0 && stream_has_complete(buffers[fd_key]) == 1 {
-                                let parts = stream_next_msg(buffers[fd_key])
-                                let msg = parts[0]
-                                buffers[fd_key] = parts[1]
-                                if len(msg) == 0 { break }
-                                if sip_ingress_header_safe(msg, len(msg)) == 0 || sip_ok(msg) == 0 { budget = budget - 1; continue }
-                                let tls_txn = sip_transaction_key(msg, len(msg))
-                                if len(tls_txn) > 2 { let _ = sip_server_conn_track_tls(cache, tls_txn, event_fd, handle) }
-                                // RFC 5923: register inbound TLS conn as reusable when Via has ;alias
-                                if sip_is_response(msg) == 0 && tls_reuse_enabled() == 1 {
-                                    let alias_via = sip_header(msg, "Via")
-                                    if tls_reuse_via_has_alias(alias_via) == 1 {
-                                        let ah = sip_via_host(alias_via)
-                                        let ap = sip_via_port(alias_via)
-                                        let _ = tls_reuse_register_alias(cache, ah, ap, handle)
-                                    }
-                                }
- let reply = process_sip(msg, len(msg), reg, calls, peers[fd_key], port, peer_ports[fd_key], "TLS", forward_fd, db, db_ok, cache, outbox, realm, nid, diameter_lock)
-                                if len(reply) > 0 {
-                                    if sip_is_response(msg) == 1 {
-                                        let _ = sip_forward_reply(reply, cache, forward_fd)
-                                    } else {
-                                        let tw_n = tls_server_pool_write(handle, reply)
-                                        if tw_n < len(reply) { close_conn = 1 }
-                                    }
-                                }
-                                budget = budget - 1
-                            }
-                        }
-                    }
-                    if close_conn == 1 {
-                        let _ = tls_srv_cleanup(handle, el, tls_handles, buffers, peers, peer_ports, tls_states, cache)
-                    }
-                }
-            }
-            event_i = event_i + 1
-        }
-        let maint_now = mono_ms()
-        if maint_now - last_txn_tick >= 250 {
-            let _ = sip_stream_poll(forward_fd, reg, calls, db, db_ok, cache, outbox, realm, nid, diameter_lock)
-            let _ = sip_client_txn_tick(cache, forward_fd, calls, db, db_ok)
-            let _ = sip_server_txn_tick(cache, forward_fd)
-            last_txn_tick = maint_now
-        }
-        // Hot TLS cert reload: check cert file mtime every 30s
-        if cmap_has(cache, "_tls_cert") == 1 {
-            let tls_now = mono_ms()
-            let mut tls_last_check = 0
-            if cmap_has(cache, "_tls_check_at") == 1 {
-                match parse_int(cmap_get(cache, "_tls_check_at")) { Ok(v) => { tls_last_check = v } Err(_) => {} }
-            }
-            if tls_now - tls_last_check >= 30000 {
-                cmap_set(cache, "_tls_check_at", string(tls_now))
-                let cert_path = cmap_get(cache, "_tls_cert")
-                let key_path = cmap_get(cache, "_tls_key")
-                let new_size = string(path_file_size(cert_path))
-                let old_size = cmap_get(cache, "_tls_mtime")
-                if not str_eq(new_size, old_size) {
-                    let rc = tls_server_reload(srv, cert_path, key_path)
-                    if rc == 1 {
-                        cmap_set(cache, "_tls_mtime", new_size)
-                        slog("  TLS:     cert reloaded from " + cert_path)
-                    }
-                }
-            }
-        }
-    }
-    let _ = evloop_close(el)
-    return 0
-}
-
-fn wss_cleanup_multiplexed(c: int, el: EvLoop, buffers: map[string]string, peers: map[string]string, peer_ports: map[string]int, ws_upgraded: map[string]int, cache: CMap) -> int {
-    let _ = evloop_del(el, c)
-    let _ = proxy_conn_decr(cache, "WSS")
-    let fd_key = string(c)
-    let cleanup_ip = peers[fd_key]
-    if len(cleanup_ip) > 0 { let _ = sip_per_ip_conn_release(cache, cleanup_ip) }
-    let _ = ims_flow_clear_conn(cache, cleanup_ip, peer_port(c), "WSS")
-    if ws_upgraded[fd_key] == 1 {
-        let _ = ws_close(c)
-    } else {
-        let _ = tcp_close(c)
-    }
-    delete(buffers, fd_key)
-    delete(peers, fd_key)
-    delete(peer_ports, fd_key)
-    delete(ws_upgraded, fd_key)
-    return 1
-}
-
-fn wss_worker(fd: int, port: int, reg: CMap, calls: CMap, cache: CMap, outbox: chan[string], diameter_lock: Mutex) -> int {
-    let db_url = env_get_or("SIP_DB_URL", "")
-    let realm = env_get_or("SIP_REALM", "mako.local")
-    let nid = env_get_or("SIP_NODE_ID", "node1")
-    let mut db_ok = 0
-    let mut db = sql_open_postgres(db_url)
-    if len(db_url) > 0 { db_ok = 1 }
-    let forward_fd = nb_udp_bind(0)
-    while shutdown_requested() == 0 {
-        let c = tcp_accept(fd)
-        if c < 0 {
-            if shutdown_requested() == 1 { break }
-            sleep_ms(25)
-            continue
-        }
-        let _ = tcp_nodelay(c)
-        let mut peer_ip = peer_host(c)
-        if len(peer_ip) == 0 { peer_ip = "0.0.0.0" }
-        let peer_p = peer_port(c)
-        if sip_per_ip_conn_check(cache, peer_ip) == 0 {
-            let _ = tcp_close(c)
-            continue
-        }
-
-        let upgrade = tcp_read(c)
-        if len(upgrade) == 0 || not str_has_prefix(str_to_lower(upgrade), "get ") {
-            let _ = sip_per_ip_conn_release(cache, peer_ip)
-            let _ = tcp_close(c)
-            continue
-        }
-        let ws_key = sip_header(upgrade, "Sec-WebSocket-Key")
-        if len(ws_key) == 0 {
-            let _ = sip_per_ip_conn_release(cache, peer_ip)
-            let _ = tcp_close(c)
-            continue
-        }
-        let ws_acc = ws_accept_key(ws_key)
-        let ws_proto = sip_header(upgrade, "Sec-WebSocket-Protocol")
-        let mut ws_proto_header = ""
-        if str_contains(str_to_lower(ws_proto), "sip") { ws_proto_header = "Sec-WebSocket-Protocol: sip\r\n" }
-        let ws_reply = "HTTP/1.1 101 Switching Protocols\r\n"
-            + "Upgrade: websocket\r\n"
-            + "Connection: Upgrade\r\n"
-            + "Sec-WebSocket-Accept: " + ws_acc + "\r\n"
-            + ws_proto_header + "\r\n"
-        if tcp_write(c, ws_reply) < 0 {
-            let _ = sip_per_ip_conn_release(cache, peer_ip)
-            let _ = tcp_close(c)
-            continue
-        }
-
-        let _ = proxy_conn_incr(cache, "WSS")
-        let mut buffer = ""
-        let mut alive = 1
-        let mut read_wait_ms = 1000
-        match parse_int(env_get_or("SIP_WSS_READ_WAIT_MS", "1000")) {
-            Ok(v) => { read_wait_ms = v }
-            Err(_) => {}
-        }
-        if read_wait_ms < 1 { read_wait_ms = 1 }
-        if read_wait_ms > 60000 { read_wait_ms = 60000 }
-        while alive == 1 && shutdown_requested() == 0 {
-            if io_read_ready(c, read_wait_ms) <= 0 {
-                continue
-            }
-            let chunk = ws_recv(c, 65536)
-            if len(chunk) == 0 {
-                alive = 0
-            } else {
-                if sip_msg_complete(chunk) == 1 {
-                    if sip_ingress_header_safe(chunk, len(chunk)) == 1 && sip_ok(chunk) == 1 {
-                        let txn = sip_transaction_key(chunk, len(chunk))
-                        if len(txn) > 2 { let _ = sip_server_conn_track_transport(cache, txn, c, "WSS") }
-                        let reply = process_sip(chunk, len(chunk), reg, calls, peer_ip, port, peer_p, "WSS", forward_fd, db, db_ok, cache, outbox, realm, nid, diameter_lock)
-                        if len(reply) > 0 {
-                            if sip_is_response(chunk) == 1 {
-                                let _ = sip_forward_reply(reply, cache, forward_fd)
-                            } else {
-                                let _ = ws_send_text(c, reply)
-                            }
-                        }
-                    }
-                } else {
-                    let combined = stream_append(buffer, chunk)
-                    if len(combined) == 0 {
-                        alive = 0
-                    } else {
-                        buffer = combined
-                        let mut message_budget = 64
-                        while message_budget > 0 && stream_has_complete(buffer) == 1 {
-                            let parts = stream_next_msg(buffer)
-                            let msg = parts[0]
-                            buffer = parts[1]
-                            if len(msg) == 0 { break }
-                            if sip_ingress_header_safe(msg, len(msg)) == 1 && sip_ok(msg) == 1 {
-                                let txn = sip_transaction_key(msg, len(msg))
-                                if len(txn) > 2 { let _ = sip_server_conn_track_transport(cache, txn, c, "WSS") }
-                                let reply = process_sip(msg, len(msg), reg, calls, peer_ip, port, peer_p, "WSS", forward_fd, db, db_ok, cache, outbox, realm, nid, diameter_lock)
-                                if len(reply) > 0 {
-                                    if sip_is_response(msg) == 1 {
-                                        let _ = sip_forward_reply(reply, cache, forward_fd)
-                                    } else {
-                                        let _ = ws_send_text(c, reply)
-                                    }
-                                }
-                            }
-                            message_budget = message_budget - 1
-                        }
-                    }
-                }
-            }
-        }
-        let _ = proxy_conn_decr(cache, "WSS")
-        let _ = sip_per_ip_conn_release(cache, peer_ip)
-        let _ = ws_close(c)
-    }
-    return 0
-}
 fn sip_config_port(name: string, default_port: int) -> int {
     let mut port = default_port
     match parse_int(env_get_or(name, string(default_port))) {
@@ -3059,7 +1997,7 @@ fn main() {
 
     let ipv6_cfg = env_get_or("SIP_IPV6", "1")
     let mut ipv6_enabled = 0
-    let ipv6_low = str_to_lower(str_trim_space(ipv6_cfg))
+    let ipv6_low = ipv6_cfg |> str_trim_space() |> str_to_lower()
     if str_eq(ipv6_low, "1") || str_eq(ipv6_low, "true") || str_eq(ipv6_low, "yes") {
         ipv6_enabled = 1
     }

@@ -39,7 +39,7 @@ fn billing_json_escape(s: string) -> string {
 }
 
 fn billing_mode() -> string {
-    let mode = str_to_lower(str_trim_space(env_get_or("SIP_BILLING_MODE", "outbox")))
+    let mode = env_get_or("SIP_BILLING_MODE", "outbox") |> str_trim_space() |> str_to_lower()
     if str_eq(mode, "off") { return "off" }
     if str_eq(mode, "preauth") { return "preauth" }
     return "outbox"

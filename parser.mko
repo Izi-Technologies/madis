@@ -146,18 +146,18 @@ fn sip_resp(st: int, reason: string, msg: string, n: int, tag: string) -> string
 
 // RFC 5626 §5.1: inline check so parser.mko is self-contained for tests.
 fn sip_outbound_supported_header(headers: string) -> string {
-    let v = str_to_lower(str_trim_space(env_get_or("SIP_OUTBOUND", "0")))
+    let v = env_get_or("SIP_OUTBOUND", "0") |> str_trim_space() |> str_to_lower()
     if str_eq(v, "1") || str_eq(v, "true") { return headers + "Supported: outbound\r\n" }
     return headers
 }
 
 fn sip_options_response(msg: string) -> string {
-    let mut allow = "Allow: INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, PRACK, UPDATE, SUBSCRIBE, NOTIFY\r\n"
+    let mut allow = "Allow: INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, PRACK, UPDATE, SUBSCRIBE, NOTIFY, MESSAGE, INFO, REFER, PUBLISH\r\n"
         + "Accept: application/sdp, application/pidf+xml, application/simple-message-summary\r\n"
         + "Supported: eventlist, 100rel\r\n"
-    let evt_on = str_to_lower(str_trim_space(env_get_or("SIP_EVENT_PACKAGES", "0")))
+    let evt_on = env_get_or("SIP_EVENT_PACKAGES", "0") |> str_trim_space() |> str_to_lower()
     if str_eq(evt_on, "1") || str_eq(evt_on, "true") {
-        allow = allow + "Allow-Events: " + str_to_lower(str_trim_space(env_get_or("SIP_EVENT_PACKAGE_LIST", "presence,message-summary"))) + "\r\n"
+        allow = allow + "Allow-Events: " + (env_get_or("SIP_EVENT_PACKAGE_LIST", "presence,message-summary") |> str_trim_space() |> str_to_lower()) + "\r\n"
     }
     allow = sip_outbound_supported_header(allow)
     // RFC 3261 §8.2.6.2: all non-100 responses MUST have a To-tag.
@@ -167,7 +167,7 @@ fn sip_options_response(msg: string) -> string {
 
 fn sip_method_not_allowed(msg: string) -> string {
     let tag = "mna-" + sha256("madis.405|" + sip_header(msg, "Call-ID"))[0:16]
-    return sip_reply_with_to_tag(msg, 405, "Method Not Allowed", "Allow: INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, PRACK, UPDATE, SUBSCRIBE, NOTIFY\r\n", "", tag)
+    return sip_reply_with_to_tag(msg, 405, "Method Not Allowed", "Allow: INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, PRACK, UPDATE, SUBSCRIBE, NOTIFY, MESSAGE, INFO, REFER, PUBLISH\r\n", "", tag)
 }
 
 fn sip_cseq_valid(msg: string, is_response: int) -> int {

@@ -1,5 +1,7 @@
 /** Small server-side fetch client for the MADIS Application Fabric (MAF). */
 
+export const MAF_VERSION = "0.7.0";
+
 export class MafError extends Error {
   constructor(status, payload) {
     super(`MAF request failed with HTTP ${status}`);
@@ -25,7 +27,11 @@ export class MadisMaf {
     if (payload !== undefined && new TextEncoder().encode(payload).length > 65536) throw new RangeError("MAF request body exceeds 64 KiB");
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-    const headers = { Authorization: `Bearer ${this.token}`, Accept: "application/json" };
+    const headers = {
+      Authorization: `Bearer ${this.token}`,
+      Accept: "application/json",
+      "X-MAF-Version": MAF_VERSION,
+    };
     if (payload !== undefined) headers["Content-Type"] = "application/json";
     if (idempotencyKey !== undefined) headers["Idempotency-Key"] = idempotencyKey;
     try {
@@ -78,8 +84,10 @@ export class MadisMaf {
     return this.command(this.callPath(callId, "/rtp"), body, key);
   }
   routeCall(callId, target, transport, key, opts = {}) {
-    const body = { target, ...opts };
-    if (transport !== undefined) body.transport = transport;
+    const tr = typeof transport === "string" ? transport : transport?.transport;
+    const extra = typeof transport === "object" && transport !== null ? { ...transport, ...opts } : opts;
+    const body = { target, ...extra };
+    if (tr !== undefined) body.transport = tr;
     return this.command(this.callPath(callId, "/route"), body, key);
   }
 

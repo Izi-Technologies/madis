@@ -219,10 +219,10 @@ fn sip_rseq_number_value(msg: string) int {
 
 fn sip_header_token_present(value: string, expected: string) int {
     let items = str_split(value, ",")
-    let wanted = str_to_lower(str_trim_space(expected))
+    let wanted = expected |> str_trim_space() |> str_to_lower()
     let mut i = 0
     while i < len(items) {
-        if str_eq(str_to_lower(str_trim_space(items[i])), wanted) { return 1 }
+        if str_eq(items[i] |> str_trim_space() |> str_to_lower(), wanted) { return 1 }
         i = i + 1
     }
     return 0
@@ -233,7 +233,7 @@ fn sip_header_token_present(value: string, expected: string) int {
 // PRACK from reviving a dialog after its final response.
 fn sip_relprov_record(msg: string, cache: CMap) int {
     let cid = sip_header(msg, "Call-ID")
-    let to_tag = sip_addr_tag(sip_header(msg, "To"))
+    let to_tag = msg |> sip_header("To") |> sip_addr_tag()
     let rseq = sip_rseq_number_value(msg)
     let cseq = sip_cseq_number_value(msg)
     let method = sip_cseq_method_value(msg)
@@ -248,7 +248,7 @@ fn sip_relprov_record(msg: string, cache: CMap) int {
 
 fn sip_relprov_close(msg: string, cache: CMap) int {
     let cid = sip_header(msg, "Call-ID")
-    let to_tag = sip_addr_tag(sip_header(msg, "To"))
+    let to_tag = msg |> sip_header("To") |> sip_addr_tag()
     if len(cid) == 0 || len(to_tag) == 0 { return 0 }
     let key = "relprov_closed|" + cid + "|" + to_tag
     let _ = rfc_bounded_state_set(cache, cache, "relprov_close_seq", "relprov_close_ring|", key, "1", 8192)
@@ -258,7 +258,7 @@ fn sip_relprov_close(msg: string, cache: CMap) int {
 fn sip_prack_matches_relprov(msg: string, cache: CMap) int {
     if not str_eq(madis_method(msg), "PRACK") { return 0 }
     let cid = sip_header(msg, "Call-ID")
-    let to_tag = sip_addr_tag(sip_header(msg, "To"))
+    let to_tag = msg |> sip_header("To") |> sip_addr_tag()
     let parts = sip_space_tokens(sip_header(msg, "RAck"))
     if len(cid) == 0 || len(to_tag) == 0 || len(parts) != 3 { return 0 }
     if cmap_has(cache, "relprov_closed|" + cid + "|" + to_tag) == 1 { return 0 }
@@ -534,7 +534,7 @@ fn sip_call_state_cleanup(calls: CMap, cid: string, from_tag: string, to_tag: st
 fn sip_dialog_cache_cleanup(cache: CMap, cid: string, msg: string) -> int {
     if len(cid) == 0 { return 0 }
     let _ = cmap_del(cache, "dialog_dst|" + cid)
-    let to_tag = sip_addr_tag(sip_header(msg, "To"))
+    let to_tag = msg |> sip_header("To") |> sip_addr_tag()
     if len(to_tag) > 0 { let _ = cmap_del(cache, "dialog_dst|" + cid + "|" + to_tag) }
     let _ = cmap_del(cache, "dialog_branch|" + cid)
     let _ = cmap_del(cache, "dialog_non2xx|" + cid)
@@ -545,8 +545,8 @@ fn sip_call_state_timeout_cleanup(calls: CMap, cache: CMap, req: string) -> int 
     if sip_is_response(req) == 1 || not str_eq(madis_method(req), "INVITE") { return 0 }
     let cid = sip_header(req, "Call-ID")
     if len(cid) == 0 { return 0 }
-    let from_tag = sip_addr_tag(sip_header(req, "From"))
-    let to_tag = sip_addr_tag(sip_header(req, "To"))
+    let from_tag = req |> sip_header("From") |> sip_addr_tag()
+    let to_tag = req |> sip_header("To") |> sip_addr_tag()
     let _ = sip_call_state_cleanup(calls, cid, from_tag, to_tag)
     let _ = sip_dialog_cache_cleanup(cache, cid, req)
     return 1
@@ -557,9 +557,9 @@ fn sip_dialog_observe(msg: string, reply: string, calls: CMap, cache: CMap) -> i
     let cid = sip_header(msg, "Call-ID")
     if len(cid) == 0 { return 0 }
     let method = madis_method(msg)
-    let from_tag = sip_addr_tag(sip_header(msg, "From"))
-    let mut to_tag = sip_addr_tag(sip_header(msg, "To"))
-    if len(to_tag) == 0 && len(reply) > 0 { to_tag = sip_addr_tag(sip_header(reply, "To")) }
+    let from_tag = msg |> sip_header("From") |> sip_addr_tag()
+    let mut to_tag = msg |> sip_header("To") |> sip_addr_tag()
+    if len(to_tag) == 0 && len(reply) > 0 { to_tag = reply |> sip_header("To") |> sip_addr_tag() }
     let mut key = "dialog|" + proxy_dialog_id(cid, from_tag, to_tag)
     if len(to_tag) == 0 { key = "dialog|" + cid }
 

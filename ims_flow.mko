@@ -4,7 +4,7 @@
 // and keepalives. Media and IPsec SA establishment remain external.
 
 fn ims_flow_dynamic_enabled() -> int {
-    let v = str_to_lower(str_trim_space(env_get_or("SIP_IMS_PATH_DYNAMIC", "0")))
+    let v = env_get_or("SIP_IMS_PATH_DYNAMIC", "0") |> str_trim_space() |> str_to_lower()
     return if str_eq(v, "1") || str_eq(v, "true") || str_eq(v, "yes") { 1 } else { 0 }
 }
 
@@ -271,7 +271,7 @@ fn ims_flow_path_with_token(path_base: string, token: string) -> string {
 // Conn key from source: transport|ip|port (env-free, no secrets).
 fn ims_flow_conn_key(ip: string, port: int, transport: string) -> string {
     if len(ip) < 1 || len(ip) > 128 || port < 1 || port > 65535 { return "" }
-    let tr = str_to_upper(str_trim_space(transport))
+    let tr = transport |> str_trim_space() |> str_to_upper()
     if len(tr) < 1 || len(tr) > 16 { return "" }
     return tr + "|" + ip + "|" + string(port)
 }

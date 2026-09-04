@@ -18,7 +18,7 @@ This README is an orientation guide, not a complete feature matrix. The linked d
 - Optional RTPEngine-ng control messages for bounded SDP offer/answer/delete operations, with WebRTC bridge support (auto-detect ICE/DTLS SDP). The SIP worker does not own RTP, RTCP, ICE, DTLS-SRTP, codecs, recording, or media policy.
 - Cluster call state replication via `SIP_CLUSTER_CALLS`.
 - Prometheus labeled metrics (per-method, per-response-code, per-transport) and graceful shutdown with connection drain.
-- MAF SDKs in Python, Go, TypeScript, JavaScript, and Erlang with 39 HTTP operations covering calls, routing, media, presence, security, infrastructure, config, charging, and events. Real-time event streaming via HTTP long-poll (`subscribe()`) and WebSocket (`ws_url()`). SIPp interop scenarios covering fork/cancel, non-2xx ACK, CANCEL/487, timer retransmit, PRACK, and digest auth.
+- MAF SDKs in Python, Go, TypeScript, JavaScript, Erlang, and Weft with 90 HTTP operations covering calls, routing, media, presence, security, infrastructure, config, charging, webhooks, queues, conferences, scheduled calls, number intelligence, routing intelligence, and events. Real-time event streaming via HTTP long-poll (`subscribe()`) and WebSocket (`ws_url()`). SIPp interop scenarios covering fork/cancel, non-2xx ACK, CANCEL/487, timer retransmit, PRACK, and digest auth.
 - Selected Diameter RFC 6733/RFC 8506, IMS Cx/Sh, HEPv3, STIR/SHAKEN (PASSporT header with `ppt`/`typ`/`x5u`, `iat` freshness check, orig/dest TN validation, x5u certificate fetch, Date header on signed messages), charging, and signed external-application contracts. These are bounded integration surfaces, not complete relay, policy, media, or carrier platforms.
 - A bounded IMS voice profile: role-aware P-/I-/S-CSCF REGISTER and initial-INVITE handling, selected Cx/AKA authorization, HTTPS subscriber authorization, durable IMS registration lifecycle (IMPI/IMPU, Path, Service-Route, S-CSCF binding, restart hydration, and Path-aware MT routing), dynamic flow-token refresh/cleanup when enabled, session-timer validation plus negotiated response headers, trusted identity/privacy filtering, P-Associated-URI handling, target-only subscriber iFC application targets, and terminating P-Charging-Vector validation.
 
@@ -152,31 +152,55 @@ POST   /admin/api/v1/maf/calls/{call_id}/headers         — headers
 POST   /admin/api/v1/maf/calls/{call_id}/rtp             — RTPEngine
 GET    /admin/api/v1/maf/calls/{call_id}/sip             — SIP inspect
 POST   /admin/api/v1/maf/calls/{call_id}/charge          — charge auth
+POST   /admin/api/v1/maf/calls/{call_id}/charge-deny     — charge deny
 GET    /admin/api/v1/maf/registrations                    — registrations
 GET    /admin/api/v1/maf/presence                         — online users
+GET    /admin/api/v1/maf/presence/{user}                  — user presence
 GET    /admin/api/v1/maf/cdr                              — CDR
 GET    /admin/api/v1/maf/security/bans                    — bans
 POST   /admin/api/v1/maf/security/bans                   — ban IP
+DELETE /admin/api/v1/maf/security/bans/{ip}              — unban IP
 GET    /admin/api/v1/maf/routing/rules                    — routing rules
 POST   /admin/api/v1/maf/routing/rules                   — create rule
+DELETE /admin/api/v1/maf/routing/rules/{id}              — delete rule
 GET    /admin/api/v1/maf/gateways                         — gateways
+POST   /admin/api/v1/maf/gateways                        — create gateway
 GET    /admin/api/v1/maf/dids                             — DIDs
+POST   /admin/api/v1/maf/dids                            — create DID
 GET    /admin/api/v1/maf/dispatch-sets                    — dispatch sets
+POST   /admin/api/v1/maf/dispatch-sets                   — create set
 GET    /admin/api/v1/maf/cluster                          — cluster health
 GET    /admin/api/v1/maf/config                           — config
+POST   /admin/api/v1/maf/config                          — set config
 GET    /admin/api/v1/maf/events                           — event replay
 POST   /admin/api/v1/maf/events                          — publish event
 GET    /admin/api/v1/maf/events/ws                        — WebSocket stream
+POST   /admin/api/v1/maf/webhooks                        — create webhook
+GET    /admin/api/v1/maf/webhooks                        — list webhooks
+DELETE /admin/api/v1/maf/webhooks/{id}                   — delete webhook
+POST   /admin/api/v1/maf/queues                          — create queue
+GET    /admin/api/v1/maf/queues                          — list queues
+POST   /admin/api/v1/maf/queues/{id}/members             — add member
+POST   /admin/api/v1/maf/conferences                     — create conference
+GET    /admin/api/v1/maf/conferences                     — list conferences
+POST   /admin/api/v1/maf/scheduled-calls                 — schedule call
+GET    /admin/api/v1/maf/scheduled-calls                 — list scheduled
+POST   /admin/api/v1/maf/number-intelligence             — number lookup
+GET    /admin/api/v1/maf/routing/intelligence             — routing scores
+POST   /admin/api/v1/maf/call-flows                      — create flow
+GET    /admin/api/v1/maf/call-flows                      — list flows
+  ...and additional CRUD, identity, and infrastructure routes (90 total)
 ```
 
-MAF provides 39 HTTP endpoints covering the full call lifecycle (create,
+MAF provides 90 HTTP endpoints covering the full call lifecycle (create,
 answer, reject, hangup, route, bridge, transfer, hold, unhold, DTMF),
 media control (play/record/stop, RTPEngine offer/answer/delete), SIP message
 inspection (headers, SDP, STIR/SHAKEN attestation, NAT status), presence and
 registration awareness, CDR access, security (ban/unban), infrastructure CRUD
-(routing rules, gateways, DIDs, dispatch sets), cluster health, runtime config,
-charging authorization, and custom application events — all tenant-scoped
-with separate read/write bearer credentials.
+(routing rules, gateways, DIDs, dispatch sets), webhooks, queues, conferences,
+scheduled calls, number intelligence, routing intelligence, call flows,
+cluster health, runtime config, charging authorization, and custom application
+events — all tenant-scoped with separate read/write bearer credentials.
 
 Set `SIP_MAF_INBOUND_MODE=route` for full SDK-controlled routing where the
 application decides where every call goes. Set `mode=b2bua` in the route
@@ -345,7 +369,7 @@ The machine API is served by the standalone WebUI at `/admin/api/v1/`. Bearer-to
 
 ## Build and test
 
-The supported source entry point is [`main.mko`](main.mko). [`sipproxy_full.mko`](sipproxy_full.mko) is a legacy monolithic reference and is not the deployment target. The codebase is pure Mako with no C bridge code; all composite-key maps, UDP reuseport, TLS server pool, base64url, and JWT custom header support are Mako builtins. Tests run without linking any C code. Builds and CI require Mako `0.5.0` with its matching runtime; do not mix compiler/runtime versions when generating native C.
+The supported source entry point is [`main.mko`](main.mko). [`sipproxy_full.mko`](sipproxy_full.mko) is a legacy monolithic reference and is not the deployment target. The codebase is pure Mako with no C bridge code; all composite-key maps, UDP reuseport, TLS server pool, base64url, and JWT custom header support are Mako builtins. Tests run without linking any C code. Builds and CI require Makori `0.6.5` or later with its matching runtime; do not mix compiler/runtime versions when generating native C.
 
 ```sh
 MAKO_BIN=/path/to/mako \
@@ -357,4 +381,4 @@ MAKO_RUNTIME=/path/to/mako/runtime \
   ./scripts/ci.sh
 ```
 
-The CI script checks Mako syntax/lint, Mako tests, native links, schemas, shell syntax, Python SDK compilation, and the default HSS/media adapter tests. The current suite totals 101 tests (45 Mako + 56 Python MAF). It does not replace external SIP, IMS, Diameter, media, or carrier interoperability testing. See [`docs/testing.md`](docs/testing.md) for opt-in wire, worker-backed, Docker, load, and recovery checks.
+The CI script checks Mako syntax/lint, Mako tests, native links, schemas, shell syntax, Python SDK compilation, and the default HSS/media adapter tests. The current suite totals 150 tests (45 Mako test files with 1507 assertions + 56 Python MAF SDK + 39 lab + 10 media). It does not replace external SIP, IMS, Diameter, media, or carrier interoperability testing. See [`docs/testing.md`](docs/testing.md) for opt-in wire, worker-backed, Docker, load, and recovery checks.

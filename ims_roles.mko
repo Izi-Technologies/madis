@@ -6,7 +6,7 @@
 // to operator-configured SIP targets. S-CSCF retains the local auth path.
 
 fn ims_role_normalize(value: string) -> string {
-    let role = str_to_lower(str_trim_space(value))
+    let role = value |> str_trim_space() |> str_to_lower()
     if len(role) == 0 { return "scscf" }
     if str_eq(role, "pcscf") || str_eq(role, "icscf") || str_eq(role, "scscf") { return role }
     return ""
@@ -90,7 +90,7 @@ fn ims_role_invite_target(role: string, cache: CMap, peer_lock: Mutex, public_id
 }
 
 fn ims_session_requested() int {
-    let value = str_to_lower(str_trim_space(env_get_or("SIP_IMS_SESSION", "0")))
+    let value = env_get_or("SIP_IMS_SESSION", "0") |> str_trim_space() |> str_to_lower()
     return if str_eq(value, "1") || str_eq(value, "true") || str_eq(value, "yes") { 1 } else { 0 }
 }
 

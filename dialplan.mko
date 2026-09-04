@@ -220,7 +220,7 @@ fn db_cdr_code(db: SqlDB, db_ok: int, cid: string, code: string) -> int {
 // SIP transaction ladder is debug data. Gated behind SIP_SIP_TX_LOG to keep
 // SQL off the hot path in production. Default: off.
 fn db_sip_tx_enabled() -> int {
-    let v = str_to_lower(str_trim_space(env_get_or("SIP_TX_LOG", "0")))
+    let v = env_get_or("SIP_TX_LOG", "0") |> str_trim_space() |> str_to_lower()
     if str_eq(v, "1") || str_eq(v, "true") { return 1 }
     return 0
 }

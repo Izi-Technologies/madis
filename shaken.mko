@@ -226,7 +226,7 @@ fn shaken_verify_cfg(msg: string, msglen: int, cfg: []string, cache: CMap) -> st
         // auto: respect the alg declared in the Identity header to prevent
         // HS256 downgrade attacks. Only fall back to HS256 if explicitly
         // declared — never as a silent cascade from ES256 failure.
-        let declared_alg = str_to_lower(str_trim_space(shaken_identity_alg(identity)))
+        let declared_alg = shaken_identity_alg(identity) |> str_trim_space() |> str_to_lower()
         if str_eq(declared_alg, "hs256") {
             if len(secret) > 0 { if jwt_verify(token, secret) == 1 { ok = 1 } }
         } else {

@@ -122,7 +122,7 @@ fn maf_api_body_ok(raw: string, n: int, required: int) -> int {
     let body = maf_api_json_compact_for_extract(parse_body(raw, n))
     if len(body) == 0 { return if required == 1 { 0 } else { 1 } }
     if len(body) > 65536 || maf_api_text_safe(body, 65536) == 0 { return 0 }
-    let content_type = str_to_lower(str_trim_space(parse_header(raw, n, "Content-Type")))
+    let content_type = parse_header(raw, n, "Content-Type") |> str_trim_space() |> str_to_lower()
     let separator = str_index(content_type, ";")
     let media_type = if separator >= 0 { str_trim_space(content_type[0:separator]) } else { content_type }
     if not str_eq(media_type, "application/json") { return 0 }
@@ -278,7 +278,7 @@ fn maf_api_capacity_available(db: SqlDB, ok: int, tenant: string) -> int {
 
 fn maf_api_sip_uri_ok(value: string) -> int {
     if len(value) < 5 || len(value) > 512 || maf_api_text_safe(value, 512) == 0 { return 0 }
-    let low = str_to_lower(str_trim_space(value))
+    let low = value |> str_trim_space() |> str_to_lower()
     if not str_has_prefix(low, "sip:") && not str_has_prefix(low, "sips:") { return 0 }
     if str_index(value, "@") < 0 { return 0 }
     if str_index(value, " ") >= 0 || str_index(value, "<") >= 0 || str_index(value, ">") >= 0 { return 0 }
@@ -604,7 +604,7 @@ fn maf_api_command(db: SqlDB, ok: int, kind: int, raw: string, n: int, call_id: 
     }
     if kind == 6 && maf_api_bridge_ok(db, ok, tenant, call_id, body) == 0 { return maf_api_error(400, "channel_ids must contain 2 to 8 owned unique channels") }
     if kind == 7 {
-        let media_op = str_to_lower(str_trim_space(json_get_string(body, "operation")))
+        let media_op = json_get_string(body, "operation") |> str_trim_space() |> str_to_lower()
         if not str_eq(media_op, "play") && not str_eq(media_op, "record") && not str_eq(media_op, "stop") && not str_eq(media_op, "pause") && not str_eq(media_op, "resume") { return maf_api_error(400, "invalid media operation") }
         let resource = json_get_string(body, "resource")
         if len(resource) > 2048 || maf_api_text_safe(resource, 2048) == 0 { return maf_api_error(400, "invalid media resource") }
@@ -616,7 +616,7 @@ fn maf_api_command(db: SqlDB, ok: int, kind: int, raw: string, n: int, call_id: 
         if header_count < 1 || header_count > 32 { return maf_api_error(400, "headers must contain 1 to 32 operations") }
     }
     if kind == 10 {
-        let transfer_type = str_to_lower(str_trim_space(json_get_string(body, "type")))
+        let transfer_type = json_get_string(body, "type") |> str_trim_space() |> str_to_lower()
         if not str_eq(transfer_type, "blind") && not str_eq(transfer_type, "attended") { return maf_api_error(400, "type must be blind or attended") }
         if str_eq(transfer_type, "blind") {
             let target = json_get_string(body, "target")
@@ -635,7 +635,7 @@ fn maf_api_command(db: SqlDB, ok: int, kind: int, raw: string, n: int, call_id: 
         if maf_api_presentation_ok(body) == 0 { return maf_api_error(400, "invalid caller presentation fields") }
     }
     if kind == 15 {
-        let rtp_action = str_to_lower(str_trim_space(json_get_string(body, "action")))
+        let rtp_action = json_get_string(body, "action") |> str_trim_space() |> str_to_lower()
         if not str_eq(rtp_action, "offer") && not str_eq(rtp_action, "answer") && not str_eq(rtp_action, "delete") && not str_eq(rtp_action, "query") {
             return maf_api_error(400, "action must be offer, answer, delete, or query")
         }
@@ -644,7 +644,7 @@ fn maf_api_command(db: SqlDB, ok: int, kind: int, raw: string, n: int, call_id: 
         }
     }
     if kind == 56 {
-        let id_action = str_to_lower(str_trim_space(json_get_string(body, "action")))
+        let id_action = json_get_string(body, "action") |> str_trim_space() |> str_to_lower()
         if not str_eq(id_action, "sign") && not str_eq(id_action, "verify") && not str_eq(id_action, "attest") && not str_eq(id_action, "clear") {
             return maf_api_error(400, "action must be sign, verify, attest, or clear")
         }
@@ -1102,12 +1102,13 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         if len(cfg_key) == 0 || len(cfg_key) > 128 || len(cfg_value) > 4096 { return maf_api_error(400, "key and value required") }
         if str_index(cfg_value, "\x01") >= 0 { return maf_api_error(400, "config value contains invalid bytes") }
         if maf_api_identifier_ok(cfg_key, 1, 128) == 0 { return maf_api_error(400, "invalid config key") }
-        // Allowlist: only permit config keys that are safe for MAF to modify.
-        // All other keys (TLS paths, credentials, DB URLs, etc.) are blocked.
-        // Allowlist: operator-configurable runtime settings. Process-level
-        // settings (bind IP, ports, worker counts, DB URLs, TLS paths, private
-        // keys) are excluded — they require a restart or are security-sensitive.
-        let maf_cfg_ok = str_has_prefix(cfg_key, "rtpengine_") || str_has_prefix(cfg_key, "security_") || str_has_prefix(cfg_key, "stir_shaken_enabled") || str_has_prefix(cfg_key, "stir_shaken_attestation") || str_has_prefix(cfg_key, "stir_shaken_cert_url") || str_has_prefix(cfg_key, "stir_shaken_mode") || str_has_prefix(cfg_key, "sip_realm") || str_has_prefix(cfg_key, "sip_rate_limit") || str_has_prefix(cfg_key, "sip_invite_rate_limit") || str_has_prefix(cfg_key, "sip_register_rate_limit") || str_has_prefix(cfg_key, "sip_max_message_size") || str_has_prefix(cfg_key, "sip_fraud_prefixes") || str_has_prefix(cfg_key, "sip_scanner_ua_list") || str_has_prefix(cfg_key, "sip_emergency") || str_has_prefix(cfg_key, "sip_digest_algorithm") || str_has_prefix(cfg_key, "sip_session_timer") || str_has_prefix(cfg_key, "sip_max_reg_expires") || str_has_prefix(cfg_key, "sip_min_expires") || str_has_prefix(cfg_key, "sip_user_rate_limit") || str_has_prefix(cfg_key, "sip_conn_idle_timeout") || str_has_prefix(cfg_key, "sip_per_ip_conn_limit") || str_has_prefix(cfg_key, "sip_call_state_capacity") || str_has_prefix(cfg_key, "sip_outbound") || str_has_prefix(cfg_key, "sip_event_package") || str_has_prefix(cfg_key, "sip_tls_reuse") || str_has_prefix(cfg_key, "sip_b2bua") || str_has_prefix(cfg_key, "sip_cluster") || str_has_prefix(cfg_key, "sip_hep_") || str_has_prefix(cfg_key, "sip_ims_")
+        // Allowlist: only permit config keys that are safe for MAF to modify
+        // at runtime. Process-level settings (bind IP, ports, worker counts,
+        // DB URLs, TLS paths, private keys) are EXCLUDED — they require a
+        // restart and are security-sensitive (media redirect, DoS on restart).
+        // Excluded broad prefixes: "security_" is too broad (could disable
+        // bans/rate-limits). Each security key is listed individually.
+        let maf_cfg_ok = str_has_prefix(cfg_key, "rtpengine_") || str_has_prefix(cfg_key, "stir_shaken_enabled") || str_has_prefix(cfg_key, "stir_shaken_attestation") || str_has_prefix(cfg_key, "stir_shaken_cert_url") || str_has_prefix(cfg_key, "stir_shaken_mode") || str_has_prefix(cfg_key, "sip_realm") || str_has_prefix(cfg_key, "sip_rate_limit") || str_has_prefix(cfg_key, "sip_invite_rate_limit") || str_has_prefix(cfg_key, "sip_register_rate_limit") || str_has_prefix(cfg_key, "sip_max_message_size") || str_has_prefix(cfg_key, "sip_fraud_prefixes") || str_has_prefix(cfg_key, "sip_scanner_ua_list") || str_has_prefix(cfg_key, "sip_emergency") || str_has_prefix(cfg_key, "sip_digest_algorithm") || str_has_prefix(cfg_key, "sip_session_timer") || str_has_prefix(cfg_key, "sip_max_reg_expires") || str_has_prefix(cfg_key, "sip_min_expires") || str_has_prefix(cfg_key, "sip_user_rate_limit") || str_has_prefix(cfg_key, "sip_conn_idle_timeout") || str_has_prefix(cfg_key, "sip_per_ip_conn_limit") || str_has_prefix(cfg_key, "sip_call_state_capacity") || str_has_prefix(cfg_key, "sip_outbound") || str_has_prefix(cfg_key, "sip_event_package") || str_has_prefix(cfg_key, "sip_tls_reuse") || str_has_prefix(cfg_key, "sip_b2bua") || str_has_prefix(cfg_key, "sip_cluster") || str_has_prefix(cfg_key, "sip_hep_") || str_has_prefix(cfg_key, "sip_ims_") || str_has_prefix(cfg_key, "security_fail2ban_threshold") || str_has_prefix(cfg_key, "security_geo_block") || str_has_prefix(cfg_key, "security_ua_block")
         if not maf_cfg_ok { return maf_api_error(403, "config key not in MAF allowlist") }
         let desc = json_get_string(body, "description")
         let tenant = maf_api_tenant()
@@ -1469,7 +1470,7 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         let body = parse_body(raw, n)
         let name = json_get_string(body, "name")
         if maf_api_identifier_ok(name, 1, 128) == 0 { return maf_api_error(400, "valid policy name required") }
-        let selector_type_raw = str_to_lower(str_trim_space(json_get_string(body, "selector_type")))
+        let selector_type_raw = json_get_string(body, "selector_type") |> str_trim_space() |> str_to_lower()
         let selector_type = if str_eq(selector_type_raw, "source_ip") || str_eq(selector_type_raw, "target") || str_eq(selector_type_raw, "tenant") { selector_type_raw } else { "global" }
         let selector_value = json_get_string(body, "selector_value")
         if len(selector_value) > 256 || maf_api_text_safe(selector_value, 256) == 0 { return maf_api_error(400, "selector_value is invalid") }
@@ -1481,7 +1482,7 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         if max_cps < 0 { max_cps = 0 }
         if max_cps > 100000 { max_cps = 100000 }
         if reject_code < 300 || reject_code > 699 { reject_code = 503 }
-        let enabled_raw = str_to_lower(str_trim_space(json_get_string(body, "enabled")))
+        let enabled_raw = json_get_string(body, "enabled") |> str_trim_space() |> str_to_lower()
         let enabled = if str_eq(enabled_raw, "false") { "false" } else { "true" }
         let tenant = maf_api_tenant()
         let packed = "{\"tenant_id\":\"" + maf_api_json_escape(tenant) + "\",\"name\":\"" + maf_api_json_escape(name) + "\",\"selector_type\":\"" + maf_api_json_escape(selector_type) + "\",\"selector_value\":\"" + maf_api_json_escape(selector_value) + "\",\"max_active_calls\":" + string(max_active) + ",\"max_cps\":" + string(max_cps) + ",\"reject_sip_code\":" + string(reject_code) + ",\"enabled\":" + enabled + "}"
@@ -1581,7 +1582,7 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         if scope < 2 { return maf_api_error(if scope == 0 { 401 } else { 403 }, "write scope required") }
         if maf_api_body_ok(raw, n, 1) == 0 { return maf_api_error(400, "application/json body required") }
         let body = parse_body(raw, n)
-        let level = str_to_lower(str_trim_space(json_get_string(body, "level")))
+        let level = json_get_string(body, "level") |> str_trim_space() |> str_to_lower()
         if not str_eq(level, "error") && not str_eq(level, "warn") && not str_eq(level, "info") && not str_eq(level, "debug") {
             return maf_api_error(400, "level must be error, warn, info, or debug")
         }

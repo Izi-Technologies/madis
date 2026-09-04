@@ -246,7 +246,10 @@ fn registration_track_aor(reg: CMap, aor: string) -> int {
     return 1
 }
 
-fn registration_store(reg: CMap, aor: string, contact: string, transport: string, expires_s: int, ip: string, port: int) -> int {
+fn registration_store(reg: CMap, aor: string, contact: string, transport: string, expires_s: int, ip: string, port: int) -> int
+prove len(aor) > 0 && len(aor) <= 512 && len(contact) > 0 && len(contact) <= 2048
+prove port >= 0 && port <= 65535
+{
     if len(aor) == 0 || len(aor) > 512 || len(contact) == 0 || len(contact) > 2048 { return -1 }
     if len(transport) > 16 || len(ip) > 128 || port < 0 || port > 65535 { return -1 }
     let _ = registration_track_aor(reg, aor)
@@ -388,7 +391,7 @@ fn registration_sweep_expired(reg: CMap) -> int {
 // a double-CRLF on persistent TCP/TLS connections.
 
 fn registration_keepalive_enabled() -> int {
-    let v = str_to_lower(str_trim_space(env_get_or("SIP_KEEPALIVE", "1")))
+    let v = env_get_or("SIP_KEEPALIVE", "1") |> str_trim_space() |> str_to_lower()
     if str_eq(v, "0") || str_eq(v, "false") || str_eq(v, "no") { return 0 }
     return 1
 }

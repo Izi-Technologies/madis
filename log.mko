@@ -4,7 +4,7 @@
 // Gated by SIP_LOG_LEVEL (default: info). Debug is opt-in and never on in production.
 
 fn log_level_configured() -> int {
-    let v = str_to_lower(str_trim_space(env_get_or("SIP_LOG_LEVEL", "info")))
+    let v = env_get_or("SIP_LOG_LEVEL", "info") |> str_trim_space() |> str_to_lower()
     if str_eq(v, "error") { return 0 }
     if str_eq(v, "warn") { return 1 }
     if str_eq(v, "debug") { return 3 }

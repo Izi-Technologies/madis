@@ -36,7 +36,7 @@ fn TestB2buaCreatesIndependentLeg() {
     assert_eq(sip_validate_message(out, len(out)), 1)
     assert(not str_eq(sip_header(out, "Call-ID"), sip_header(invite, "Call-ID")))
     assert(str_has_prefix(sip_header(out, "Call-ID"), "b2bua-"))
-    assert(not str_eq(sip_addr_tag(sip_header(out, "From")), sip_addr_tag(sip_header(invite, "From"))))
+    assert(not str_eq(out |> sip_header("From") |> sip_addr_tag(), invite |> sip_header("From") |> sip_addr_tag()))
     assert(not str_contains(out, "branch=z9hG4bK-b2bua-test"))
     assert(str_contains(sip_header(out, "Contact"), "b2bua"))
     assert(len(b2bua_lookup_in(invite, cache)) > 0)
@@ -53,8 +53,8 @@ fn TestB2buaResponseMapsBackToCallerLeg() {
     let in_tag = cmap_get(cache, "b2bua_in_tag|" + key)
     assert_eq(sip_validate_message(translated, len(translated)), 1)
     assert_eq_str(sip_header(translated, "Call-ID"), sip_header(invite, "Call-ID"))
-    assert_eq_str(sip_addr_tag(sip_header(translated, "To")), in_tag)
-    assert_eq_str(sip_addr_tag(sip_header(translated, "From")), "caller1")
+    assert_eq_str(translated |> sip_header("To") |> sip_addr_tag(), in_tag)
+    assert_eq_str(translated |> sip_header("From") |> sip_addr_tag(), "caller1")
     assert(str_contains(sip_header(translated, "Via"), "192.0.2.10:5060"))
     assert(str_contains(sip_header(translated, "Contact"), "b2bua"))
 }
@@ -75,15 +75,15 @@ fn TestB2buaInDialogCseqAndByeTranslation() {
     assert_eq(sip_validate_message(rewritten, len(rewritten)), 1)
     assert_eq_str(sip_header(rewritten, "Call-ID"), sip_header(out, "Call-ID"))
     assert_eq_str(sip_header(rewritten, "CSeq"), "43 BYE")
-    assert_eq_str(sip_addr_tag(sip_header(rewritten, "From")), sip_addr_tag(sip_header(out, "From")))
-    assert_eq_str(sip_addr_tag(sip_header(rewritten, "To")), "remote2")
+    assert_eq_str(rewritten |> sip_header("From") |> sip_addr_tag(), out |> sip_header("From") |> sip_addr_tag())
+    assert_eq_str(rewritten |> sip_header("To") |> sip_addr_tag(), "remote2")
 
     let downstream_bye = str_replace(rewritten, "BYE sip:bob@example.net", "BYE sip:alice@example.com")
     let back = b2bua_request_to_peer(downstream_bye, key, cache)
     assert_eq(sip_validate_message(back, len(back)), 1)
     assert_eq_str(sip_header(back, "Call-ID"), sip_header(invite, "Call-ID"))
-    assert_eq_str(sip_addr_tag(sip_header(back, "From")), in_tag)
-    assert_eq_str(sip_addr_tag(sip_header(back, "To")), "caller1")
+    assert_eq_str(back |> sip_header("From") |> sip_addr_tag(), in_tag)
+    assert_eq_str(back |> sip_header("To") |> sip_addr_tag(), "caller1")
 }
 
 fn TestB2buaNon2xxAckUsesDownstreamDialog() {
@@ -97,7 +97,7 @@ fn TestB2buaNon2xxAckUsesDownstreamDialog() {
     assert_eq(sip_validate_message(ack, len(ack)), 1)
     assert_eq_str(sip_header(ack, "Call-ID"), sip_header(out, "Call-ID"))
     assert_eq_str(sip_header(ack, "CSeq"), "42 ACK")
-    assert_eq_str(sip_addr_tag(sip_header(ack, "To")), "remote3")
+    assert_eq_str(ack |> sip_header("To") |> sip_addr_tag(), "remote3")
 }
 
 fn TestHeaderSanitizerPreservesSafeZeroAndRejectsInjection() {

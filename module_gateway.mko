@@ -30,15 +30,15 @@ fn module_gateway_operation_safe(operation: string) -> int {
 }
 
 fn module_gateway_builtin(name: string) -> int {
-    let n = str_to_lower(str_trim_space(name))
+    let n = name |> str_trim_space() |> str_to_lower()
     if str_eq(n, "tts") || str_eq(n, "stt") || str_eq(n, "llm") { return 1 }
     if str_eq(n, "media") || str_eq(n, "recording") || str_eq(n, "fraud") || str_eq(n, "billing") { return 1 }
     return 0
 }
 
 fn module_gateway_operation_builtin(name: string, operation: string) -> int {
-    let n = str_to_lower(str_trim_space(name))
-    let op = str_to_lower(str_trim_space(operation))
+    let n = name |> str_trim_space() |> str_to_lower()
+    let op = operation |> str_trim_space() |> str_to_lower()
     if str_eq(n, "tts") { return if str_eq(op, "speak") || str_eq(op, "synthesize") || str_eq(op, "attach") { 1 } else { 0 } }
     if str_eq(n, "stt") { return if str_eq(op, "listen") || str_eq(op, "transcribe") || str_eq(op, "attach") { 1 } else { 0 } }
     if str_eq(n, "llm") { return if str_eq(op, "complete") || str_eq(op, "chat") || str_eq(op, "classify") { 1 } else { 0 } }
@@ -57,18 +57,18 @@ fn module_gateway_request_allowed(name: string, operation: string) -> int {
         let mut found = 0
         let mut i = 0
         while i < len(names) {
-            if str_eq(str_to_lower(str_trim_space(names[i])), str_to_lower(name)) { found = 1 }
+            if str_eq(names[i] |> str_trim_space() |> str_to_lower(), str_to_lower(name)) { found = 1 }
             i = i + 1
         }
         if found == 0 { return 0 }
     } else {
         if module_gateway_builtin(name) == 0 {
-            let custom = str_to_lower(str_trim_space(env_get_or("SIP_MODULE_ALLOW_CUSTOM", "0")))
+            let custom = env_get_or("SIP_MODULE_ALLOW_CUSTOM", "0") |> str_trim_space() |> str_to_lower()
             if not str_eq(custom, "1") && not str_eq(custom, "true") && not str_eq(custom, "yes") { return 0 }
         }
     }
     if module_gateway_operation_builtin(name, operation) == 1 { return 1 }
-    let custom_ops = str_to_lower(str_trim_space(env_get_or("SIP_MODULE_ALLOW_CUSTOM", "0")))
+    let custom_ops = env_get_or("SIP_MODULE_ALLOW_CUSTOM", "0") |> str_trim_space() |> str_to_lower()
     return if str_eq(custom_ops, "1") || str_eq(custom_ops, "true") || str_eq(custom_ops, "yes") { 1 } else { 0 }
 }
 
@@ -84,7 +84,7 @@ fn module_gateway_timeout_ms() -> int {
 }
 
 fn module_gateway_fail_closed() -> int {
-    let value = str_to_lower(str_trim_space(env_get_or("SIP_MODULE_FAIL_MODE", "closed")))
+    let value = env_get_or("SIP_MODULE_FAIL_MODE", "closed") |> str_trim_space() |> str_to_lower()
     if str_eq(value, "open") || str_eq(value, "fail-open") || str_eq(value, "0") { return 0 }
     return 1
 }
@@ -110,7 +110,7 @@ fn module_gateway_call(msg: string, ip: string, port: int, tr: string, event: st
         token_i = token_i + 1
     }
     if app_url_is_http(url) == 1 {
-        let allow = str_to_lower(str_trim_space(env_get_or("SIP_MODULE_ALLOW_HTTP", "0")))
+        let allow = env_get_or("SIP_MODULE_ALLOW_HTTP", "0") |> str_trim_space() |> str_to_lower()
         if not str_eq(allow, "1") && not str_eq(allow, "true") && not str_eq(allow, "yes") { return "__MODULE_FAIL__" }
     }
     if len(payload) > 32768 || app_gateway_text_safe(payload, 32768) == 0 { return "__MODULE_FAIL__" }
@@ -141,7 +141,7 @@ fn module_gateway_command_valid(raw: string, msg: string, event: string, module:
     let token = env_get_or("SIP_MODULE_TOKEN", "")
     let request_id = module_gateway_request_id(msg, event, module, operation, payload)
     if app_gateway_command_valid_token(raw, request_id, for_response, token) == 0 { return 0 }
-    let action = str_to_lower(str_trim_space(json_get_string(raw, "action")))
+    let action = json_get_string(raw, "action") |> str_trim_space() |> str_to_lower()
     if str_eq(action, "module") { return 0 }
     return 1
 }
@@ -152,5 +152,5 @@ fn module_gateway_action(raw: string, msg: string, event: string, module: string
     if module_gateway_command_valid(raw, msg, event, module, operation, payload, 0) == 0 {
         return if module_gateway_fail_closed() == 1 { "fail" } else { "continue" }
     }
-    return str_to_lower(str_trim_space(json_get_string(raw, "action")))
+    return json_get_string(raw, "action") |> str_trim_space() |> str_to_lower()
 }

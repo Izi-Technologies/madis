@@ -190,7 +190,7 @@ fn carrier_api_rule_state(path: string) -> string {
 }
 
 fn carrier_api_control_status() -> string {
-    let mode = str_to_lower(str_trim_space(env_get_or("SIP_B2BUA_MODE", "proxy")))
+    let mode = env_get_or("SIP_B2BUA_MODE", "proxy") |> str_trim_space() |> str_to_lower()
     let mut enabled = "false"
     if str_eq(mode, "1") || str_eq(mode, "enabled") || str_eq(mode, "b2bua") { enabled = "true" }
     return "{\"schema\":\"madis.control.v1\",\"mako_version\":\"0.5.0\",\"b2bua\":{\"enabled\":" + enabled + ",\"mode\":\"" + carrier_json_escape(carrier_cap(mode, 32)) + "\"},\"application_database\":\"external\",\"operations\":[\"routing-rules.read\",\"routing-rules.create\",\"routing-rules.enable\",\"routing-rules.disable\",\"dialplans.read\",\"dialplans.create\",\"dialplans.enable\",\"dialplans.disable\",\"resources.read\",\"resources.write\"]}"
@@ -327,7 +327,7 @@ fn carrier_api_dialplan_json_ok(body: string) -> int {
     let prefix = json_get_string(body, "match_prefix")
     let callee = json_get_string(body, "callee_action")
     let caller = json_get_string(body, "caller_action")
-    let direction = str_to_lower(str_trim_space(json_get_string(body, "direction")))
+    let direction = json_get_string(body, "direction") |> str_trim_space() |> str_to_lower()
     let description = json_get_string(body, "description")
     let priority_raw = json_get_string(body, "priority")
     if len(prefix) == 0 || len(prefix) > 256 || len(callee) == 0 || len(callee) > 512 || len(caller) > 512 || len(description) > 512 { return 0 }
@@ -346,7 +346,7 @@ fn carrier_api_dialplan_packed(body: string) -> string {
     let prefix = json_get_string(body, "match_prefix")
     let callee = json_get_string(body, "callee_action")
     let caller = json_get_string(body, "caller_action")
-    let direction = str_to_lower(str_trim_space(json_get_string(body, "direction")))
+    let direction = json_get_string(body, "direction") |> str_trim_space() |> str_to_lower()
     let description = json_get_string(body, "description")
     let priority_raw = json_get_string(body, "priority")
     let mut priority = 10

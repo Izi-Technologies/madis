@@ -10,7 +10,7 @@ fn ims_rx_asr_command() -> int { return 274 }
 fn ims_rx_rar_command() -> int { return 258 }
 
 fn ims_rx_enabled() -> int {
-    let v = str_to_lower(str_trim_space(env_get_or("SIP_IMS_RX", "0")))
+    let v = env_get_or("SIP_IMS_RX", "0") |> str_trim_space() |> str_to_lower()
     return if str_eq(v, "1") || str_eq(v, "true") || str_eq(v, "yes") { 1 } else { 0 }
 }
 

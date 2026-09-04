@@ -751,7 +751,7 @@ fn maf_worker_start_call(db: SqlDB, ok: int, tenant: string, call_id: string, re
     if len(offer_sdp) > 0 {
         invite = maf_worker_invite_with_sdp(invite, offer_sdp)
         if len(invite) == 0 { return "invalid_offer_sdp|offer_sdp must be valid SDP" }
-        let from_tag = sip_addr_tag(sip_header(invite, "From"))
+        let from_tag = invite |> sip_header("From") |> sip_addr_tag()
         let wire_call_id = sip_header(invite, "Call-ID")
         invite = rtp_process_offer(invite, len(invite), wire_call_id, from_tag, db, ok, cache)
     }
@@ -779,7 +779,7 @@ fn maf_worker_handle_outbound_response(db: SqlDB, ok: int, msg: string, cache: C
     let invite = cmap_get(cache, "maf_invite|" + call_id)
     if len(invite) == 0 { return 0 }
     let cseq_parts = str_split(sip_header(msg, "CSeq"), " ")
-    let cseq_method = if len(cseq_parts) >= 2 { str_to_upper(str_trim_space(cseq_parts[1])) } else { "" }
+    let cseq_method = if len(cseq_parts) >= 2 { cseq_parts[1] |> str_trim_space() |> str_to_upper() } else { "" }
     if str_eq(cseq_method, "BYE") || str_eq(cseq_method, "CANCEL") {
         let _ = maf_worker_sync_sip(db, ok, msg, cache)
         let code = sip_status_code(msg)
@@ -796,8 +796,8 @@ fn maf_worker_handle_outbound_response(db: SqlDB, ok: int, msg: string, cache: C
     let code = sip_status_code(msg)
     let mut observed = msg
     if code >= 200 && code < 300 {
-        let from_tag = sip_addr_tag(sip_header(invite, "From"))
-        let to_tag = sip_addr_tag(sip_header(msg, "To"))
+        let from_tag = invite |> sip_header("From") |> sip_addr_tag()
+        let to_tag = msg |> sip_header("To") |> sip_addr_tag()
         if len(sip_body(msg)) > 0 && cmap_has(cache, "rtp_state|" + wire_call_id) == 1 {
             observed = rtp_process_answer(msg, len(msg), wire_call_id, from_tag, to_tag, db, ok, cache)
         }
@@ -943,7 +943,7 @@ fn maf_worker_bridge(db: SqlDB, ok: int, tenant: string, call_id: string, reques
     if str_eq(existing, "active") { return "ok" }
     let rc = sql_exec_str4(db, "INSERT INTO maf_bridges (bridge_id, tenant_id, call_id, channel_ids, state) SELECT $1, $2, $3, $4::jsonb->'channel_ids', 'active' ON CONFLICT (bridge_id) DO UPDATE SET state = 'active', updated_at = NOW()", bridge_id, tenant, call_id, request)
     if rc < 0 { return "bridge_persist_failed|the bridge relationship could not be stored" }
-    let mode = str_to_lower(str_trim_space(json_get_string(request, "mode")))
+    let mode = json_get_string(request, "mode") |> str_trim_space() |> str_to_lower()
     let bridge_mode = if str_eq(mode, "conference") { "conference" } else { "bridge" }
     let bridge_payload = "{\"bridge_id\":\"" + maf_worker_json_escape(bridge_id) + "\",\"call_id\":\"" + maf_worker_json_escape(call_id) + "\",\"mode\":\"" + maf_worker_json_escape(bridge_mode) + "\",\"state\":\"active\"}"
     let _ = maf_worker_emit_event(db, ok, tenant, "bridge.created", call_id, bridge_payload, trace)
@@ -959,7 +959,7 @@ fn maf_worker_media_event(db: SqlDB, ok: int, tenant: string, call_id: string, m
 fn maf_worker_media_execute(db: SqlDB, ok: int, tenant: string, call_id: string, command_id: string, request: string, trace: string) string {
     let current = sql_query_str2(db, "SELECT state FROM maf_calls WHERE tenant_id = $1 AND call_id = $2", tenant, call_id)
     if not str_eq(current, "answered") && not str_eq(current, "bridged") { return "media_state_conflict|media operations require an answered or bridged call" }
-    let operation = str_to_lower(str_trim_space(json_get_string(request, "operation")))
+    let operation = json_get_string(request, "operation") |> str_trim_space() |> str_to_lower()
     if not str_eq(operation, "play") && not str_eq(operation, "record") && not str_eq(operation, "stop") && not str_eq(operation, "pause") && not str_eq(operation, "resume") { return "invalid_media|the media operation is not allowlisted" }
     let resource = json_get_string(request, "resource")
     if len(resource) > 2048 || maf_worker_text_safe(resource, 2048) == 0 { return "invalid_media|the media resource is not safe" }
@@ -990,7 +990,7 @@ fn maf_worker_media_execute(db: SqlDB, ok: int, tenant: string, call_id: string,
 fn maf_worker_transfer(db: SqlDB, ok: int, tenant: string, call_id: string, request: string, trace: string, cache: CMap, out_fd: int) -> string {
     let current = sql_query_str2(db, "SELECT state FROM maf_calls WHERE tenant_id = $1 AND call_id = $2", tenant, call_id)
     if not str_eq(current, "answered") && not str_eq(current, "bridged") { return "transfer_state_conflict|transfer requires an answered or bridged call" }
-    let transfer_type = str_to_lower(str_trim_space(json_get_string(request, "type")))
+    let transfer_type = json_get_string(request, "type") |> str_trim_space() |> str_to_lower()
     if not str_eq(transfer_type, "blind") && not str_eq(transfer_type, "attended") { return "invalid_transfer|type must be blind or attended" }
     // Resolve dialog state from cache (outbound) or inbound cache
     let invite = cmap_get(cache, "maf_invite|" + call_id)
@@ -1258,7 +1258,7 @@ fn maf_worker_execute(db: SqlDB, ok: int, tenant: string, operation: string, cal
 // flags (ICE, SRTP, codec strip, etc.) per call. This replaces the automatic
 // RTPEngine integration for MAF-controlled calls.
 fn maf_worker_rtp(db: SqlDB, ok: int, tenant: string, call_id: string, request: string, trace: string, cache: CMap) -> string {
-    let action = str_to_lower(str_trim_space(json_get_string(request, "action")))
+    let action = json_get_string(request, "action") |> str_trim_space() |> str_to_lower()
     if not str_eq(action, "offer") && not str_eq(action, "answer") && not str_eq(action, "delete") && not str_eq(action, "query") {
         return "invalid_rtp|action must be offer, answer, delete, or query"
     }
@@ -1377,14 +1377,14 @@ fn maf_worker_route(db: SqlDB, ok: int, tenant: string, call_id: string, command
     if len(invite) == 0 { return "dialog_unavailable|cached invite is missing" }
     let ip = json_get_string(packed, "ip")
     // Transport for outbound leg: SDK can override, else derive from target URI
-    let mut tr = str_to_lower(str_trim_space(json_get_string(request, "transport")))
+    let mut tr = json_get_string(request, "transport") |> str_trim_space() |> str_to_lower()
     if len(tr) == 0 { tr = sip_transport_param(target, "udp") }
     let public_ip = env_get_or("SIP_PUBLIC_IP", ip)
     let udp_port_str = env_get_or("SIP_UDP_PORT", "5060")
     let mut udp_port = 5060
     match parse_int(udp_port_str) { Ok(v) => { udp_port = v } Err(_) => {} }
     // B2BUA mode: terminate both legs locally instead of proxy forwarding
-    let mode = str_to_lower(str_trim_space(json_get_string(request, "mode")))
+    let mode = json_get_string(request, "mode") |> str_trim_space() |> str_to_lower()
     if str_eq(mode, "b2bua") && b2bua_enabled() == 1 {
         let _ = maf_worker_route_attempt_start(db, ok, tenant, call_id, command_id, target, tr, "b2bua")
         let b2_msg = b2bua_prepare_invite(invite, target, tr, public_ip + ":" + string(udp_port), tr, cache)
@@ -1410,7 +1410,7 @@ fn maf_worker_route(db: SqlDB, ok: int, tenant: string, call_id: string, command
                 let _ = maf_worker_route_attempt_finish(db, ok, tenant, call_id, "failed", 0, "invalid_offer_sdp", "cached inbound SDP is not usable")
                 return "invalid_offer_sdp|cached inbound SDP is not usable"
             }
-            let from_tag = sip_addr_tag(sip_header(out_invite, "From"))
+            let from_tag = out_invite |> sip_header("From") |> sip_addr_tag()
             let wire_call_id = sip_header(out_invite, "Call-ID")
             out_invite = rtp_process_offer(out_invite, len(out_invite), wire_call_id, from_tag, db, ok, cache)
         }
@@ -1427,6 +1427,10 @@ fn maf_worker_route(db: SqlDB, ok: int, tenant: string, call_id: string, command
         }
         let wire_out_cid = sip_header(out_invite, "Call-ID")
         let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_dst|" + wire_out_cid, target, 131072)
+        let wire_in_cid = sip_header(invite, "Call-ID")
+        if len(wire_in_cid) > 0 {
+            let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_dst|" + wire_in_cid, target, 131072)
+        }
         let _ = bounded_cache_set(cache, "maf_cache_seq", "maf_cache_ring|", "maf_invite|" + call_id, out_invite, 65536)
     }
     // Track dialog so responses route back
@@ -1450,7 +1454,7 @@ fn maf_worker_route(db: SqlDB, ok: int, tenant: string, call_id: string, command
 //   attest  — set the attestation level for this call
 //   clear   — remove Identity/P-Attestation-Indicator headers
 fn maf_worker_identity(db: SqlDB, ok: int, tenant: string, call_id: string, request: string, trace: string, cache: CMap) -> string {
-    let action = str_to_lower(str_trim_space(json_get_string(request, "action")))
+    let action = json_get_string(request, "action") |> str_trim_space() |> str_to_lower()
     if not str_eq(action, "sign") && not str_eq(action, "verify") && not str_eq(action, "attest") && not str_eq(action, "clear") {
         return "invalid_identity|action must be sign, verify, attest, or clear"
     }
@@ -1515,7 +1519,7 @@ fn maf_worker_identity(db: SqlDB, ok: int, tenant: string, call_id: string, requ
     }
 
     if str_eq(action, "attest") {
-        let attest = str_to_upper(str_trim_space(json_get_string(request, "attest")))
+        let attest = json_get_string(request, "attest") |> str_trim_space() |> str_to_upper()
         if not str_eq(attest, "A") && not str_eq(attest, "B") && not str_eq(attest, "C") {
             return "invalid_identity|attest must be A, B, or C"
         }
@@ -1641,7 +1645,7 @@ fn maf_worker_sync_sip(db: SqlDB, ok: int, msg: string, cache: CMap) -> int {
     if len(inbound_call_id) > 0 {
         let inbound_method = str_to_upper(str_trim_space(madis_method(msg)))
         let inbound_cseq_parts = str_split(sip_header(msg, "CSeq"), " ")
-        let inbound_cseq_method = if len(inbound_cseq_parts) >= 2 { str_to_upper(str_trim_space(inbound_cseq_parts[1])) } else { inbound_method }
+        let inbound_cseq_method = if len(inbound_cseq_parts) >= 2 { inbound_cseq_parts[1] |> str_trim_space() |> str_to_upper() } else { inbound_method }
         if str_eq(inbound_method, "BYE") || str_eq(inbound_method, "CANCEL") || str_eq(inbound_cseq_method, "BYE") || str_eq(inbound_cseq_method, "CANCEL") {
             let inbound_trace = sha256("madis.maf.inbound.state|" + inbound_call_id + "|" + inbound_cseq_method)[0:32]
             let mut end_detail = "\"ended_by\":\"" + maf_worker_json_escape(if str_eq(inbound_method, "BYE") { "BYE" } else { "CANCEL" }) + "\""
@@ -1666,7 +1670,7 @@ fn maf_worker_sync_sip(db: SqlDB, ok: int, msg: string, cache: CMap) -> int {
     let trace = parts[2]
     let mut next = current
     let cseq_parts = str_split(sip_header(msg, "CSeq"), " ")
-    let cseq_method = if len(cseq_parts) >= 2 { str_to_upper(str_trim_space(cseq_parts[1])) } else { "" }
+    let cseq_method = if len(cseq_parts) >= 2 { cseq_parts[1] |> str_trim_space() |> str_to_upper() } else { "" }
     let mut sip_detail = ""
     if sip_is_response(msg) == 1 {
         let code = sip_status_code(msg)

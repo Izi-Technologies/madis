@@ -4,7 +4,7 @@
 // users.password_ha1 (32 hex chars for MD5, 64 for SHA-256).
 
 fn digest_algorithm_config() -> string {
-    let configured = str_to_lower(str_trim_space(env_get_or("SIP_DIGEST_ALGORITHM", "md5")))
+    let configured = env_get_or("SIP_DIGEST_ALGORITHM", "md5") |> str_trim_space() |> str_to_lower()
     if str_eq(configured, "sha256") { return "SHA-256" }
     if str_eq(configured, "sha-256") { return "SHA-256" }
     if str_eq(configured, "sha-256-sess") { return "SHA-256-sess" }

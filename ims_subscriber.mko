@@ -64,7 +64,7 @@ fn ims_subscriber_response_allowed(response: string, request_id: string, public_
     if not str_eq(json_get_string(response, "request_id"), request_id) { return 0 }
     if not str_eq(json_get_string(response, "public_identity"), public_identity) { return 0 }
     if not str_eq(json_get_string(response, "private_identity"), private_identity) { return 0 }
-    let decision = str_to_lower(str_trim_space(json_get_string(response, "decision")))
+    let decision = json_get_string(response, "decision") |> str_trim_space() |> str_to_lower()
     if not str_eq(decision, "allow") { return 0 }
     let assigned_server_name = json_get_string(response, "assigned_server_name")
     if ims_subscriber_text_ok(assigned_server_name, 2048) == 0 || not str_eq(assigned_server_name, requested_server_name) { return 0 }

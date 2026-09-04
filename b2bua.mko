@@ -163,7 +163,7 @@ fn b2bua_store(key: string, in_cid: string, out_cid: string, from: string, to: s
 }
 
 fn b2bua_lookup_in(msg: string, cache: CMap) -> string {
-    let key = b2bua_key(sip_header(msg, "Call-ID"), sip_addr_tag(sip_header(msg, "From")))
+    let key = b2bua_key(sip_header(msg, "Call-ID"), msg |> sip_header("From") |> sip_addr_tag())
     if b2bua_active(key, cache) == 1 { return key }
     return ""
 }
@@ -194,7 +194,7 @@ fn b2bua_rewrite_request(msg: string, call_id: string, from: string, to: string,
     out = hdr_set(out, "From", from)
     out = hdr_set(out, "To", to)
     if len(cseq) > 0 {
-        let parts = str_split(str_trim_space(sip_header(out, "CSeq")), " ")
+        let parts = out |> sip_header("CSeq") |> str_trim_space() |> str_split(" ")
         let mut method = madis_method(msg)
         if len(parts) >= 2 { method = str_trim_space(parts[1]) }
         out = hdr_set(out, "CSeq", cseq + " " + method)
@@ -279,8 +279,8 @@ fn b2bua_non2xx_ack(response: string, key: string, cache: CMap) -> string {
 
 fn b2bua_translate_response(response: string, key: string, cache: CMap) -> string {
     if b2bua_active(key, cache) == 0 { return "" }
-    let cseq_parts = str_split(str_trim_space(sip_header(response, "CSeq")), " ")
-    if len(cseq_parts) < 2 || not str_eq(str_to_upper(str_trim_space(cseq_parts[1])), "INVITE") { return "" }
+    let cseq_parts = response |> sip_header("CSeq") |> str_trim_space() |> str_split(" ")
+    if len(cseq_parts) < 2 || not str_eq(cseq_parts[1] |> str_trim_space() |> str_to_upper(), "INVITE") { return "" }
     let remote_to = sip_header(response, "To")
     let remote_tag = sip_addr_tag(remote_to)
     if len(remote_tag) > 0 {

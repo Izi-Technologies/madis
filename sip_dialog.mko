@@ -1,0 +1,199 @@
+// In-dialog routing, client transaction ticking, and app gateway command mapping.
+
+fn sip_dialog_target_for_request(msg: string, cid: string, route_target: string, cache: CMap) -> string {
+    let mut target = route_target
+    if len(target) == 0 {
+        let to_tag = msg |> sip_header("To") |> sip_addr_tag()
+        if len(to_tag) > 0 {
+            let tagged_key = "dialog_dst|" + cid + "|" + to_tag
+            if cmap_has(cache, tagged_key) == 1 {
+                target = cmap_get(cache, tagged_key)
+            }
+        }
+    }
+    if len(target) == 0 {
+        let key = "dialog_dst|" + cid
+        if cmap_has(cache, key) == 0 { return "" }
+        target = cmap_get(cache, key)
+    }
+    return target
+}
+
+// Mid-dialog requests must be sent to the dialog's terminating contact. The
+// worker sends non-response return values back to the ingress peer, so forward
+// these requests here and return an empty string once the datagram is sent.
+fn sip_forward_dialog_request(msg: string, cid: string, method: string, route_target: string, ip: string, port: int, tr: string, cache: CMap, out_fd: int) -> int {
+    let target = sip_dialog_target_for_request(msg, cid, route_target, cache)
+    if len(target) == 0 { return 0 }
+    let mut forwarded = proxy_hop_via(msg, ip, port, tr)
+    let branch_key = "dialog_branch|" + cid
+    if str_eq(method, "CANCEL") || (str_eq(method, "ACK") && cmap_has(cache, "dialog_non2xx|" + cid) == 1) {
+        if cmap_has(cache, branch_key) == 1 {
+            forwarded = sip_proxy_hop_with_branch(msg, ip, port, tr, cmap_get(cache, branch_key))
+        }
+    }
+    let sent = sip_forward_target(target, forwarded, sip_transport_param(target, "udp"), cache, out_fd)
+    return sent
+}
+
+fn sip_client_txn_tick(cache: CMap, out_fd: int, calls: CMap, db: SqlDB, db_ok: int) -> int {
+    let now = mono_ms()
+    let mut acted = 0
+    let owner_s = string(out_fd)
+    if cmap_get_int2(cache, "client_active|", owner_s, 0) <= 0 { return 0 }
+    let mut start = cmap_get_int2(cache, "client_scan|", owner_s, 0)
+    let mut scanned = 0
+    let mut live_seen = 0
+    // Sweep a small bounded slice of the 16384-slot ring per tick.
+    // Idle workers call this on a timer; large scans here can allocate heavily.
+    while scanned < 64 {
+        let slot = (start + scanned) - ((start + scanned) / 16384) * 16384
+        if cmap_has3i(cache, "client_ring|", "", slot) == 1 {
+            let key = cmap_get3i(cache, "client_ring|", "", slot)
+            if len(key) > 2 && cmap_has2(cache, "client_req|", key) == 1 {
+                let owner = cmap_get_int2(cache, "client_owner|", key, -1)
+                if owner == out_fd {
+                    live_seen = 1
+                    let expiry = cmap_get_int2(cache, "client_exp|", key, 0)
+                    if expiry > 0 && now >= expiry {
+                        let req = cmap_get2(cache, "client_req|", key)
+                        if str_eq(madis_method(req), "CANCEL") {
+                            let _ = sip_client_txn_cleanup(key, cache)
+                            scanned = scanned + 1
+                            continue
+                        }
+                        let via = sip_header(req, "Via")
+                        let branch = sip_via_branch(via)
+                        // 3pREG transactions belong to the worker; expire them
+                        // without generating an upstream 408.
+                        if ims_ifc_3preg_branch(branch) == 1 {
+                            let _ = sip_client_txn_cleanup(key, cache)
+                            scanned = scanned + 1
+                            continue
+                        }
+                        // RFC 3261 §16.10: if the INVITE was cancelled, the
+                        // proxy generates 487 instead of 408.
+                        let timeout_cid = sip_header(req, "Call-ID")
+                        let mut timeout_code = 408
+                        let mut timeout_reason = "Request Timeout"
+                        if cmap_has(cache, "cancelled|" + timeout_cid) == 1 {
+                            timeout_code = 487
+                            timeout_reason = "Request Terminated"
+                            let _ = cmap_del(cache, "cancelled|" + timeout_cid)
+                        }
+                        let timeout_resp = sip_reply(req, timeout_code, timeout_reason, "", "")
+                        let mut selected_timeout = timeout_resp
+                        if len(branch) > 0 && cmap_has2(cache, "fork_branch|", branch) == 1 {
+                            selected_timeout = sip_fork_collect_response(timeout_resp, cache)
+                        }
+                        if len(selected_timeout) > 0 {
+                            let upstream = sip_strip_top_via(selected_timeout)
+                            if len(sip_header(upstream, "Via")) > 0 {
+                                let _ = sip_forward_reply(upstream, cache, out_fd)
+                            }
+                        }
+                        if str_eq(madis_method(req), "INVITE") {
+                            let mut caller = sip_uri_user(sip_header(req, "From"))
+                            let mut callee = sip_uri_user(sip_header(req, "To"))
+                            if cmap_has(calls, timeout_cid) == 1 {
+                                let parts = str_split(cmap_get(calls, timeout_cid), "|")
+                                if len(parts) >= 2 {
+                                    caller = parts[0]
+                                    callee = parts[1]
+                                }
+                            }
+                            let _ = db_cdr(db, db_ok, timeout_cid, caller, callee, "TIMEOUT:" + string(timeout_code))
+                            let _ = rtp_process_delete(timeout_cid, db, db_ok, cache)
+                            let mut maf_timeout_call = maf_worker_inbound_call_for_wire(cache, maf_worker_tenant(), timeout_cid)
+                            if len(maf_timeout_call) == 0 {
+                                let at = str_index(timeout_cid, "@")
+                                let candidate = if at > 0 { timeout_cid[0:at] } else { timeout_cid }
+                                if len(candidate) > 0 && len(maf_worker_inbound_cache_get(cache, candidate)) > 0 {
+                                    maf_timeout_call = candidate
+                                }
+                            }
+                            if len(maf_timeout_call) > 0 {
+                                let packed = maf_worker_inbound_cache_get(cache, maf_timeout_call)
+                                let inbound_invite = maf_worker_cached_invite(packed)
+                                if len(inbound_invite) > 0 {
+                                    let _ = sip_call_state_timeout_cleanup(calls, cache, inbound_invite)
+                                }
+                                let timeout_state = if timeout_code == 487 { "canceled" } else { "timeout" }
+                                let _ = maf_worker_call_final(db, db_ok, maf_worker_tenant(), maf_timeout_call, timeout_state, timeout_code, timeout_reason, "timer", sha256("madis.maf.inbound.timeout|" + maf_timeout_call)[0:32])
+                                let _ = maf_worker_route_attempt_finish(db, db_ok, maf_worker_tenant(), maf_timeout_call, "failed", timeout_code, "timer_expired", timeout_reason)
+                                let _ = cmap_incr(cache, "prom|maf_stale_cleanups|reason=\"timer_expired\"", 1)
+                                let _ = cmap_del(cache, "maf_inbound|" + maf_timeout_call)
+                                let _ = cmap_del(cache, "maf_created_ms|" + maf_timeout_call)
+                                let _ = cmap_del(cache, "maf_invite|" + maf_timeout_call)
+                                let _ = cmap_del(cache, "maf_target|" + maf_timeout_call)
+                                let _ = cmap_del(cache, "maf_transport|" + maf_timeout_call)
+                                let _ = cmap_del(cache, "maf_response|" + maf_timeout_call)
+                            }
+                            let _ = sip_call_state_timeout_cleanup(calls, cache, req)
+                        }
+                        let _ = sip_client_txn_cleanup(key, cache)
+                        acted = acted + 1
+                    } else {
+                        let transport = cmap_get2(cache, "client_transport|", key)
+                        if str_eq(transport, "udp") {
+                            let next = cmap_get_int2(cache, "client_next|", key, 0)
+                            if next > 0 && now >= next {
+                                let req = cmap_get2(cache, "client_req|", key)
+                                let target = cmap_get2(cache, "client_target|", key)
+                                let _ = sip_resend_target(target, req, transport, cache, out_fd)
+                                let mut attempt = cmap_get_int2(cache, "client_attempt|", key, 0)
+                                attempt = attempt + 1
+                                let mut interval = sip_t1_ms()
+                                let mut i = 0
+                                while i < attempt {
+                                    if interval >= sip_t2_ms() { interval = sip_t2_ms(); break }
+                                    interval = interval * 2
+                                    if interval > sip_t2_ms() { interval = sip_t2_ms() }
+                                    i = i + 1
+                                }
+                                cmap_set_int2(cache, "client_attempt|", key, attempt)
+                                cmap_set_int2(cache, "client_next|", key, now + interval)
+                                acted = acted + 1
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        scanned = scanned + 1
+    }
+    cmap_set_int2(cache, "client_scan|", owner_s, (start + scanned) - ((start + scanned) / 16384) * 16384)
+    if live_seen == 0 {
+        let empty = cmap_get_int2(cache, "client_empty_scan|", owner_s, 0) + 1
+        if empty >= 256 {
+            cmap_set_int2(cache, "client_active|", owner_s, 0)
+            cmap_set_int2(cache, "client_empty_scan|", owner_s, 0)
+        } else {
+            cmap_set_int2(cache, "client_empty_scan|", owner_s, empty)
+        }
+    } else {
+        cmap_set_int2(cache, "client_empty_scan|", owner_s, 0)
+    }
+    return acted
+}
+
+fn app_command_reply(msg: string, raw: string) -> string {
+    let action = json_get_string(raw, "action") |> str_trim_space() |> str_to_lower()
+    let mut status = json_get_int(raw, "status")
+    let mut reason = json_get_string(raw, "reason")
+    let mut extra = app_gateway_reply_headers(raw)
+    if str_eq(action, "redirect") {
+        status = 302
+        reason = "Moved Temporarily"
+        extra = extra + "Contact: <" + json_get_string(raw, "target") + ">\r\n"
+    }
+    if len(reason) == 0 { reason = "SIP Application Response" }
+    let body = json_get_string(raw, "body")
+    return sip_reply(msg, status, reason, extra, body)
+}
+
+fn app_command_apply(msg: string, raw: string) -> string {
+    let updated = app_gateway_apply_headers(msg, raw)
+    if sip_validate_message(updated, len(updated)) == 0 { return "__APP_INVALID_MESSAGE__" }
+    return updated
+}

@@ -71,22 +71,30 @@ PY
 
 bash -n install.sh
 bash -n scripts/maf-carrier-smoke.sh
-python3 -m py_compile sdk/python/madis_carrier.py
+python3 -m py_compile sdk/python/madis_carrier.py sdk/python/test_carrier_sdk.py
+python3 -m unittest sdk/python/test_carrier_sdk.py
 python3 -m py_compile scripts/nat-transport-check.py
 python3 -m py_compile sdk/maf/python/madis_maf.py sdk/maf/tests/test_maf_sdk.py bench/maf_security_matrix.py
 python3 -m unittest discover -s sdk/maf/tests -p 'test_*.py'
 
 if command -v node >/dev/null 2>&1; then
+  node --check sdk/javascript/madis-carrier.mjs
+  node sdk/javascript/test_carrier_sdk.mjs
   node --check sdk/maf/javascript/madis-maf.mjs
   node sdk/maf/tests/test_maf_sdk.mjs
+  if command -v npx >/dev/null 2>&1; then
+    npx -p typescript tsc --project sdk/maf/typescript/tsconfig.json
+  fi
+  node --experimental-strip-types sdk/maf/typescript/test_maf_sdk.ts
 else
-  echo "node not installed; skipped MAF JavaScript syntax check"
+  echo "node not installed; skipped JavaScript/TypeScript SDK checks"
 fi
 
 if command -v go >/dev/null 2>&1; then
+  (cd sdk/go && GO111MODULE=off go test)
   (cd sdk/maf/go && GO111MODULE=off go test)
 else
-  echo "go not installed; skipped MAF Go compile check"
+  echo "go not installed; skipped Go SDK checks"
 fi
 
 python3 -m unittest discover -s lab -p 'test_*.py'

@@ -5,7 +5,7 @@
 // generate or persist AKA secrets.
 
 fn ims_aka_requested() -> int {
-    let value = str_to_lower(str_trim_space(env_get_or("SIP_IMS_AKA", "0")))
+    let value = env_get_or("SIP_IMS_AKA", "0") |> str_trim_space() |> str_to_lower()
     if not (str_eq(value, "1") || str_eq(value, "true") || str_eq(value, "yes")) { return 0 }
     return 1
 }
@@ -78,7 +78,7 @@ fn ims_aka_pool_slot_key(private_identity: string, slot: int) -> string {
 // Optional opaque CK/IK storage for access security (IPsec SA is external).
 // Default OFF — never log secrets; values are base64 and TTL-bound by nonce.
 fn ims_aka_store_keys_enabled() -> int {
-    let v = str_to_lower(str_trim_space(env_get_or("SIP_IMS_AKA_STORE_KEYS", "0")))
+    let v = env_get_or("SIP_IMS_AKA_STORE_KEYS", "0") |> str_trim_space() |> str_to_lower()
     return if str_eq(v, "1") || str_eq(v, "true") || str_eq(v, "yes") { 1 } else { 0 }
 }
 
@@ -86,7 +86,9 @@ fn ims_aka_keys_key(nonce: string, private_identity: string) -> string {
     return "ims-aka-keys|" + nonce + "|" + private_identity
 }
 
-fn ims_aka_store_keys(cache: CMap, nonce: string, private_identity: string, ck: string, ik: string) -> int {
+fn ims_aka_store_keys(cache: CMap, nonce: string, private_identity: string, ck: string, ik: string) -> int
+prove len(ck) >= 1 && len(ck) <= 256 && len(ik) >= 1 && len(ik) <= 256
+{
     if ims_aka_store_keys_enabled() == 0 { return 1 }
     if ims_aka_nonce_ok(nonce) == 0 { return 0 }
     if len(ck) < 1 || len(ck) > 256 || len(ik) < 1 || len(ik) > 256 { return 0 }
@@ -272,9 +274,9 @@ fn ims_aka_response_valid(msg: string, n: int, cache: CMap, public_identity: str
     let qop = str_to_lower(sip_auth_param(auth, "qop"))
     let nonce = sip_auth_param(auth, "nonce")
     let uri = sip_auth_param(auth, "uri")
-    let nc = str_to_lower(str_trim_space(sip_auth_param(auth, "nc")))
+    let nc = sip_auth_param(auth, "nc") |> str_trim_space() |> str_to_lower()
     let cnonce = sip_auth_param(auth, "cnonce")
-    let response = str_to_lower(str_trim_space(sip_auth_param(auth, "response")))
+    let response = sip_auth_param(auth, "response") |> str_trim_space() |> str_to_lower()
     // AUTS: require identity match, well-formed AUTS, and a nonce we issued.
     // Burn the vector (mark used + drop XRES) so it cannot be replayed as RES
     // and so a second AUTS on the same nonce cannot free-run MAR.

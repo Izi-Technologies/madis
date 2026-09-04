@@ -392,9 +392,9 @@ fn TestByeResponseCseqIdentifiesTermination() {
         + "Call-ID: bye-response-dialog\r\n"
         + "CSeq: 2 BYE\r\n"
         + "Content-Length: 0\r\n\r\n"
-    let parts = str_split(str_trim_space(sip_header(response, "CSeq")), " ")
+    let parts = response |> sip_header("CSeq") |> str_trim_space() |> str_split(" ")
     assert_eq(len(parts), 2)
-    assert_eq_str(str_to_upper(str_trim_space(parts[1])), "BYE")
+    assert_eq_str(parts[1] |> str_trim_space() |> str_to_upper(), "BYE")
 }
 
 fn TestInviteAckAndCancelConstruction() {
