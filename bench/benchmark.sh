@@ -33,6 +33,7 @@ ALLOW_PRIVATE_TARGETS=${SIP_ALLOW_PRIVATE_TARGETS:-1}
 BENCH_BUILD=${BENCH_BUILD:-1}
 PROXY_BIN=${BENCH_PROXY_BIN:-$ROOT/main}
 POST_RUN_SLEEP=${BENCH_POST_RUN_SLEEP:-0}
+RUN_TIMEOUT=${BENCH_TIMEOUT:-180s}
 ADMIN_TOKEN=${SIP_ADMIN_TOKEN:-bench-admin-token-0000000000000000}
 BENCH_MALLOC_ARENA_MAX=${BENCH_MALLOC_ARENA_MAX:-}
 BENCH_MALLOC_TRIM_THRESHOLD=${BENCH_MALLOC_TRIM_THRESHOLD:-}
@@ -368,12 +369,13 @@ if ! "$SIPP" "127.0.0.1:$PROXY_PORT" \
 fi
 
 echo "Running: rate=${RATE} cps calls=${CALLS} concurrency=${CONCURRENCY}"
+UAC_STATUS=0
 "$SIPP" "127.0.0.1:$PROXY_PORT" \
   -sf "$INVITE_SCENARIO" -s bench -i 127.0.0.1 -p "$UAC_SOURCE_PORT" \
   -r "$RATE" -l "$CONCURRENCY" -m "$CALLS" \
-  -recv_timeout 5000 -timeout 180s \
+  -recv_timeout 5000 -timeout "$RUN_TIMEOUT" \
   -f 1 -fd 1 -stf "$STATS" -trace_stat -trace_err -trace_screen \
-  -nostdin -skip_rlimit >"$TMPDIR/uac.log" 2>&1 || true
+  -nostdin -skip_rlimit >"$TMPDIR/uac.log" 2>&1 || UAC_STATUS=$?
 capture_state_snapshot "after_load"
 
 if [ "$POST_RUN_SLEEP" != "0" ]; then
@@ -398,3 +400,16 @@ echo "Metrics: $METRICS"
 if [ "$SAMPLE_STATE" = "1" ]; then
     echo "State metrics: $STATE_METRICS"
 fi
+
+if ! kill -0 "$PROXY_PID" 2>/dev/null; then
+    PROXY_STATUS=0
+    wait "$PROXY_PID" || PROXY_STATUS=$?
+    PROXY_PID=""
+    echo "FAIL: proxy exited during the benchmark (status $PROXY_STATUS)" >&2
+    exit 1
+fi
+if [ "$UAC_STATUS" -ne 0 ]; then
+    echo "FAIL: SIPp exited with status $UAC_STATUS" >&2
+    exit 1
+fi
+python3 "$ROOT/bench/check_sipp_stats.py" "$STATS" "$CALLS"

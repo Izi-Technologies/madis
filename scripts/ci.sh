@@ -99,5 +99,6 @@ fi
 
 python3 -m unittest discover -s lab -p 'test_*.py'
 python3 -m unittest discover -s media -p 'test_*.py'
+python3 -m unittest discover -s bench -p 'test_check_sipp_stats.py'
 
 echo "Madis CI checks passed"

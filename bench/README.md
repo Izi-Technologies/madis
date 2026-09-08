@@ -1,5 +1,11 @@
 # SIP CPS/concurrency benchmark
 
+Set `BENCH_TIMEOUT` longer than `CALLS / RATE` plus dialog drain time for
+long runs (for example `BENCH_TIMEOUT=420s RATE=50 CALLS=15000`). The default
+is 180 seconds. The harness fails if the proxy exits, SIPp returns an error,
+any dialog fails, or the final cumulative statistics do not show every
+requested call completed. Logs and metrics are printed before failure.
+
 This is a load harness, not a capacity promise. Read
 [`../docs/testing.md`](../docs/testing.md) before comparing Madis with
 Kamailio or another proxy.

@@ -1,5 +1,9 @@
 # Testing and release checks
 
+The [0.6.29 validation report](makori-0.6.29-validation.md) records the current
+Linux leak failure and failed traffic soak. Functional checks passing does
+not make this upgrade ready to merge; the failing ownership gate is retained.
+
 CI, release, and the optional IMS workflow use Makori 0.6.29 at commit
 `a4d57046072fc573c6411c6167a038864e4a4095`, including the runtime from that
 checkout. Keep the compiler and runtime together when updating the pin. The
