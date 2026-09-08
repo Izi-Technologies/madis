@@ -49,7 +49,13 @@ showed RSS increasing from 10,348 KiB to 243,852 KiB over 25.486 seconds, with
 file descriptors increasing from 8 to 9. SIPp ultimately reported 1,173
 successful and 6,200 failed dialogs. The run cannot establish steady-state
 memory use, sustainable throughput, or a regression relative to 0.6.25.
-The exit's root cause was not established by the initial run.
+The initial run did not capture the exit status. A subsequent sanitizer-backed
+reproduction exited with status 141 (SIGPIPE). A process-level regression
+confirmed that sending SIGPIPE kills the original binary (status -13).
+Both server entry points now install `signal_ignore("PIPE")` before opening
+listeners. The regression runs outside Makori's test runner, which already
+ignores SIGPIPE and would otherwise mask the startup defect. The leak finding
+is separate from this signal-handling fix.
 
 The existing harness hid SIPp's nonzero status and used a fixed 180-second
 timeout, so it incorrectly returned success despite these failures. The

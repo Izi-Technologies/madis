@@ -28,6 +28,12 @@ Makori 0.6.29's generated serializer leaves tabs and carriage returns literal;
 the pilot escapes those after serialization. Keep this compatibility step
 until a compiler upgrade passes the same wire-contract test without it.
 
+CI also runs `python3 scripts/check-broken-pipe.py PROXY_BINARY ADMIN_BINARY`
+against the built applications. It resets inherited signal dispositions,
+sends SIGPIPE after HTTP readiness, and requires both servers to remain
+responsive. This must be a process test: Makori's unit-test runner ignores
+SIGPIPE itself and cannot detect missing application startup handling.
+
 The opt-in session-timer worker regression additionally verifies a `422 Min-SE` response for an undersized `Session-Expires` interval and forwarding of a valid interval. It does not prove endpoint refresh or external-stack interoperability.
 
 The opt-in worker-backed two-subscriber IMS smoke runs the worker against the lab HSS with TLS Cx/AKA **and** the fail-closed HTTPS subscriber-authorization boundary (ephemeral certificates, bearer token), then exercises authenticated REGISTER retransmission replay, initial-INVITE forwarding, in-dialog `UPDATE` and re-INVITE offer/answer exchanges through the RTP sidecar, and authenticated INVITE cancellation with downstream `487 Request Terminated` handling. Separate opt-in cases provision two target-only iFC application branches and verify a reliable `183 Session Progress`/PRACK exchange with To-tag routing, downstream `200 OK` acknowledgement, CANCEL cleanup after one branch answers, and a correlated `408 Request Timeout` when an INVITE receives no final response.

@@ -60,6 +60,7 @@ build_native() {
 
 build_native main.mko "$BUILD_DIR/madis"
 build_native admin/main.mko "$BUILD_DIR/madis-admin"
+python3 scripts/check-broken-pipe.py "$BUILD_DIR/madis" "$BUILD_DIR/madis-admin"
 
 python3 - <<'PY'
 import json
