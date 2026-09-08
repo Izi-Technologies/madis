@@ -4,6 +4,24 @@ pull . "../admin/http.mko"
 pull . "../admin/ui.mko"
 pull . "../maf_api.mko"
 
+fn TestMafTypedErrorResponsePreservesWireContract() {
+    let messages = ["unauthorized", "quote: \" slash: \\ tab:\t line:\nreturn:\r", "café 日本語", ""]
+    let mut i = 0
+    while i < len(messages) {
+        let message = messages[i]
+        let expected = http_resp(400, "application/json", "{\"ok\":false,\"error\":\"" + maf_api_json_escape(message) + "\"}\n", "Cache-Control: no-store\r\n")
+        assert_eq_str(maf_api_error(400, message), expected)
+        i = i + 1
+    }
+    let b = str_builder()
+    let mut c = 0
+    while c < 32 { builder_write_byte(b, byte(c)); c = c + 1 }
+    builder_write_byte(b, byte(127))
+    let controls = builder_string(b)
+    let expected = http_resp(422, "application/json", "{\"ok\":false,\"error\":\"" + maf_api_json_escape(controls) + "\"}\n", "Cache-Control: no-store\r\n")
+    assert_eq_str(maf_api_error(422, controls), expected)
+}
+
 // These test-only shims keep worker helpers linkable without the SIP socket
 // forwarding implementation pulled by the production main entry point.
 fn sip_forward_first(targets: string, msg: string, cache: CMap, cid: string, out_fd: int) string { return "" }

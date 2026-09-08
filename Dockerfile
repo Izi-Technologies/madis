@@ -11,12 +11,12 @@ COPY . /src
 WORKDIR /src
 
 # If the binary is pre-built, just use it. Otherwise emit C and link the
-# Mako 0.5.0 output with Madis' small native ownership bridge.
+# Makori 0.6.29 C output with the matching runtime.
 RUN if [ -f /src/main ]; then \
         cp /src/main /src/madis; \
     elif [ -x "$MAKO_BINARY" ]; then \
         rm -f /src/main.c; \
-        if ! MAKO_RUNTIME="$MAKO_RUNTIME" "$MAKO_BINARY" build --emit-c --release --strip --no-incremental main.mko -o /tmp/madis-mako > /tmp/mako-build.log 2>&1; then \
+        if ! MAKO_RUNTIME="$MAKO_RUNTIME" "$MAKO_BINARY" build --backend c --emit-c --release --strip --no-incremental main.mko -o /tmp/madis-mako > /tmp/mako-build.log 2>&1; then \
             test -s /src/main.c || (cat /tmp/mako-build.log && exit 1); \
         fi; \
         cc -std=c11 -O3 -DNDEBUG -w -I"$MAKO_RUNTIME" -I/usr/include/postgresql \

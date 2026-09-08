@@ -1,5 +1,29 @@
 # Testing and release checks
 
+CI, release, and the optional IMS workflow use Makori 0.6.29 at commit
+`a4d57046072fc573c6411c6167a038864e4a4095`, including the runtime from that
+checkout. Keep the compiler and runtime together when updating the pin. The
+application uses `--backend c`; the direct native backend does not yet lower
+all of its SIP and event-loop builtins.
+
+Run `bash scripts/check-ownership.sh` for focused AddressSanitizer and
+UndefinedBehaviorSanitizer checks. It honors `MAKO_BIN` and `MAKO_RUNTIME`.
+The bounded offline ownership fixture repeatedly copies and mutates Contact
+arrays, transfers HEP packets to joined workers, reuses the parent's channel,
+and rejects sends to full/closed queues. Linux also checks this fixture with
+LeakSanitizer; macOS runs without leak detection. Stream, HEP, and MAF contract
+suites run with address/undefined checks but without leak detection because
+they use process-lifetime runtime resources. CI and release require these checks.
+This does not replace a sustained traffic/RSS soak or the opt-in transport
+matrices in `bench/sanitizer.sh`.
+
+The MAF error-response pilot uses `#[derive(json)]` with boolean/string fields.
+Its contract test compares the complete HTTP response, including control-byte
+normalization, escaping, UTF-8, content length, and the trailing newline.
+Makori 0.6.29's generated serializer leaves tabs and carriage returns literal;
+the pilot escapes those after serialization. Keep this compatibility step
+until a compiler upgrade passes the same wire-contract test without it.
+
 The opt-in session-timer worker regression additionally verifies a `422 Min-SE` response for an undersized `Session-Expires` interval and forwarding of a valid interval. It does not prove endpoint refresh or external-stack interoperability.
 
 The opt-in worker-backed two-subscriber IMS smoke runs the worker against the lab HSS with TLS Cx/AKA **and** the fail-closed HTTPS subscriber-authorization boundary (ephemeral certificates, bearer token), then exercises authenticated REGISTER retransmission replay, initial-INVITE forwarding, in-dialog `UPDATE` and re-INVITE offer/answer exchanges through the RTP sidecar, and authenticated INVITE cancellation with downstream `487 Request Terminated` handling. Separate opt-in cases provision two target-only iFC application branches and verify a reliable `183 Session Progress`/PRACK exchange with To-tag routing, downstream `200 OK` acknowledgement, CANCEL cleanup after one branch answers, and a correlated `408 Request Timeout` when an INVITE receives no final response.
