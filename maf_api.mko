@@ -132,11 +132,7 @@ fn maf_api_error_text(message: string) -> string {
 }
 
 fn maf_api_error(status: int, message: string) -> string {
-    // Makori 0.6.29's JSON string emitter escapes quotes, backslashes and
-    // newlines, but leaves literal tabs/CRs. Escape those in the serialized
-    // body (before adding its trailing newline) to retain valid JSON.
-    let encoded = MafErrorResponse_to_json(false, maf_api_error_text(message))
-    let body = str_replace(str_replace(encoded, "\t", "\\t"), "\r", "\\r") + "\n"
+    let body = MafErrorResponse_to_json(false, maf_api_error_text(message)) + "\n"
     return http_resp(status, "application/json", body, "Cache-Control: no-store\r\n")
 }
 

@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 MAKO_BIN="${MAKO_BIN:-$(command -v makori 2>/dev/null || echo mako)}"
+bash "$ROOT/scripts/check-makori-version.sh" "$MAKO_BIN"
 cd "$ROOT"
 
 # LeakSanitizer is supported on Linux, but not on macOS. Keep leak checking

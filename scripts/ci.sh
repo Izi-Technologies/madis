@@ -3,11 +3,7 @@ set -euo pipefail
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 MAKO_BIN="${MAKO_BIN:-$(command -v makori 2>/dev/null || echo mako)}"
-MAKO_VERSION_TEXT=$("$MAKO_BIN" --version 2>/dev/null || true)
-case "$MAKO_VERSION_TEXT" in
-  *0.5.*|*0.6.*) ;;
-  *) echo "Mako 0.5.x or 0.6.x is required (found: ${MAKO_VERSION_TEXT:-unknown})" >&2; exit 1 ;;
-esac
+bash "$ROOT/scripts/check-makori-version.sh" "$MAKO_BIN"
 
 run_mako() {
   if [[ -n "${MAKO_RUNTIME:-}" ]]; then

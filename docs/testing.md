@@ -1,12 +1,17 @@
 # Testing and release checks
 
-The [0.6.29 validation report](makori-0.6.29-validation.md) records the current
-Linux leak failure and failed traffic soak. Functional checks passing does
-not make this upgrade ready to merge; the failing ownership gate is retained.
+The [0.6.31 validation report](makori-0.6.31-validation.md) records the clean
+Linux sanitizer gate and complete suite results for the current compiler pin.
 
-CI, release, and the optional IMS workflow use Makori 0.6.29 at commit
-`a4d57046072fc573c6411c6167a038864e4a4095`, including the runtime from that
+The [0.6.29 validation report](makori-0.6.29-validation.md) records the baseline
+Linux leak failure and traffic findings. Recheck ownership on every compiler
+upgrade; functional checks alone do not establish memory safety.
+
+CI, release, and the optional IMS workflow use Makori 0.6.31 at commit
+`8d6f2b68afb7ea0f9311ce5f8c5f08cd73901ccf`, including the runtime from that
 checkout. Keep the compiler and runtime together when updating the pin. The
+build/check scripts reject compilers older than 0.6.31 so a local build cannot
+silently restore the JSON escaping bug. The
 application uses `--backend c`; the direct native backend does not yet lower
 all of its SIP and event-loop builtins.
 
@@ -24,9 +29,10 @@ matrices in `bench/sanitizer.sh`.
 The MAF error-response pilot uses `#[derive(json)]` with boolean/string fields.
 Its contract test compares the complete HTTP response, including control-byte
 normalization, escaping, UTF-8, content length, and the trailing newline.
-Makori 0.6.29's generated serializer leaves tabs and carriage returns literal;
-the pilot escapes those after serialization. Keep this compatibility step
-until a compiler upgrade passes the same wire-contract test without it.
+Makori 0.6.31 includes the upstream JSON control-byte escaping fix. The pilot
+uses the generated serializer directly and retains the API's existing
+control-byte normalization. The complete wire-contract test guards this
+behavior without the previous tab/carriage-return workaround.
 
 CI also runs `python3 scripts/check-broken-pipe.py PROXY_BINARY ADMIN_BINARY`
 against the built applications. It resets inherited signal dispositions,
