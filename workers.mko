@@ -1,5 +1,17 @@
 // Transport stream polling, connection tracking, and worker loops (UDP, TLS, WSS, MAF).
 
+// Process-lifetime listener count. Mailbox cap 4 is the inline ring.
+// Bye must be sent before the process crew exits or join hangs.
+actor SipWorkers {
+    n: int = 0
+    receive Up {
+        self.n = self.n + 1
+    }
+    receive Bye {
+        let _ = 0
+    }
+}
+
 fn sip_tls_stream_poll(owner: int, reg: CMap, calls: CMap, db: SqlDB, db_ok: int, cache: CMap, outbox: chan[string], realm: string, node_id: string, diameter_lock: Mutex) -> int {
     let list_key = "tls_assoc_list|" + string(owner)
     if cmap_has(cache, list_key) == 0 { return 0 }
@@ -258,6 +270,19 @@ fn sip_server_conn_track(cache: CMap, txn: string, c: int) -> int {
     return 1
 }
 
+// Retransmit/stream housekeeping. SqlDB is not Send, so the DB-backed
+// stream/client ticks stay on this thread while the server-transaction
+// sweep runs on the request pool and joins before return.
+fn sip_housekeep_ticks(fd: int, reg: CMap, calls: CMap, db: SqlDB, db_ok: int, cache: CMap, outbox: chan[string], realm: string, node_id: string, diameter_lock: Mutex) -> int {
+    crew:all ticks {
+        let srv = ticks.kick(sip_server_txn_tick(cache, fd))
+        let _ = sip_stream_poll(fd, reg, calls, db, db_ok, cache, outbox, realm, node_id, diameter_lock)
+        let _ = sip_client_txn_tick(cache, fd, calls, db, db_ok)
+        let _ = srv.join()
+    }
+    return 1
+}
+
 // ============ WORKERS ============
 
 fn udp_worker(id: int, fd: int, port: int, reg: CMap, calls: CMap, cache: CMap, outbox: chan[string], diameter_lock: Mutex) -> int {
@@ -300,9 +325,7 @@ fn udp_worker(id: int, fd: int, port: int, reg: CMap, calls: CMap, cache: CMap, 
         }
         let tick_now = mono_ms()
         if tick_now - last_txn_tick >= 1000 {
-            let _ = sip_stream_poll(fd, reg, calls, db, db_ok, cache, outbox, realm, nid, diameter_lock)
-            let _ = sip_client_txn_tick(cache, fd, calls, db, db_ok)
-            let _ = sip_server_txn_tick(cache, fd)
+            let _ = sip_housekeep_ticks(fd, reg, calls, db, db_ok, cache, outbox, realm, nid, diameter_lock)
             last_txn_tick = tick_now
         }
         if ei == 0 {
@@ -530,9 +553,7 @@ fn tls_worker(fd: int, srv: TlsServer, port: int, reg: CMap, calls: CMap, cache:
         }
         let maint_now = mono_ms()
         if maint_now - last_txn_tick >= 250 {
-            let _ = sip_stream_poll(forward_fd, reg, calls, db, db_ok, cache, outbox, realm, nid, diameter_lock)
-            let _ = sip_client_txn_tick(cache, forward_fd, calls, db, db_ok)
-            let _ = sip_server_txn_tick(cache, forward_fd)
+            let _ = sip_housekeep_ticks(forward_fd, reg, calls, db, db_ok, cache, outbox, realm, nid, diameter_lock)
             last_txn_tick = maint_now
         }
         // Hot TLS cert reload: check cert file mtime every 30s

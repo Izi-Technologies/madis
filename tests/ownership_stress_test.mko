@@ -34,7 +34,7 @@ fn TestOwnershipChannelAfterWorkerAndRejectedSend() {
         assert_eq(chan_str_try_send_take(outbox, packet), 1)
         // A rejected move-send must release its payload, not the queued one.
         assert_eq(chan_str_try_send_take(outbox, "rejected-" + string(i)), 0)
-        crew tasks {
+        crew:all tasks {
             let worker = tasks.kick(ownership_consume_packet(outbox))
             assert_eq(worker.join(), expected)
         }

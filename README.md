@@ -6,11 +6,22 @@ This README is an orientation guide, not a complete feature matrix. The linked d
 
 ## Version
 
-**v0.7.0** — requires Mako 0.5.0+. Pure Mako: zero `extern "C"` functions, no C bridge code.
+**v0.7.4** — source builds require Makori 0.6.32 or later. CI and releases pin
+`1a75d53f15e59bf1a5f58eb3e14d75180c7d82d7` with its matching runtime.
+Pure Mako: zero `extern "C"` functions, no C bridge code.
+
+This release adopts structured `crew:all` process nurseries, the 0.6.32
+compiler pin (inline small channels, memset elision, channel-drop safety),
+the 0.6.31 JSON/ownership fixes, SIGPIPE protection, and incomplete-benchmark
+rejection. The bounded ownership fixture passes ASan, UBSan and Linux
+LeakSanitizer on arm64 and x86_64. Sustained-traffic memory behavior is
+tracked separately; see the
+[0.6.32 validation report](docs/makori-0.6.32-validation.md) and the prior
+[0.6.31 report](docs/makori-0.6.31-validation.md).
 
 ## Current implementation
 
-- SIP UDP, TCP, TLS, and WSS (RFC 7118) listeners with registration, digest authentication, transactions, dialogs, retransmission handling, routing, forking, dispatch, dialplans, and response routing. Multiplexed TCP/TLS/WSS workers with `SO_REUSEPORT` multi-worker scaling. PROXY protocol v1 support for HAProxy deployments. Full SIP.js/JsSIP WebSocket compatibility with `Sec-WebSocket-Protocol: sip` subprotocol and transport-aware response routing.
+- SIP UDP, TCP, TLS, and WSS (RFC 7118) listeners with registration, digest authentication, transactions, dialogs, retransmission handling, routing, forking, dispatch, dialplans, and response routing. Multiplexed TCP/TLS/WSS workers with `SO_REUSEPORT` multi-worker scaling, `crew:all` process nurseries, a 4-worker request scheduler pool for parallel INVITE fork/CANCEL, `crew:race` first-healthy dispatch over a cap-4 inline int channel, mailbox actors for HEP and worker accounting, and arena-backed IPv4 checks. PROXY protocol v1 support for HAProxy deployments. Full SIP.js/JsSIP WebSocket compatibility with `Sec-WebSocket-Protocol: sip` subprotocol and transport-aware response routing.
 - RFC 3261 compliance improvements: To-tag on all responses, CANCEL→487 generation, 3xx redirect following, and in-dialog REFER/INFO/MESSAGE forwarding. RFC 5626 outbound flow tokens with `+sip.instance`, `reg-id`, and flow token Path URI. RFC 3265/6665 event packages (SUBSCRIBE/NOTIFY with presence and message-summary). RFC 5923 TLS connection reuse with Via `;alias`. RFC 4028 session timer refresh with re-INVITE generation at 50% interval. RFC 3325 P-Asserted-Identity insertion with anonymous From support.
 - Security hardening: per-method rate limits, digest URI validation, nonce-count monotonicity, registration enumeration detection, DNS rebinding guard, per-IP connection limits, constant-time digest comparison, and progressive authentication delay.
 - PostgreSQL-backed registrations, routing policy, access control, security state, CDRs, and a durable billing-event outbox.
@@ -28,7 +39,7 @@ The repository includes an opt-in lab that exercises the implemented IMS boundar
 
 - [`lab/ims_hss.py`](lab/README.md) is a bounded Cx/AKA HSS-compatible adapter with HTTP/HTTPS subscriber authorization. It uses configured opaque XRES test values; it is not an HSS/UDM, AKA secret store, or vector generator.
 - [`media/rtp_module.py`](media/README.md) is a separate RTPEngine-ng-compatible control sidecar with a bounded one-audio-stream RTP/RTCP relay. It is not a production media server.
-- [`docker-compose.ims-lab.yml`](docker-compose.ims-lab.yml) composes the adapters, separate Mako `v0.5.0` P-/I-/S-CSCF workers, and a deterministic two-subscriber client.
+- [`docker-compose.ims-lab.yml`](docker-compose.ims-lab.yml) composes the adapters, separate Mako P-/I-/S-CSCF workers, and a deterministic two-subscriber client.
 
 The Docker smoke path covers deterministic unknown/barred registration rejection, TLS Cx/AKA, HTTPS subscriber authorization, P-/I-/S-CSCF REGISTER and initial-INVITE forwarding, SDP offer/answer rewriting, bidirectional RTP, ACK, and BYE. It does not establish full 3GPP IMS, real UE/HSS/UDM interoperability, carrier capacity, ICE/DTLS-SRTP support, or production failover. See [`docs/ims-roadmap.md`](docs/ims-roadmap.md) for the remaining work and acceptance evidence.
 
@@ -76,8 +87,8 @@ curl -fsSL https://raw.githubusercontent.com/Izi-Technologies/madis/main/packagi
 Pin a specific version:
 
 ```sh
-sudo bash setup-apt.sh 0.7.0
-sudo bash setup-dnf.sh 0.7.0
+sudo bash setup-apt.sh 0.7.4
+sudo bash setup-dnf.sh 0.7.4
 ```
 
 After install, configure `/etc/madis/madis.env` (see the example at `/etc/madis/madis.env.example`) and start:
@@ -94,7 +105,7 @@ docker compose up -d --build
 
 ### Source install
 
-For a Linux host with the Mako compiler:
+For a Linux host with Makori 0.6.32 or later and the matching runtime:
 
 ```sh
 sudo ./install.sh
@@ -369,7 +380,7 @@ The machine API is served by the standalone WebUI at `/admin/api/v1/`. Bearer-to
 
 ## Build and test
 
-The supported source entry point is [`main.mko`](main.mko). [`sipproxy_full.mko`](sipproxy_full.mko) is a legacy monolithic reference and is not the deployment target. The codebase is pure Mako with no C bridge code; all composite-key maps, UDP reuseport, TLS server pool, base64url, and JWT custom header support are Mako builtins. Tests run without linking any C code. Builds and CI require Makori `0.6.5` or later with its matching runtime; do not mix compiler/runtime versions when generating native C.
+The supported source entry point is [`main.mko`](main.mko). [`sipproxy_full.mko`](sipproxy_full.mko) is a legacy monolithic reference and is not the deployment target. The codebase is pure Mako with no C bridge code; all composite-key maps, UDP reuseport, TLS server pool, base64url, and JWT custom header support are Mako builtins. Tests run without linking any C code. Builds and CI require Makori `0.6.32` or later with its matching runtime; do not mix compiler/runtime versions when generating native C.
 
 ```sh
 MAKO_BIN=/path/to/mako \
@@ -381,4 +392,4 @@ MAKO_RUNTIME=/path/to/mako/runtime \
   ./scripts/ci.sh
 ```
 
-The CI script checks Mako syntax/lint, Mako tests, native links, schemas, shell syntax, Python SDK compilation, and the default HSS/media adapter tests. The current suite totals 150 tests (45 Mako test files with 1507 assertions + 56 Python MAF SDK + 39 lab + 10 media). It does not replace external SIP, IMS, Diameter, media, or carrier interoperability testing. See [`docs/testing.md`](docs/testing.md) for opt-in wire, worker-backed, Docker, load, and recovery checks.
+The CI script checks Mako syntax/lint, Mako tests, native links, schemas, shell syntax, Python SDK compilation, and the default HSS/media adapter tests. All 49 Mako test files pass on the 0.6.32 C backend, including crew-policy, actor, arena, inline-channel, and parallel-fork contracts. The ownership gate uses ASan/UBSan and enables LeakSanitizer for the bounded ownership fixture on Linux. It does not replace external SIP, IMS, Diameter, media, or carrier interoperability testing. See [`docs/testing.md`](docs/testing.md) for opt-in wire, worker-backed, Docker, load, and recovery checks.

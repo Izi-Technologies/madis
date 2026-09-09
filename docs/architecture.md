@@ -96,7 +96,7 @@ The application remains responsible for:
 
 ## Concurrency and failure behavior
 
-Listener workers and scheduler settings are bounded through the `SIP_*_WORKERS` and `SIP_SCHED_WORKERS` configuration. Attacker-controlled caches, transaction state, dialog state, routing state, and integration payloads have implementation limits.
+Listener workers and scheduler settings are bounded through the `SIP_*_WORKERS` and `SIP_SCHED_WORKERS` configuration. After those long-lived workers start, `SIP_REQUEST_WORKERS` (default 4) enables a Makori request pool for parallel INVITE fork, CANCEL, first-healthy race, quality scoring, and overlapping transaction ticks. Attacker-controlled caches, transaction state, dialog state, routing state, and integration payloads have implementation limits.
 
 Billing delivery is at least once: an application must commit its own transaction before acknowledging an event. Optional live applications and modules have bounded synchronous timeouts. Application failures can be configured open or closed; module failures are closed by default. Online preauthorization is fail-closed unless the operator explicitly enables `SIP_CHARGING_FAIL_OPEN=1`.
 

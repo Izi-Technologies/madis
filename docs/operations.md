@@ -22,7 +22,7 @@ sudo MADIS_DB_NAME=mysipdb \
   ./install.sh
 ```
 
-Mako 0.5.0 is required. For an offline or prebuilt install, place `main` and `admin-bin` beside the installer. Otherwise provide `MADIS_MAKO_BIN` and `MAKO_RUNTIME` so the installer can build the processes.
+Makori 0.6.32 or later is required, with a matching runtime. For an offline or prebuilt install, place `main` and `admin-bin` beside the installer. Otherwise provide `MADIS_MAKO_BIN` and `MAKO_RUNTIME` so the installer can build the processes.
 
 ## Docker
 
@@ -197,7 +197,7 @@ List calls are capped at 100 records and JSON bodies at 64 KiB. Billing consumer
 
 ## Upgrade and rollback
 
-Build and test the exact source revision with Mako 0.5.0 before replacing the live processes:
+Build and test the exact source revision with Makori 0.6.32 before replacing the live processes:
 
 ```sh
 MAKO_BIN=/path/to/mako MAKO_RUNTIME=/path/to/mako/runtime \
@@ -208,6 +208,8 @@ MAKO_BIN=/path/to/mako MAKO_RUNTIME=/path/to/mako/runtime \
 ```
 
 Before an upgrade, save the current binaries, environment file, unit files, and a tested PostgreSQL backup. Replace binaries atomically, restart one service at a time where the topology allows, and verify readiness plus a representative SIP transaction. If checks fail, restore the previous binaries and restart. Database migrations require their own tested rollback or restore plan; the repository does not provide automatic zero-downtime migration rollback.
+
+Release binaries are built with `-DNDEBUG`, so Makori 0.6.32 tracing compiles to no-ops. For a debug C build only, `MAKO_TRACE=tree` prints a hierarchical call tree, `MAKO_TRACE_JSON=<path>` writes a Chrome/Perfetto trace, and `MAKO_TRACE_CHAN=1` logs channel send/recv. Do not enable those on the production worker.
 
 ## Incident checklist
 

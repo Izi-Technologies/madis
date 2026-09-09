@@ -1,0 +1,33 @@
+pull . "../main.mko"
+
+fn TestDispatchRaceFirstPrefersHealthy() {
+    let cache = cmap_new()
+    let _ = dispatch_health_note("192.0.2.10:5060", 1, cache)
+    let _ = dispatch_health_note("192.0.2.20:5060", 1, cache)
+    let winner = dispatch_race_first("192.0.2.10:5060", "192.0.2.20:5060", cache)
+    assert(str_eq(winner, "192.0.2.10:5060") || str_eq(winner, "192.0.2.20:5060"))
+}
+
+fn TestDispatchRaceFirstSkipsDownMember() {
+    let cache = cmap_new()
+    let _ = bounded_cache_set(cache, "health_state_seq", "health_state_ring|", "health|192.0.2.99:5060", "down", 16384)
+    let _ = dispatch_health_note("192.0.2.10:5060", 1, cache)
+    assert_eq_str(dispatch_race_first("192.0.2.99:5060", "192.0.2.10:5060", cache), "192.0.2.10:5060")
+}
+
+fn TestDispatchInlineChanIsCap4() {
+    let ch = sip_inline_chan()
+    assert_eq(chan_cap(ch), 4)
+    let _ = ch.send(1)
+    let _ = ch.send(2)
+    assert_eq(ch.recv(), 1)
+    assert_eq(ch.recv(), 2)
+}
+
+fn TestDispatchHashProvePositiveCount() {
+    assert_eq(dispatch_hash("call-1", 1), 0)
+    let a = dispatch_hash("alice@example.com", 3)
+    let b = dispatch_hash("bob@example.com", 3)
+    assert(a >= 0 && a < 3)
+    assert(b >= 0 && b < 3)
+}

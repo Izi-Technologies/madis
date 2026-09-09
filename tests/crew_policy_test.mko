@@ -1,0 +1,171 @@
+// Structured crew policies from Makori 0.6.32, shaped like SIP worker
+// lifetime and first-healthy dispatch. The process crews in main.mko and
+// admin/main.mko use crew:all so one listener or WebSocket ending cannot
+// cancel the rest. crew:race is for first-complete probes, not the
+// process nursery.
+
+fn probe_gateway(addr: string, delay_ms: int, healthy: int) -> string {
+    if delay_ms > 0 { sleep_ms(delay_ms) }
+    if healthy == 1 { return addr }
+    return ""
+}
+
+fn double_len(s: string) -> int {
+    return len(s) * 2
+}
+
+fn TestCrewAllJoinsSipShapedWorkers() {
+    crew:all workers {
+        let udp = workers.kick(double_len("udp"))
+        let tcp = workers.kick(double_len("tcp"))
+        assert_eq(udp.join(), 6)
+        assert_eq(tcp.join(), 6)
+    }
+}
+
+fn TestCrewRaceFirstHealthyGatewayWins() {
+    crew:race probes {
+        let slow = probes.kick(probe_gateway("192.0.2.20:5060", 80, 1))
+        let fast = probes.kick(probe_gateway("192.0.2.10:5060", 0, 1))
+        let winner = fast.join()
+        assert_eq_str(winner, "192.0.2.10:5060")
+        let _ = slow.join()
+    }
+}
+
+fn TestCrewRaceUnhealthyProbeLoses() {
+    crew:race probes {
+        let down = probes.kick(probe_gateway("192.0.2.99:5060", 0, 0))
+        let up = probes.kick(probe_gateway("192.0.2.10:5060", 20, 1))
+        let first = down.join()
+        if len(first) == 0 {
+            assert_eq_str(up.join(), "192.0.2.10:5060")
+        } else {
+            assert_eq_str(first, "192.0.2.10:5060")
+        }
+    }
+}
+
+fn TestCrewFailFastOptionCompiles() {
+    crew probes(fail_fast=true) {
+        let a = probes.kick(double_len("ok"))
+        assert_eq(a.join(), 4)
+    }
+}
+
+fn TestCrewAnyJoinsFirstProbe() {
+    crew:any probes {
+        let a = probes.kick(probe_gateway("192.0.2.10:5060", 0, 1))
+        let b = probes.kick(probe_gateway("192.0.2.20:5060", 50, 1))
+        let res = a.join()
+        assert(len(res) > 0 || len(b.join()) > 0)
+    }
+}
+
+fn TestFanScalesGatewayScores() {
+    let raw = [100, 500, 200]
+    let scaled = fan(raw, |s| s * 2)
+    assert_eq(scaled[0], 200)
+    assert_eq(scaled[1], 1000)
+    assert_eq(scaled[2], 400)
+}
+
+fn fail_if_empty(addr: string) -> Result[string, string] {
+    if len(addr) == 0 { return Err("empty gateway") }
+    return Ok(addr)
+}
+
+fn TestCrewFailFastJoinsHealthyProbe() {
+    crew:fail_fast probes {
+        let a = probes.kick(fail_if_empty("192.0.2.10:5060"))
+        match a.join() {
+            Ok(addr) => { assert_eq_str(addr, "192.0.2.10:5060") }
+            Err(_) => { assert_eq(0, 1) }
+        }
+    }
+}
+
+actor ProbeCounter {
+    n: int = 0
+    receive Hit {
+        self.n = self.n + 1
+    }
+    receive Bye {
+        let _ = 0
+    }
+}
+
+fn TestActorCountsDispatchProbes() {
+    let c = ProbeCounter_spawn_cap(4)
+    crew:all workers {
+        let loopj = workers.kick(ProbeCounter_loop(c))
+        assert(ProbeCounter_send(c, ProbeCounter_Hit()))
+        assert(ProbeCounter_send(c, ProbeCounter_Hit()))
+        assert(ProbeCounter_send(c, ProbeCounter_Hit()))
+        assert(ProbeCounter_send(c, ProbeCounter_Bye()))
+        assert_eq(loopj.join(), 3)
+    }
+}
+
+fn TestArenaIpv4Scratch() {
+    arena scratch {
+        let mut octets = make([]int, 0, 4)
+        octets = append(octets, 192)
+        octets = append(octets, 0)
+        octets = append(octets, 2)
+        octets = append(octets, 10)
+        assert_eq(len(octets), 4)
+        assert_eq(octets[0], 192)
+        assert_eq(octets[3], 10)
+    }
+}
+
+fn inline_chan_probe(ch: chan[int], idx: int) -> int {
+    let _ = ch.send(idx)
+    return idx
+}
+
+fn TestInlineIntChanCap4ZeroAllocRing() {
+    let ch = chan_new(4)
+    assert_eq(chan_cap(ch), 4)
+    let _ = ch.send(10)
+    let _ = ch.send(20)
+    let _ = ch.send(30)
+    let _ = ch.send(40)
+    assert_eq(chan_len(ch), 4)
+    assert_eq(ch.recv(), 10)
+    assert_eq(ch.recv(), 20)
+    assert_eq(ch.recv(), 30)
+    assert_eq(ch.recv(), 40)
+    let rend = chan_new(0)
+    assert_eq(chan_cap(rend), 0)
+}
+
+fn TestInlineIntChanRendezvous() {
+    let ch = chan_new(0)
+    crew:all t {
+        let _ = t.kick(inline_chan_probe(ch, 7))
+        assert_eq(ch.recv(), 7)
+    }
+}
+
+fn fork_branch_mark(idx: int, ch: chan[int]) -> int {
+    let _ = ch.send(idx)
+    return 1
+}
+
+fn TestCrewAllForksFourBranches() {
+    let ch = chan_new(4)
+    crew:all branches {
+        let _ = branches.kick(fork_branch_mark(0, ch))
+        let _ = branches.kick(fork_branch_mark(1, ch))
+        let _ = branches.kick(fork_branch_mark(2, ch))
+        let _ = branches.kick(fork_branch_mark(3, ch))
+    }
+    let mut seen = 0
+    while chan_len(ch) > 0 {
+        let _ = ch.recv()
+        seen = seen + 1
+    }
+    assert_eq(seen, 4)
+}

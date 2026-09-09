@@ -1,3 +1,4 @@
+pull . "../parser.mko"
 pull . "../hep.mko"
 
 fn TestHEP3IPv4Packet() {
@@ -74,6 +75,17 @@ fn TestHEPWorkerSendsPacket() {
     let _ = detached_join_all()
     let _ = udp_close(collector)
     let _ = env_set("SIP_HEP_ENABLE", "0")
+}
+
+fn TestHEPCaptureActorCountsPackets() {
+    let capn = HepCapture_spawn_cap(4)
+    crew:all hep {
+        let loopj = hep.kick(HepCapture_loop(capn))
+        assert(HepCapture_send(capn, HepCapture_Packet()))
+        assert(HepCapture_send(capn, HepCapture_Packet()))
+        assert(HepCapture_send(capn, HepCapture_Bye()))
+        assert_eq(loopj.join(), 2)
+    }
 }
 
 fn TestHEPQueueCapacityBounds() {

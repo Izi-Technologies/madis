@@ -18,6 +18,51 @@ fn sip_domain(uri: string) -> string {
     return sip_uri_host(uri)
 }
 
+// Arena-backed dotted-quad check. Octet scratch is freed with the region;
+// only the 0/1 result escapes. Same rules as the previous heap str_split
+// path: four decimal groups, each 1-3 digits, 0-255.
+fn sip_ipv4_ok(ip: string) -> int {
+    let n = len(ip)
+    if n < 7 || n > 15 { return 0 }
+    let mut ok = 0
+    arena scratch {
+        let mut octets = make([]int, 0, 4)
+        let mut start = 0
+        let mut i = 0
+        let mut bad = 0
+        while i <= n && bad == 0 {
+            let mut sep = 0
+            if i == n { sep = 1 }
+            if i < n && int(ip[i]) == 46 { sep = 1 }
+            if sep == 1 {
+                let part_len = i - start
+                if part_len < 1 || part_len > 3 {
+                    bad = 1
+                } else {
+                    let mut v = 0
+                    let mut j = start
+                    while j < i && bad == 0 {
+                        let c = int(ip[j])
+                        if c < 48 || c > 57 {
+                            bad = 1
+                        } else {
+                            v = v * 10 + (c - 48)
+                        }
+                        j = j + 1
+                    }
+                    if bad == 0 {
+                        if v > 255 { bad = 1 } else { octets = append(octets, v) }
+                    }
+                    start = i + 1
+                }
+            }
+            i = i + 1
+        }
+        if bad == 0 && len(octets) == 4 { ok = 1 }
+    }
+    return ok
+}
+
 fn sip_contact_addr(c: string) -> string {
     let n = len(c)
     let mut i = 0

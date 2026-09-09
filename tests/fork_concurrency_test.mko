@@ -1,0 +1,39 @@
+pull . "../main.mko"
+
+fn TestForkCommitUsesPerIndexKeys() {
+    let cache = cmap_new()
+    let cid = "fork-par"
+    cmap_set(cache, "fork_tmp_br|" + cid + "|0", "z9hG4bK-a")
+    cmap_set(cache, "fork_tmp_tg|" + cid + "|0", "sip:a@192.0.2.10:5060")
+    cmap_set(cache, "fork_tmp_rq|" + cid + "|0", "INVITE sip:a@192.0.2.10 SIP/2.0\r\nVia: SIP/2.0/UDP 192.0.2.1:5060;branch=z9hG4bK-a\r\nContent-Length: 0\r\n\r\n")
+    cmap_set(cache, "fork_tmp_br|" + cid + "|1", "z9hG4bK-b")
+    cmap_set(cache, "fork_tmp_tg|" + cid + "|1", "sip:b@192.0.2.11:5060")
+    cmap_set(cache, "fork_tmp_rq|" + cid + "|1", "INVITE sip:b@192.0.2.11 SIP/2.0\r\nVia: SIP/2.0/UDP 192.0.2.1:5060;branch=z9hG4bK-b\r\nContent-Length: 0\r\n\r\n")
+    let a = sip_fork_commit_branch(cid, 0, cache)
+    let b = sip_fork_commit_branch(cid, 1, cache)
+    assert_eq_str(a, "sip:a@192.0.2.10:5060")
+    assert_eq_str(b, "sip:b@192.0.2.11:5060")
+    assert_eq(sip_fork_is_pending(cid, "z9hG4bK-a", cache), 1)
+    assert_eq(sip_fork_is_pending(cid, "z9hG4bK-b", cache), 1)
+}
+
+fn TestHousekeepTicksJoins() {
+    let cache = cmap_new()
+    let calls = cmap_new()
+    let reg = cmap_new()
+    let db = sql_open_postgres("")
+    let outbox = chan_open[string](1)
+    let lock = mutex_new()
+    assert_eq(sip_housekeep_ticks(-1, reg, calls, db, 0, cache, outbox, "example.com", "node1", lock), 1)
+    outbox.close()
+}
+
+fn TestDispatchScoreStoreParallel() {
+    let cache = cmap_new()
+    crew:all scores {
+        let _ = scores.kick(dispatch_score_store(0, "192.0.2.10:5060", cache))
+        let _ = scores.kick(dispatch_score_store(1, "192.0.2.20:5060", cache))
+    }
+    assert_eq(dispatch_score_at(0, cache), 500)
+    assert_eq(dispatch_score_at(1, cache), 500)
+}

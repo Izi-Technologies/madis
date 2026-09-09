@@ -76,7 +76,7 @@ fn control_resource_time_ok(body: string, key: string) -> int {
 }
 
 fn control_resource_algorithm_ok(value: string) -> int {
-    return if str_eq(value, "round-robin") || str_eq(value, "weight") || str_eq(value, "priority") || str_eq(value, "hash") || str_eq(value, "hash-user") || str_eq(value, "broadcast") { 1 } else { 0 }
+    return if str_eq(value, "round-robin") || str_eq(value, "weight") || str_eq(value, "priority") || str_eq(value, "hash") || str_eq(value, "hash-user") || str_eq(value, "broadcast") || str_eq(value, "first") || str_eq(value, "race") || str_eq(value, "quality") || str_eq(value, "smart") { 1 } else { 0 }
 }
 
 fn control_resource_transport_ok(value: string) -> int {

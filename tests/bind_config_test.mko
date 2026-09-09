@@ -24,6 +24,16 @@ fn TestBindIpRejectsInvalidFailsBackToWildcard() {
     let _ = env_set("SIP_BIND_IP", "")
 }
 
+fn TestRequestWorkersDefaultIsFour() {
+    let _ = env_set("SIP_REQUEST_WORKERS", "")
+    assert_eq(sip_request_workers(), 4)
+    let _ = env_set("SIP_REQUEST_WORKERS", "8")
+    assert_eq(sip_request_workers(), 8)
+    let _ = env_set("SIP_REQUEST_WORKERS", "99")
+    assert_eq(sip_request_workers(), 16)
+    let _ = env_set("SIP_REQUEST_WORKERS", "")
+}
+
 fn TestBindIpValidatorBoundary() {
     assert_eq(sip_bind_ip_valid("0.0.0.0"), 1)
     assert_eq(sip_bind_ip_valid("255.255.255.255"), 1)

@@ -11,7 +11,7 @@ COPY . /src
 WORKDIR /src
 
 # If the binary is pre-built, just use it. Otherwise emit C and link the
-# Makori 0.6.31 C output with the matching runtime.
+# Makori 0.6.32 C output with the matching runtime.
 RUN if [ -f /src/main ]; then \
         cp /src/main /src/madis; \
     elif [ -x "$MAKO_BINARY" ]; then \

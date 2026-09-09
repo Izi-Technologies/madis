@@ -4,12 +4,11 @@ The `admin/` directory contains the standalone Mako WebUI and the machine API ga
 
 ## Build and run
 
-Mako 0.5.0 is required:
+Makori 0.6.32 is required:
 
 ```sh
-MAKO_RUNTIME=/path/to/mako/runtime \
-  mako build --release --strip --no-incremental \
-  admin/main.mko -o admin-bin
+MAKO_BIN=/path/to/mako MAKO_RUNTIME=/path/to/mako/runtime \
+  ../scripts/build-native.sh admin/main.mko admin-bin
 
 SIP_DB_URL='postgres://<db-user>:<db-password>@<db-host>:5432/<db-name>' \
 ADMIN_BIND=<admin-bind-address> ADMIN_PORT=8080 \

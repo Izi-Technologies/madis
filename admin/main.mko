@@ -70,8 +70,9 @@ fn main() {
     let el = evloop_new()
     let _ = evloop_add(el, lfd, 1)
 
-    // Crew owns long-lived WebSocket live sessions kicked from the accept loop.
-    crew ws_crew {
+    // crew:all owns long-lived WebSocket sessions kicked from the accept loop.
+    // One session ending must not cancel the remaining live/MAF sockets.
+    crew:all ws_crew {
     while shutdown_requested() == 0 {
         // Keep the wait finite so SIGTERM can drain the worker without
         // relying on systemd's SIGKILL fallback.

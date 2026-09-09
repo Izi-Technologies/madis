@@ -120,7 +120,9 @@ fn dispatch_next_rr(set_id: int, count: int, cache: CMap) -> int {
     return idx
 }
 
-fn dispatch_hash(key: string, count: int) -> int {
+fn dispatch_hash(key: string, count: int) -> int
+    prove count > 0
+{
     let mut h = 2166136261
     let mut i = 0
     let n = len(key)
@@ -166,6 +168,63 @@ fn dispatch_health_note(addr: string, ok: int, cache: CMap) -> int {
         let _ = bounded_cache_set(cache, "health_until_seq", "health_until_ring|", "health_until|" + addr, string(mono_ms() + backoff), 16384)
     }
     return 0
+}
+
+fn dispatch_score_store(idx: int, gateway: string, cache: CMap) -> int {
+    let s = routing_gateway_score(cache, gateway, "")
+    cmap_set(cache, "tmp_score|" + string(idx), string(s))
+    return s
+}
+
+fn dispatch_score_at(idx: int, cache: CMap) -> int {
+    let mut score = 500
+    match parse_int(cmap_get(cache, "tmp_score|" + string(idx))) {
+        Ok(v) => { score = v }
+        Err(_) => { score = 500 }
+    }
+    return score
+}
+
+fn dispatch_probe_member(addr: string, cache: CMap) -> string {
+    if len(addr) > 0 && dispatch_is_healthy(addr, cache) == 1 { return addr }
+    return ""
+}
+
+// Probe result on a cap-4 int channel: the index if healthy, else -1.
+// chan_new(4) uses the 0.6.32 inline ring — no heap buffer.
+fn dispatch_probe_send(addr: string, idx: int, cache: CMap, ch: chan[int]) -> int {
+    if len(addr) > 0 && dispatch_is_healthy(addr, cache) == 1 {
+        let _ = ch.send(idx)
+        return 1
+    }
+    let _ = ch.send(-1)
+    return 0
+}
+
+fn sip_inline_chan() -> chan[int] {
+    return chan_new(4)
+}
+
+// First complete probe publishes on the inline channel; crew:race cancels
+// the slower sibling. A -1 result falls back to a sequential health check.
+fn dispatch_race_first(a: string, b: string, cache: CMap) -> string {
+    if len(b) == 0 { return a }
+    if len(a) == 0 { return b }
+    let ch = sip_inline_chan()
+    let mut winner = a
+    crew:race probes {
+        let _ = probes.kick(dispatch_probe_send(a, 0, cache, ch))
+        let _ = probes.kick(dispatch_probe_send(b, 1, cache, ch))
+        let idx = ch.recv()
+        if idx == 1 {
+            winner = b
+        } else {
+            if idx != 0 {
+                if dispatch_is_healthy(b, cache) == 1 { winner = b }
+            }
+        }
+    }
+    return winner
 }
 
 // Resolve a dispatch set to comma-separated targets.
@@ -243,16 +302,31 @@ fn resolve_dispatch_set(db: SqlDB, set_name: string, from_user: string, call_id:
     if str_eq(algo, "round-robin") { start_idx = dispatch_next_rr(set_id, count, cache) }
     if str_eq(algo, "hash") { start_idx = dispatch_hash(call_id, count) }
     if str_eq(algo, "hash-user") { start_idx = dispatch_hash(from_user, count) }
+    if (str_eq(algo, "first") || str_eq(algo, "race")) && count >= 2 {
+        let winner = dispatch_race_first(members[0], members[1], cache)
+        if str_eq(winner, members[1]) { start_idx = 1 }
+    }
     if str_eq(algo, "quality") || str_eq(algo, "smart") {
+        if count >= 2 {
+            crew:all scores {
+                let mut qi = 0
+                while qi < count {
+                    let _ = scores.kick(dispatch_score_store(qi, members[qi], cache))
+                    qi = qi + 1
+                }
+            }
+        } else {
+            if count == 1 { let _ = dispatch_score_store(0, members[0], cache) }
+        }
         // Sort members by routing intelligence score (highest first).
         // ponytail: selection sort, max 8 members — no need for anything fancier.
         let mut si = 0
         while si < count - 1 {
             let mut best = si
-            let mut best_score = routing_gateway_score(cache, members[si], "")
+            let mut best_score = dispatch_score_at(si, cache)
             let mut sj = si + 1
             while sj < count {
-                let score = routing_gateway_score(cache, members[sj], "")
+                let score = dispatch_score_at(sj, cache)
                 if score > best_score { best = sj; best_score = score }
                 sj = sj + 1
             }
@@ -262,6 +336,11 @@ fn resolve_dispatch_set(db: SqlDB, set_name: string, from_user: string, call_id:
                 members[best] = tmp
             }
             si = si + 1
+        }
+        let mut di = 0
+        while di < count {
+            let _ = cmap_del(cache, "tmp_score|" + string(di))
+            di = di + 1
         }
         start_idx = 0
     }

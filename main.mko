@@ -1748,26 +1748,7 @@ fn sip_config_port(name: string, default_port: int) -> int {
 
 // Strict dotted-quad check: four decimal octets 0-255, nothing else.
 fn sip_bind_ip_valid(ip: string) -> int {
-    if len(ip) < 7 || len(ip) > 15 { return 0 }
-    let parts = str_split(ip, ".")
-    if len(parts) != 4 { return 0 }
-    let mut i = 0
-    while i < 4 {
-        let octet = parts[i]
-        if len(octet) < 1 || len(octet) > 3 { return 0 }
-        let mut j = 0
-        while j < len(octet) {
-            let c = int(octet[j])
-            if c < 48 || c > 57 { return 0 }
-            j = j + 1
-        }
-        match parse_int(octet) {
-            Ok(v) => { if v > 255 { return 0 } }
-            Err(_) => { return 0 }
-        }
-        i = i + 1
-    }
-    return 1
+    return sip_ipv4_ok(ip)
 }
 
 // SIP_BIND_IP selects the local IPv4 signaling bind address for the
@@ -1808,6 +1789,20 @@ fn sip_scheduler_workers(udp_workers: int, tcp_workers: int, tls_workers: int, w
     if minimum > 0 && workers < minimum { workers = minimum }
     if workers > 64 { workers = 64 }
     return workers
+}
+
+// Pool for short-lived fork/race/cancel crews. Listeners are kicked first
+// with sched 0 (dedicated pthreads). Enabling the pool afterwards reuses
+// four workers for request-scoped kicks instead of one pthread per branch.
+fn sip_request_workers() -> int {
+    let mut n = 4
+    match parse_int(env_get_or("SIP_REQUEST_WORKERS", "4")) {
+        Ok(v) => { n = v }
+        Err(_) => { n = 4 }
+    }
+    if n < 0 { n = 0 }
+    if n > 16 { n = 16 }
+    return n
 }
 
 // ============ MAIN ============
@@ -2030,8 +2025,12 @@ fn main() {
     }
     slog("")
 
-    // HEP worker disabled in proxy-only deployment.
-    crew t {
+    // crew:all: every SIP/media-control worker stays joined for process
+    // lifetime. Do not use crew:race here — the first worker returning
+    // would cancel the remaining listeners.
+    crew:all t {
+        let sup = SipWorkers_spawn_cap(4)
+        let _ = t.kick(SipWorkers_loop(sup))
         let mut udp_i = 0
         let mut maf_poll_fd = -1
         while udp_i < requested_udp_workers {
@@ -2057,6 +2056,7 @@ fn main() {
             } else {
                 let _ = register_listener(udp_fd)
                 let _ = t.kick(udp_worker(udp_i, udp_fd, udp_port, reg, calls, cache, hep_outbox, diameter_lock))
+                let _ = SipWorkers_send(sup, SipWorkers_Up())
                 if maf_poll_fd < 0 { maf_poll_fd = udp_fd }
             }
             udp_i = udp_i + 1
@@ -2069,11 +2069,13 @@ fn main() {
             } else {
                 let _ = register_listener(ipv6_fd)
                 let _ = t.kick(udp_worker(requested_udp_workers, ipv6_fd, udp_port, reg, calls, cache, hep_outbox, diameter_lock))
+                let _ = SipWorkers_send(sup, SipWorkers_Up())
                 if maf_poll_fd < 0 { maf_poll_fd = ipv6_fd }
             }
         }
         if maf_poll_fd >= 0 {
             let _ = t.kick(maf_poll_worker(maf_poll_fd, cache, calls))
+            let _ = SipWorkers_send(sup, SipWorkers_Up())
         }
         let mut tcp_i = 0
         while tcp_i < tcp_workers {
@@ -2094,6 +2096,7 @@ fn main() {
             let _ = register_listener(tcp_fd)
             let _ = io_set_nonblocking(tcp_fd, 1)
             let _ = t.kick(tcp_worker_multiplexed(tcp_fd, reg, calls, tcp_port, cache, hep_outbox, diameter_lock))
+            let _ = SipWorkers_send(sup, SipWorkers_Up())
             tcp_i = tcp_i + 1
         }
         // TLS: shared OpenSSL context, per-worker listener fds
@@ -2144,6 +2147,7 @@ fn main() {
                 let _ = register_listener(tls_fd)
                 let _ = io_set_nonblocking(tls_fd, 1)
                 let _ = t.kick(tls_worker(tls_fd, tls_srv, tls_port, reg, calls, cache, hep_outbox, diameter_lock))
+                let _ = SipWorkers_send(sup, SipWorkers_Up())
                 tls_i = tls_i + 1
             }
             }
@@ -2170,9 +2174,16 @@ fn main() {
             let _ = register_listener(wss_fd)
             let _ = io_set_nonblocking(wss_fd, 1)
             let _ = t.kick(wss_worker(wss_fd, wss_port, reg, calls, cache, hep_outbox, diameter_lock))
+            let _ = SipWorkers_send(sup, SipWorkers_Up())
             wss_i = wss_i + 1
         }
+        if hep_enabled() == 1 {
+            let _ = t.kick(hep_worker(hep_outbox, cache))
+            let _ = SipWorkers_send(sup, SipWorkers_Up())
+            slog("  HEP:     capture worker started")
+        }
     let _ = t.kick(ims_cx_push_server_worker(reg))
+        let _ = SipWorkers_send(sup, SipWorkers_Up())
 
         // Heartbeat + stats loop
         let hb_db_url = env_get_or("SIP_DB_URL", "")
@@ -2181,6 +2192,13 @@ fn main() {
         let mut hb_db = sql_open_postgres(hb_db_url)
         if len(hb_db_url) > 0 { hb_db_ok = 1 }
         let _ = t.kick(proxy_admin_worker(reg, calls, cache))
+        let _ = SipWorkers_send(sup, SipWorkers_Up())
+
+        let request_workers = sip_request_workers()
+        if request_workers > 0 {
+            sched_set_workers(request_workers)
+            slog("  Crew:    request pool " + string(request_workers) + " (fork/race/cancel/ticks)")
+        }
 
         while shutdown_requested() == 0 {
             sleep_ms(1000)
@@ -2222,5 +2240,7 @@ fn main() {
             }
             let _ = server_shutdown_begin(0)
         }
+        hep_outbox.close()
+        let _ = SipWorkers_send(sup, SipWorkers_Bye())
     }
 }

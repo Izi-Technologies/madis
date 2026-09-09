@@ -1,6 +1,19 @@
 // ============ HEPv3 SIP CAPTURE ============
 // Best-effort UDP export for Homer/HEP collectors. Capture is disabled unless
 // SIP_HEP_ENABLE=1; failures never change SIP request handling.
+// sip_ipv4_ok lives in parser.mko (pulled by main and by hep tests).
+
+// Mailbox-cap 4 uses the 0.6.32 inline channel ring. Packet is a count
+// tick; Bye ends the loop. The SIP wire still travels on chan[string].
+actor HepCapture {
+    n: int = 0
+    receive Packet {
+        self.n = self.n + 1
+    }
+    receive Bye {
+        let _ = 0
+    }
+}
 
 fn hep_enabled() -> int {
     let value = env_get_or("SIP_HEP_ENABLE", "0") |> str_trim_space() |> str_to_lower()
@@ -59,19 +72,7 @@ fn hep_queue_new() -> chan[string] {
 }
 
 fn hep_ipv4_valid(ip: string) -> int {
-    let parts = str_split(ip, ".")
-    if len(parts) != 4 { return 0 }
-    let mut i = 0
-    while i < 4 {
-        match parse_int(parts[i]) {
-            Ok(value) => {
-                if value < 0 || value > 255 { return 0 }
-            }
-            Err(_) => { return 0 }
-        }
-        i = i + 1
-    }
-    return 1
+    return sip_ipv4_ok(ip)
 }
 
 fn hep_chunk_header(b: Buf, typ: int, data_len: int) {
@@ -168,14 +169,22 @@ fn hep_capture(outbox: chan[string], cache: CMap, msg: string, src_ip: string, s
 }
 
 fn hep_worker(outbox: chan[string], cache: CMap) -> int {
-    while shutdown_requested() == 0 {
-        let wire = outbox.recv()
-        if len(wire) == 0 { break }
-        let host = str_trim_space(env_get_or("SIP_HEP_HOST", ""))
-        if len(host) == 0 { continue }
-        let fd = hep_sender_fd(cache)
-        if fd < 0 { continue }
-        let _ = udp_send_to(fd, host, hep_port(), wire)
+    let capn = HepCapture_spawn_cap(4)
+    let mut sent = 0
+    crew:all hep {
+        let loopj = hep.kick(HepCapture_loop(capn))
+        while shutdown_requested() == 0 {
+            let wire = outbox.recv()
+            if len(wire) == 0 { break }
+            let _ = HepCapture_send(capn, HepCapture_Packet())
+            let host = str_trim_space(env_get_or("SIP_HEP_HOST", ""))
+            if len(host) == 0 { continue }
+            let fd = hep_sender_fd(cache)
+            if fd < 0 { continue }
+            let _ = udp_send_to(fd, host, hep_port(), wire)
+        }
+        let _ = HepCapture_send(capn, HepCapture_Bye())
+        sent = loopj.join()
     }
-    return 0
+    return sent
 }

@@ -16,6 +16,11 @@ the same checkout; all application builds used the C backend.
 | Returned string-slice regression | Pass on Linux arm64 and macOS arm64 with ASan/UBSan |
 | macOS arm64 proxy and admin C builds | Pass |
 | Actual proxy/admin processes after SIGPIPE | Both remain healthy |
+| Linux x86_64 ownership sanitizer gate | Pass, zero reported leaks in the bounded fixture |
+| Linux x86_64 complete test suite | 46 test files pass, zero failures |
+| Linux x86_64 proxy/admin builds and SIGPIPE check | Pass; both remain healthy |
+| Docker arm64 source build | Pass with matching 0.6.31 compiler/runtime |
+| Docker authenticated health, SIGPIPE and SIP OPTIONS | Health passes before/after SIGPIPE; SIP returns 200 OK |
 
 Only the bounded ownership fixture enables Linux leak detection. The other
 contract suites retain their documented ASan/UBSan settings. No sanitizer
@@ -33,8 +38,8 @@ tab/carriage-return workaround is removed. Local build/check scripts require
 ## Remaining validation
 
 These results do not establish stable RSS under sustained SIP traffic.
-A fresh Linux x86_64 check and a repeat traffic soak with post-load idle sampling
-remain necessary. The earlier SIGPIPE-fixed 0.6.29 soak failed with SIPp exit 1;
+A repeat traffic soak with post-load idle sampling remains necessary.
+The earlier SIGPIPE-fixed 0.6.29 soak failed with SIPp exit 1;
 peak and final sampled RSS were 2,578,956 KiB over 361 resource samples.
 That failed baseline is not a successful throughput measurement and has not
 been repeated with 0.6.31. See the historical

@@ -143,27 +143,81 @@ fn sip_forward_first(targets: string, msg: string, cache: CMap, cid: string, out
     return ""
 }
 
+// One fork branch: send in parallel, stash results on unique CMap keys so
+// registration of the shared branch list stays single-threaded after join.
+fn sip_fork_send_branch(idx: int, target: string, base_msg: string, ip: string, port: int, tr: string, public_ip: string, cache: CMap, cid: string, out_fd: int) -> int {
+    let t = str_trim_space(target)
+    if len(t) == 0 { return 0 }
+    let out_tr = sip_transport_param(t, tr)
+    let raw = proxy_hop(base_msg, ip, port, out_tr)
+    let fwd = nat_fix_sdp(raw, len(raw), public_ip)
+    if sip_forward_target(t, fwd, out_tr, cache, out_fd) == 0 { return 0 }
+    let branch = sip_via_branch(sip_header(fwd, "Via"))
+    if len(branch) == 0 { return 0 }
+    cmap_set(cache, "fork_tmp_br|" + cid + "|" + string(idx), branch)
+    cmap_set(cache, "fork_tmp_tg|" + cid + "|" + string(idx), t)
+    cmap_set(cache, "fork_tmp_rq|" + cid + "|" + string(idx), fwd)
+    return 1
+}
+
+fn sip_fork_commit_branch(cid: string, idx: int, cache: CMap) -> string {
+    let br_key = "fork_tmp_br|" + cid + "|" + string(idx)
+    if cmap_has(cache, br_key) == 0 { return "" }
+    let branch = cmap_get(cache, br_key)
+    let target = cmap_get(cache, "fork_tmp_tg|" + cid + "|" + string(idx))
+    let fwd = cmap_get(cache, "fork_tmp_rq|" + cid + "|" + string(idx))
+    let _ = cmap_del(cache, br_key)
+    let _ = cmap_del(cache, "fork_tmp_tg|" + cid + "|" + string(idx))
+    let _ = cmap_del(cache, "fork_tmp_rq|" + cid + "|" + string(idx))
+    if sip_fork_register_branch(cid, branch, target, cache) == 1 {
+        let _ = sip_fork_store_request(cid, branch, fwd, cache)
+        return target
+    }
+    return ""
+}
+
 fn sip_forward_fork(targets: string, base_msg: string, ip: string, port: int, tr: string, public_ip: string, cache: CMap, cid: string, out_fd: int) -> string {
     let target_list = str_split(targets, ",")
-    let mut primary = ""
-    let mut expected = 0
-    let mut i = 0
-    while i < len(target_list) {
-        let target = str_trim_space(target_list[i])
-        if len(target) > 0 {
-            let out_tr = sip_transport_param(target, tr)
-            let raw = proxy_hop(base_msg, ip, port, out_tr)
-            let fwd = nat_fix_sdp(raw, len(raw), public_ip)
-            if sip_forward_target(target, fwd, out_tr, cache, out_fd) == 1 {
-                if len(primary) == 0 { primary = target }
-                let branch = sip_via_branch(sip_header(fwd, "Via"))
-                if sip_fork_register_branch(cid, branch, target, cache) == 1 {
-                    let _ = sip_fork_store_request(cid, branch, fwd, cache)
-                    expected = expected + 1
-                }
+    let n = len(target_list)
+    if n <= 1 {
+        let mut primary = ""
+        let mut expected = 0
+        if n == 1 {
+            if sip_fork_send_branch(0, target_list[0], base_msg, ip, port, tr, public_ip, cache, cid, out_fd) == 1 {
+                primary = sip_fork_commit_branch(cid, 0, cache)
+                if len(primary) > 0 { expected = 1 }
             }
         }
-        i = i + 1
+        if expected > 0 {
+            cmap_set(cache, "fork_expected|" + cid, string(expected))
+            cmap_set(cache, "fork_done|" + cid, "0")
+            cmap_set(cache, "fork_complete|" + cid, "0")
+        }
+        return primary
+    }
+    // Parallel hop-rewrite + send. Structured crew joins before we touch the
+    // shared branch list. The request scheduler pool (set after listeners
+    // start) reuses workers so this is not one pthread per branch.
+    crew:all branches {
+        let mut i = 0
+        while i < n {
+            let t = str_trim_space(target_list[i])
+            if len(t) > 0 {
+                let _ = branches.kick(sip_fork_send_branch(i, t, base_msg, ip, port, tr, public_ip, cache, cid, out_fd))
+            }
+            i = i + 1
+        }
+    }
+    let mut primary = ""
+    let mut expected = 0
+    let mut j = 0
+    while j < n {
+        let committed = sip_fork_commit_branch(cid, j, cache)
+        if len(committed) > 0 {
+            if len(primary) == 0 { primary = committed }
+            expected = expected + 1
+        }
+        j = j + 1
     }
     if expected > 0 {
         cmap_set(cache, "fork_expected|" + cid, string(expected))
@@ -176,28 +230,55 @@ fn sip_forward_fork(targets: string, base_msg: string, ip: string, port: int, tr
 // RFC 3261 §16.7: after a fork produces a 2xx, cancel all still-pending
 // branches. The CANCEL is derived from the exact forwarded INVITE so it uses
 // the same branch and hop-by-hop transaction identifiers.
+fn sip_cancel_one_branch(cid: string, branch: string, cache: CMap, out_fd: int) -> int {
+    let b = str_trim_space(branch)
+    if len(b) == 0 || sip_fork_is_pending(cid, b, cache) == 0 { return 0 }
+    let req_key = "fork_request|" + cid + "|" + b
+    if cmap_has(cache, req_key) == 0 { return 0 }
+    let cancel = sip_build_cancel(cmap_get(cache, req_key))
+    let target = cmap_get(cache, "fork_target|" + cid + "|" + b)
+    let tr = sip_transport_param(target, "udp")
+    let mut sent = 0
+    if len(cancel) > 0 && len(target) > 0 {
+        if sip_forward_target(target, cancel, tr, cache, out_fd) == 1 { sent = 1 }
+    }
+    let _ = sip_fork_mark_cancelled(cid, b, cache)
+    return sent
+}
+
 fn sip_send_fork_cancels(cid: string, except_branch: string, cache: CMap, out_fd: int) -> int {
     let list_key = "fork_branches|" + cid
     if cmap_has(cache, list_key) == 0 { return 0 }
     let branches = str_split(cmap_get(cache, list_key), ",")
-    let mut sent = 0
-    let mut i = 0
-    while i < len(branches) {
-        let branch = str_trim_space(branches[i])
-        if len(branch) > 0 && not str_eq(branch, except_branch) && sip_fork_is_pending(cid, branch, cache) == 1 {
-            let req_key = "fork_request|" + cid + "|" + branch
-            if cmap_has(cache, req_key) == 1 {
-                let cancel = sip_build_cancel(cmap_get(cache, req_key))
-                let target = cmap_get(cache, "fork_target|" + cid + "|" + branch)
-                let tr = sip_transport_param(target, "udp")
-                if len(cancel) > 0 && len(target) > 0 {
-                    let _ = sip_forward_target(target, cancel, tr, cache, out_fd)
-                    sent = sent + 1
-                }
-                let _ = sip_fork_mark_cancelled(cid, branch, cache)
+    let n = len(branches)
+    if n <= 1 {
+        let mut sent = 0
+        if n == 1 {
+            let branch = str_trim_space(branches[0])
+            if not str_eq(branch, except_branch) {
+                sent = sip_cancel_one_branch(cid, branch, cache, out_fd)
             }
         }
-        i = i + 1
+        return sent
+    }
+    crew:all cancels {
+        let mut i = 0
+        while i < n {
+            let branch = str_trim_space(branches[i])
+            if len(branch) > 0 && not str_eq(branch, except_branch) {
+                let _ = cancels.kick(sip_cancel_one_branch(cid, branch, cache, out_fd))
+            }
+            i = i + 1
+        }
+    }
+    let mut sent = 0
+    let mut j = 0
+    while j < n {
+        let branch = str_trim_space(branches[j])
+        if len(branch) > 0 && not str_eq(branch, except_branch) && sip_fork_is_pending(cid, branch, cache) == 0 {
+            sent = sent + 1
+        }
+        j = j + 1
     }
     return sent
 }

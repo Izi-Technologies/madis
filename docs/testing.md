@@ -1,17 +1,19 @@
 # Testing and release checks
 
-The [0.6.31 validation report](makori-0.6.31-validation.md) records the clean
-Linux sanitizer gate and complete suite results for the current compiler pin.
+The [0.6.32 validation report](makori-0.6.32-validation.md) records the current
+compiler pin, crew-policy contract, and sanitizer gate.
 
-The [0.6.29 validation report](makori-0.6.29-validation.md) records the baseline
+The [0.6.31 validation report](makori-0.6.31-validation.md) records the clean
+Linux sanitizer gate that first closed the ownership leaks. The
+[0.6.29 validation report](makori-0.6.29-validation.md) records the baseline
 Linux leak failure and traffic findings. Recheck ownership on every compiler
 upgrade; functional checks alone do not establish memory safety.
 
-CI, release, and the optional IMS workflow use Makori 0.6.31 at commit
-`8d6f2b68afb7ea0f9311ce5f8c5f08cd73901ccf`, including the runtime from that
+CI, release, and the optional IMS workflow use Makori 0.6.32 at commit
+`1a75d53f15e59bf1a5f58eb3e14d75180c7d82d7`, including the runtime from that
 checkout. Keep the compiler and runtime together when updating the pin. The
-build/check scripts reject compilers older than 0.6.31 so a local build cannot
-silently restore the JSON escaping bug. The
+build/check scripts reject compilers older than 0.6.32 so a local build cannot
+silently drop crew policies or restore the JSON escaping bug. The
 application uses `--backend c`; the direct native backend does not yet lower
 all of its SIP and event-loop builtins.
 
@@ -29,7 +31,7 @@ matrices in `bench/sanitizer.sh`.
 The MAF error-response pilot uses `#[derive(json)]` with boolean/string fields.
 Its contract test compares the complete HTTP response, including control-byte
 normalization, escaping, UTF-8, content length, and the trailing newline.
-Makori 0.6.31 includes the upstream JSON control-byte escaping fix. The pilot
+Makori 0.6.32 keeps the upstream JSON control-byte escaping fix. The pilot
 uses the generated serializer directly and retains the API's existing
 control-byte normalization. The complete wire-contract test guards this
 behavior without the previous tab/carriage-return workaround.
@@ -44,7 +46,7 @@ The opt-in session-timer worker regression additionally verifies a `422 Min-SE` 
 
 The opt-in worker-backed two-subscriber IMS smoke runs the worker against the lab HSS with TLS Cx/AKA **and** the fail-closed HTTPS subscriber-authorization boundary (ephemeral certificates, bearer token), then exercises authenticated REGISTER retransmission replay, initial-INVITE forwarding, in-dialog `UPDATE` and re-INVITE offer/answer exchanges through the RTP sidecar, and authenticated INVITE cancellation with downstream `487 Request Terminated` handling. Separate opt-in cases provision two target-only iFC application branches and verify a reliable `183 Session Progress`/PRACK exchange with To-tag routing, downstream `200 OK` acknowledgement, CANCEL cleanup after one branch answers, and a correlated `408 Request Timeout` when an INVITE receives no final response.
 
-Madis builds and tests with Mako **0.5.0** and a matching runtime directory. Mako 0.5.0 is native-first, so the contract suite selects its C backend explicitly while production C emission remains exercised. The codebase is pure Mako with no C bridge code; tests run without linking any C. Do not mix a different compiler/runtime pair with generated C.
+Madis builds and tests with Makori **0.6.32** and a matching runtime directory. The contract suite selects the C backend explicitly while production C emission remains exercised. The codebase is pure Mako with no C bridge code; tests run without linking any C. Do not mix a different compiler/runtime pair with generated C.
 
 ## Local CI
 
@@ -64,7 +66,9 @@ MAKO_RUNTIME=/path/to/mako/runtime \
 ./scripts/test.sh tests/proxy_state_test.mko
 ```
 
-The current suite totals **101 tests** (45 Mako + 56 Python MAF).
+The current suite totals **49 Mako test files** plus the Python MAF, lab, and
+media checks. Extra Mako files cover 0.6.32 crew policies, actors, arenas,
+inline channels, and parallel fork/CANCEL.
 
 The CI script runs:
 

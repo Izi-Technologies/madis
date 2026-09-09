@@ -169,13 +169,13 @@ custody, attestation policy, and carrier interoperability before enabling.
 
 ## Mako runtime prerequisites
 
-The supported compiler/runtime version is **Mako 0.5.0**. Use the same
-0.5.0 compiler and runtime directory for C emission, native linking, the
+The supported compiler/runtime version is **Makori 0.6.32**. Use the same
+0.6.32 compiler and runtime directory for C emission, native linking, the
 WebUI, and the benchmark harness. Local filesystem paths are intentionally not
 part of the deployment contract.
 
 Build this proxy with `MAKO_RUNTIME=/path/to/mako/runtime` so the generated C
-links against the Mako 0.5.0 runtime. Do not mix a different compiler and
+links against the Makori 0.6.32 runtime. Do not mix a different compiler and
 runtime version. STIR/SHAKEN signing mode and key handling must be reviewed
 against the deployed configuration; the repository does not provide carrier
 certificate provisioning or rotation.

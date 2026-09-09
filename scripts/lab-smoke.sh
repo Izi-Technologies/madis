@@ -14,12 +14,9 @@ case "$cmd" in
     echo "lab-smoke unit: ok"
     ;;
   e2e)
-    # Requires Mako 0.5.0 and a built Madis binary.
+    # Requires Makori 0.6.32 and a built Madis binary.
     MAKO_BIN="${MAKO_BIN:-mako}"
-    case "$($MAKO_BIN version 2>/dev/null || true)" in
-      *0.5.0*) ;;
-      *) echo "Mako 0.5.0 required for e2e (found: $($MAKO_BIN version 2>/dev/null || unknown))" >&2; exit 1 ;;
-    esac
+    bash "$ROOT/scripts/check-makori-version.sh" "$MAKO_BIN"
     MADIS_OUT="${MADIS_BIN:-$ROOT/build/madis}"
     if [[ ! -x "$MADIS_OUT" ]]; then
       mkdir -p "$(dirname "$MADIS_OUT")"
@@ -67,7 +64,7 @@ case "$cmd" in
 Usage: scripts/lab-smoke.sh <command>
 
   unit          Run Mako contract tests + lab/media Python unit tests
-  e2e           Build Madis (Mako 0.5.0) + two-subscriber Cx/AKA/INVITE smoke
+  e2e           Build Madis (Makori 0.6.32) + two-subscriber Cx/AKA/INVITE smoke
   docker        Build IMS lab images and run client smoke (needs Docker RAM for Mako cargo)
   docker-down   Tear down IMS lab compose
   mmtel [port]  Run lab MMTel/TAS stub (default 5090)

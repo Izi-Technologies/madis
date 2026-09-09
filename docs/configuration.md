@@ -112,7 +112,8 @@ Unix socket mode eliminates UDP loopback overhead for co-located RTPEngine deplo
 | `SIP_TCP_WORKERS` | `1` | Stream listener worker count (max 8). |
 | `SIP_TLS_WORKERS` | `1` | TLS listener worker count (max 4). |
 | `SIP_WSS_WORKERS` | `1` | WebSocket-over-TLS listener worker count (max 4). |
-| `SIP_SCHED_WORKERS` | `0` | Bounded Mako scheduler pool; `0` keeps the default per-kick threading behavior. |
+| `SIP_SCHED_WORKERS` | `0` | Listener kick pool. `0` (default) gives each long-lived UDP/TCP/TLS/WSS worker its own pthread so a blocked recv cannot occupy the request pool. |
+| `SIP_REQUEST_WORKERS` | `4` | Request-scoped Makori scheduler pool, enabled after listeners start. Fork, CANCEL, first-healthy race, quality scoring, and transaction ticks reuse these workers. `0` disables the pool (one pthread per short-lived kick). Max 16. |
 
 ## PROXY Protocol
 

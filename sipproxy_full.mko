@@ -2627,7 +2627,7 @@ fn main() {
     slog("  Cluster: DB-shared registrations + heartbeat")
     slog("")
 
-    crew t {
+    crew:all t {
         let _ = t.kick(udp_worker(0, udp_port, reg, calls, cache))
         let _ = t.kick(udp_worker(1, udp_port, reg, calls, cache))
         let _ = t.kick(udp_worker(2, udp_port, reg, calls, cache))
