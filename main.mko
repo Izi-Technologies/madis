@@ -1813,6 +1813,10 @@ fn sip_scheduler_workers(udp_workers: int, tcp_workers: int, tls_workers: int, w
 // ============ MAIN ============
 
 fn main() {
+    // A peer closing an HTTP/SIP connection must not terminate all workers.
+    // Test runners and TLS setup may install this handler, but plain TCP
+    // deployments must not depend on either of those side effects.
+    let _ = signal_ignore("PIPE")
     let _ = signal_on_term()
     // Validate config at startup — log warnings, abort on critical errors
     let config_errors = proxy_validate_config()

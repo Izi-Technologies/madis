@@ -3,11 +3,7 @@ set -euo pipefail
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 MAKO_BIN="${MAKO_BIN:-$(command -v makori 2>/dev/null || echo mako)}"
-MAKO_VERSION_TEXT=$("$MAKO_BIN" --version 2>/dev/null || true)
-case "$MAKO_VERSION_TEXT" in
-  *0.5.*|*0.6.*) ;;
-  *) echo "Mako 0.5.x or 0.6.x is required (found: ${MAKO_VERSION_TEXT:-unknown})" >&2; exit 1 ;;
-esac
+bash "$ROOT/scripts/check-makori-version.sh" "$MAKO_BIN"
 
 run_mako() {
   if [[ -n "${MAKO_RUNTIME:-}" ]]; then
@@ -60,6 +56,7 @@ build_native() {
 
 build_native main.mko "$BUILD_DIR/madis"
 build_native admin/main.mko "$BUILD_DIR/madis-admin"
+python3 scripts/check-broken-pipe.py "$BUILD_DIR/madis" "$BUILD_DIR/madis-admin"
 
 python3 - <<'PY'
 import json
@@ -99,5 +96,6 @@ fi
 
 python3 -m unittest discover -s lab -p 'test_*.py'
 python3 -m unittest discover -s media -p 'test_*.py'
+python3 -m unittest discover -s bench -p 'test_check_sipp_stats.py'
 
 echo "Madis CI checks passed"

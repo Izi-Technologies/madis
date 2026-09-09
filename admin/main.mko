@@ -10,6 +10,7 @@ pull . "../ims_subscriber_service.mko"
 pull . "../control_resources.mko"
 
 fn main() {
+    let _ = signal_ignore("PIPE")
     let db_url = env_get_or("SIP_DB_URL", "")
     let mut db_ok = 0
     let mut db = sql_open_postgres("")

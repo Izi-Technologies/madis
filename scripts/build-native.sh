@@ -7,11 +7,7 @@ SOURCE="${1:-main.mko}"
 OUTPUT="${2:-main}"
 CC_BIN="${CC:-cc}"
 
-VERSION=$($MAKO_BIN --version 2>/dev/null || true)
-case "$VERSION" in
-  *0.5.*|*0.6.*) ;;
-  *) echo "Mako 0.5.x or 0.6.x is required (found: ${VERSION:-unknown})" >&2; exit 1 ;;
-esac
+bash "$ROOT/scripts/check-makori-version.sh" "$MAKO_BIN"
 
 RUNTIME_DIR="${MAKO_RUNTIME_PATH:-${MAKO_RUNTIME:-}}"
 if [[ -z "$RUNTIME_DIR" ]]; then

@@ -1,5 +1,45 @@
 # Testing and release checks
 
+The [0.6.31 validation report](makori-0.6.31-validation.md) records the clean
+Linux sanitizer gate and complete suite results for the current compiler pin.
+
+The [0.6.29 validation report](makori-0.6.29-validation.md) records the baseline
+Linux leak failure and traffic findings. Recheck ownership on every compiler
+upgrade; functional checks alone do not establish memory safety.
+
+CI, release, and the optional IMS workflow use Makori 0.6.31 at commit
+`8d6f2b68afb7ea0f9311ce5f8c5f08cd73901ccf`, including the runtime from that
+checkout. Keep the compiler and runtime together when updating the pin. The
+build/check scripts reject compilers older than 0.6.31 so a local build cannot
+silently restore the JSON escaping bug. The
+application uses `--backend c`; the direct native backend does not yet lower
+all of its SIP and event-loop builtins.
+
+Run `bash scripts/check-ownership.sh` for focused AddressSanitizer and
+UndefinedBehaviorSanitizer checks. It honors `MAKO_BIN` and `MAKO_RUNTIME`.
+The bounded offline ownership fixture repeatedly copies and mutates Contact
+arrays, transfers HEP packets to joined workers, reuses the parent's channel,
+and rejects sends to full/closed queues. Linux also checks this fixture with
+LeakSanitizer; macOS runs without leak detection. Stream, HEP, and MAF contract
+suites run with address/undefined checks but without leak detection because
+they use process-lifetime runtime resources. CI and release require these checks.
+This does not replace a sustained traffic/RSS soak or the opt-in transport
+matrices in `bench/sanitizer.sh`.
+
+The MAF error-response pilot uses `#[derive(json)]` with boolean/string fields.
+Its contract test compares the complete HTTP response, including control-byte
+normalization, escaping, UTF-8, content length, and the trailing newline.
+Makori 0.6.31 includes the upstream JSON control-byte escaping fix. The pilot
+uses the generated serializer directly and retains the API's existing
+control-byte normalization. The complete wire-contract test guards this
+behavior without the previous tab/carriage-return workaround.
+
+CI also runs `python3 scripts/check-broken-pipe.py PROXY_BINARY ADMIN_BINARY`
+against the built applications. It resets inherited signal dispositions,
+sends SIGPIPE after HTTP readiness, and requires both servers to remain
+responsive. This must be a process test: Makori's unit-test runner ignores
+SIGPIPE itself and cannot detect missing application startup handling.
+
 The opt-in session-timer worker regression additionally verifies a `422 Min-SE` response for an undersized `Session-Expires` interval and forwarding of a valid interval. It does not prove endpoint refresh or external-stack interoperability.
 
 The opt-in worker-backed two-subscriber IMS smoke runs the worker against the lab HSS with TLS Cx/AKA **and** the fail-closed HTTPS subscriber-authorization boundary (ephemeral certificates, bearer token), then exercises authenticated REGISTER retransmission replay, initial-INVITE forwarding, in-dialog `UPDATE` and re-INVITE offer/answer exchanges through the RTP sidecar, and authenticated INVITE cancellation with downstream `487 Request Terminated` handling. Separate opt-in cases provision two target-only iFC application branches and verify a reliable `183 Session Progress`/PRACK exchange with To-tag routing, downstream `200 OK` acknowledgement, CANCEL cleanup after one branch answers, and a correlated `408 Request Timeout` when an INVITE receives no final response.

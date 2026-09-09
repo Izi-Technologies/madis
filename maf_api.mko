@@ -108,8 +108,32 @@ fn maf_api_tenant() -> string {
     return configured
 }
 
+#[derive(json)]
+struct MafErrorResponse {
+    ok: bool
+    error: string
+}
+
+// Preserve the API's existing control-character normalization before the
+// generated serializer handles JSON escaping and the boolean field.
+fn maf_api_error_text(message: string) -> string {
+    let b = str_builder()
+    let mut i = 0
+    while i < len(message) {
+        let c = int(message[i])
+        if (c < 32 && c != 9 && c != 10 && c != 13) || c == 127 {
+            builder_write_byte(b, byte(32))
+        } else {
+            builder_write_byte(b, byte(c))
+        }
+        i = i + 1
+    }
+    return builder_string(b)
+}
+
 fn maf_api_error(status: int, message: string) -> string {
-    return http_resp(status, "application/json", "{\"ok\":false,\"error\":\"" + maf_api_json_escape(message) + "\"}\n", "Cache-Control: no-store\r\n")
+    let body = MafErrorResponse_to_json(false, maf_api_error_text(message)) + "\n"
+    return http_resp(status, "application/json", body, "Cache-Control: no-store\r\n")
 }
 
 fn maf_api_command_id(raw: string, n: int, body: string) -> string {

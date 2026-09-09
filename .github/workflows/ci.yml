@@ -15,7 +15,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: loreste/mako
-          ref: main
+          ref: 8d6f2b68afb7ea0f9311ce5f8c5f08cd73901ccf # Makori 0.6.31
           path: .ci/mako
 
       - name: Build Mako
@@ -26,6 +26,12 @@ jobs:
           MAKO_BIN: ${{ github.workspace }}/.ci/mako/target/release/mako
           MAKO_RUNTIME: ${{ github.workspace }}/.ci/mako/runtime
         run: ./scripts/ci.sh
+      - name: Check Makori ownership under sanitizers
+        timeout-minutes: 10
+        env:
+          MAKO_BIN: ${{ github.workspace }}/.ci/mako/target/release/mako
+          MAKO_RUNTIME: ${{ github.workspace }}/.ci/mako/runtime
+        run: bash scripts/check-ownership.sh
 
       # IMS end-to-end smoke tests require a built worker binary, Diameter
       # peer, and HSS test double. Run locally with:

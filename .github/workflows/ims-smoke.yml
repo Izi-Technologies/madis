@@ -21,10 +21,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: loreste/mako
-          ref: v0.5.0
+          ref: 8d6f2b68afb7ea0f9311ce5f8c5f08cd73901ccf # Makori 0.6.31
           path: .ci/mako
 
-      - name: Build Mako 0.5.0
+      - name: Build Makori 0.6.31
         run: cargo build --release --manifest-path .ci/mako/Cargo.toml
 
       - name: Validate docker-compose config

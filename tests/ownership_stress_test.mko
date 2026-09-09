@@ -1,0 +1,48 @@
+// Bounded offline regressions for the ownership paths used by SIP workers.
+pull . "../parser.mko"
+pull . "../hep.mko"
+
+fn ownership_consume_packet(outbox: chan[string]) -> int {
+    let packet = outbox.recv()
+    assert_eq_str(packet[0:4], "HEP3")
+    return len(packet)
+}
+
+fn TestOwnershipContactArrayCopyAndOverwrite() {
+    let mut i = 0
+    while i < 2000 {
+        let wire = "\"Caller, " + string(i) + "\" <sip:alice@example.com>, <sip:bob@example.com>"
+        let original = sip_split_contact_values(wire)
+        let mut edited = original
+        edited[0] = "<sip:carol@example.com>"
+        edited = append(edited, "<sip:dave@example.com>")
+        assert_eq(len(original), 2)
+        assert_eq(len(edited), 3)
+        assert_eq_str(sip_contact_addr(str_trim_space(original[0])), "sip:alice@example.com")
+        assert_eq_str(sip_contact_addr(edited[0]), "sip:carol@example.com")
+        i = i + 1
+    }
+}
+
+fn TestOwnershipChannelAfterWorkerAndRejectedSend() {
+    let outbox = chan_open[string](1)
+    let mut i = 0
+    while i < 200 {
+        let msg = "OPTIONS sip:test@example.com SIP/2.0\r\nCall-ID: " + string(i) + "\r\nContent-Length: 0\r\n\r\n"
+        let packet = hep_packet(msg, "192.0.2.10", 5060, "198.51.100.20", 9060, "UDP")
+        let expected = len(packet)
+        assert_eq(chan_str_try_send_take(outbox, packet), 1)
+        // A rejected move-send must release its payload, not the queued one.
+        assert_eq(chan_str_try_send_take(outbox, "rejected-" + string(i)), 0)
+        crew tasks {
+            let worker = tasks.kick(ownership_consume_packet(outbox))
+            assert_eq(worker.join(), expected)
+        }
+        // The parent still owns the same channel after the worker exits.
+        assert_eq(chan_str_try_send_take(outbox, "parent-" + string(i)), 1)
+        assert_eq_str(outbox.recv(), "parent-" + string(i))
+        i = i + 1
+    }
+    outbox.close()
+    assert_eq(chan_str_try_send_take(outbox, "closed-" + string(i)), 0)
+}
