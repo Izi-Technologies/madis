@@ -189,7 +189,7 @@ fn db_digest_valid(db: SqlDB, db_ok: int, msg: string, n: int, method: string, f
     }
     // Default 120s nonce lifetime; configurable via SIP_NONCE_TTL_SEC.
     let mut nonce_ttl = 120000
-    match parse_int(env_get_or("SIP_NONCE_TTL_SEC", "120")) { Ok(v) => { nonce_ttl = v * 1000 } Err(_) => {} }
+    if let Ok(v) = parse_int(env_get_or("SIP_NONCE_TTL_SEC", "120")) { nonce_ttl = v * 1000 }
     if nonce_ttl < 30000 { nonce_ttl = 30000 }
     if nonce_ttl > 600000 { nonce_ttl = 600000 }
     if mono_ms() - nonce_at > nonce_ttl { return 2 }
@@ -198,7 +198,7 @@ fn db_digest_valid(db: SqlDB, db_ok: int, msg: string, n: int, method: string, f
         let nc_key = "nonce_nc|" + nonce
         let mut last_nc = 0
         if cmap_has(cache, nc_key) == 1 {
-            match parse_int(cmap_get(cache, nc_key)) { Ok(v) => { last_nc = v } Err(_) => {} }
+            if let Ok(v) = parse_int(cmap_get(cache, nc_key)) { last_nc = v }
         }
         let mut this_nc = 0
         let nc_low = str_to_lower(nc)
@@ -282,7 +282,7 @@ fn db_ip_auth(db: SqlDB, db_ok: int, src_ip: string, cache: CMap) -> int {
         // Format: "1|<ms>" or "0|<ms>". First byte is the decision.
         if len(cached) > 2 && int(cached[1]) == 124 {
             let mut at = 0
-            match parse_int(cached[2:]) { Ok(v) => { at = v } Err(_) => {} }
+            if let Ok(v) = parse_int(cached[2:]) { at = v }
             if at > 0 && mono_ms() - at < 30000 {
                 return if int(cached[0]) == 49 { 1 } else { 0 }
             }

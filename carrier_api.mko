@@ -81,7 +81,7 @@ fn carrier_api_limit(q: string) -> int {
     let mut limit = 100
     let raw = query_val(q, "limit")
     if len(raw) > 0 {
-        match parse_int(raw) { Ok(v) => { limit = v } Err(_) => {} }
+        if let Ok(v) = parse_int(raw) { limit = v }
     }
     if limit < 1 { limit = 1 }
     if limit > 100 { limit = 100 }
@@ -351,7 +351,7 @@ fn carrier_api_dialplan_packed(body: string) -> string {
     let priority_raw = json_get_string(body, "priority")
     let mut priority = 10
     if len(priority_raw) > 0 {
-        match parse_int(priority_raw) { Ok(v) => { priority = v } Err(_) => {} }
+        if let Ok(v) = parse_int(priority_raw) { priority = v }
     } else {
         if str_index(body, "\"priority\"") >= 0 { priority = json_get_int(body, "priority") }
     }

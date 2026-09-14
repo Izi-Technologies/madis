@@ -23,7 +23,7 @@ fn sip_tls_stream_poll(owner: int, reg: CMap, calls: CMap, db: SqlDB, db_ok: int
         let assoc_key = "tls_assoc|" + string(owner) + "|" + item
         if cmap_has(cache, assoc_key) == 1 {
             let mut handle = -1
-            match parse_int(cmap_get(cache, assoc_key)) { Ok(v) => { handle = v } Err(_) => {} }
+            if let Ok(v) = parse_int(cmap_get(cache, assoc_key)) { handle = v }
             let fd = tls_pool_fd(handle)
             if fd >= 0 {
                 let el = evloop_new()
@@ -102,10 +102,10 @@ fn sip_wss_stream_poll(owner: int, reg: CMap, calls: CMap, db: SqlDB, db_ok: int
         let assoc_key = "wss_assoc|" + string(owner) + "|" + item
         if cmap_has(cache, assoc_key) == 1 {
             let mut handle = -1
-            match parse_int(cmap_get(cache, assoc_key)) { Ok(v) => { handle = v } Err(_) => {} }
+            if let Ok(v) = parse_int(cmap_get(cache, assoc_key)) { handle = v }
             let mut last = now
             if cmap_has(cache, "wss_at|" + assoc_key) == 1 {
-                match parse_int(cmap_get(cache, "wss_at|" + assoc_key)) { Ok(v) => { last = v } Err(_) => {} }
+                if let Ok(v) = parse_int(cmap_get(cache, "wss_at|" + assoc_key)) { last = v }
             }
             let mut expired = 0
             if last > 0 && now - last > idle_ms { expired = 1 }
@@ -165,7 +165,7 @@ fn sip_stream_poll(owner: int, reg: CMap, calls: CMap, db: SqlDB, db_ok: int, ca
         let assoc_key = "tcp_assoc|" + string(owner) + "|" + item
         if cmap_has(cache, assoc_key) == 1 {
             let mut fd = -1
-            match parse_int(cmap_get(cache, assoc_key)) { Ok(v) => { fd = v } Err(_) => {} }
+            if let Ok(v) = parse_int(cmap_get(cache, assoc_key)) { fd = v }
             if fd >= 0 {
                 let el = evloop_new()
                 let _ = evloop_add(el, fd, 1)
@@ -451,7 +451,7 @@ fn tls_worker(fd: int, srv: TlsServer, port: int, reg: CMap, calls: CMap, cache:
                     if c < 0 { break }
                     if len(buffers) >= max_connections {
                         let _ = tcp_close(c)
-                    } else if io_set_nonblocking(c, 0) < 0 || tcp_nodelay(c) < 0 {
+                    } else if tcp_nodelay(c) < 0 {
                         let _ = tcp_close(c)
                     } else {
                         let mut peer_ip = peer_host(c)
@@ -469,7 +469,7 @@ fn tls_worker(fd: int, srv: TlsServer, port: int, reg: CMap, calls: CMap, cache:
                                     let pp = proxy_protocol_parse(pp_raw)
                                     if len(pp[0]) > 0 { peer_ip = pp[0] }
                                     if len(pp[1]) > 0 {
-                                        match parse_int(pp[1]) { Ok(v) => { pp_port = v } Err(_) => {} }
+                                        if let Ok(v) = parse_int(pp[1]) { pp_port = v }
                                     }
                                 }
                             }
@@ -561,7 +561,7 @@ fn tls_worker(fd: int, srv: TlsServer, port: int, reg: CMap, calls: CMap, cache:
             let tls_now = mono_ms()
             let mut tls_last_check = 0
             if cmap_has(cache, "_tls_check_at") == 1 {
-                match parse_int(cmap_get(cache, "_tls_check_at")) { Ok(v) => { tls_last_check = v } Err(_) => {} }
+                if let Ok(v) = parse_int(cmap_get(cache, "_tls_check_at")) { tls_last_check = v }
             }
             if tls_now - tls_last_check >= 30000 {
                 cmap_set(cache, "_tls_check_at", string(tls_now))

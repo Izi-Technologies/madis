@@ -194,7 +194,7 @@ fn live_snapshot_cached(db: SqlDB, ok: int, sip: string, cache: CMap) -> string 
     let now = now_ms()
     if cmap_has(cache, "snapshot") == 1 && cmap_has(cache, "snapshot_at") == 1 {
         let mut at = 0
-        match parse_int(cmap_get(cache, "snapshot_at")) { Ok(v) => { at = v } Err(_) => {} }
+        if let Ok(v) = parse_int(cmap_get(cache, "snapshot_at")) { at = v }
         if at > 0 && now >= at && now - at < 3000 {
             return cmap_get(cache, "snapshot")
         }
@@ -469,7 +469,7 @@ fn f_dashboard_cached(db: SqlDB, ok: int, cache: CMap) -> string {
     let now = now_ms()
     if cmap_has(cache, "html") == 1 && cmap_has(cache, "html_at") == 1 {
         let mut at = 0
-        match parse_int(cmap_get(cache, "html_at")) { Ok(v) => { at = v } Err(_) => {} }
+        if let Ok(v) = parse_int(cmap_get(cache, "html_at")) { at = v }
         if at > 0 && now >= at && now - at < 3000 {
             return cmap_get(cache, "html")
         }

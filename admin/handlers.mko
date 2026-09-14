@@ -151,7 +151,7 @@ fn handle_api(path: string, fields: CMap, role: string, user: string, db: SqlDB,
             return "<div class=\"alert err\">Gateway not found.</div>" + f_gateways(db, db_ok)
         }
         let mut port = 5060
-        match parse_int(port_s) { Ok(v) => { port = v } Err(_) => {} }
+        if let Ok(v) = parse_int(port_s) { port = v }
         if len(host) > 255 || str_contains(host, "\r") || str_contains(host, "\n") || str_contains(host, " ") || port < 1 || port > 65535 {
             return "<div class=\"alert err\">Gateway address or port is invalid.</div>" + f_gateways(db, db_ok)
         }

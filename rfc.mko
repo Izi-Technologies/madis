@@ -264,8 +264,8 @@ fn sip_prack_matches_relprov(msg: string, cache: CMap) int {
     if cmap_has(cache, "relprov_closed|" + cid + "|" + to_tag) == 1 { return 0 }
     let mut rseq = -1
     let mut cseq = -1
-    match parse_int(parts[0]) { Ok(v) => { rseq = v } Err(_) => {} }
-    match parse_int(parts[1]) { Ok(v) => { cseq = v } Err(_) => {} }
+    if let Ok(v) = parse_int(parts[0]) { rseq = v }
+    if let Ok(v) = parse_int(parts[1]) { cseq = v }
     if rseq <= 0 || rseq > 2147483647 || cseq < 0 || cseq > 2147483647 { return 0 }
     let method = str_to_upper(parts[2])
     if not str_eq(method, "INVITE") && not str_eq(method, "UPDATE") { return 0 }
@@ -843,7 +843,7 @@ fn sip_t2_ms() -> int {
 fn sip_timer_c_ms() -> int {
     let raw = env_get_or("SIP_TIMER_C_MS", "180000")
     let mut value = 180000
-    match parse_int(raw) { Ok(v) => { value = v } Err(_) => {} }
+    if let Ok(v) = parse_int(raw) { value = v }
     let minimum = 64 * sip_t1_ms()
     if value < minimum { value = minimum }
     if value > 600000 { value = 600000 }

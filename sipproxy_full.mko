@@ -613,8 +613,8 @@ fn parse_hhmm(s: string) -> int {
     if len(parts) < 2 { return 0 }
     let mut h = 0
     let mut m = 0
-    match parse_int(parts[0]) { Ok(v) => { h = v } Err(_) => {} }
-    match parse_int(parts[1]) { Ok(v) => { m = v } Err(_) => {} }
+    if let Ok(v) = parse_int(parts[0]) { h = v }
+    if let Ok(v) = parse_int(parts[1]) { m = v }
     return h * 100 + m
 }
 

@@ -3,7 +3,7 @@
 // SIP_HEP_ENABLE=1; failures never change SIP request handling.
 // sip_ipv4_ok lives in parser.mko (pulled by main and by hep tests).
 
-// Mailbox-cap 4 uses the 0.6.32 inline channel ring. Packet is a count
+// Mailbox-cap 4 uses the inline channel ring. Packet is a count
 // tick; Bye ends the loop. The SIP wire still travels on chan[string].
 actor HepCapture {
     n: int = 0

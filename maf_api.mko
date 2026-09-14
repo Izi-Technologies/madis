@@ -283,9 +283,9 @@ fn maf_api_write_required(kind: int) -> int {
 fn maf_api_capacity_limit(db: SqlDB, ok: int, tenant: string) -> int {
     let env_limit = str_trim_space(env_get_or("SIP_MAF_MAX_ACTIVE_CALLS", "0"))
     let mut limit = 0
-    match parse_int(env_limit) { Ok(v) => { limit = v } Err(_) => {} }
+    if let Ok(v) = parse_int(env_limit) { limit = v }
     let db_limit = sql_query_str2(db, "SELECT COALESCE(NULLIF(MAX(max_active_calls),0),0)::text FROM maf_capacity_policies WHERE tenant_id = $1 AND enabled AND selector_type = 'global'", tenant, "")
-    match parse_int(db_limit) { Ok(v) => { if v > 0 && (limit == 0 || v < limit) { limit = v } } Err(_) => {} }
+    if let Ok(v) = parse_int(db_limit) { if v > 0 && (limit == 0 || v < limit) { limit = v } }
     if limit < 0 { limit = 0 }
     return limit
 }
@@ -296,7 +296,7 @@ fn maf_api_capacity_available(db: SqlDB, ok: int, tenant: string) -> int {
     if limit <= 0 { return 1 }
     let active_raw = sql_query_str2(db, "SELECT COUNT(*)::text FROM maf_calls WHERE tenant_id = $1 AND ended_at IS NULL AND state NOT IN ('ended','failed','canceled','rejected','timeout')", tenant, "")
     let mut active = 0
-    match parse_int(active_raw) { Ok(v) => { active = v } Err(_) => {} }
+    if let Ok(v) = parse_int(active_raw) { active = v }
     return if active < limit { 1 } else { 0 }
 }
 
@@ -401,7 +401,7 @@ fn maf_api_parse_cursor(q: string) -> int {
 fn maf_api_limit(q: string) -> int {
     let mut value = 100
     let raw = query_val(q, "limit")
-    if len(raw) > 0 { match parse_int(raw) { Ok(v) => { value = v } Err(_) => {} } }
+    if len(raw) > 0 { if let Ok(v) = parse_int(raw) { value = v } }
     if value < 1 { value = 1 }
     if value > 100 { value = 100 }
     return value
@@ -492,7 +492,7 @@ fn maf_api_ws_session(fd: int, db_url: string, tenant: string, initial_query: st
         if len(page) == 0 { alive = 0; continue }
         let next_raw = json_get_string(page, "next_cursor")
         let mut next = cursor
-        match parse_int(next_raw) { Ok(v) => { next = v } Err(_) => {} }
+        if let Ok(v) = parse_int(next_raw) { next = v }
         if next > cursor {
             // Events found — send and reset to fast poll
             if ws_send_text(fd, page) < 0 { alive = 0; continue }
@@ -533,11 +533,11 @@ fn maf_api_bridge_ok(db: SqlDB, ok: int, tenant: string, call_id: string, body: 
     let packed = "{\"tenant_id\":\"" + maf_api_json_escape(tenant) + "\",\"call_id\":\"" + maf_api_json_escape(call_id) + "\",\"request\":" + body + "}"
     let total_raw = sql_query_str(db, "SELECT jsonb_array_length($1::jsonb->'request'->'channel_ids')::text", packed)
     let mut total = -1
-    match parse_int(total_raw) { Ok(v) => { total = v } Err(_) => {} }
+    if let Ok(v) = parse_int(total_raw) { total = v }
     if total < 2 || total > 8 { return 0 }
     let owned_raw = sql_query_str(db, "SELECT COUNT(*)::text FROM maf_channels WHERE tenant_id = $1::jsonb->>'tenant_id' AND call_id = $1::jsonb->>'call_id' AND channel_id IN (SELECT jsonb_array_elements_text($1::jsonb->'request'->'channel_ids'))", packed)
     let mut owned = -1
-    match parse_int(owned_raw) { Ok(v) => { owned = v } Err(_) => {} }
+    if let Ok(v) = parse_int(owned_raw) { owned = v }
     return if owned == total { 1 } else { 0 }
 }
 
@@ -636,7 +636,7 @@ fn maf_api_command(db: SqlDB, ok: int, kind: int, raw: string, n: int, call_id: 
     if kind == 9 {
         let header_count_raw = sql_query_str(db, "SELECT jsonb_array_length(COALESCE($1::jsonb->'headers','[]'::jsonb))::text", body)
         let mut header_count = -1
-        match parse_int(header_count_raw) { Ok(v) => { header_count = v } Err(_) => {} }
+        if let Ok(v) = parse_int(header_count_raw) { header_count = v }
         if header_count < 1 || header_count > 32 { return maf_api_error(400, "headers must contain 1 to 32 operations") }
     }
     if kind == 10 {
@@ -771,7 +771,7 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         let q = parse_query(raw, n)
         let mut limit = 100
         let raw_limit = query_val(q, "limit")
-        if len(raw_limit) > 0 { match parse_int(raw_limit) { Ok(v) => { limit = v } Err(_) => {} } }
+        if len(raw_limit) > 0 { if let Ok(v) = parse_int(raw_limit) { limit = v } }
         if limit < 1 { limit = 1 }
         if limit > 100 { limit = 100 }
         let tenant = maf_api_tenant()
@@ -804,7 +804,7 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         let q = parse_query(raw, n)
         let mut limit = 50
         let raw_limit = query_val(q, "limit")
-        if len(raw_limit) > 0 { match parse_int(raw_limit) { Ok(v) => { limit = v } Err(_) => {} } }
+        if len(raw_limit) > 0 { if let Ok(v) = parse_int(raw_limit) { limit = v } }
         if limit < 1 { limit = 1 }
         if limit > 100 { limit = 100 }
         let call_id_filter = query_val(q, "call_id")
@@ -888,7 +888,7 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         let q = parse_query(raw, n)
         let mut limit = 100
         let rl = query_val(q, "limit")
-        if len(rl) > 0 { match parse_int(rl) { Ok(v) => { limit = v } Err(_) => {} } }
+        if len(rl) > 0 { if let Ok(v) = parse_int(rl) { limit = v } }
         if limit < 1 { limit = 1 }
         if limit > 100 { limit = 100 }
         let tenant = maf_api_tenant()
@@ -1792,7 +1792,7 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         if len(number) == 0 || len(number) > 32 { return maf_api_error(400, "number required (max 32 chars)") }
         if len(carrier) > 128 || len(ntype) > 32 || len(country) > 8 { return maf_api_error(400, "field too long") }
         let mut spam_score = 0
-        if len(spam_str) > 0 { match parse_int(spam_str) { Ok(v) => { spam_score = v } Err(_) => {} } }
+        if len(spam_str) > 0 { if let Ok(v) = parse_int(spam_str) { spam_score = v } }
         if spam_score < 0 || spam_score > 100 { return maf_api_error(400, "spam_score must be 0-100") }
         let tenant = maf_api_tenant()
         let packed = "{\"number\":\"" + maf_api_json_escape(number) + "\",\"tenant_id\":\"" + maf_api_json_escape(tenant) + "\",\"carrier\":\"" + maf_api_json_escape(carrier) + "\",\"type\":\"" + maf_api_json_escape(ntype) + "\",\"country\":\"" + maf_api_json_escape(country) + "\",\"spam_score\":" + string(spam_score) + "}"
@@ -1882,7 +1882,7 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         let mut strat = if len(strategy) > 0 { strategy } else { "round-robin" }
         if not str_eq(strat, "round-robin") && not str_eq(strat, "ring-all") && not str_eq(strat, "longest-idle") && not str_eq(strat, "random") { return maf_api_error(400, "strategy must be round-robin, ring-all, longest-idle, or random") }
         let mut mw = 300
-        if len(max_wait) > 0 { match parse_int(max_wait) { Ok(v) => { mw = v } Err(_) => {} } }
+        if len(max_wait) > 0 { if let Ok(v) = parse_int(max_wait) { mw = v } }
         if mw < 0 || mw > 3600 { return maf_api_error(400, "max_wait_sec must be 0-3600") }
         let tenant = maf_api_tenant()
         let packed = "{\"tenant\":\"" + maf_api_json_escape(tenant) + "\",\"name\":\"" + maf_api_json_escape(name) + "\",\"strategy\":\"" + maf_api_json_escape(strat) + "\",\"max_wait\":" + string(mw) + ",\"moh\":\"" + maf_api_json_escape(moh) + "\"}"
@@ -1917,7 +1917,7 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         let priority_str = str_trim_space(json_get_string(body, "priority"))
         if maf_api_sip_uri_ok(agent_uri) == 0 { return maf_api_error(400, "valid agent_uri SIP URI required") }
         let mut priority = 1
-        if len(priority_str) > 0 { match parse_int(priority_str) { Ok(v) => { priority = v } Err(_) => {} } }
+        if len(priority_str) > 0 { if let Ok(v) = parse_int(priority_str) { priority = v } }
         if priority < 1 || priority > 100 { return maf_api_error(400, "priority must be 1-100") }
         // Extract queue_id from path: /admin/api/v1/maf/queues/{id}/members
         let qpath = path[len("/admin/api/v1/maf/queues/"):]
@@ -1963,7 +1963,7 @@ fn maf_api_handle(db: SqlDB, ok: int, method: string, path: string, raw: string,
         if len(cname) == 0 || len(cname) > 128 { return maf_api_error(400, "name required (max 128 chars)") }
         if len(cpin) > 32 { return maf_api_error(400, "pin too long (max 32 chars)") }
         let mut cmax = 10
-        if len(cmax_str) > 0 { match parse_int(cmax_str) { Ok(v) => { cmax = v } Err(_) => {} } }
+        if len(cmax_str) > 0 { if let Ok(v) = parse_int(cmax_str) { cmax = v } }
         if cmax < 2 || cmax > 500 { return maf_api_error(400, "max_participants must be 2-500") }
         let rec_bool = if str_eq(crecord, "true") { "true" } else { "false" }
         let mute_bool = if str_eq(cmuted, "true") { "true" } else { "false" }

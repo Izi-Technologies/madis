@@ -514,11 +514,11 @@ fn diameter_ccr_body(cid: string, caller: string, callee: string, kind: string, 
     if len(parameter) > 0 { body = body + parameter }
     let service_id = env_get_or("SIP_DIAMETER_SERVICE_ID", "")
     if len(service_id) > 0 {
-        match parse_int(service_id) { Ok(v) => { if v > 0 { body = body + madis_diameter_avp_u32(439, v) } } Err(_) => {} }
+        if let Ok(v) = parse_int(service_id) { if v > 0 { body = body + madis_diameter_avp_u32(439, v) } }
     }
     if request_type == 1 {
         let requested = env_get_or("SIP_DIAMETER_REQUESTED_SECONDS", "")
-        match parse_int(requested) { Ok(v) => { let unit = diameter_cc_time_group(437, v); if len(unit) > 0 { body = body + unit } } Err(_) => {} }
+        if let Ok(v) = parse_int(requested) { let unit = diameter_cc_time_group(437, v); if len(unit) > 0 { body = body + unit } }
     }
     if (request_type == 2 || request_type == 3) && used_seconds > 0 {
         let used = diameter_cc_time_group(446, used_seconds)
@@ -527,7 +527,7 @@ fn diameter_ccr_body(cid: string, caller: string, callee: string, kind: string, 
     if request_type == 3 { body = body + diameter_termination_cause() }
     if request_type == 4 {
         let action = env_get_or("SIP_DIAMETER_REQUESTED_ACTION", "0")
-        match parse_int(action) { Ok(v) => { if v >= 0 && v <= 4 { body = body + madis_diameter_avp_u32(436, v) } } Err(_) => {} }
+        if let Ok(v) = parse_int(action) { if v >= 0 && v <= 4 { body = body + madis_diameter_avp_u32(436, v) } }
     }
     return body
 }

@@ -68,7 +68,7 @@ fn shaken_iat_from_payload(payload: string) -> int {
     }
     if end == start { return 0 }
     let mut val = 0
-    match parse_int(payload[start:end]) { Ok(v) => { val = v } Err(_) => {} }
+    if let Ok(v) = parse_int(payload[start:end]) { val = v }
     return val
 }
 

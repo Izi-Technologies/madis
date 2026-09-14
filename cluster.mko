@@ -27,7 +27,7 @@ fn cluster_call_sync(calls: CMap, cache: CMap, db: SqlDB, db_ok: int, node_id: s
     let now = mono_ms()
     let mut last = 0
     if cmap_has(cache, "cluster_sync_at") == 1 {
-        match parse_int(cmap_get(cache, "cluster_sync_at")) { Ok(v) => { last = v } Err(_) => {} }
+        if let Ok(v) = parse_int(cmap_get(cache, "cluster_sync_at")) { last = v }
     }
     // Sync every 5s
     if last > 0 && now - last < 5000 { return 0 }

@@ -412,7 +412,7 @@ fn registration_keepalive_tick(reg: CMap, cache: CMap) -> int {
     let now = mono_ms()
     let mut last = 0
     if cmap_has(cache, "keepalive_at") == 1 {
-        match parse_int(cmap_get(cache, "keepalive_at")) { Ok(v) => { last = v } Err(_) => {} }
+        if let Ok(v) = parse_int(cmap_get(cache, "keepalive_at")) { last = v }
     }
     let interval = registration_keepalive_interval_ms()
     if last > 0 && now - last < interval { return 0 }
@@ -422,7 +422,7 @@ fn registration_keepalive_tick(reg: CMap, cache: CMap) -> int {
     // The keepalive fd is a process-local ephemeral UDP socket.
     let mut ka_fd = -1
     if cmap_has(cache, "keepalive_fd") == 1 {
-        match parse_int(cmap_get(cache, "keepalive_fd")) { Ok(v) => { ka_fd = v } Err(_) => {} }
+        if let Ok(v) = parse_int(cmap_get(cache, "keepalive_fd")) { ka_fd = v }
     }
     if ka_fd < 0 {
         ka_fd = nb_udp_bind(0)
@@ -445,7 +445,7 @@ fn registration_keepalive_tick(reg: CMap, cache: CMap) -> int {
                     if len(parts) >= 5 {
                         let reg_ip = parts[3]
                         let mut reg_port = 0
-                        match parse_int(parts[4]) { Ok(v) => { reg_port = v } Err(_) => {} }
+                        if let Ok(v) = parse_int(parts[4]) { reg_port = v }
                         let reg_transport = str_to_lower(parts[1])
                         if len(reg_ip) > 0 && reg_port > 0 {
                             if str_eq(reg_transport, "udp") {

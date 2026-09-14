@@ -96,7 +96,7 @@ fn sip_srv_record_target(record: string) -> string {
     let port = parse_int(str_trim_space(parts[2]))
     let mut host = str_trim_space(parts[3])
     if len(host) > 0 && int(host[len(host) - 1]) == 46 { host = host[0:len(host) - 1] }
-    match port { Ok(v) => { if v > 0 && v <= 65535 && len(host) > 0 { return host + ":" + string(v) } } Err(_) => {} }
+    if let Ok(v) = port { if v > 0 && v <= 65535 && len(host) > 0 { return host + ":" + string(v) } }
     return ""
 }
 
@@ -104,7 +104,7 @@ fn sip_naptr_record_order(record: string) -> int {
     let parts = str_split(record, ":")
     if len(parts) < 2 { return -1 }
     let mut value = -1
-    match parse_int(str_trim_space(parts[0])) { Ok(v) => { value = v } Err(_) => {} }
+    if let Ok(v) = parse_int(str_trim_space(parts[0])) { value = v }
     return value
 }
 
@@ -112,7 +112,7 @@ fn sip_naptr_record_preference(record: string) -> int {
     let parts = str_split(record, ":")
     if len(parts) < 2 { return -1 }
     let mut value = -1
-    match parse_int(str_trim_space(parts[1])) { Ok(v) => { value = v } Err(_) => {} }
+    if let Ok(v) = parse_int(str_trim_space(parts[1])) { value = v }
     return value
 }
 
@@ -149,7 +149,7 @@ fn sip_naptr_resolve_service(target: string, transport: string, cache: CMap) -> 
     let mut fresh = 0
     if cmap_has(cache, key) == 1 && cmap_has(cache, key + "|at") == 1 {
         let mut at = 0
-        match parse_int(cmap_get(cache, key + "|at")) { Ok(v) => { at = v } Err(_) => {} }
+        if let Ok(v) = parse_int(cmap_get(cache, key + "|at")) { at = v }
         if at > 0 && now - at < 60000 { fresh = 1; records = cmap_get(cache, key) }
     }
     if fresh == 0 {
@@ -199,7 +199,7 @@ fn sip_srv_resolve_targets(target: string, transport: string, cache: CMap) -> st
     let mut fresh = 0
     if cmap_has(cache, key) == 1 && cmap_has(cache, key + "|at") == 1 {
         let mut at = 0
-        match parse_int(cmap_get(cache, key + "|at")) { Ok(v) => { at = v } Err(_) => {} }
+        if let Ok(v) = parse_int(cmap_get(cache, key + "|at")) { at = v }
         if at > 0 && now - at < 60000 { fresh = 1; records = cmap_get(cache, key) }
     }
     if fresh == 0 {
@@ -376,7 +376,7 @@ fn sip_forward_tcp(target: string, msg: string, cache: CMap, owner: int) -> int 
         if len(evicted) > 0 {
             let old_key = "tcp_assoc|" + string(owner) + "|" + evicted
             if cmap_has(cache, old_key) == 1 {
-                match parse_int(cmap_get(cache, old_key)) { Ok(old_fd) => { let _ = tcp_close(old_fd) } Err(_) => {} }
+                if let Ok(old_fd) = parse_int(cmap_get(cache, old_key)) { let _ = tcp_close(old_fd) }
                 let _ = cmap_del(cache, old_key)
                 let _ = cmap_del(cache, "tcp_buf|" + string(owner) + "|" + evicted)
             }
@@ -438,7 +438,7 @@ fn sip_forward_tls(target: string, msg: string, cache: CMap, owner: int) -> int 
         if len(evicted) > 0 {
             let old_key = "tls_assoc|" + string(owner) + "|" + evicted
             if cmap_has(cache, old_key) == 1 {
-                match parse_int(cmap_get(cache, old_key)) { Ok(old_handle) => { let _ = tls_pool_close(old_handle) } Err(_) => {} }
+                if let Ok(old_handle) = parse_int(cmap_get(cache, old_key)) { let _ = tls_pool_close(old_handle) }
                 let _ = cmap_del(cache, old_key)
                 let _ = cmap_del(cache, "tls_buf|" + string(owner) + "|" + evicted)
             }
@@ -519,7 +519,7 @@ fn sip_forward_wss(target: string, msg: string, cache: CMap, owner: int) -> int 
     if len(evicted) > 0 {
         let old_key = "wss_assoc|" + string(owner) + "|" + evicted
         if cmap_has(cache, old_key) == 1 {
-            match parse_int(cmap_get(cache, old_key)) { Ok(old_handle) => { let _ = wss_pool_close(old_handle) } Err(_) => {} }
+            if let Ok(old_handle) = parse_int(cmap_get(cache, old_key)) { let _ = wss_pool_close(old_handle) }
             let _ = cmap_del(cache, old_key)
             let _ = cmap_del(cache, "wss_at|" + old_key)
             let _ = cmap_del(cache, "wss_buf|" + string(owner) + "|" + evicted)

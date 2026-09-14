@@ -238,7 +238,6 @@ fn ims_cx_push_server_worker(reg: CMap) -> int {
             sleep_ms(5)
             continue
         }
-        let _ = io_set_nonblocking(c, 0)
         let _ = tcp_nodelay(c)
         let conn = tls_accept(srv, c)
         if tls_conn_fd(conn) < 0 {
