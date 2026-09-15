@@ -931,10 +931,7 @@ live fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: stri
             }
             if len(rem_parts) >= 5 {
                 life_ip = rem_parts[3]
-                match parse_int(rem_parts[4]) {
-                    Ok(v) => { life_port = v }
-                    Err(_) => {}
-                }
+                if let Ok(v) = parse_int(rem_parts[4]) { life_port = v }
             }
         } else {
             life_contact = ""
@@ -1403,10 +1400,7 @@ live fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: stri
                 let mut rcode = 403
                 let mut rreason = "Forbidden"
                 if len(reject_parts) >= 1 {
-                    match parse_int(reject_parts[0]) {
-                        Ok(v) => { rcode = v }
-                        Err(_) => {}
-                    }
+                    if let Ok(v) = parse_int(reject_parts[0]) { rcode = v }
                 }
                 if len(reject_parts) >= 2 { rreason = reject_parts[1] }
                 let _ = db_cdr(db, db_ok, cid, caller_id, translated, "REJECTED:" + string(rcode))
@@ -1739,10 +1733,7 @@ fn process_sip(data: string, dl: int, reg: CMap, calls: CMap, ip: string, port: 
 
 fn sip_config_port(name: string, default_port: int) -> int {
     let mut port = default_port
-    match parse_int(env_get_or(name, string(default_port))) {
-        Ok(v) => { if v > 0 && v <= 65535 { port = v } }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(env_get_or(name, string(default_port))) { if v > 0 && v <= 65535 { port = v } }
     return port
 }
 
@@ -2218,10 +2209,7 @@ fn main() {
             // closed by should_stop_accepting), wait for in-flight
             // transactions to complete, then shut down.
             let mut drain_ms = 5000
-            match parse_int(env_get_or("SIP_SHUTDOWN_DRAIN_MS", "5000")) {
-                Ok(v) => { drain_ms = v }
-                Err(_) => {}
-            }
+            match parse_int(env_get_or("SIP_SHUTDOWN_DRAIN_MS", "5000")) { Ok(v) => { drain_ms = v } Err(_) => {} }
             if drain_ms < 0 { drain_ms = 0 }
             if drain_ms > 30000 { drain_ms = 30000 }
             if drain_ms > 0 {

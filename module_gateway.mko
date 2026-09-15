@@ -74,10 +74,7 @@ fn module_gateway_request_allowed(name: string, operation: string) -> int {
 
 fn module_gateway_timeout_ms() -> int {
     let mut value = 250
-    match parse_int(env_get_or("SIP_MODULE_TIMEOUT_MS", "250")) {
-        Ok(v) => { value = v }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(env_get_or("SIP_MODULE_TIMEOUT_MS", "250")) { value = v }
     if value < 10 { value = 10 }
     if value > 2000 { value = 2000 }
     return value

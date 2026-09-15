@@ -12,20 +12,14 @@ fn is_private_ip(ip: string) -> int {
     if str_has_prefix(ip, "172.") {
         let dot2 = str_index(ip[4:], ".")
         if dot2 > 0 {
-            match parse_int(ip[4:4 + dot2]) {
-                Ok(v) => { if v >= 16 && v <= 31 { return 1 } }
-                Err(_) => {}
-            }
+            if let Ok(v) = parse_int(ip[4:4 + dot2]) { if v >= 16 && v <= 31 { return 1 } }
         }
     }
     // 100.64.0.0/10 (CGNAT / RFC 6598)
     if str_has_prefix(ip, "100.") {
         let dot2 = str_index(ip[4:], ".")
         if dot2 > 0 {
-            match parse_int(ip[4:4 + dot2]) {
-                Ok(v) => { if v >= 64 && v <= 127 { return 1 } }
-                Err(_) => {}
-            }
+            if let Ok(v) = parse_int(ip[4:4 + dot2]) { if v >= 64 && v <= 127 { return 1 } }
         }
     }
     // 169.254.0.0/16 (link-local)

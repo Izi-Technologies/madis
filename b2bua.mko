@@ -248,10 +248,7 @@ fn b2bua_prepare_in_dialog(msg: string, key: string, cache: CMap) -> string {
         out_cseq = invite_cseq
     } else {
         let current = cmap_get(cache, "b2bua_out_cseq|" + key)
-        match parse_int(current) {
-            Ok(v) => { if v < 2147483647 { out_cseq = string(v + 1) } }
-            Err(_) => {}
-        }
+        if let Ok(v) = parse_int(current) { if v < 2147483647 { out_cseq = string(v + 1) } }
         cmap_set(cache, "b2bua_out_cseq|" + key, out_cseq)
         cmap_set(cache, "b2bua_pending_method|" + key, method)
         cmap_set(cache, "b2bua_pending_in_cseq|" + key, in_cseq)

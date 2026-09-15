@@ -63,10 +63,7 @@ fn rtp_cookie() -> string {
 }
 
 fn rtp_port_value(raw: string) -> int {
-    match parse_int(raw) {
-        Ok(v) => { if v > 0 && v <= 65535 { return v } }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(raw) { if v > 0 && v <= 65535 { return v } }
     return 2223
 }
 
@@ -261,12 +258,7 @@ fn rtp_send_call(cache: CMap, call_id: string, command: string, host: string, po
     let bind_key = "rtp_node|" + call_id
     let mut start = rtp_node_index_for(call_id)
     if cmap_has(cache, bind_key) == 1 {
-        match parse_int(cmap_get(cache, bind_key)) {
-            Ok(v) => {
-                if v >= 0 && v < n { start = v }
-            }
-            Err(_) => {}
-        }
+        if let Ok(v) = parse_int(cmap_get(cache, bind_key)) { if v >= 0 && v < n { start = v } }
     }
     let mut attempt = 0
     while attempt < n {
@@ -504,10 +496,7 @@ fn rtp_process_offer(msg: string, msglen: int, call_id: string, from_tag: string
     if rtp_sdp_content_type_safe(msg) == 0 || rtp_sdp_body_safe(sdp) == 0 { return msg }
 
     let mut rtp_port = 2223
-    match parse_int(cfg[2]) {
-        Ok(v) => { rtp_port = v }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(cfg[2]) { rtp_port = v }
 
     let new_sdp = rtp_offer_cache(cache, cfg[1], rtp_port, call_id, from_tag, sdp)
     if len(new_sdp) == 0 { return msg }
@@ -530,10 +519,7 @@ fn rtp_process_answer(msg: string, msglen: int, call_id: string, from_tag: strin
     }
 
     let mut rtp_port = 2223
-    match parse_int(cfg[2]) {
-        Ok(v) => { rtp_port = v }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(cfg[2]) { rtp_port = v }
 
     let new_sdp = rtp_answer_cache(cache, cfg[1], rtp_port, call_id, from_tag, to_tag, sdp)
     if len(new_sdp) == 0 { return msg }
@@ -548,10 +534,7 @@ fn rtp_process_delete(call_id: string, db: SqlDB, db_ok: int, cache: CMap) -> in
     if str_eq(cfg[0], "0") { return 0 }
 
     let mut rtp_port = 2223
-    match parse_int(cfg[2]) {
-        Ok(v) => { rtp_port = v }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(cfg[2]) { rtp_port = v }
 
     let result = rtp_delete_cache(cache, cfg[1], rtp_port, call_id)
     if result == 1 { let _ = cmap_del(cache, "rtp_state|" + call_id) }

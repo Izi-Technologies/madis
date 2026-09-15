@@ -69,10 +69,7 @@ fn sip_target_port_state(target: string) -> int {
         colon = -1
     }
     if colon < 0 { return 0 }
-    match parse_int(t[colon + 1:]) {
-        Ok(v) => { if v > 0 && v <= 65535 { return 1 } }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(t[colon + 1:]) { if v > 0 && v <= 65535 { return 1 } }
     return -1
 }
 
@@ -87,10 +84,7 @@ fn sip_target_port(target: string, default_port: int) -> int {
         colon = close + 1
     }
     let mut port = -1
-    match parse_int(t[colon + 1:]) {
-        Ok(v) => { port = v }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(t[colon + 1:]) { port = v }
     return port
 }
 

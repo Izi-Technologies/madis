@@ -15,7 +15,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: loreste/mako
-          ref: 81ef8c594c4fe5bb1a7a58f5a116f818faaf7a9e # Makori 0.6.33
+          ref: 45c8e61a94a13dce9f01c3c913a6a5f28610ce8c # Makori 0.6.34
           path: .ci/mako
 
       - name: Build Mako

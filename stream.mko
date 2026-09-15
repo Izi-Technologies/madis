@@ -22,10 +22,7 @@ fn peer_split(addr: string) -> []string {
             if rb + 1 < len(addr) {
                 if int(addr[rb + 1]) == 58 {
                     let ps = addr[rb + 2:]
-                    match parse_int(ps) {
-                        Ok(v) => { if v > 0 && v <= 65535 { out[1] = string(v) } }
-                        Err(_) => {}
-                    }
+                    if let Ok(v) = parse_int(ps) { if v > 0 && v <= 65535 { out[1] = string(v) } }
                 }
             }
             return out
@@ -45,10 +42,7 @@ fn peer_split(addr: string) -> []string {
     }
     out[0] = addr[0:colon]
     let ps = addr[colon + 1:]
-    match parse_int(ps) {
-        Ok(v) => { if v > 0 && v <= 65535 { out[1] = string(v) } }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(ps) { if v > 0 && v <= 65535 { out[1] = string(v) } }
     return out
 }
 
@@ -62,10 +56,7 @@ fn peer_host(fd: int) -> string {
 fn peer_port(fd: int) -> int {
     let parts = peer_split(tcp_peer_addr(fd))
     let mut p = 5060
-    match parse_int(parts[1]) {
-        Ok(v) => { p = v }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(parts[1]) { p = v }
     return p
 }
 
@@ -127,10 +118,7 @@ fn proxy_protocol_enabled() -> int {
 // Default: 100 concurrent connections per source IP.
 fn sip_per_ip_conn_limit() -> int {
     let mut limit = 100
-    match parse_int(env_get_or("SIP_PER_IP_CONN_LIMIT", "100")) {
-        Ok(v) => { limit = v }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(env_get_or("SIP_PER_IP_CONN_LIMIT", "100")) { limit = v }
     if limit < 10 { limit = 10 }
     if limit > 10000 { limit = 10000 }
     return limit
@@ -207,10 +195,7 @@ fn proxy_protocol_parse(buf: string) -> []string {
     let src_port = parts[3]
     // Validate port range
     let mut port_ok = 0
-    match parse_int(src_port) {
-        Ok(v) => { if v > 0 && v <= 65535 { port_ok = 1 } }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(src_port) { if v > 0 && v <= 65535 { port_ok = 1 } }
     if port_ok == 0 { return out }
     // Validate IP has content (not exhaustive, but safe — invalid IPs
     // fail downstream without causing harm)

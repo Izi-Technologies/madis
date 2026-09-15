@@ -89,10 +89,7 @@ fn sip_wss_stream_poll(owner: int, reg: CMap, calls: CMap, db: SqlDB, db_ok: int
     let targets = str_split(cmap_get(cache, list_key), ",")
     let mut acted = 0
     let mut idle_ms = 600000
-    match parse_int(env_get_or("SIP_WSS_IDLE_MS", "600000")) {
-        Ok(v) => { idle_ms = v }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(env_get_or("SIP_WSS_IDLE_MS", "600000")) { idle_ms = v }
     if idle_ms < 60000 { idle_ms = 60000 }
     if idle_ms > 86400000 { idle_ms = 86400000 }
     let now = mono_ms()
@@ -657,10 +654,7 @@ fn wss_worker(fd: int, port: int, reg: CMap, calls: CMap, cache: CMap, outbox: c
         let mut buffer = ""
         let mut alive = 1
         let mut read_wait_ms = 1000
-        match parse_int(env_get_or("SIP_WSS_READ_WAIT_MS", "1000")) {
-            Ok(v) => { read_wait_ms = v }
-            Err(_) => {}
-        }
+        if let Ok(v) = parse_int(env_get_or("SIP_WSS_READ_WAIT_MS", "1000")) { read_wait_ms = v }
         if read_wait_ms < 1 { read_wait_ms = 1 }
         if read_wait_ms > 60000 { read_wait_ms = 60000 }
         while alive == 1 && shutdown_requested() == 0 {

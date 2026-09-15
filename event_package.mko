@@ -26,10 +26,7 @@ fn event_package_supported(pkg: string) -> int {
 
 fn event_package_max_expires() -> int {
     let mut v = 3600
-    match parse_int(env_get_or("SIP_EVENT_MAX_EXPIRES", "3600")) {
-        Ok(n) => { v = n }
-        Err(_) => {}
-    }
+    if let Ok(n) = parse_int(env_get_or("SIP_EVENT_MAX_EXPIRES", "3600")) { v = n }
     if v < 60 { v = 60 }
     if v > 86400 { v = 86400 }
     return v

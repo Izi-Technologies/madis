@@ -5,10 +5,7 @@
 fn registration_max_expires() -> int {
     let raw = env_get_or("SIP_MAX_REG_EXPIRES", "3600")
     let mut value = 3600
-    match parse_int(raw) {
-        Ok(v) => { value = v }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(raw) { value = v }
     if value < 60 { value = 60 }
     if value > 86400 { value = 86400 }
     return value
@@ -17,10 +14,7 @@ fn registration_max_expires() -> int {
 fn registration_min_expires() -> int {
     let raw = env_get_or("SIP_MIN_EXPIRES", "60")
     let mut value = 60
-    match parse_int(raw) {
-        Ok(v) => { value = v }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(raw) { value = v }
     if value < 0 { value = 0 }
     if value > 86400 { value = 86400 }
     return value
@@ -398,10 +392,7 @@ fn registration_keepalive_enabled() -> int {
 
 fn registration_keepalive_interval_ms() -> int {
     let mut interval = 25000
-    match parse_int(env_get_or("SIP_KEEPALIVE_INTERVAL", "25")) {
-        Ok(v) => { interval = v * 1000 }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(env_get_or("SIP_KEEPALIVE_INTERVAL", "25")) { interval = v * 1000 }
     if interval < 5000 { interval = 5000 }
     if interval > 120000 { interval = 120000 }
     return interval

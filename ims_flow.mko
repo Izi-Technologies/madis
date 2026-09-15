@@ -10,9 +10,8 @@ fn ims_flow_dynamic_enabled() -> int {
 
 fn ims_flow_keepalive_s() -> int {
     let mut s = 120
-    match parse_int(env_get_or("SIP_IMS_FLOW_KEEPALIVE_S", "120")) {
-        Ok(v) => { s = v }
-        Err(_) => {}
+    if let Ok(v) = parse_int(env_get_or("SIP_IMS_FLOW_KEEPALIVE_S", "120")) {
+        s = v
     }
     if s < 30 { s = 30 }
     if s > 3600 { s = 3600 }
@@ -21,9 +20,8 @@ fn ims_flow_keepalive_s() -> int {
 
 fn ims_flow_capacity() -> int {
     let mut n = 65536
-    match parse_int(env_get_or("SIP_IMS_FLOW_CAPACITY", "65536")) {
-        Ok(v) => { n = v }
-        Err(_) => {}
+    if let Ok(v) = parse_int(env_get_or("SIP_IMS_FLOW_CAPACITY", "65536")) {
+        n = v
     }
     if n < 64 { n = 64 }
     if n > 1048576 { n = 1048576 }
@@ -72,9 +70,8 @@ fn ims_flow_mint(cache: CMap, conn_key: string, transport: string, contact: stri
     }
     let mut count = 0
     if cmap_has(cache, "ims_flow_count") == 1 {
-        match parse_int(cmap_get(cache, "ims_flow_count")) {
-            Ok(v) => { count = v }
-            Err(_) => {}
+        if let Ok(v) = parse_int(cmap_get(cache, "ims_flow_count")) {
+            count = v
         }
     }
     if count >= ims_flow_capacity() && cmap_has(cache, key) == 0 { return "" }
@@ -165,9 +162,8 @@ fn ims_flow_clear(cache: CMap, token: string) -> int {
     let _ = cmap_del(cache, key)
     let mut count = 0
     if cmap_has(cache, "ims_flow_count") == 1 {
-        match parse_int(cmap_get(cache, "ims_flow_count")) {
-            Ok(v) => { count = v }
-            Err(_) => {}
+        if let Ok(v) = parse_int(cmap_get(cache, "ims_flow_count")) {
+            count = v
         }
     }
     if count > 0 { cmap_set(cache, "ims_flow_count", string(count - 1)) }

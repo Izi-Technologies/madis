@@ -1,9 +1,6 @@
 fn sip_tcp_connection_limit() -> int {
     let mut limit = 65536
-    match parse_int(env_get_or("SIP_TCP_MAX_CONNECTIONS", "65536")) {
-        Ok(value) => { limit = value }
-        Err(_) => {}
-    }
+    if let Ok(value) = parse_int(env_get_or("SIP_TCP_MAX_CONNECTIONS", "65536")) { limit = value }
     if limit < 1024 { limit = 1024 }
     if limit > 1048576 { limit = 1048576 }
     return limit
@@ -40,10 +37,7 @@ fn tcp_cleanup_multiplexed(c: int, el: EvLoop, buffers: map[string]string, peers
 
 fn sip_conn_idle_timeout_ms() -> int {
     let mut idle_ms = 120000
-    match parse_int(env_get_or("SIP_CONN_IDLE_TIMEOUT", "120")) {
-        Ok(v) => { idle_ms = v * 1000 }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(env_get_or("SIP_CONN_IDLE_TIMEOUT", "120")) { idle_ms = v * 1000 }
     if idle_ms < 10000 { idle_ms = 10000 }
     if idle_ms > 600000 { idle_ms = 600000 }
     return idle_ms

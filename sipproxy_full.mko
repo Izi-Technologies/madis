@@ -1649,10 +1649,7 @@ fn sec_is_banned(db: SqlDB, db_ok: int, src_ip: string, cache: CMap) -> int {
         // Check if cache is fresh (within 5 seconds)
         if cmap_has(cache, ts_key) == 1 {
             let mut cached_at = 0
-            match parse_int(cmap_get(cache, ts_key)) {
-                Ok(v) => { cached_at = v }
-                Err(_) => {}
-            }
+            if let Ok(v) = parse_int(cmap_get(cache, ts_key)) { cached_at = v }
             if now - cached_at < 5000 {
                 if str_eq(cmap_get(cache, key), "1") { return 1 }
                 return 0
@@ -1689,10 +1686,7 @@ fn sec_auth_failure(db: SqlDB, db_ok: int, src_ip: string, sip_user: string, cac
     // Get threshold from config
     let thresh_str = sql_query_str(db, "SELECT value FROM config WHERE key = $1", "security_max_auth_failures")
     let mut threshold = 5
-    match parse_int(thresh_str) {
-        Ok(v) => { threshold = v }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(thresh_str) { threshold = v }
 
     if count >= threshold {
         // Auto-ban
@@ -1938,10 +1932,7 @@ fn rtp_process_offer(msg: string, msglen: int, call_id: string, from_tag: string
     if len(sdp) == 0 { return msg }
 
     let mut rtp_port = 2223
-    match parse_int(cfg[2]) {
-        Ok(v) => { rtp_port = v }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(cfg[2]) { rtp_port = v }
 
     let new_sdp = rtp_offer(cfg[1], rtp_port, call_id, from_tag, sdp)
     if len(new_sdp) == 0 { return msg }
@@ -1976,10 +1967,7 @@ fn rtp_process_answer(msg: string, msglen: int, call_id: string, from_tag: strin
     if len(sdp) == 0 { return msg }
 
     let mut rtp_port = 2223
-    match parse_int(cfg[2]) {
-        Ok(v) => { rtp_port = v }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(cfg[2]) { rtp_port = v }
 
     let new_sdp = rtp_answer(cfg[1], rtp_port, call_id, from_tag, to_tag, sdp)
     if len(new_sdp) == 0 { return msg }
@@ -2009,10 +1997,7 @@ fn rtp_process_delete(call_id: string, db: SqlDB, db_ok: int, cache: CMap) -> in
     if str_eq(cfg[0], "0") { return 0 }
 
     let mut rtp_port = 2223
-    match parse_int(cfg[2]) {
-        Ok(v) => { rtp_port = v }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(cfg[2]) { rtp_port = v }
 
     return rtp_delete(cfg[1], rtp_port, call_id)
 }
@@ -2337,10 +2322,7 @@ fn process_sip(data: string, dl: int, reg: CMap, calls: CMap, ip: string, port: 
                 let mut rcode = 403
                 let mut rreason = "Forbidden"
                 if len(reject_parts) >= 1 {
-                    match parse_int(reject_parts[0]) {
-                        Ok(v) => { rcode = v }
-                        Err(_) => {}
-                    }
+                    if let Ok(v) = parse_int(reject_parts[0]) { rcode = v }
                 }
                 if len(reject_parts) >= 2 { rreason = reject_parts[1] }
                 let _ = db_cdr(db, db_ok, cid, caller_id, translated, "REJECTED:" + string(rcode))

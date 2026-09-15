@@ -25,10 +25,7 @@ fn hep_enabled() -> int {
 
 fn hep_port() -> int {
     let mut port = 9060
-    match parse_int(env_get_or("SIP_HEP_PORT", "9060")) {
-        Ok(value) => { port = value }
-        Err(_) => {}
-    }
+    if let Ok(value) = parse_int(env_get_or("SIP_HEP_PORT", "9060")) { port = value }
     if port < 1 { port = 1 }
     if port > 65535 { port = 65535 }
     return port
@@ -36,10 +33,7 @@ fn hep_port() -> int {
 
 fn hep_capture_id() -> int {
     let mut id = 1
-    match parse_int(env_get_or("SIP_HEP_CAPTURE_ID", "1")) {
-        Ok(value) => { id = value }
-        Err(_) => {}
-    }
+    if let Ok(value) = parse_int(env_get_or("SIP_HEP_CAPTURE_ID", "1")) { id = value }
     if id < 0 { id = 0 }
     if id > 65535 { id = 65535 }
     return id
@@ -47,10 +41,7 @@ fn hep_capture_id() -> int {
 
 fn hep_payload_limit() -> int {
     let mut limit = 60000
-    match parse_int(env_get_or("SIP_HEP_MAX_PAYLOAD", "60000")) {
-        Ok(value) => { limit = value }
-        Err(_) => {}
-    }
+    if let Ok(value) = parse_int(env_get_or("SIP_HEP_MAX_PAYLOAD", "60000")) { limit = value }
     if limit < 256 { limit = 256 }
     if limit > 65400 { limit = 65400 }
     return limit
@@ -58,10 +49,7 @@ fn hep_payload_limit() -> int {
 
 fn hep_queue_capacity() -> int {
     let mut capacity = 8192
-    match parse_int(env_get_or("SIP_HEP_QUEUE_CAPACITY", "8192")) {
-        Ok(value) => { capacity = value }
-        Err(_) => {}
-    }
+    if let Ok(value) = parse_int(env_get_or("SIP_HEP_QUEUE_CAPACITY", "8192")) { capacity = value }
     if capacity < 256 { capacity = 256 }
     if capacity > 65536 { capacity = 65536 }
     return capacity
@@ -107,12 +95,7 @@ fn hep_ip_protocol(transport: string) -> int {
 
 fn hep_sender_fd(cache: CMap) -> int {
     if cmap_has(cache, "hep|fd") == 1 {
-        match parse_int(cmap_get(cache, "hep|fd")) {
-            Ok(fd) => {
-                if fd >= 0 { return fd }
-            }
-            Err(_) => {}
-        }
+        if let Ok(fd) = parse_int(cmap_get(cache, "hep|fd")) { if fd >= 0 { return fd } }
     }
 // One process-local ephemeral UDP socket is reused by the HEP worker.
     // A first-packet creation race can create at most one short-lived extra

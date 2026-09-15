@@ -187,9 +187,8 @@ fn ims_cx_push_listen_enabled() -> int {
 
 fn ims_cx_push_listen_port() -> int {
     let mut port = 3868
-    match parse_int(env_get_or("SIP_IMS_CX_PUSH_PORT", "3868")) {
-        Ok(v) => { port = v }
-        Err(_) => {}
+    if let Ok(v) = parse_int(env_get_or("SIP_IMS_CX_PUSH_PORT", "3868")) {
+        port = v
     }
     if port < 1 || port > 65535 { return -1 }
     return port

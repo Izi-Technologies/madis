@@ -612,10 +612,7 @@ fn sip_forward_reply(reply: string, cache: CMap, out_fd: int) -> int {
     let conn_key = "server_conn|" + txn_key
     if len(txn_key) > 2 && cmap_has(cache, conn_key) == 1 {
         let mut conn_fd = -1
-        match parse_int(cmap_get(cache, conn_key)) {
-            Ok(v) => { conn_fd = v }
-            Err(_) => {}
-        }
+        if let Ok(v) = parse_int(cmap_get(cache, conn_key)) { conn_fd = v }
         if conn_fd >= 0 {
             // RFC 7118 §5: WebSocket connections must use frame-based send,
             // not raw TCP write. Check the tracked transport type.
@@ -625,10 +622,7 @@ fn sip_forward_reply(reply: string, cache: CMap, out_fd: int) -> int {
                 if ws_sent >= 0 { return 1 }
             } else if str_eq(conn_tr, "TLS") {
                 let mut handle = -1
-                match parse_int(cmap_get(cache, "server_conn_tls_handle|" + txn_key)) {
-                    Ok(v) => { handle = v }
-                    Err(_) => {}
-                }
+                if let Ok(v) = parse_int(cmap_get(cache, "server_conn_tls_handle|" + txn_key)) { handle = v }
                 if handle >= 0 {
                     let tls_sent = tls_server_pool_write(handle, reply)
                     if tls_sent >= len(reply) { return 1 }

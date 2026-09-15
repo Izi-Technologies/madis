@@ -16,9 +16,8 @@ fn ims_lifecycle_key(aor: string) -> string {
 
 fn ims_lifecycle_capacity() -> int {
     let mut value = 16384
-    match parse_int(env_get_or("SIP_IMS_LIFECYCLE_CAPACITY", "16384")) {
-        Ok(v) => { value = v }
-        Err(_) => {}
+    if let Ok(v) = parse_int(env_get_or("SIP_IMS_LIFECYCLE_CAPACITY", "16384")) {
+        value = v
     }
     if value < 16 { value = 16 }
     if value > 262144 { value = 262144 }
@@ -27,9 +26,8 @@ fn ims_lifecycle_capacity() -> int {
 
 fn ims_lifecycle_load_limit() -> int {
     let mut value = 10000
-    match parse_int(env_get_or("SIP_IMS_LIFECYCLE_LOAD_LIMIT", "10000")) {
-        Ok(v) => { value = v }
-        Err(_) => {}
+    if let Ok(v) = parse_int(env_get_or("SIP_IMS_LIFECYCLE_LOAD_LIMIT", "10000")) {
+        value = v
     }
     if value < 1 { value = 1 }
     if value > 100000 { value = 100000 }

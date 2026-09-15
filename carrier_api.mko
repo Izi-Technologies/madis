@@ -174,10 +174,7 @@ fn carrier_api_rule_id(path: string) -> string {
     let id = rest[0:slash]
     let action = rest[slash + 1:]
     if not str_eq(action, "enable") && not str_eq(action, "disable") { return "" }
-    match parse_int(id) {
-        Ok(v) => { if v > 0 && v <= 2147483647 { return id } }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(id) { if v > 0 && v <= 2147483647 { return id } }
     return ""
 }
 
@@ -253,10 +250,7 @@ fn carrier_api_resource_state_id(path: string, prefix: string) -> string {
     let id = rest[0:slash]
     let state = rest[slash + 1:]
     if not str_eq(state, "enable") && not str_eq(state, "disable") { return "" }
-    match parse_int(id) {
-        Ok(v) => { if v > 0 && v <= 2147483647 { return id } }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(id) { if v > 0 && v <= 2147483647 { return id } }
     return ""
 }
 
@@ -264,10 +258,7 @@ fn carrier_api_resource_id(path: string, prefix: string) -> string {
     if not str_has_prefix(path, prefix) { return "" }
     let id = path[len(prefix):]
     if len(id) == 0 || str_index(id, "/") >= 0 { return "" }
-    match parse_int(id) {
-        Ok(v) => { if v > 0 && v <= 2147483647 { return id } }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(id) { if v > 0 && v <= 2147483647 { return id } }
     return ""
 }
 
