@@ -1,0 +1,2 @@
+{"before_final": [], "final": [200], "replay": [200], "new_transaction": [481], "valid": true}
+fault matrix: loss/retransmit, unacknowledged 2xx, reorder/duplicate, and delay passed

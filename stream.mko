@@ -22,10 +22,7 @@ fn peer_split(addr: string) -> []string {
             if rb + 1 < len(addr) {
                 if int(addr[rb + 1]) == 58 {
                     let ps = addr[rb + 2:]
-                    match parse_int(ps) {
-                        Ok(v) => { if v > 0 && v <= 65535 { out[1] = string(v) } }
-                        Err(_) => {}
-                    }
+                    if let Ok(v) = parse_int(ps) { if v > 0 && v <= 65535 { out[1] = string(v) } }
                 }
             }
             return out
@@ -45,27 +42,20 @@ fn peer_split(addr: string) -> []string {
     }
     out[0] = addr[0:colon]
     let ps = addr[colon + 1:]
-    match parse_int(ps) {
-        Ok(v) => { if v > 0 && v <= 65535 { out[1] = string(v) } }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(ps) { if v > 0 && v <= 65535 { out[1] = string(v) } }
     return out
 }
 
 fn peer_host(fd: int) -> string {
     let parts = peer_split(tcp_peer_addr(fd))
-    // Do not return an element owned by the temporary array: the array drop
-    // releases its strings before the caller owns the result.
-    return "" + parts[0]
+    // Makori retains the returned string before dropping the local array.
+    return parts[0]
 }
 
 fn peer_port(fd: int) -> int {
     let parts = peer_split(tcp_peer_addr(fd))
     let mut p = 5060
-    match parse_int(parts[1]) {
-        Ok(v) => { p = v }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(parts[1]) { p = v }
     return p
 }
 
@@ -73,32 +63,30 @@ fn peer_port(fd: int) -> int {
 fn stream_append(buf: string, chunk: string) -> string {
     if len(chunk) == 0 { return buf }
     if len(buf) + len(chunk) > stream_max_buf() { return "" }
+    // Retain the incoming RC string on the first read; only fragments need
+    // concatenation. Keep the size check before this fast path.
+    if len(buf) == 0 { return chunk }
     return buf + chunk
 }
 
-// Process all complete SIP messages in buf; returns remaining incomplete tail.
-// write_fn style: caller supplies transport write via process callback results.
-// Here we return processed count indirectly by mutating through returned remainder.
-//
-// sip_on_msg is process_sip — returns reply body to write (may be empty).
-// For stream transports we call process and write via the provided write_reply helper
-// is inlined in workers; this helper only slices messages.
+// Both fields own their strings; replacing the input cannot invalidate them.
+// A value result avoids allocating an array for every framed message.
+struct StreamFrame {
+    message: string
+    remainder: string
+}
 
-fn stream_next_msg(buf: string) -> []string {
-    // Returns [message, remainder]. message empty if incomplete.
-    let mut out = make([]string, 2)
-    out[0] = ""
-    out[1] = buf
+fn stream_next_msg(buf: string) -> StreamFrame {
     let n = sip_first_message_len(buf)
-    if n <= 0 {
-        return out
+    if n <= 0 || n > len(buf) {
+        return StreamFrame { message: "", remainder: buf }
     }
-    if n > len(buf) {
-        return out
+    // A complete single-message buffer can share its RC storage instead of
+    // allocating a full-length substring. The caller may replace its buffer.
+    if n == len(buf) {
+        return StreamFrame { message: buf, remainder: "" }
     }
-    out[0] = buf[0:n]
-    out[1] = buf[n:]
-    return out
+    return StreamFrame { message: buf[0:n], remainder: buf[n:] }
 }
 
 // True if buffer has at least one complete message
@@ -127,10 +115,7 @@ fn proxy_protocol_enabled() -> int {
 // Default: 100 concurrent connections per source IP.
 fn sip_per_ip_conn_limit() -> int {
     let mut limit = 100
-    match parse_int(env_get_or("SIP_PER_IP_CONN_LIMIT", "100")) {
-        Ok(v) => { limit = v }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(env_get_or("SIP_PER_IP_CONN_LIMIT", "100")) { limit = v }
     if limit < 10 { limit = 10 }
     if limit > 10000 { limit = 10000 }
     return limit
@@ -140,7 +125,7 @@ fn sip_per_ip_conn_check(cache: CMap, ip: string) -> int {
     let key = "ip_conns|" + ip
     let mut count = 0
     if cmap_has(cache, key) == 1 {
-        match parse_int(cmap_get(cache, key)) { Ok(v) => { count = v } Err(_) => {} }
+        if let Ok(v) = parse_int(cmap_get(cache, key)) { count = v }
     }
     if count >= sip_per_ip_conn_limit() {
         let _ = log_warn_if(cache, "stream", "conn-limit-exceeded ip=" + ip + " count=" + string(count))
@@ -157,7 +142,7 @@ fn sip_per_ip_conn_release(cache: CMap, ip: string) -> int {
     let key = "ip_conns|" + ip
     let mut count = 0
     if cmap_has(cache, key) == 1 {
-        match parse_int(cmap_get(cache, key)) { Ok(v) => { count = v } Err(_) => {} }
+        if let Ok(v) = parse_int(cmap_get(cache, key)) { count = v }
     }
     if count > 1 {
         cmap_set(cache, key, string(count - 1))
@@ -207,10 +192,7 @@ fn proxy_protocol_parse(buf: string) -> []string {
     let src_port = parts[3]
     // Validate port range
     let mut port_ok = 0
-    match parse_int(src_port) {
-        Ok(v) => { if v > 0 && v <= 65535 { port_ok = 1 } }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(src_port) { if v > 0 && v <= 65535 { port_ok = 1 } }
     if port_ok == 0 { return out }
     // Validate IP has content (not exhaustive, but safe — invalid IPs
     // fail downstream without causing harm)

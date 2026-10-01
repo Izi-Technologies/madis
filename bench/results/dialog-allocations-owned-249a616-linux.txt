@@ -1,0 +1,4 @@
+mako: pg_connect: bad url
+2026-10-01T12:46:57.672Z   reg: store aor=bench@mako.local contact=sip:bench@127.0.0.1:44037 expires=3600
+2026-10-01T12:46:57.674Z   ims: lifecycle aor=bench@mako.local state=registered
+completed_dialogs=100 calls_entries=2 cache_entries=2576

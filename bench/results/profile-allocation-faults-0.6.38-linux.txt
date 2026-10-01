@@ -1,0 +1,58 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 1K of event 'minor-faults'
+# Event count (approx.): 192200
+#
+# Children      Self  Command          Shared Object        Symbol                                
+# ........  ........  ...............  ...................  ......................................
+#
+    98.96%    98.96%  madis-debug-rel  libc.so.6            [.] _int_malloc
+    98.96%     0.00%  madis-debug-rel  libc.so.6            [.] __GI___libc_malloc (inlined)
+    95.84%     0.00%  madis-debug-rel  madis-debug-release  [.] udp_worker
+    93.44%     0.00%  madis-debug-rel  madis-debug-release  [.] process_sip
+    76.38%     0.00%  madis-debug-rel  madis-debug-release  [.] process_sip_core__impl
+    76.38%     0.00%  madis-debug-rel  [unknown]            [.] 0xffffffffffffffff
+    75.75%     0.00%  madis-debug-rel  madis-debug-release  [.] process_sip_core (inlined)
+    73.20%     0.00%  madis-debug-rel  libc.so.6            [.] sysmalloc (inlined)
+    28.56%     0.00%  madis-debug-rel  madis-debug-release  [.] __kick_udp_worker_16782
+    23.62%     0.00%  madis-debug-rel  libc.so.6            [.] clone3
+    23.62%     0.00%  madis-debug-rel  libc.so.6            [.] start_thread
+    21.18%     0.00%  madis-debug-rel  madis-debug-release  [.] sip_forward_target
+    20.24%     0.00%  madis-debug-rel  madis-debug-release  [.] mako_task_trampoline
+    19.30%     0.00%  madis-debug-rel  madis-debug-release  [.] mako_str_concat (inlined)
+    19.15%     0.00%  madis-debug-rel  madis-debug-release  [.] mako_rc_alloc (inlined)
+    14.52%     0.00%  madis-debug-rel  madis-debug-release  [.] sip_client_txn_record
+    13.48%     0.00%  madis-debug-rel  madis-debug-release  [.] mako_rc_alloc (inlined)
+    13.48%     0.00%  madis-debug-rel  madis-debug-release  [.] mako_str_concat_own (inlined)
+    11.39%     0.00%  madis-debug-rel  madis-debug-release  [.] sip_forward_dialog_request
+    10.98%     0.00%  madis-debug-rel  madis-debug-release  [.] sip_decrement_max_forwards
+    10.82%     0.00%  madis-debug-rel  madis-debug-release  [.] mako_cmap_set (inlined)
+    10.20%     0.00%  madis-debug-rel  madis-debug-release  [.] cmap_dup_bytes (inlined)
+     9.16%     0.00%  madis-debug-rel  madis-debug-release  [.] sip_validate_message
+     8.53%     0.00%  madis-debug-rel  madis-debug-release  [.] mako_str_slice (inlined)
+     6.45%     0.00%  madis-debug-rel  madis-debug-release  [.] sip_name_addr_valid
+     5.88%     0.00%  madis-debug-rel  madis-debug-release  [.] mako_rc_alloc (inlined)
+     5.88%     0.00%  madis-debug-rel  madis-debug-release  [.] mako_str_clone
+     5.67%     0.00%  madis-debug-rel  madis-debug-release  [.] sip_uri_syntax_valid
+     5.46%     0.00%  madis-debug-rel  madis-debug-release  [.] ims_lifecycle_find
+     5.46%     0.00%  madis-debug-rel  madis-debug-release  [.] ims_lifecycle_resolve_aor
+     5.25%     0.00%  madis-debug-rel  madis-debug-release  [.] ims_lifecycle_decode_ok
+     5.25%     0.00%  madis-debug-rel  madis-debug-release  [.] ims_lifecycle_live
+     5.25%     0.00%  madis-debug-rel  madis-debug-release  [.] sip_strip_top_via
+     4.89%     0.00%  madis-debug-rel  madis-debug-release  [.] sip_dialog_observe
+     4.79%     0.00%  madis-debug-rel  madis-debug-release  [.] rtp_config
+     4.32%     0.00%  madis-debug-rel  madis-debug-release  [.] mako_sip_header_n (inlined)
+     3.54%     0.00%  madis-debug-rel  madis-debug-release  [.] __kick_sip_server_txn_tick_14912
+     3.54%     0.00%  madis-debug-rel  madis-debug-release  [.] mako_sched_worker_main
+     3.54%     0.00%  madis-debug-rel  madis-debug-release  [.] sip_server_txn_tick
+     3.17%     0.00%  madis-debug-rel  madis-debug-release  [.] ims_lifecycle_mt_target_resolved
+     3.17%     0.00%  madis-debug-rel  madis-debug-release  [.] sip_txn_sweep_expired
+     3.07%     0.00%  madis-debug-rel  madis-debug-release  [.] sip_via_valid
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

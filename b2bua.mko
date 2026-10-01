@@ -1,3 +1,4 @@
+pull . "./cache_owned.mko"
 // B2BUA leg management.
 //
 // This module is deliberately opt-in. A b2bua:<target> routing action makes
@@ -17,7 +18,7 @@ fn b2bua_state_capacity() -> int {
 
 fn b2bua_state_ttl_ms() -> int {
     let mut value = 1800000
-    match parse_int(env_get_or("SIP_B2BUA_STATE_MS", "1800000")) { Ok(v) => { value = v } Err(_) => {} }
+    if let Ok(v) = parse_int(env_get_or("SIP_B2BUA_STATE_MS", "1800000")) { value = v }
     if value < 64000 { value = 64000 }
     if value > 86400000 { value = 86400000 }
     return value
@@ -64,7 +65,7 @@ fn b2bua_signal_host() -> string {
 
 fn b2bua_signal_port() -> int {
     let mut port = 5060
-    match parse_int(env_get_or("SIP_B2BUA_SIGNAL_PORT", env_get_or("SIP_UDP_PORT", "5060"))) { Ok(v) => { port = v } Err(_) => {} }
+    if let Ok(v) = parse_int(env_get_or("SIP_B2BUA_SIGNAL_PORT", env_get_or("SIP_UDP_PORT", "5060"))) { port = v }
     if port <= 0 || port > 65535 { port = 5060 }
     return port
 }
@@ -75,7 +76,7 @@ fn b2bua_contact_uri(transport: string) -> string {
     let mut authority = host
     if str_index(host, ":") >= 0 && not str_has_prefix(host, "[") { authority = "[" + host + "]" }
     let mut port = b2bua_signal_port()
-    match parse_int(env_get_or("SIP_B2BUA_CONTACT_PORT", string(port))) { Ok(v) => { port = v } Err(_) => {} }
+    if let Ok(v) = parse_int(env_get_or("SIP_B2BUA_CONTACT_PORT", string(port))) { port = v }
     if port <= 0 || port > 65535 { port = b2bua_signal_port() }
     let user = env_get_or("SIP_B2BUA_CONTACT_USER", "b2bua")
     let mut scheme = "sip"
@@ -115,7 +116,7 @@ fn b2bua_cleanup(key: string, cache: CMap) -> int {
 fn b2bua_active(key: string, cache: CMap) -> int {
     if len(key) == 0 || cmap_has(cache, "b2bua_state|" + key) == 0 { return 0 }
     let mut created = 0
-    match parse_int(cmap_get(cache, "b2bua_created|" + key)) { Ok(v) => { created = v } Err(_) => {} }
+    if let Ok(v) = parse_int(cmap_get(cache, "b2bua_created|" + key)) { created = v }
     if created <= 0 || mono_ms() - created > b2bua_state_ttl_ms() {
         let _ = b2bua_cleanup(key, cache)
         return 0
@@ -126,7 +127,7 @@ fn b2bua_active(key: string, cache: CMap) -> int {
 
 fn b2bua_store(key: string, in_cid: string, out_cid: string, from: string, to: string, via: string, in_tag: string, out_tag: string, invite: string, target: string, transport: string, peer: string, peer_transport: string, invite_cseq: string, cache: CMap) -> int {
     if len(key) == 0 || len(in_cid) == 0 || len(out_cid) == 0 || len(invite) > 32768 { return 0 }
-    let seq = cmap_incr(cache, "b2bua_seq", 1)
+    let seq = cache_incr(cache, "b2bua_seq", 1)
     if seq < 0 { return 0 }
     let cap = b2bua_state_capacity()
     let slot = seq - (seq / cap) * cap
@@ -248,10 +249,7 @@ fn b2bua_prepare_in_dialog(msg: string, key: string, cache: CMap) -> string {
         out_cseq = invite_cseq
     } else {
         let current = cmap_get(cache, "b2bua_out_cseq|" + key)
-        match parse_int(current) {
-            Ok(v) => { if v < 2147483647 { out_cseq = string(v + 1) } }
-            Err(_) => {}
-        }
+        if let Ok(v) = parse_int(current) { if v < 2147483647 { out_cseq = string(v + 1) } }
         cmap_set(cache, "b2bua_out_cseq|" + key, out_cseq)
         cmap_set(cache, "b2bua_pending_method|" + key, method)
         cmap_set(cache, "b2bua_pending_in_cseq|" + key, in_cseq)
@@ -309,7 +307,7 @@ fn b2bua_translate_response(response: string, key: string, cache: CMap) -> strin
 fn b2bua_next_peer_cseq(key: string, cache: CMap) -> string {
     let current = cmap_get(cache, "b2bua_peer_cseq|" + key)
     let mut value = 1
-    match parse_int(current) { Ok(v) => { value = v } Err(_) => {} }
+    if let Ok(v) = parse_int(current) { value = v }
     if value < 1 { value = 1 }
     if value < 2147483647 { cmap_set(cache, "b2bua_peer_cseq|" + key, string(value + 1)) }
     return string(value)

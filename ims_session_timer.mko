@@ -404,9 +404,9 @@ fn ims_session_timer_bind_from_response(cache: CMap, call_id: string, request: s
 fn ims_session_timer_next_cseq(cache: CMap, call_id: string, stored_cseq: string) -> string {
     let key = "ims-se-cseq|" + call_id
     let mut current = 0
-    match parse_int(stored_cseq) { Ok(v) => { current = v } Err(_) => {} }
+    if let Ok(v) = parse_int(stored_cseq) { current = v }
     if cmap_has(cache, key) == 1 {
-        match parse_int(cmap_get(cache, key)) { Ok(v) => { if v > current { current = v } } Err(_) => {} }
+        if let Ok(v) = parse_int(cmap_get(cache, key)) { if v > current { current = v } }
     }
     current = current + 1
     cmap_set(cache, key, string(current))
@@ -448,7 +448,7 @@ fn ims_session_timer_refresh_tick(cache: CMap, ip: string, port: int, tr: string
     let now = mono_ms()
     let mut start = 0
     if cmap_has(cache, "ims_se_scan") == 1 {
-        match parse_int(cmap_get(cache, "ims_se_scan")) { Ok(v) => { start = v } Err(_) => {} }
+        if let Ok(v) = parse_int(cmap_get(cache, "ims_se_scan")) { start = v }
     }
     let mut refreshed = 0
     let mut i = 0
@@ -463,8 +463,8 @@ fn ims_session_timer_refresh_tick(cache: CMap, ip: string, port: int, tr: string
                 if len(vparts) >= 3 {
                     let mut seconds = 0
                     let mut expires_at = 0
-                    match parse_int(vparts[0]) { Ok(v) => { seconds = v } Err(_) => {} }
-                    match parse_int(vparts[1]) { Ok(v) => { expires_at = v } Err(_) => {} }
+                    if let Ok(v) = parse_int(vparts[0]) { seconds = v }
+                    if let Ok(v) = parse_int(vparts[1]) { expires_at = v }
                     let r = vparts[2]
                     // Only refresh if proxy is the refresher (uas role)
                     if str_eq(r, "uas") && seconds > 0 && expires_at > 0 {

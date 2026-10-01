@@ -54,9 +54,8 @@ fn ims_aka_challenge(realm: string, msg: string, nonce: string, stale: int) -> s
 // How many authentication vectors to request from the HSS per MAR (1–5).
 fn ims_aka_num_vectors() -> int {
     let mut value = 1
-    match parse_int(env_get_or("SIP_IMS_AKA_NUM_VECTORS", "1")) {
-        Ok(v) => { value = v }
-        Err(_) => {}
+    if let Ok(v) = parse_int(env_get_or("SIP_IMS_AKA_NUM_VECTORS", "1")) {
+        value = v
     }
     if value < 1 { value = 1 }
     if value > 5 { value = 5 }
@@ -303,9 +302,8 @@ fn ims_aka_response_valid(msg: string, n: int, cache: CMap, public_identity: str
     }
     // Vector lifetime is operator-configurable; default five minutes.
     let mut ttl_ms = 300000
-    match parse_int(env_get_or("SIP_IMS_AKA_VECTOR_TTL_MS", "300000")) {
-        Ok(v) => { ttl_ms = v }
-        Err(_) => {}
+    if let Ok(v) = parse_int(env_get_or("SIP_IMS_AKA_VECTOR_TTL_MS", "300000")) {
+        ttl_ms = v
     }
     if ttl_ms < 1000 { ttl_ms = 1000 }
     if ttl_ms > 3600000 { ttl_ms = 3600000 }

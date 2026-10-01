@@ -164,9 +164,9 @@ fn db_rate_ok(user: string, cache: CMap) -> int {
     let limit_key = "rl_limit"
     let mut limit = 100
     if cmap_has(cache, limit_key) == 1 {
-        match parse_int(cmap_get(cache, limit_key)) { Ok(v) => { limit = v } Err(_) => {} }
+        if let Ok(v) = parse_int(cmap_get(cache, limit_key)) { limit = v }
     } else {
-        match parse_int(env_get_or("SIP_USER_RATE_LIMIT", "100")) { Ok(v) => { limit = v } Err(_) => {} }
+        if let Ok(v) = parse_int(env_get_or("SIP_USER_RATE_LIMIT", "100")) { limit = v }
         if limit > 1000000 { limit = 1000000 }
         cmap_set(cache, limit_key, string(limit))
     }

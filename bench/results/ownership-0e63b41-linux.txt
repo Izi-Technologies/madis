@@ -1,0 +1,8 @@
+mako test: /tmp/madis-bb36025-isolated/ownership_test.mko
+=== /tmp/madis-bb36025-isolated/ownership_test.mko ===
+--- PASS: TestCompilerCryptoTemporaryOwnership
+--- PASS: TestCompilerRetainedStringReplacement
+PASS
+ok  /tmp/madis-bb36025-isolated/ownership_test.mko (1586ms)
+
+mako test: 1 passed, 0 failed

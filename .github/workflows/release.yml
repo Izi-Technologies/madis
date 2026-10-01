@@ -19,11 +19,11 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: loreste/mako
-          ref: 1a75d53f15e59bf1a5f58eb3e14d75180c7d82d7 # Makori 0.6.32
+          ref: c2a2d38212903b981f967c7023c5fe07744e1d71 # Makori 0.6.38 + ownership fixes (#74–#77)
           path: .ci/mako
 
       - name: Build Mako
-        run: cargo build --release --manifest-path .ci/mako/Cargo.toml
+        run: cargo build --release --locked --manifest-path .ci/mako/Cargo.toml
 
       - name: Build madis binary
         env:

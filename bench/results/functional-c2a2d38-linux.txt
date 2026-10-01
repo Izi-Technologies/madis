@@ -1,0 +1,683 @@
+mako test: tests
+=== tests/admin_http_test.mko ===
+--- PASS: TestAdminHttpFramingAndCookieBoundaries
+--- PASS: TestAdminHttpOriginAndFormDecoding
+--- PASS: TestAdminMetricsTokenValidation
+PASS
+ok  tests/admin_http_test.mko (4318ms)
+
+=== tests/admin_password_test.mko ===
+--- PASS: TestAdminLegacyHashCompatibility
+--- PASS: TestAdminPasswordHashing
+PASS
+ok  tests/admin_password_test.mko (2231ms)
+
+=== tests/adversarial_test.mko ===
+--- PASS: TestAdversarialBodyFraming
+--- PASS: TestAdversarialDigestChallengeAndHeaderInjection
+--- PASS: TestAdversarialHeaderName
+--- PASS: TestAdversarialOrphanFold
+--- PASS: TestAdversarialRegistrationValues
+--- PASS: TestAdversarialResponseStatusCodes
+--- PASS: TestAdversarialSipUriGrammar
+--- PASS: TestAdversarialStartLinesAndCSeq
+--- PASS: TestAdversarialTransactionExpiryAndDuplicates
+PASS
+ok  tests/adversarial_test.mko (2987ms)
+
+=== tests/app_gateway_test.mko ===
+--- PASS: TestApplicationCommandSignatureAndSqlLikeData
+--- PASS: TestApplicationGatewayBoundary
+--- PASS: TestEmptyApplicationHookSkipsCommandIdentity
+--- PASS: TestModuleAllowlist
+PASS
+ok  tests/app_gateway_test.mko (11501ms)
+
+=== tests/auth_test.mko ===
+--- PASS: TestAttackerCachesAreBounded
+--- PASS: TestDigestAuthParameterParsing
+--- PASS: TestDigestQopAuthKnownAnswer
+--- PASS: TestDigestSessInteropVectors
+--- PASS: TestDigestSha256AndAuthInt
+PASS
+ok  tests/auth_test.mko (2256ms)
+
+=== tests/b2bua_test.mko ===
+--- PASS: TestB2buaCleanupRemovesBothLegIndexes
+--- PASS: TestB2buaCreatesIndependentLeg
+--- PASS: TestB2buaInDialogCseqAndByeTranslation
+--- PASS: TestB2buaNon2xxAckUsesDownstreamDialog
+--- PASS: TestB2buaResponseMapsBackToCallerLeg
+--- PASS: TestHeaderSanitizerPreservesSafeZeroAndRejectsInjection
+PASS
+ok  tests/b2bua_test.mko (2474ms)
+
+=== tests/bind_config_test.mko ===
+--- PASS: TestBindIpAcceptsConfiguredIpv4
+--- PASS: TestBindIpDefaultIsWildcard
+2026-10-01T16:52:00.572Z   Bind:    SIP_BIND_IP invalid, using 0.0.0.0
+2026-10-01T16:52:00.572Z   Bind:    SIP_BIND_IP invalid, using 0.0.0.0
+2026-10-01T16:52:00.572Z   Bind:    SIP_BIND_IP invalid, using 0.0.0.0
+2026-10-01T16:52:00.572Z   Bind:    SIP_BIND_IP invalid, using 0.0.0.0
+2026-10-01T16:52:00.572Z   Bind:    SIP_BIND_IP invalid, using 0.0.0.0
+2026-10-01T16:52:00.572Z   Bind:    SIP_BIND_IP invalid, using 0.0.0.0
+2026-10-01T16:52:00.572Z   Bind:    SIP_BIND_IP invalid, using 0.0.0.0
+--- PASS: TestBindIpRejectsInvalidFailsBackToWildcard
+--- PASS: TestBindIpValidatorBoundary
+--- PASS: TestRequestWorkersDefaultIsFour
+PASS
+ok  tests/bind_config_test.mko (11240ms)
+
+=== tests/cache_owned_test.mko ===
+--- PASS: TestOwnedIntegerCache
+PASS
+ok  tests/cache_owned_test.mko (2427ms)
+
+=== tests/capacity_test.mko ===
+--- PASS: TestCallStateCapacityDefaultsAndClamps
+--- PASS: TestCallStateUpdatesExistingRecord
+--- PASS: TestTcpConnectionCapacityBounds
+PASS
+ok  tests/capacity_test.mko (11620ms)
+
+=== tests/carrier_contract_test.mko ===
+--- PASS: TestBillingEventIdentityAndEscaping
+--- PASS: TestChargingContractUsesRFC8506RequestTypes
+--- PASS: TestControlApiIsExplicitAndAllowlisted
+--- PASS: TestDialplanApiIsBoundedAndComplete
+PASS
+ok  tests/carrier_contract_test.mko (3927ms)
+
+=== tests/compiler_ownership_test.mko ===
+--- PASS: TestCompilerCryptoTemporaryOwnership
+--- PASS: TestCompilerRetainedStringReplacement
+--- PASS: TestNamedSliceOwnership
+--- PASS: TestNumericStringArrayAppendOwnership
+--- PASS: TestNumericStringArrayReplacementOwnership
+--- PASS: TestSipTagTemporaryOwnership
+--- PASS: TestStringArrayReplacementOwnership
+PASS
+ok  tests/compiler_ownership_test.mko (1595ms)
+
+=== tests/crew_policy_test.mko ===
+--- PASS: TestActorCountsDispatchProbes
+--- PASS: TestArenaIpv4Scratch
+--- PASS: TestCrewAllForksFourBranches
+--- PASS: TestCrewAllJoinsSipShapedWorkers
+--- PASS: TestCrewAnyJoinsFirstProbe
+--- PASS: TestCrewFailFastJoinsHealthyProbe
+--- PASS: TestCrewFailFastOptionCompiles
+--- PASS: TestCrewRaceFirstHealthyGatewayWins
+--- PASS: TestCrewRaceUnhealthyProbeLoses
+--- PASS: TestFanScalesGatewayScores
+--- PASS: TestInlineIntChanCap4ZeroAllocRing
+--- PASS: TestInlineIntChanRendezvous
+PASS
+ok  tests/crew_policy_test.mko (2306ms)
+
+=== tests/diameter_codec_test.mko ===
+--- PASS: TestDiameterCCRHeaderAndMandatoryAVPs
+--- PASS: TestDiameterCEAAndCCAValidation
+--- PASS: TestDiameterGroupedUnitsAndPadding
+--- PASS: TestDiameterMalformedAndSequenceGuards
+--- PASS: TestDiameterVendorAVPAndPeerBase
+--- PASS: TestIMS_AnswerCorrelationAndResult
+--- PASS: TestIMS_CxAndShWireContracts
+--- PASS: TestIMS_CxLirServerSelection
+--- PASS: TestIMS_CxUaaServerAssignment
+PASS
+ok  tests/diameter_codec_test.mko (2251ms)
+
+=== tests/diameter_failover_test.mko ===
+--- PASS: TestDiameterCeaForCer
+--- PASS: TestDiameterFindVendorAvpN
+--- PASS: TestDiameterPeerBackoffAndInflight
+--- PASS: TestDiameterPeerFailoverAdvance
+--- PASS: TestDiameterPeerHostListParsing
+--- PASS: TestDiameterPeerRealmSelection
+--- PASS: TestDiameterRequestRealmExtraction
+PASS
+ok  tests/diameter_failover_test.mko (10308ms)
+
+=== tests/fork_concurrency_test.mko ===
+--- PASS: TestDispatchScoreStoreParallel
+--- PASS: TestForkCommitUsesPerIndexKeys
+mako: pg_connect: bad url
+--- PASS: TestHousekeepTicksJoins
+PASS
+ok  tests/fork_concurrency_test.mko (11272ms)
+
+=== tests/forwarding_ownership_test.mko ===
+--- PASS: TestForwardingHelpersBoundedOwnership
+--- PASS: TestMessageReplacementPreservesSnapshots
+PASS
+ok  tests/forwarding_ownership_test.mko (10913ms)
+
+=== tests/forwarding_range_test.mko ===
+--- PASS: TestForwardingHelpersBoundedOwnership
+--- PASS: TestForwardingRangeMatchesOldByteMutations
+--- PASS: TestForwardingRangeVariants
+--- PASS: TestMessageReplacementPreservesSnapshots
+PASS
+ok  tests/forwarding_range_test.mko (12309ms)
+
+=== tests/hep_test.mko ===
+--- PASS: TestHEP3IPv4Packet
+--- PASS: TestHEP3RejectsNonIPv4
+--- PASS: TestHEPCaptureActorCountsPackets
+--- PASS: TestHEPDisabledIsNoop
+--- PASS: TestHEPEnabledQueuesPacket
+--- PASS: TestHEPProtocolMapping
+--- PASS: TestHEPQueueCapacityBounds
+--- PASS: TestHEPWorkerSendsPacket
+PASS
+ok  tests/hep_test.mko (1921ms)
+
+=== tests/https_client_test.mko ===
+--- PASS: TestHttpsPostEnvelopeParsing
+--- PASS: TestHttpsPostLiveEndpoint
+PASS
+ok  tests/https_client_test.mko (12485ms)
+
+=== tests/ims_aka_test.mko ===
+--- PASS: TestIMSAKAStoreKeysOptional
+--- PASS: TestIMS_AKAAutsParamAndRandExtraction
+--- PASS: TestIMS_AKAAutsRequiresIssuedNonce
+--- PASS: TestIMS_AKAClusterNodeRechallenge
+--- PASS: TestIMS_AKAInputGuards
+--- PASS: TestIMS_AKAMissingVectorAndMalformedAuth
+--- PASS: TestIMS_AKANumVectorsClamped
+--- PASS: TestIMS_AKAPoolNextWithoutMar
+--- PASS: TestIMS_AKAReplayAndExpiry
+PASS
+ok  tests/ims_aka_test.mko (11784ms)
+
+=== tests/ims_aka_vector_test.mko ===
+--- PASS: TestIMS_CxMaaOpaqueVectorExtraction
+--- PASS: TestIMS_CxMaaVectorCorrelationAndPayloadGuards
+--- PASS: TestIMS_CxMarAutsWireShape
+PASS
+ok  tests/ims_aka_vector_test.mko (2451ms)
+
+=== tests/ims_charging_vector_test.mko ===
+--- PASS: TestIMSPCVDisabled
+--- PASS: TestIMSPCVMintAndApply
+PASS
+ok  tests/ims_charging_vector_test.mko (10863ms)
+
+=== tests/ims_cx_push_test.mko ===
+2026-10-01T16:54:00.213Z   reg: store aor=alice@example.com contact=sip:alice@192.0.2.10:5060 expires=300
+--- PASS: TestIMSCxPprRejectsUnsafeUserData
+2026-10-01T16:54:00.216Z   reg: store aor=alice@example.com contact=sip:alice@192.0.2.10:5060 expires=300
+--- PASS: TestIMSCxPprUpdatesAssociatedAndIfc
+--- PASS: TestIMSCxPushAnswerIsNotRequest
+--- PASS: TestIMSCxPushClientCnPolicy
+--- PASS: TestIMSCxPushDisabledByDefault
+--- PASS: TestIMSCxPushListenPortBounds
+2026-10-01T16:54:00.216Z   reg: store aor=alice@example.com contact=sip:alice@192.0.2.10:5060 expires=300
+2026-10-01T16:54:00.216Z   reg: remove aor=alice@example.com contact=*
+--- PASS: TestIMSCxRtrDeregistersLifecycle
+2026-10-01T16:54:00.216Z   reg: remove aor=nobody@example.com contact=*
+--- PASS: TestIMSCxRtrIdempotentUnknownUser
+--- PASS: TestIMSCxRtrRejectsMalformedIdentity
+PASS
+ok  tests/ims_cx_push_test.mko (10992ms)
+
+=== tests/ims_diameter_errors_test.mko ===
+--- PASS: TestIMSDiameterErrorMap
+PASS
+ok  tests/ims_diameter_errors_test.mko (12013ms)
+
+=== tests/ims_drain_test.mko ===
+--- PASS: TestIMSDrainEnabled
+PASS
+ok  tests/ims_drain_test.mko (11803ms)
+
+=== tests/ims_flow_test.mko ===
+--- PASS: TestIMSFlowConfigurationAndExpiry
+--- PASS: TestIMSFlowMintAndLookup
+--- PASS: TestIMSFlowOutboundRequire
+--- PASS: TestIMSFlowPathWithToken
+PASS
+ok  tests/ims_flow_test.mko (11039ms)
+
+=== tests/ims_identity_test.mko ===
+--- PASS: TestIMSIdentityAssertApply
+--- PASS: TestIMSIdentityPolicyDisabled
+--- PASS: TestIMSIdentityPrivacyApplication
+--- PASS: TestIMSIdentityStripsUntrustedHeaders
+--- PASS: TestIMSIdentityTrustedValidation
+PASS
+ok  tests/ims_identity_test.mko (11319ms)
+
+=== tests/ims_ifc_test.mko ===
+--- PASS: TestIMSIFC3pRegBranchGuard
+--- PASS: TestIMSIFC3pRegBuild
+--- PASS: TestIMSIFCOriginatingForkPrivacy
+--- PASS: TestIMSIFCProfileRejectsUnsafe
+--- PASS: TestIMSIFCProfileTargets
+2026-10-01T16:54:57.790Z   reg: store aor=alice@example.com contact=sip:alice@192.0.2.10 expires=300
+2026-10-01T16:54:57.790Z   reg: store aor=alice@example.com contact=sip:alice@192.0.2.10 expires=0
+--- PASS: TestIMSIFCStateBoundedAndCleared
+2026-10-01T16:54:57.790Z   reg: store aor=alice@example.com contact=sip:alice@192.0.2.10 expires=300
+--- PASS: TestIMSIFCStructuredCriteria
+PASS
+ok  tests/ims_ifc_test.mko (11293ms)
+
+=== tests/ims_ipsec_test.mko ===
+--- PASS: TestIMSIPSecConfigurationAndLookupBounds
+--- PASS: TestIMSIPSecExportDisabledByDefault
+--- PASS: TestIMSIPSecExportRequiresKeysAndProducesJson
+PASS
+ok  tests/ims_ipsec_test.mko (12918ms)
+
+=== tests/ims_lab_test.mko ===
+--- PASS: TestIMSTwoSubscriberLabIsolation
+2026-10-01T16:55:24.776Z   reg: store aor=alice@example.com contact=sip:alice@192.0.2.10:5060 expires=300
+2026-10-01T16:55:24.777Z   reg: store aor=bob@example.com contact=sip:bob@192.0.2.11:5060 expires=300
+--- PASS: TestIMSTwoSubscriberLabRegistrationAndSession
+PASS
+ok  tests/ims_lab_test.mko (14023ms)
+
+=== tests/ims_lifecycle_test.mko ===
+--- PASS: TestIMSAKAAutsRequestsFreshChallenge
+--- PASS: TestIMSAKAVectorTtlConfigurable
+--- PASS: TestIMSLifecycleAorFromPublic
+--- PASS: TestIMSLifecycleApplyPathRoute
+2026-10-01T16:55:37.377Z   reg: store aor=alice@example.com contact=sip:alice@192.0.2.10:5060 expires=300
+2026-10-01T16:55:37.377Z   reg: store aor=bob@example.com contact=sip:bob@192.0.2.11:5060 expires=300
+2026-10-01T16:55:37.378Z   ims: lifecycle aor=alice@example.com state=registered
+--- PASS: TestIMSLifecycleAssociatedRejectsHijackAndInjection
+--- PASS: TestIMSLifecycleCapacityIsBounded
+--- PASS: TestIMSLifecycleDecodeRejectsPoisoned
+--- PASS: TestIMSLifecycleExpiryAndClear
+2026-10-01T16:55:37.379Z   reg: store aor=alice@example.com contact=sip:alice@192.0.2.10 expires=300
+2026-10-01T16:55:37.379Z   reg: store aor=alice2@example.com contact=sip:alice2@192.0.2.11 expires=300
+2026-10-01T16:55:37.379Z   ims: lifecycle aor=alice@example.com state=registered
+2026-10-01T16:55:37.379Z   ims: lifecycle aor=alice2@example.com state=registered
+2026-10-01T16:55:37.379Z   reg: remove aor=alice@example.com contact=sip:alice@192.0.2.10
+2026-10-01T16:55:37.379Z   ims: lifecycle aor=alice@example.com state=deregistered
+--- PASS: TestIMSLifecycleExplicitDeregRemovesIRSMembership
+2026-10-01T16:55:37.379Z   reg: store aor=alice@example.com contact=sip:alice@192.0.2.10 expires=300
+2026-10-01T16:55:37.379Z   reg: store aor=alice2@example.com contact=sip:alice2@192.0.2.11 expires=300
+2026-10-01T16:55:37.379Z   reg: remove aor=alice@example.com contact=*
+--- PASS: TestIMSLifecycleIRSDeregSingle
+2026-10-01T16:55:37.379Z   reg: store aor=alice@example.com contact=sip:alice@192.0.2.10 expires=300
+2026-10-01T16:55:37.379Z   reg: store aor=alice2@example.com contact=sip:alice2@192.0.2.11 expires=300
+2026-10-01T16:55:37.379Z   reg: remove aor=alice@example.com contact=*
+2026-10-01T16:55:37.379Z   reg: remove aor=alice2@example.com contact=*
+--- PASS: TestIMSLifecycleIRSMembersAndDeregAll
+--- PASS: TestIMSLifecycleLrParamIsExact
+--- PASS: TestIMSLifecycleMtTargetPrefersPath
+--- PASS: TestIMSLifecycleMtTargetRejectsCorruptSnapshot
+2026-10-01T16:55:37.380Z   reg: store aor=alice@example.com contact=sip:alice@192.0.2.10:5060 expires=300
+2026-10-01T16:55:37.380Z   reg: remove aor=alice@example.com contact=*
+--- PASS: TestIMSLifecycleNetworkDeregister
+--- PASS: TestIMSLifecyclePathAtRestStripsUnpinned
+--- PASS: TestIMSLifecyclePathExactPin
+--- PASS: TestIMSLifecyclePathHostAllowlistRequiresSourceTrust
+--- PASS: TestIMSLifecyclePathLabOverrideStillNeedsPin
+--- PASS: TestIMSLifecyclePathTrustFailClosed
+2026-10-01T16:55:37.380Z   reg: store aor=alice@example.com contact=sip:alice@192.0.2.10:5060 expires=300
+2026-10-01T16:55:37.380Z   ims: lifecycle aor=alice@example.com state=registered
+2026-10-01T16:55:37.381Z   ims: lifecycle aor=alice@example.com state=deregistered
+--- PASS: TestIMSLifecycleReconcileWithRegistration
+--- PASS: TestIMSLifecycleRejectsUnsafeFields
+--- PASS: TestIMSLifecycleServerMismatch
+--- PASS: TestIMSLifecycleStoreAndFind
+PASS
+ok  tests/ims_lifecycle_test.mko (12575ms)
+
+=== tests/ims_path_test.mko ===
+--- PASS: TestIMSPathDisabled
+--- PASS: TestIMSPathRejectsUnsafeConfig
+--- PASS: TestIMSPathReplacesUntrustedHeader
+PASS
+ok  tests/ims_path_test.mko (12760ms)
+
+=== tests/ims_registration_test.mko ===
+--- PASS: TestIMSAssociatedURIRejectsUnsafeConfig
+--- PASS: TestIMSAssociatedURIValid
+--- PASS: TestIMSServiceRouteDisabled
+--- PASS: TestIMSServiceRouteRejectsUnsafeConfig
+--- PASS: TestIMSServiceRouteValid
+PASS
+ok  tests/ims_registration_test.mko (13018ms)
+
+=== tests/ims_roles_test.mko ===
+--- PASS: TestIMSEarlyDialogTargetSelection
+--- PASS: TestIMSInitialDialogClassification
+--- PASS: TestIMSRelProvMatchOnly
+--- PASS: TestIMSRelProvRecordOnly
+--- PASS: TestIMSRelProvTabMatch
+--- PASS: TestIMSReliableProvisionalPrackMatching
+--- PASS: TestIMSRoleNormalization
+--- PASS: TestIMSRoleRoutingBoundary
+--- PASS: TestIMSRoleSessionBoundary
+--- PASS: TestIMSRoleTargetValidation
+2026-10-01T16:56:17.088Z   reg: store aor=bob@example.com contact=sip:bob@192.0.2.11:5060 expires=300
+2026-10-01T16:56:17.088Z   reg: store aor=expired@example.com contact=sip:expired@192.0.2.12:5060 expires=0
+--- PASS: TestIMSSessionDestinationRegistrationGate
+2026-10-01T16:56:17.088Z   reg: store aor=alice@example.com contact=sip:alice@192.0.2.10:5060 expires=300
+2026-10-01T16:56:17.088Z   reg: store aor=expired@example.com contact=sip:expired@192.0.2.11:5060 expires=0
+--- PASS: TestIMSSessionOriginatorRegistrationGate
+PASS
+ok  tests/ims_roles_test.mko (13841ms)
+
+=== tests/ims_rx_test.mko ===
+--- PASS: TestIMSRxAarWireShape
+--- PASS: TestIMSRxDisabledNoOp
+--- PASS: TestIMSRxEnabledFailsClosedWithoutPeer
+--- PASS: TestIMSRxSessionIdCorrelation
+PASS
+ok  tests/ims_rx_test.mko (12419ms)
+
+=== tests/ims_session_timer_test.mko ===
+--- PASS: TestIMSSessionTimerAbsentSessionHeader
+--- PASS: TestIMSSessionTimerBindAndGlare
+--- PASS: TestIMSSessionTimerBindFromResponse
+--- PASS: TestIMSSessionTimerBuildRefresh
+--- PASS: TestIMSSessionTimerDisabledByDefault
+--- PASS: TestIMSSessionTimerEnsureRefresher
+--- PASS: TestIMSSessionTimerMinimumAndMaximum
+--- PASS: TestIMSSessionTimerPreferredRefresher
+--- PASS: TestIMSSessionTimerRefreshTickNoOp
+--- PASS: TestIMSSessionTimerRefresherOwnershipModes
+--- PASS: TestIMSSessionTimerRejectsAmbiguityAndInjection
+--- PASS: TestIMSSessionTimerValidIntervals
+PASS
+ok  tests/ims_session_timer_test.mko (12241ms)
+
+=== tests/ims_subscriber_service_test.mko ===
+--- PASS: TestIMSSubscriberProviderResponseEnvelope
+--- PASS: TestIMSSubscriberProviderTokenAndBounds
+PASS
+ok  tests/ims_subscriber_service_test.mko (3149ms)
+
+=== tests/ims_subscriber_test.mko ===
+--- PASS: TestIMSSubscriberAuthorizationContract
+--- PASS: TestIMSSubscriberAuthorizationFailsClosed
+--- PASS: TestIMSSubscriberProfileAssociatedURIs
+--- PASS: TestIMSSubscriberProfileAssociatedURIsFailClosed
+--- PASS: TestIMSSubscriberRequestBounds
+PASS
+ok  tests/ims_subscriber_test.mko (11182ms)
+
+=== tests/maf_contract_test.mko ===
+--- PASS: TestMafAuthComparisonAndFramingBoundaries
+--- PASS: TestMafCommandIdentityAndBodyLimits
+--- PASS: TestMafCursorAndBoundedQueryValues
+--- PASS: TestMafEveryHttpRouteIsAllowlisted
+--- PASS: TestMafInboundAnswerMessage
+--- PASS: TestMafInboundAnswerSdpBoundaries
+--- PASS: TestMafInboundAnswerSdpRejectsControls
+--- PASS: TestMafInboundAnswerSdpRequiresMedia
+--- PASS: TestMafInboundAnswerSdpRequiresSessionVersion
+--- PASS: TestMafInboundCallIdentifiers
+--- PASS: TestMafJsonEscapingAndCredentialScopes
+--- PASS: TestMafPresentationControlsCallerIdentity
+--- PASS: TestMafPresentationRejectsUnsafeApiFields
+--- PASS: TestMafRejectsPathConfusionAndUnsafeIdentifiers
+--- PASS: TestMafTypedErrorResponsePreservesWireContract
+--- PASS: TestMafWorkerEndpointAndInviteBoundaries
+--- PASS: TestMafWorkerSipReasonPhrase
+PASS
+ok  tests/maf_contract_test.mko (5501ms)
+
+=== tests/maf_headers_test.mko ===
+--- PASS: TestMAFHeaderPolicyActions
+--- PASS: TestMAFHeaderPolicyGuards
+PASS
+ok  tests/maf_headers_test.mko (13104ms)
+
+=== tests/maf_improvements_test.mko ===
+--- PASS: TestMafApiRouteEvents
+--- PASS: TestMafApiRouteHeaders
+--- PASS: TestMafApiRouteRejectsUnknown
+--- PASS: TestMafApiWsRoute
+--- PASS: TestMafHeadersActionOk
+--- PASS: TestMafHeadersDirectionOk
+--- PASS: TestMafHeadersJsonEscapeDelegates
+--- PASS: TestMafHeadersProtectedHeaders
+--- PASS: TestMafJsonEscapeSpecialChars
+--- PASS: TestMafWorkerAck2xxUsesRemoteTagAndContactTarget
+--- PASS: TestMafWorkerAnswerSdpOk
+--- PASS: TestMafWorkerCachedInviteUnescapesJsonEnvelope
+--- PASS: TestMafWorkerEndpointOk
+--- PASS: TestMafWorkerEnvIntBounds
+--- PASS: TestMafWorkerInboundCachePutUsesBoundedCacheSuccess
+--- PASS: TestMafWorkerInboundCallId
+--- PASS: TestMafWorkerInboundCallIdDeterministic
+--- PASS: TestMafWorkerInboundCallIdDiffersByTenant
+--- PASS: TestMafWorkerInboundCallIdRejectsEmpty
+--- PASS: TestMafWorkerInboundCancelBuilds487
+--- PASS: TestMafWorkerIntText
+--- PASS: TestMafWorkerInviteNumericTargetValid
+--- PASS: TestMafWorkerInviteWithSdp
+--- PASS: TestMafWorkerJsonCompactForExtract
+--- PASS: TestMafWorkerMetricRequiresPromActive
+--- PASS: TestMafWorkerOutboundByeConsumesOwnedDialog
+--- PASS: TestMafWorkerOutboundByeResponseConsumesOwnedDialog
+--- PASS: TestMafWorkerOutboundInviteResponseBridgesInboundAnswer
+--- PASS: TestMafWorkerRouteInviteNumericEndpointWithTransportParam
+--- PASS: TestMafWorkerTenantDefault
+--- PASS: TestMafWorkerTextSafe
+--- PASS: TestMafWorkerTextSafeRejectsControlChars
+PASS
+ok  tests/maf_improvements_test.mko (5526ms)
+
+=== tests/ops_test.mko ===
+sqlite: not linked (rebuild with -DMAKO_HAS_SQLITE -lsqlite3)
+--- PASS: TestDialplanNoRuleKeepsNumbers
+--- PASS: TestProxyAdminSecretComparison
+--- PASS: TestProxyCacheRingCount
+--- PASS: TestProxyClientTransactionMethodCount
+2026-10-01T16:57:31.826Z [INFO] [ops] config-reloaded epoch=5
+--- PASS: TestProxyConfigReloadClearsRuntimeOverrides
+--- PASS: TestProxyMafMetricsExport
+--- PASS: TestViaAddReceivedUsesPacketSourcePort
+PASS
+ok  tests/ops_test.mko (11456ms)
+
+=== tests/outbound_test.mko ===
+--- PASS: TestOutboundAddSupported
+--- PASS: TestOutboundBindingExtendedFields
+--- PASS: TestOutboundFlowTokenMintResolve
+--- PASS: TestOutboundInstanceIdExtraction
+--- PASS: TestOutboundPathUri
+--- PASS: TestOutboundProcessRegisterGated
+--- PASS: TestOutboundResolveFlow
+--- PASS: TestOutboundTokenFromUri
+PASS
+ok  tests/outbound_test.mko (11041ms)
+
+=== tests/ownership_stress_test.mko ===
+--- PASS: TestOwnershipChannelAfterWorkerAndRejectedSend
+--- PASS: TestOwnershipContactArrayCopyAndOverwrite
+PASS
+ok  tests/ownership_stress_test.mko (1939ms)
+
+=== tests/parser_ownership_test.mko ===
+--- PASS: TestValidatorBoundedOwnership
+--- PASS: TestValidatorMalformedOwnership
+PASS
+ok  tests/parser_ownership_test.mko (1947ms)
+
+=== tests/parser_scan_test.mko ===
+--- PASS: TestHeaderScanAliasesAndSingletons
+--- PASS: TestHeaderScanLineLimitsMatchReference
+--- PASS: TestHeaderScanMatchesReferenceForMutations
+PASS
+ok  tests/parser_scan_test.mko (2081ms)
+
+=== tests/proxy_state_test.mko ===
+--- PASS: TestByeResponseCseqIdentifiesTermination
+--- PASS: TestClientTransactionLifecycle
+--- PASS: TestClientTransactionRejectsResponses
+--- PASS: TestClusterOwnerQueryUsesLiveBindings
+--- PASS: TestContactListParsing
+--- PASS: TestDialogByeWithOkReplyStaysTerminated
+--- PASS: TestDialogCacheCleanupRemovesTaggedDestination
+--- PASS: TestDialogLifecycleTeardown
+--- PASS: TestExpiredLegacyBindingIsNotResurrected
+--- PASS: TestForkFinalResponseSelection
+--- PASS: TestForkSelectionAndCancellationState
+--- PASS: TestForkSixxxImmediateAndAuthAggregation
+--- PASS: TestForkSixxxPriority
+--- PASS: TestHeaderInjectionProtection
+--- PASS: TestInviteAckAndCancelConstruction
+--- PASS: TestInviteRetransmitCacheAndCancelIsolation
+--- PASS: TestInviteTimeoutCleanupClearsCallAndDialogState
+--- PASS: TestInviteTwoxxServerTransactionLifecycle
+--- PASS: TestMaxForwardsBounds
+--- PASS: TestPendingByeTransaction
+--- PASS: TestProxyMessageValidation
+--- PASS: TestRegistrationCxAssignmentTypes
+--- PASS: TestRegistrationExpiryAndMultipleBindings
+--- PASS: TestRegistrationExpiryPolicy
+--- PASS: TestResponseViaKeepsCallerHop
+--- PASS: TestRouteListProcessing
+--- PASS: TestServerTransactionAckLifecycle
+--- PASS: TestTransactionReplayExpiry
+--- PASS: TestTransactionReplaySweepExpired
+PASS
+ok  tests/proxy_state_test.mko (2535ms)
+
+=== tests/rfc3261_abnf_test.mko ===
+--- PASS: TestRfc3261CompactHeadersAndQuotedDisplayName
+--- PASS: TestRfc3261HeaderContinuation
+--- PASS: TestRfc3261SingletonHeadersAndMethodCase
+--- PASS: TestRfc3261ViaParameterGrammar
+--- PASS: TestUnsupportedProxyRequireIsRejected
+PASS
+ok  tests/rfc3261_abnf_test.mko (2196ms)
+
+=== tests/rfc3263_test.mko ===
+--- PASS: TestNaptrOrderAndSrvFailoverList
+--- PASS: TestSipSrvSelectionAndCache
+--- PASS: TestSipTargetIpv6Authority
+--- PASS: TestSipTargetRejectsInvalidPorts
+--- PASS: TestSipTransportSelectionMatrix
+PASS
+ok  tests/rfc3263_test.mko (11210ms)
+
+=== tests/rfc_compliance_fix_test.mko ===
+--- PASS: TestCseqMethodValue
+--- PASS: TestCseqNumberValue
+--- PASS: TestLoopDetection
+--- PASS: TestMaxForwardsDecrement
+--- PASS: TestMaxForwardsDefault70
+--- PASS: TestMaxForwardsInvalidReturnsNeg1
+--- PASS: TestMaxForwardsZeroReturnsZero
+--- PASS: TestMethodNotAllowedHasAllow
+--- PASS: TestMethodNotAllowedHasToTag
+--- PASS: TestNoProxyRequire
+--- PASS: TestOptionsResponseHasAllow
+--- PASS: TestOptionsResponseHasToTag
+--- PASS: TestPopRoute
+--- PASS: TestPopRouteComma
+--- PASS: TestProxyRequireUnsupported
+--- PASS: TestRSeqInvalid
+--- PASS: TestRSeqParsing
+--- PASS: TestRouteAbsent
+--- PASS: TestRoutePresent
+--- PASS: TestSipRespWithTag
+--- PASS: TestTransactionKeyStable
+PASS
+ok  tests/rfc_compliance_fix_test.mko (2581ms)
+
+=== tests/routing_dispatch_test.mko ===
+--- PASS: TestDispatchHashProvePositiveCount
+--- PASS: TestDispatchInlineChanIsCap4
+--- PASS: TestDispatchRaceFirstPrefersHealthy
+--- PASS: TestDispatchRaceFirstSkipsDownMember
+PASS
+ok  tests/routing_dispatch_test.mko (10374ms)
+
+=== tests/rtpengine_sdp_test.mko ===
+--- PASS: TestRTPEngineSDPBodyExtraction
+--- PASS: TestRTPEngineSDPContentType
+--- PASS: TestRTPEngineSDPMissingMedia
+--- PASS: TestRTPEngineSDPValidBody
+PASS
+ok  tests/rtpengine_sdp_test.mko (10645ms)
+
+=== tests/rtpengine_test.mko ===
+--- PASS: TestRTPEngineAnswerCarriesDialogTags
+--- PASS: TestRTPEngineControlTimeoutFailsClosed
+--- PASS: TestRTPEngineDialogTagBounds
+--- PASS: TestRTPEngineEnvironmentOverrides
+--- PASS: TestRTPEngineLiveNgControlLoopback
+--- PASS: TestRTPEngineMalformedResponseFailsClosed
+--- PASS: TestRTPEngineOfferCarriesFromTag
+--- PASS: TestRTPNodeListParsing
+--- PASS: TestRTPProfileFlags
+PASS
+ok  tests/rtpengine_test.mko (10866ms)
+
+=== tests/security_hardening_test.mko ===
+--- PASS: TestAuthDelay1000After6Failures
+--- PASS: TestAuthDelay2000After10Failures
+--- PASS: TestAuthDelay500After3Failures
+--- PASS: TestAuthDelayZeroBelow3Failures
+--- PASS: TestAuthFailClearResetsDelay
+--- PASS: TestDigestUriHostCaseInsensitive
+--- PASS: TestDigestUriMatchAllowed
+--- PASS: TestDigestUriMismatchBlocked
+--- PASS: TestEnumScannerCommaInjection
+--- PASS: TestEnumScannerDifferentIpsAreIndependent
+--- PASS: TestEnumScannerDuplicateUsernameNotCounted
+--- PASS: TestEnumScannerTriggersAtThreshold
+--- PASS: TestEnumScannerUnderThreshold
+--- PASS: TestFraudPrefixDefaultList
+--- PASS: TestFraudPrefixEmptyDest
+--- PASS: TestFraudPrefixLegitNotBlocked
+--- PASS: TestNonceNcHexParse
+--- PASS: TestProxyProtocolV1EmptyRemainder
+--- PASS: TestProxyProtocolV1Malformed
+--- PASS: TestProxyProtocolV1Tcp4
+--- PASS: TestProxyProtocolV1Tcp6
+--- PASS: TestProxyProtocolV1Unknown
+--- PASS: TestScannerDetectionKnownAgents
+--- PASS: TestScannerDetectionLegitAgent
+--- PASS: TestScannerDetectionNoUA
+--- PASS: TestScannerSippNotBlocked
+PASS
+ok  tests/security_hardening_test.mko (2036ms)
+
+=== tests/stream_ownership_test.mko ===
+--- PASS: TestLifecycleFieldsAndNatOwnership
+2026-10-01T16:58:51.908Z ownership probe
+2026-10-01T16:58:51.909Z [INFO] [ownership] probe
+2026-10-01T16:58:51.909Z [INFO] [ownership] probe ok=1
+--- PASS: TestLogTimestampOwnership
+--- PASS: TestStreamAndIMSRefreshBoundedOwnership
+PASS
+ok  tests/stream_ownership_test.mko (10504ms)
+
+=== tests/stream_transport_test.mko ===
+--- PASS: TestPeerSplitEmpty
+--- PASS: TestPeerSplitIPv4
+--- PASS: TestPeerSplitIPv4NoPort
+--- PASS: TestPeerSplitIPv6Bracket
+--- PASS: TestPeerSplitIPv6NoPort
+--- PASS: TestPeerSplitPortBounds
+--- PASS: TestProxyProtocolDisabledByDefault
+--- PASS: TestProxyProtocolLineTooLong
+--- PASS: TestProxyProtocolMissingFields
+--- PASS: TestProxyProtocolPort0Rejected
+--- PASS: TestStreamAppendEmpty
+--- PASS: TestStreamAppendOverCap
+--- PASS: TestStreamAppendUnderCap
+--- PASS: TestStreamBinaryBodyAndIncompleteTail
+--- PASS: TestStreamEveryFragmentBoundary
+--- PASS: TestStreamHasComplete
+--- PASS: TestStreamMessageSurvivesBufferReplacement
+--- PASS: TestStreamNextMsgComplete
+--- PASS: TestStreamNextMsgIncomplete
+--- PASS: TestStreamNextMsgTwoMessages
+--- PASS: TestStreamRetainedPipelineFrames
+PASS
+ok  tests/stream_transport_test.mko (1587ms)
+
+mako test: 56 passed, 0 failed

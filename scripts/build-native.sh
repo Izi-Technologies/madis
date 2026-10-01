@@ -7,8 +7,6 @@ SOURCE="${1:-main.mko}"
 OUTPUT="${2:-main}"
 CC_BIN="${CC:-cc}"
 
-bash "$ROOT/scripts/check-makori-version.sh" "$MAKO_BIN"
-
 RUNTIME_DIR="${MAKO_RUNTIME_PATH:-${MAKO_RUNTIME:-}}"
 if [[ -z "$RUNTIME_DIR" ]]; then
   for candidate in \
@@ -21,6 +19,7 @@ if [[ -z "$RUNTIME_DIR" ]]; then
   done
 fi
 [[ -d "$RUNTIME_DIR" ]] || { echo "Mako runtime directory not found" >&2; exit 1; }
+MAKO_RUNTIME="$RUNTIME_DIR" bash "$ROOT/scripts/check-makori-version.sh" "$MAKO_BIN"
 
 GENERATED="${SOURCE%.mko}.c"
 BUILD_TMP=$(mktemp -d "${TMPDIR:-/tmp}/madis-native.XXXXXX")

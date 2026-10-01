@@ -432,10 +432,7 @@ fn diameter_destination_realm() -> string {
 
 fn diameter_timeout_ms() -> int {
     let mut wait_ms = 1000
-    match parse_int(env_get_or("SIP_DIAMETER_TIMEOUT_MS", "1000")) {
-        Ok(v) => { wait_ms = v }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(env_get_or("SIP_DIAMETER_TIMEOUT_MS", "1000")) { wait_ms = v }
     if wait_ms < 50 { wait_ms = 50 }
     if wait_ms > 10000 { wait_ms = 10000 }
     return wait_ms
@@ -449,10 +446,7 @@ fn diameter_service_context() -> string {
 
 fn diameter_subscription_type() -> int {
     let mut value = 0
-    match parse_int(env_get_or("SIP_DIAMETER_SUBSCRIPTION_TYPE", "0")) {
-        Ok(v) => { value = v }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(env_get_or("SIP_DIAMETER_SUBSCRIPTION_TYPE", "0")) { value = v }
     if value < 0 || value > 3 { return 0 }
     return value
 }
@@ -514,11 +508,11 @@ fn diameter_ccr_body(cid: string, caller: string, callee: string, kind: string, 
     if len(parameter) > 0 { body = body + parameter }
     let service_id = env_get_or("SIP_DIAMETER_SERVICE_ID", "")
     if len(service_id) > 0 {
-        match parse_int(service_id) { Ok(v) => { if v > 0 { body = body + madis_diameter_avp_u32(439, v) } } Err(_) => {} }
+        if let Ok(v) = parse_int(service_id) { if v > 0 { body = body + madis_diameter_avp_u32(439, v) } }
     }
     if request_type == 1 {
         let requested = env_get_or("SIP_DIAMETER_REQUESTED_SECONDS", "")
-        match parse_int(requested) { Ok(v) => { let unit = diameter_cc_time_group(437, v); if len(unit) > 0 { body = body + unit } } Err(_) => {} }
+        if let Ok(v) = parse_int(requested) { let unit = diameter_cc_time_group(437, v); if len(unit) > 0 { body = body + unit } }
     }
     if (request_type == 2 || request_type == 3) && used_seconds > 0 {
         let used = diameter_cc_time_group(446, used_seconds)
@@ -527,7 +521,7 @@ fn diameter_ccr_body(cid: string, caller: string, callee: string, kind: string, 
     if request_type == 3 { body = body + diameter_termination_cause() }
     if request_type == 4 {
         let action = env_get_or("SIP_DIAMETER_REQUESTED_ACTION", "0")
-        match parse_int(action) { Ok(v) => { if v >= 0 && v <= 4 { body = body + madis_diameter_avp_u32(436, v) } } Err(_) => {} }
+        if let Ok(v) = parse_int(action) { if v >= 0 && v <= 4 { body = body + madis_diameter_avp_u32(436, v) } }
     }
     return body
 }
@@ -960,10 +954,7 @@ fn diameter_peer_preferred_index(cache: CMap) -> int {
 // Skip dead peers for N ms after consecutive failures (env-driven, no hardcode).
 fn diameter_peer_backoff_ms() -> int {
     let mut ms = 5000
-    match parse_int(env_get_or("SIP_DIAMETER_PEER_BACKOFF_MS", "5000")) {
-        Ok(v) => { ms = v }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(env_get_or("SIP_DIAMETER_PEER_BACKOFF_MS", "5000")) { ms = v }
     if ms < 0 { ms = 0 }
     if ms > 300000 { ms = 300000 }
     return ms
@@ -971,10 +962,7 @@ fn diameter_peer_backoff_ms() -> int {
 
 fn diameter_max_inflight() -> int {
     let mut n = 64
-    match parse_int(env_get_or("SIP_DIAMETER_MAX_INFLIGHT", "64")) {
-        Ok(v) => { n = v }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(env_get_or("SIP_DIAMETER_MAX_INFLIGHT", "64")) { n = v }
     if n < 1 { n = 1 }
     if n > 4096 { n = 4096 }
     return n
@@ -1006,10 +994,7 @@ fn diameter_peer_mark_failure(cache: CMap, index: int) -> int {
     let fkey = diameter_peer_fail_key(index)
     let mut fails = 0
     if cmap_has(cache, fkey) == 1 {
-        match parse_int(cmap_get(cache, fkey)) {
-            Ok(v) => { fails = v }
-            Err(_) => {}
-        }
+        if let Ok(v) = parse_int(cmap_get(cache, fkey)) { fails = v }
     }
     fails = fails + 1
     cmap_set(cache, fkey, string(fails))
@@ -1029,10 +1014,7 @@ fn diameter_peer_mark_success(cache: CMap, index: int) -> int {
 fn diameter_inflight_begin(cache: CMap) -> int {
     let mut n = 0
     if cmap_has(cache, "diameter.inflight") == 1 {
-        match parse_int(cmap_get(cache, "diameter.inflight")) {
-            Ok(v) => { n = v }
-            Err(_) => {}
-        }
+        if let Ok(v) = parse_int(cmap_get(cache, "diameter.inflight")) { n = v }
     }
     if n >= diameter_max_inflight() { return 0 }
     cmap_set(cache, "diameter.inflight", string(n + 1))
@@ -1042,10 +1024,7 @@ fn diameter_inflight_begin(cache: CMap) -> int {
 fn diameter_inflight_end(cache: CMap) -> int {
     let mut n = 0
     if cmap_has(cache, "diameter.inflight") == 1 {
-        match parse_int(cmap_get(cache, "diameter.inflight")) {
-            Ok(v) => { n = v }
-            Err(_) => {}
-        }
+        if let Ok(v) = parse_int(cmap_get(cache, "diameter.inflight")) { n = v }
     }
     if n > 0 { cmap_set(cache, "diameter.inflight", string(n - 1)) }
     return 1
@@ -1162,10 +1141,7 @@ fn diameter_peer_open_locked(cache: CMap, application: int, realm: string) -> in
         let mut use_pos = start + attempt
         while use_pos >= count { use_pos = use_pos - count }
         let mut use = -1
-        match parse_int(str_trim_space(items[use_pos])) {
-            Ok(v) => { use = v }
-            Err(_) => {}
-        }
+        if let Ok(v) = parse_int(str_trim_space(items[use_pos])) { use = v }
         if use >= 0 && diameter_peer_is_backed_off(cache, use) == 0 {
             let entry = diameter_peer_entry_at(use)
             let host = diameter_peer_entry_host(entry)

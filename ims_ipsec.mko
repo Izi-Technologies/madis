@@ -15,9 +15,8 @@ fn ims_ipsec_export_enabled() -> int {
 
 fn ims_ipsec_spi_base() -> int {
     let mut base = 1000
-    match parse_int(env_get_or("SIP_IMS_IPSEC_SPI_BASE", "1000")) {
-        Ok(v) => { base = v }
-        Err(_) => {}
+    if let Ok(v) = parse_int(env_get_or("SIP_IMS_IPSEC_SPI_BASE", "1000")) {
+        base = v
     }
     if base < 256 { base = 256 }
     if base > 2147483646 { base = 2147483646 }
@@ -26,9 +25,8 @@ fn ims_ipsec_spi_base() -> int {
 
 fn ims_ipsec_port_c() -> int {
     let mut p = 5060
-    match parse_int(env_get_or("SIP_IMS_IPSEC_PORT_C", "5060")) {
-        Ok(v) => { p = v }
-        Err(_) => {}
+    if let Ok(v) = parse_int(env_get_or("SIP_IMS_IPSEC_PORT_C", "5060")) {
+        p = v
     }
     if p < 1 || p > 65535 { return 5060 }
     return p
@@ -36,9 +34,8 @@ fn ims_ipsec_port_c() -> int {
 
 fn ims_ipsec_port_s() -> int {
     let mut p = 5061
-    match parse_int(env_get_or("SIP_IMS_IPSEC_PORT_S", "5061")) {
-        Ok(v) => { p = v }
-        Err(_) => {}
+    if let Ok(v) = parse_int(env_get_or("SIP_IMS_IPSEC_PORT_S", "5061")) {
+        p = v
     }
     if p < 1 || p > 65535 { return 5061 }
     return p

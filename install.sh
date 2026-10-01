@@ -27,7 +27,7 @@ MADIS_APP_TOKEN="${MADIS_APP_TOKEN:-}"
 MADIS_MODULE_TOKEN="${MADIS_MODULE_TOKEN:-}"
 MADIS_ADMIN_PASSWORD="${MADIS_ADMIN_PASSWORD:-}"
 MADIS_VERSION="${MADIS_VERSION:-}"
-MADIS_MAKO_VERSION="0.6.32"
+MADIS_MAKO_VERSION="0.6.38"
 MADIS_CLI_DIR="${MADIS_CLI_DIR:-/usr/local/bin}"
 
 # ── colors ───────────────────────────────────────────────────────────────────
@@ -670,14 +670,14 @@ if [ -f "$SCRIPT_DIR/main" ]; then
 elif [ -f "$MADIS_INSTALL_DIR/main.mko" ]; then
     MADIS_MAKO_BIN="${MADIS_MAKO_BIN:-mako}"
     if ! command -v "$MADIS_MAKO_BIN" >/dev/null 2>&1; then
-        fail "Makori 0.6.32 is required to build the SIP worker; install it or provide MADIS_MAKO_BIN."
+        fail "Makori 0.6.38 is required to build the SIP worker; install it or provide MADIS_MAKO_BIN."
     fi
-    bash "$SCRIPT_DIR/scripts/check-makori-version.sh" "$MADIS_MAKO_BIN" \
-        || fail "Makori 0.6.32 is required (found: $($MADIS_MAKO_BIN --version 2>/dev/null || unknown))."
     MADIS_MAKO_RUNTIME="${MAKO_RUNTIME:-/usr/local/share/mako/runtime}"
     [ -d "$MADIS_MAKO_RUNTIME" ] || MADIS_MAKO_RUNTIME="${HOME}/.local/share/mako/runtime"
     [ -d "$MADIS_MAKO_RUNTIME" ] || fail "Mako runtime not found; set MAKO_RUNTIME."
-    info "Building Madis SIP worker with Makori 0.6.32..."
+    MAKO_RUNTIME="$MADIS_MAKO_RUNTIME" bash "$SCRIPT_DIR/scripts/check-makori-version.sh" "$MADIS_MAKO_BIN" \
+        || fail "Makori with the #74–#77 ownership fixes and its matching runtime is required (pinned commit c2a2d38)."
+    info "Building Madis SIP worker with Makori 0.6.38..."
     (cd "$MADIS_INSTALL_DIR" && MAKO_BIN="$MADIS_MAKO_BIN" MAKO_RUNTIME="$MADIS_MAKO_RUNTIME" \
         bash scripts/build-native.sh main.mko madis)
     chmod +x "$MADIS_INSTALL_DIR/madis"
@@ -693,18 +693,18 @@ if [ -f "$SCRIPT_DIR/admin-bin" ]; then
 elif [ -f "$MADIS_INSTALL_DIR/admin/main.mko" ]; then
     MADIS_MAKO_BIN="${MADIS_MAKO_BIN:-mako}"
     if command -v "$MADIS_MAKO_BIN" >/dev/null 2>&1; then
-        bash "$SCRIPT_DIR/scripts/check-makori-version.sh" "$MADIS_MAKO_BIN" \
-            || fail "Makori 0.6.32 is required to build the WebUI (found: $($MADIS_MAKO_BIN --version 2>/dev/null || unknown))."
         info "Building Mako SIP WebUI with ${MADIS_MAKO_BIN}..."
         MADIS_MAKO_RUNTIME="${MAKO_RUNTIME:-/usr/local/share/mako/runtime}"
         [ -d "$MADIS_MAKO_RUNTIME" ] || MADIS_MAKO_RUNTIME="${HOME}/.local/share/mako/runtime"
+        MAKO_RUNTIME="$MADIS_MAKO_RUNTIME" bash "$SCRIPT_DIR/scripts/check-makori-version.sh" "$MADIS_MAKO_BIN" \
+            || fail "Makori with the #74–#77 ownership fixes and its matching runtime is required to build the WebUI (pinned commit c2a2d38)."
         (cd "$MADIS_INSTALL_DIR" && MAKO_BIN="$MADIS_MAKO_BIN" MAKO_RUNTIME="$MADIS_MAKO_RUNTIME" \
             bash scripts/build-native.sh admin/main.mko admin-bin)
         chmod +x "$MADIS_INSTALL_DIR/admin-bin"
         info "Built WebUI binary."
     else
         warn "Mako compiler not found; WebUI source was installed but admin-bin was not built."
-        warn "Install Makori 0.6.32 or set MADIS_MAKO_BIN, then build admin/main.mko."
+        warn "Install Makori 0.6.38 or set MADIS_MAKO_BIN, then build admin/main.mko."
     fi
 fi
 
@@ -967,7 +967,7 @@ echo "    $MADIS_CONF_DIR/madis.env"
 echo ""
 echo "  ── Next steps ─────────────────────────"
 echo ""
-echo "  Build from source (requires Makori 0.6.32):"
+echo "  Build from source (requires Makori 0.6.38):"
 echo "    cd $MADIS_INSTALL_DIR"
 echo "    MAKO_BIN=mako MAKO_RUNTIME=/path/to/mako/runtime ./scripts/build-native.sh main.mko madis"
 echo ""

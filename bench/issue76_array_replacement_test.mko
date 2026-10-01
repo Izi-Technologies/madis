@@ -1,0 +1,23 @@
+// Run from an isolated directory to avoid importing neighboring benchmarks.
+fn copied_config(values: []string) -> []string {
+    let mut result = make([]string, 3)
+    result[0] = values[0]
+    result[1] = values[1]
+    result[2] = values[2]
+    return result
+}
+
+fn TestStringArrayReplacementOwnership() {
+    let mut i = 0
+    while i < 100 {
+        let mut cfg = make([]string, 3)
+        cfg[0] = "0"
+        cfg[1] = "127.0.0.1"
+        cfg[2] = "2223"
+        cfg = copied_config(cfg)
+        assert_eq_str(cfg[0], "0")
+        assert_eq_str(cfg[1], "127.0.0.1")
+        assert_eq_str(cfg[2], "2223")
+        i = i + 1
+    }
+}

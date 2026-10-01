@@ -6,18 +6,17 @@ This README is an orientation guide, not a complete feature matrix. The linked d
 
 ## Version
 
-**v0.7.4** — source builds require Makori 0.6.32 or later. CI and releases pin
-`1a75d53f15e59bf1a5f58eb3e14d75180c7d82d7` with its matching runtime.
+**v0.7.4** — source builds require Makori 0.6.38 with the issues #74–#77 ownership fixes (or a later compiler that passes the ownership probe). CI and releases pin
+`c2a2d38212903b981f967c7023c5fe07744e1d71` with its matching runtime.
 Pure Mako: zero `extern "C"` functions, no C bridge code.
 
-This release adopts structured `crew:all` process nurseries, the 0.6.32
-compiler pin (inline small channels, memset elision, channel-drop safety),
-the 0.6.31 JSON/ownership fixes, SIGPIPE protection, and incomplete-benchmark
-rejection. The bounded ownership fixture passes ASan, UBSan and Linux
-LeakSanitizer on arm64 and x86_64. Sustained-traffic memory behavior is
-tracked separately; see the
-[0.6.32 validation report](docs/makori-0.6.32-validation.md) and the prior
-[0.6.31 report](docs/makori-0.6.31-validation.md).
+The compiler pin adopts Makori 0.6.38 reference-counted strings, ownership
+fixes, and worker-pool stack safety. Existing crew policies, actors, inline
+channels, and SIP behavior remain covered by the contract suite. Compiler and
+runtime must come from the same release: the string representation changed.
+See the [retained-string fix integration](docs/makori-string-ownership-integration.md) for the current compiler pin and checks.
+See the [0.6.38 validation report](docs/makori-0.6.38-validation.md) for upgrade
+results and remaining production checks.
 
 ## Current implementation
 
@@ -105,7 +104,7 @@ docker compose up -d --build
 
 ### Source install
 
-For a Linux host with Makori 0.6.32 or later and the matching runtime:
+For a Linux host with the pinned Makori ownership fix and matching runtime:
 
 ```sh
 sudo ./install.sh
@@ -380,7 +379,7 @@ The machine API is served by the standalone WebUI at `/admin/api/v1/`. Bearer-to
 
 ## Build and test
 
-The supported source entry point is [`main.mko`](main.mko). [`sipproxy_full.mko`](sipproxy_full.mko) is a legacy monolithic reference and is not the deployment target. The codebase is pure Mako with no C bridge code; all composite-key maps, UDP reuseport, TLS server pool, base64url, and JWT custom header support are Mako builtins. Tests run without linking any C code. Builds and CI require Makori `0.6.32` or later with its matching runtime; do not mix compiler/runtime versions when generating native C.
+The supported source entry point is [`main.mko`](main.mko). [`sipproxy_full.mko`](sipproxy_full.mko) is a legacy monolithic reference and is not the deployment target. The codebase is pure Mako with no C bridge code; all composite-key maps, UDP reuseport, TLS server pool, base64url, and JWT custom header support are Mako builtins. Tests run without linking any C code. Builds and CI require the pinned Makori `0.6.38` ownership fix (or a later compiler that passes the ownership probe) with its matching runtime; do not mix compiler/runtime versions when generating native C.
 
 ```sh
 MAKO_BIN=/path/to/mako \
@@ -392,4 +391,4 @@ MAKO_RUNTIME=/path/to/mako/runtime \
   ./scripts/ci.sh
 ```
 
-The CI script checks Mako syntax/lint, Mako tests, native links, schemas, shell syntax, Python SDK compilation, and the default HSS/media adapter tests. All 49 Mako test files pass on the 0.6.32 C backend, including crew-policy, actor, arena, inline-channel, and parallel-fork contracts. The ownership gate uses ASan/UBSan and enables LeakSanitizer for the bounded ownership fixture on Linux. It does not replace external SIP, IMS, Diameter, media, or carrier interoperability testing. See [`docs/testing.md`](docs/testing.md) for opt-in wire, worker-backed, Docker, load, and recovery checks.
+The CI script checks Mako syntax/lint, Mako tests, native links, schemas, shell syntax, Python SDK compilation, and the default HSS/media adapter tests. The 55 Mako test files cover crew-policy, actor, arena, inline-channel, and parallel-fork contracts. The ownership gate uses ASan/UBSan and enables LeakSanitizer for the bounded ownership fixture on Linux. It does not replace external SIP, IMS, Diameter, media, or carrier interoperability testing. See [`docs/testing.md`](docs/testing.md) for opt-in wire, worker-backed, Docker, load, and recovery checks.

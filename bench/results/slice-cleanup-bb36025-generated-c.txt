@@ -1,0 +1,62 @@
+void TestCompilerCryptoTemporaryOwnership(void) {
+    mako_trace_enter("TestCompilerCryptoTemporaryOwnership", "/private/tmp/madis-bb36025-emitted/main.mko", 9);
+#line 13 "/private/tmp/madis-bb36025-emitted/main.mko"
+    MakoString cid = mako_str_from_cstr("call-id");
+#line 14 "/private/tmp/madis-bb36025-emitted/main.mko"
+    MakoString tag = mako_str_from_cstr("from-tag");
+#line 15 "/private/tmp/madis-bb36025-emitted/main.mko"
+    MakoString __mako_s_6 = mako_str_concat(mako_str_view("madis.b2bua.key|", 16), cid);
+    MakoString __mako_s_7 = mako_str_concat_own(__mako_s_6, mako_str_view("|", 1));
+    MakoString __mako_s_8 = mako_str_concat_own(__mako_s_7, tag);
+    MakoString input = __mako_s_8;
+#line 16 "/private/tmp/madis-bb36025-emitted/main.mko"
+    MakoString __mako_sh_9 = mako_sha256_hex(input);
+    MakoString digest = __mako_sh_9;
+#line 17 "/private/tmp/madis-bb36025-emitted/main.mko"
+    MakoString __mako_sl_10 = mako_str_slice(digest, 0, 32);
+    MakoString expected = __mako_sl_10;
+#line 18 "/private/tmp/madis-bb36025-emitted/main.mko"
+    int64_t i = 0;
+#line 19 "/private/tmp/madis-bb36025-emitted/main.mko"
+    while (1) {
+        if (!((i < 100))) break;
+#line 20 "/private/tmp/madis-bb36025-emitted/main.mko"
+        MakoString __mako_r_11 = compiler_crypto_key(cid, tag);
+        MakoString key = __mako_r_11;
+#line 21 "/private/tmp/madis-bb36025-emitted/main.mko"
+        mako_assert_eq_str(key, expected);
+#line 22 "/private/tmp/madis-bb36025-emitted/main.mko"
+        MakoString __mako_s_12 = mako_str_concat(mako_str_view("madis.b2bua.key|", 16), cid);
+        MakoString __mako_s_13 = mako_str_concat_own(__mako_s_12, mako_str_view("|", 1));
+        MakoString __mako_s_14 = mako_str_concat_own(__mako_s_13, tag);
+        MakoString __mako_sa_15 = __mako_s_14;
+        MakoString __mako_sh_16 = mako_sha256_hex(__mako_sa_15);
+        MakoString __mako_sl_17 = mako_str_slice(__mako_sh_16, 0, 32);
+        mako_str_free(__mako_sh_16);
+        MakoString __mako_s_18 = mako_str_concat(mako_str_view("call-in-", 8), __mako_sl_17);
+        MakoString chained = __mako_s_18;
+#line 23 "/private/tmp/madis-bb36025-emitted/main.mko"
+        MakoString __mako_s_19 = mako_str_concat(mako_str_view("call-in-", 8), expected);
+        MakoString expected_chained = __mako_s_19;
+#line 24 "/private/tmp/madis-bb36025-emitted/main.mko"
+        mako_assert_eq_str(chained, expected_chained);
+#line 25 "/private/tmp/madis-bb36025-emitted/main.mko"
+        i = mako_wrap_add_i64(i, 1);
+        mako_str_free(expected_chained);
+        mako_str_free(chained);
+        mako_str_free(__mako_sa_15);
+        mako_str_free(key);
+    }
+#line 28 "/private/tmp/madis-bb36025-emitted/main.mko"
+    mako_assert_eq(mako_str_len(digest), 64);
+#line 29 "/private/tmp/madis-bb36025-emitted/main.mko"
+    MakoString __mako_sl_20 = mako_str_slice(digest, 0, 32);
+    mako_assert_eq_str(__mako_sl_20, expected);
+    mako_str_free(digest);
+    mako_str_free(input);
+    mako_str_free(tag);
+    mako_str_free(cid);
+    mako_trace_exit("TestCompilerCryptoTemporaryOwnership");
+}
+
+#line 1 "<mako-codegen>"

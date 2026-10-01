@@ -4,7 +4,7 @@ The `admin/` directory contains the standalone Mako WebUI and the machine API ga
 
 ## Build and run
 
-Makori 0.6.32 is required:
+Makori 0.6.38 is required:
 
 ```sh
 MAKO_BIN=/path/to/mako MAKO_RUNTIME=/path/to/mako/runtime \

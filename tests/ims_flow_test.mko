@@ -11,6 +11,21 @@ fn TestIMSFlowMintAndLookup() {
     assert_eq(if len(value) > 0 { 1 } else { 0 }, 1)
     assert_eq_str(ims_flow_conn(value), "UDP|192.0.2.10|5060")
     assert_eq(ims_flow_touch(cache, token), 1)
+    let original_fields = ims_flow_fields(value)
+    let mut refreshes = 0
+    while refreshes < 100 {
+        assert_eq(ims_flow_touch(cache, token), 1)
+        let refreshed = ims_flow_fields(ims_flow_get(cache, token))
+        let mut field = 0
+        while field < 4 {
+            assert_eq_str(refreshed[field], original_fields[field])
+            field = field + 1
+        }
+        refreshes = refreshes + 1
+    }
+    // The retained snapshot remains valid after repeated cache replacement.
+    assert_eq_str(ims_flow_conn(value), "UDP|192.0.2.10|5060")
+    assert_eq_str(ims_flow_path_uri(value), "sip:pcscf.example.com;lr")
     assert_eq_str(ims_flow_by_conn(cache, "UDP|192.0.2.10|5060"), token)
     assert_eq_str(ims_flow_token_from_uri("<sip:pcscf.example.com;lr;ob;ft=" + token + ">"), token)
     let route_msg = "OPTIONS sip:pcscf.example.com SIP/2.0\r\nRoute: <sip:pcscf.example.com;lr;ob;ft=" + token + ">\r\nContent-Length: 0\r\n\r\n"

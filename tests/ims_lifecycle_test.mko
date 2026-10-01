@@ -350,3 +350,18 @@ fn TestIMSLifecycleServerMismatch() {
     assert_eq(ims_lifecycle_server_mismatch(reg, "nobody@example.com", "sip:scscf.example.com"), 0)
     ims_lifecycle_test_reset_env()
 }
+
+fn TestIMSLifecycleMtTargetRejectsCorruptSnapshot() {
+    ims_lifecycle_test_reset_env()
+    let reg = cmap_new()
+    let aor = "snapshot@example.com"
+    let contact = "sip:snapshot@192.0.2.11:5060"
+    assert_eq(ims_lifecycle_store(reg, aor, aor, "sip:snapshot@example.com", contact, "UDP", 300, "192.0.2.11", 5060, "", "", "sip:scscf.example.com"), 1)
+    let key = ims_lifecycle_key(aor)
+    let original = cmap_get(reg, key)
+    assert_eq_str(ims_lifecycle_mt_target(reg, aor), contact + "|UDP")
+    cmap_set(reg, key, str_replace(original, contact, "http://invalid.example.com"))
+    assert_eq_str(ims_lifecycle_mt_target(reg, aor), "")
+    cmap_set(reg, key, str_replace(original, "|registered", "|deregistered"))
+    assert_eq_str(ims_lifecycle_mt_target(reg, aor), "")
+}

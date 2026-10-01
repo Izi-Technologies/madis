@@ -1,0 +1,160 @@
+{
+  "description": "Thirty-second follow-up, 1,000 CPS, OpenSIPS first then Madis. Both invalid; shared production host.",
+  "runs": [
+    {
+      "kind": "madis",
+      "binary_sha256": "45741f22e8b6f7ce7bd18d5718b481e719dafa5830c051c64f583b84ef7c6711",
+      "proxy_command": [
+        "/tmp/madis-opensips.6Xq9rD/madis-owned-release"
+      ],
+      "system": "Linux-6.8.0-136-generic-x86_64-with-glibc2.39",
+      "cpu_affinity": {
+        "proxy": 2,
+        "caller": 3,
+        "callee": 4
+      },
+      "fixture_sha256": {
+        "compare_opensips.py": "d44f5465262af739474686c46a5703b51b4b5e750435220a867bc5c23803e4b6",
+        "compare_uac.xml": "473c5676afc0703782280103b1d3e7ab2bebd00d195039a3a28518807738f6ca",
+        "compare_uas.xml": "e42e60a453eaada25522d397c84e7d962dfdf3d1ab41b12743ec5839ebd35f7e",
+        "opensips.cfg.in": "80e7ad96203e716630987a7687ed3100b8eb3cda339e957e5c3c1b608295309d"
+      },
+      "offered_cps": 1000,
+      "expected_calls": 30000,
+      "elapsed_seconds": 45.08764946553856,
+      "caller_exit": 255,
+      "callee_exit": 255,
+      "socket_samples": {
+        "15060": {
+          "sampled_max_rx_bytes": 400000,
+          "drops": 13401
+        },
+        "15070": {
+          "sampled_max_rx_bytes": 185600,
+          "drops": 0
+        },
+        "15071": {
+          "sampled_max_rx_bytes": 326080,
+          "drops": 2
+        }
+      },
+      "generator_socket_drops": 2,
+      "sipp_requested_buffer_bytes": 1048576,
+      "host_cpu_during_caller": {
+        "cpu2": {
+          "busy_fraction": 0.7106116774791473,
+          "steal_fraction": 0
+        },
+        "cpu3": {
+          "busy_fraction": 0.23118544023610427,
+          "steal_fraction": 0
+        },
+        "cpu4": {
+          "busy_fraction": 0.21613212063188128,
+          "steal_fraction": 0
+        }
+      },
+      "caller": {
+        "SuccessfulCall(C)": 27839,
+        "FailedCall(C)": 2156,
+        "Retransmissions(C)": 8369,
+        "WatchdogMajor(C)": 0
+      },
+      "callee": {
+        "SuccessfulCall(C)": 28064,
+        "FailedCall(C)": 1820,
+        "Retransmissions(C)": 3892,
+        "WatchdogMajor(C)": 0
+      },
+      "rtt_samples": 29995,
+      "valid": false,
+      "invite_rtt_ms": {
+        "0.5": 96.001,
+        "0.95": 653.005,
+        "0.99": 1643.01
+      }
+    },
+    {
+      "kind": "opensips",
+      "binary_sha256": "2f233c7b2e0e68ae11791b9bb4f13bb341f56bd8d23216a29ec33246a5317b08",
+      "proxy_command": [
+        "/tmp/madis-opensips.6Xq9rD/opensips/usr/sbin/opensips",
+        "-F",
+        "-m",
+        "256",
+        "-M",
+        "16",
+        "-f",
+        "/tmp/madis-opensips.6Xq9rD/owned-long-opensips-1000/opensips.cfg",
+        "-w",
+        "/tmp/madis-opensips.6Xq9rD/owned-long-opensips-1000"
+      ],
+      "system": "Linux-6.8.0-136-generic-x86_64-with-glibc2.39",
+      "cpu_affinity": {
+        "proxy": 2,
+        "caller": 3,
+        "callee": 4
+      },
+      "fixture_sha256": {
+        "compare_opensips.py": "d44f5465262af739474686c46a5703b51b4b5e750435220a867bc5c23803e4b6",
+        "compare_uac.xml": "473c5676afc0703782280103b1d3e7ab2bebd00d195039a3a28518807738f6ca",
+        "compare_uas.xml": "e42e60a453eaada25522d397c84e7d962dfdf3d1ab41b12743ec5839ebd35f7e",
+        "opensips.cfg.in": "80e7ad96203e716630987a7687ed3100b8eb3cda339e957e5c3c1b608295309d"
+      },
+      "offered_cps": 1000,
+      "expected_calls": 30000,
+      "elapsed_seconds": 45.033920455724,
+      "caller_exit": 255,
+      "callee_exit": 1,
+      "socket_samples": {
+        "15060": {
+          "sampled_max_rx_bytes": 390080,
+          "drops": 363
+        },
+        "15070": {
+          "sampled_max_rx_bytes": 380160,
+          "drops": 88
+        },
+        "15071": {
+          "sampled_max_rx_bytes": 329280,
+          "drops": 69
+        }
+      },
+      "generator_socket_drops": 157,
+      "sipp_requested_buffer_bytes": 1048576,
+      "host_cpu_during_caller": {
+        "cpu2": {
+          "busy_fraction": 0.45954457364341084,
+          "steal_fraction": 0
+        },
+        "cpu3": {
+          "busy_fraction": 0.22818137493905413,
+          "steal_fraction": 0
+        },
+        "cpu4": {
+          "busy_fraction": 0.20712748146376464,
+          "steal_fraction": 0
+        }
+      },
+      "caller": {
+        "SuccessfulCall(C)": 29944,
+        "FailedCall(C)": 24,
+        "Retransmissions(C)": 678,
+        "WatchdogMajor(C)": 0
+      },
+      "callee": {
+        "SuccessfulCall(C)": 29933,
+        "FailedCall(C)": 67,
+        "Retransmissions(C)": 264,
+        "WatchdogMajor(C)": 0
+      },
+      "rtt_samples": 30000,
+      "valid": false,
+      "invite_rtt_ms": {
+        "0.5": 3,
+        "0.95": 112.001,
+        "0.99": 518.004
+      }
+    }
+  ]
+}

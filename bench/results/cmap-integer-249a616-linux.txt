@@ -1,0 +1,25 @@
+
+=================================================================
+==1832030==ERROR: LeakSanitizer: detected memory leaks
+
+Direct leak of 11890 byte(s) in 1000 object(s) allocated from:
+    #0 0x7579e12fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5a792ec1bf5a in mako_rc_alloc /tmp/madis-makori-249a616/runtime/mako_rt.h:143
+    #2 0x5a792ec1ed42 in mako_str_clone /tmp/madis-makori-249a616/runtime/mako_rt.h:3497
+    #3 0x5a792ec1ed42 in mako_cmap_set_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:479
+    #4 0x5a792ec1ed42 in main /tmp/madis-dialog-fix/source/bench/cmap_integer_leak_probe.c:11
+    #5 0x7579e062a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #6 0x7579e062a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #7 0x5a792ec1b604 in _start (/tmp/madis-dialog-fix/cmap-integer-probe+0x8604) (BuildId: 93a4cd1bc8b6237ba33ec66000158e4f65b69019)
+
+Direct leak of 3890 byte(s) in 1000 object(s) allocated from:
+    #0 0x7579e12fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5a792ec1e993 in cmap_dup_bytes /tmp/madis-makori-249a616/runtime/mako_cmap.h:60
+    #2 0x5a792ec1e993 in mako_cmap_get /tmp/madis-makori-249a616/runtime/mako_cmap.h:241
+    #3 0x5a792ec1e993 in mako_cmap_get_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:484
+    #4 0x5a792ec1e993 in main /tmp/madis-dialog-fix/source/bench/cmap_integer_leak_probe.c:12
+    #5 0x7579e062a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #6 0x7579e062a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #7 0x5a792ec1b604 in _start (/tmp/madis-dialog-fix/cmap-integer-probe+0x8604) (BuildId: 93a4cd1bc8b6237ba33ec66000158e4f65b69019)
+
+SUMMARY: AddressSanitizer: 15780 byte(s) leaked in 2000 allocation(s).

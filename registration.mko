@@ -1,3 +1,4 @@
+pull . "./cache_owned.mko"
 // ============ REGISTRATION LIFECYCLE ============
 // In-memory bindings are deliberately bounded and expire lazily on lookup.
 // The database keeps the same binding data for cluster failover.
@@ -5,10 +6,7 @@
 fn registration_max_expires() -> int {
     let raw = env_get_or("SIP_MAX_REG_EXPIRES", "3600")
     let mut value = 3600
-    match parse_int(raw) {
-        Ok(v) => { value = v }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(raw) { value = v }
     if value < 60 { value = 60 }
     if value > 86400 { value = 86400 }
     return value
@@ -17,10 +15,7 @@ fn registration_max_expires() -> int {
 fn registration_min_expires() -> int {
     let raw = env_get_or("SIP_MIN_EXPIRES", "60")
     let mut value = 60
-    match parse_int(raw) {
-        Ok(v) => { value = v }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(raw) { value = v }
     if value < 0 { value = 0 }
     if value > 86400 { value = 86400 }
     return value
@@ -124,18 +119,13 @@ fn registration_nat_target(value: string) -> string {
     if p3 < 0 { return "" }
     let rest3 = rest2[p3 + 1:]
     let p4 = str_index(rest3, "|")
-    let mut src_ip = ""
-    let mut src_port = ""
-    if p4 >= 0 {
-        src_ip = rest3[0:p4]
-        src_port = rest3[p4 + 1:]
-        // src_port may have more fields after it
-        let p5 = str_index(src_port, "|")
-        if p5 >= 0 { src_port = src_port[0:p5] }
-    } else {
-        src_ip = rest3
-    }
+    if p4 < 0 { return "" }
+    let src_ip = str_slice(rest3, 0, p4)
     if len(src_ip) == 0 || is_private_ip(src_ip) == 1 { return "" }
+    let port_tail = str_slice(rest3, p4 + 1, len(rest3))
+    let p5 = str_index(port_tail, "|")
+    let port_end = if p5 >= 0 { p5 } else { len(port_tail) }
+    let src_port = str_slice(port_tail, 0, port_end)
     if len(src_port) == 0 || str_eq(src_port, "0") { return "" }
     return src_ip + ":" + src_port
 }
@@ -234,7 +224,7 @@ fn registration_clear_aor(reg: CMap, aor: string) -> int {
 fn registration_track_aor(reg: CMap, aor: string) -> int {
     let first_slot = "reg|" + aor + "|0"
     if cmap_has(reg, first_slot) == 1 { return 1 }
-    let seq = cmap_incr(reg, "reg_aor_seq", 1)
+    let seq = cache_incr(reg, "reg_aor_seq", 1)
     let capacity = 65536
     let slot = seq - (seq / capacity) * capacity
     let ring_key = "reg_aor_ring|" + string(slot)
@@ -398,10 +388,7 @@ fn registration_keepalive_enabled() -> int {
 
 fn registration_keepalive_interval_ms() -> int {
     let mut interval = 25000
-    match parse_int(env_get_or("SIP_KEEPALIVE_INTERVAL", "25")) {
-        Ok(v) => { interval = v * 1000 }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(env_get_or("SIP_KEEPALIVE_INTERVAL", "25")) { interval = v * 1000 }
     if interval < 5000 { interval = 5000 }
     if interval > 120000 { interval = 120000 }
     return interval
@@ -412,7 +399,7 @@ fn registration_keepalive_tick(reg: CMap, cache: CMap) -> int {
     let now = mono_ms()
     let mut last = 0
     if cmap_has(cache, "keepalive_at") == 1 {
-        match parse_int(cmap_get(cache, "keepalive_at")) { Ok(v) => { last = v } Err(_) => {} }
+        if let Ok(v) = parse_int(cmap_get(cache, "keepalive_at")) { last = v }
     }
     let interval = registration_keepalive_interval_ms()
     if last > 0 && now - last < interval { return 0 }
@@ -422,7 +409,7 @@ fn registration_keepalive_tick(reg: CMap, cache: CMap) -> int {
     // The keepalive fd is a process-local ephemeral UDP socket.
     let mut ka_fd = -1
     if cmap_has(cache, "keepalive_fd") == 1 {
-        match parse_int(cmap_get(cache, "keepalive_fd")) { Ok(v) => { ka_fd = v } Err(_) => {} }
+        if let Ok(v) = parse_int(cmap_get(cache, "keepalive_fd")) { ka_fd = v }
     }
     if ka_fd < 0 {
         ka_fd = nb_udp_bind(0)
@@ -445,7 +432,7 @@ fn registration_keepalive_tick(reg: CMap, cache: CMap) -> int {
                     if len(parts) >= 5 {
                         let reg_ip = parts[3]
                         let mut reg_port = 0
-                        match parse_int(parts[4]) { Ok(v) => { reg_port = v } Err(_) => {} }
+                        if let Ok(v) = parse_int(parts[4]) { reg_port = v }
                         let reg_transport = str_to_lower(parts[1])
                         if len(reg_ip) > 0 && reg_port > 0 {
                             if str_eq(reg_transport, "udp") {

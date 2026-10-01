@@ -1,0 +1,65 @@
+// No sockets, tasks, or process-lifetime caches: Linux LSan checks all owners.
+pull . "../main.mko"
+
+fn TestLogTimestampOwnership() {
+    assert_eq(slog("ownership probe"), 0)
+    assert_eq(log_at(2, "ownership", "probe"), 0)
+    assert_eq(log_structured(2, "ownership", "probe", "ok=1"), 0)
+}
+
+fn TestLifecycleFieldsAndNatOwnership() {
+    let packed = "v1|alice@example.com|sip:alice@example.com|sip:alice@192.0.2.10:5060|UDP|100000|192.0.2.10|5060|sip:pcscf.example.com;lr|sip:scscf.example.com;lr|sip:scscf.example.com|registered"
+    let mut i = 0
+    while i < 100 {
+        assert_eq_str(ims_lifecycle_private(packed), "alice@example.com")
+        assert_eq_str(ims_lifecycle_public(packed), "sip:alice@example.com")
+        assert_eq_str(ims_lifecycle_contact(packed), "sip:alice@192.0.2.10:5060")
+        assert_eq_str(ims_lifecycle_transport(packed), "UDP")
+        assert_eq_str(ims_lifecycle_path(packed), "sip:pcscf.example.com;lr")
+        assert_eq_str(ims_lifecycle_service_route(packed), "sip:scscf.example.com;lr")
+        assert_eq_str(ims_lifecycle_server_name(packed), "sip:scscf.example.com")
+        assert_eq_str(registration_nat_target("sip:alice@10.0.0.1:5060|UDP|100000|198.51.100.2|5080|instance|1"), "198.51.100.2:5080")
+        assert_eq_str(registration_nat_target("sip:alice@10.0.0.1:5060|UDP|100000|198.51.100.2"), "")
+        assert_eq_str(registration_nat_target("sip:alice@10.0.0.1:5060|UDP|100000|127.0.0.1|5080"), "")
+        i = i + 1
+    }
+}
+
+fn TestStreamAndIMSRefreshBoundedOwnership() {
+    let identity = "TCP|192.0.2.10|5060~~TCP~~sip:alice@example.com~~sip:pcscf.example.com;lr~~"
+    let original = identity + "100000~~0"
+    let mut flow = original
+    let mut i = 0
+    while i < 2000 {
+        let one = "OPTIONS sip:test@example.com SIP/2.0\r\nCall-ID: own-" + string(i) + "\r\nContent-Length: 0\r\n\r\n"
+        let two = "SIP/2.0 200 OK\r\nCall-ID: reply-" + string(i) + "\r\nContent-Length: 0\r\n\r\n"
+        let mut buffer = stream_append("", one + two)
+        let first = stream_next_msg(buffer)
+        buffer = first.remainder
+        let last = stream_next_msg(buffer)
+        buffer = last.remainder
+        assert_eq_str(first.message, one)
+        assert_eq_str(last.message, two)
+        assert_eq_str(buffer, "")
+        let mut fragmented = stream_append("", one[0:20])
+        let pending = stream_next_msg(fragmented)
+        let combined = stream_append(fragmented, one[20:])
+        fragmented = combined
+        let full = stream_next_msg(fragmented)
+        assert_eq_str(full.message, one)
+        assert_eq_str(pending.remainder, one[0:20])
+        let snapshot = flow
+        // Keep the borrowed call separate from replacing its input. In 0.6.38
+        // direct self-reassignment through this call can retain the old owner.
+        let renewed = ims_flow_refresh_value(flow, i, 120000)
+        flow = renewed
+        assert_eq_str(flow, identity + string(i + 120000) + "~~" + string(i))
+        assert(str_has_prefix(snapshot, identity))
+        assert_eq_str(original, identity + "100000~~0")
+        i = i + 1
+    }
+    // Renewal never shortens an existing expiry, and malformed values fail.
+    assert_eq_str(ims_flow_refresh_value(original, 5, 10), identity + "100000~~5")
+    assert_eq_str(ims_flow_refresh_value("short", 5, 10), "")
+    assert_eq_str(ims_flow_refresh_value(identity + "invalid~~0", 5, 10), "")
+}

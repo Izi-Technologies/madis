@@ -1,0 +1,40 @@
+# Isolated, in-memory, stateful UDP comparison. No production listeners.
+log_level=1
+stderror_enabled=yes
+syslog_enabled=no
+udp_workers=1
+socket=udp:127.0.0.1:15060
+mpath="@MODULES@/"
+loadmodule "proto_udp.so"
+loadmodule "signaling.so"
+loadmodule "sl.so"
+loadmodule "tm.so"
+loadmodule "rr.so"
+loadmodule "maxfwd.so"
+loadmodule "sipmsgops.so"
+loadmodule "usrloc.so"
+loadmodule "registrar.so"
+modparam("usrloc", "working_mode_preset", "single-instance-no-db")
+modparam("rr", "append_fromtag", 0)
+route {
+    if (!mf_process_maxfwd_header(70)) { send_reply(483,"Too Many Hops"); exit; }
+    if (has_totag()) {
+        if (is_method("ACK") && t_check_trans()) { t_relay(); exit; }
+        if (!loose_route()) { send_reply(404,"Not here"); exit; }
+        route(relay); exit;
+    }
+    if (is_method("CANCEL")) {
+        if (t_check_trans()) t_relay();
+        exit;
+    }
+    t_check_trans();
+    if (is_method("REGISTER")) { save("location"); exit; }
+    if (loose_route()) { send_reply(403,"Preloaded route denied"); exit; }
+    record_route();
+    if (!lookup("location", "method-filtering")) { t_reply(404,"Not Found"); exit; }
+    route(relay);
+}
+route[relay] {
+    if (!t_relay()) send_reply(500,"Relay failed");
+    exit;
+}

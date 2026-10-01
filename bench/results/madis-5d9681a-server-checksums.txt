@@ -1,0 +1,2 @@
+6fb3b7c8d8b5ba43edf4ea118d73e1c88301053182ae8aab46dc29c893c63254  /tmp/madis-verify-5d9681a/madis
+82d88b0e1389184f7b917da5fa847bdaa2666e1b906227f9176c9c4f4c67d3cc  /tmp/madis-verify-5d9681a/source/main.c

@@ -1,3 +1,4 @@
+pull . "./cache_owned.mko"
 // ============ OBSERVABILITY / ADMIN PLANE ============
 
 // ============ CONFIG VALIDATION ============
@@ -21,7 +22,7 @@ fn proxy_validate_config() -> string {
         let raw = env_get_or(ports[pi], "")
         if len(raw) > 0 {
             let mut valid = 0
-            match parse_int(raw) { Ok(v) => { if v > 0 && v <= 65535 { valid = 1 } } Err(_) => {} }
+            if let Ok(v) = parse_int(raw) { if v > 0 && v <= 65535 { valid = 1 } }
             if valid == 0 { builder_write(b, "ERROR: " + ports[pi] + "=" + raw + " is not a valid port (1-65535)\n") }
         }
         pi = pi + 1
@@ -34,7 +35,7 @@ fn proxy_validate_config() -> string {
         let raw = env_get_or(workers[wi], "")
         if len(raw) > 0 {
             let mut valid = 0
-            match parse_int(raw) { Ok(v) => { if str_eq(workers[wi], "SIP_UDP_WORKERS") { if v >= 1 && v <= 8 { valid = 1 } } else { if v >= 0 && v <= 8 { valid = 1 } } } Err(_) => {} }
+            if let Ok(v) = parse_int(raw) { if str_eq(workers[wi], "SIP_UDP_WORKERS") { if v >= 1 && v <= 8 { valid = 1 } } else { if v >= 0 && v <= 8 { valid = 1 } } }
             if valid == 0 { builder_write(b, "ERROR: " + workers[wi] + "=" + raw + " must be 0-8, with UDP 1-8\n") }
         }
         wi = wi + 1
@@ -104,7 +105,7 @@ fn proxy_cache_epoch(cache: CMap) -> string {
 
 fn proxy_config_reload(cache: CMap) -> int {
     let mut epoch = 0
-    match parse_int(proxy_cache_epoch(cache)) { Ok(v) => { epoch = v } Err(_) => {} }
+    if let Ok(v) = parse_int(proxy_cache_epoch(cache)) { epoch = v }
     epoch = epoch + 1
     cmap_set(cache, "config_epoch", string(epoch))
     let _ = cmap_del(cache, "rtpengine_cfg")
@@ -141,7 +142,7 @@ fn proxy_config_sync_db(db: SqlDB, db_ok: int, cache: CMap) -> int {
     let now = mono_ms()
     if cmap_has(cache, ts_key) == 1 {
         let mut last = 0
-        match parse_int(cmap_get(cache, ts_key)) { Ok(v) => { last = v } Err(_) => {} }
+        if let Ok(v) = parse_int(cmap_get(cache, ts_key)) { last = v }
         if now - last < 5000 { return 0 }
     }
     cmap_set(cache, ts_key, string(now))
@@ -193,13 +194,13 @@ fn proxy_metric_labeled(msg: string, reply: string, tr: string, method: string, 
     // Per-method counter — method is already parsed by the caller
     if len(method) > 0 {
         // Build the CMap key directly to avoid intermediate label string
-        let _ = cmap_incr(cache, "prom|sip_requests|method=\"" + method + "\",transport=\"" + tr + "\"", 1)
+        let _ = cache_incr(cache, "prom|sip_requests|method=\"" + method + "\",transport=\"" + tr + "\"", 1)
     }
     // Per-code counter
     if len(reply) > 0 {
         let code = sip_status_code(reply)
         if code > 0 {
-            let _ = cmap_incr(cache, "prom|sip_responses|code=\"" + string(code) + "\",class=\"" + string(code / 100) + "xx\"", 1)
+            let _ = cache_incr(cache, "prom|sip_responses|code=\"" + string(code) + "\",class=\"" + string(code / 100) + "xx\"", 1)
         }
     }
     return 0
@@ -207,7 +208,7 @@ fn proxy_metric_labeled(msg: string, reply: string, tr: string, method: string, 
 
 // Connection gauge tracking per transport
 fn proxy_conn_incr(cache: CMap, transport: string) -> int {
-    let _ = cmap_incr(cache, "prom|sip_connections|transport=\"" + transport + "\"", 1)
+    let _ = cache_incr(cache, "prom|sip_connections|transport=\"" + transport + "\"", 1)
     return 1
 }
 
@@ -215,7 +216,7 @@ fn proxy_conn_decr(cache: CMap, transport: string) -> int {
     let key = "prom|sip_connections|transport=\"" + transport + "\""
     let mut val = 0
     if cmap_has(cache, key) == 1 {
-        match parse_int(cmap_get(cache, key)) { Ok(v) => { val = v } Err(_) => {} }
+        if let Ok(v) = parse_int(cmap_get(cache, key)) { val = v }
     }
     if val > 0 { val = val - 1 }
     cmap_set(cache, key, string(val))
@@ -401,7 +402,7 @@ fn proxy_cache_ring_count(cache: CMap, ring_prefix: string, value_prefix: string
     let mut i = 0
     while i < capacity {
         if cmap_has3i(cache, ring_prefix, "", i) == 1 {
-            let key = cmap_get3i(cache, ring_prefix, "", i)
+            let key = cache_get3i(cache, ring_prefix, "", i)
             if len(value_prefix) == 0 {
                 if len(key) > 0 && cmap_has(cache, key) == 1 { count = count + 1 }
             } else {
@@ -418,7 +419,7 @@ fn proxy_client_txn_method_count(cache: CMap, expected: string) -> int {
     let mut i = 0
     while i < 16384 {
         if cmap_has3i(cache, "client_ring|", "", i) == 1 {
-            let key = cmap_get3i(cache, "client_ring|", "", i)
+            let key = cache_get3i(cache, "client_ring|", "", i)
             if len(key) > 0 && cmap_has2(cache, "client_req|", key) == 1 {
                 let method = cmap_get2(cache, "client_method|", key)
                 if str_eq(expected, "OTHER") {
@@ -639,7 +640,7 @@ fn proxy_admin_worker(reg: CMap, calls: CMap, cache: CMap) -> int {
     // standalone WebUI port and must stay free on shared hosts.
     let raw_port = env_get_or("SIP_ADMIN_PORT", "9090")
     let mut port = 9090
-    match parse_int(raw_port) { Ok(v) => { port = v } Err(_) => {} }
+    if let Ok(v) = parse_int(raw_port) { port = v }
     if port <= 0 { return 0 }
     let fd = http_bind(port)
     if fd < 0 {

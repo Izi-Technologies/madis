@@ -187,9 +187,8 @@ fn ims_cx_push_listen_enabled() -> int {
 
 fn ims_cx_push_listen_port() -> int {
     let mut port = 3868
-    match parse_int(env_get_or("SIP_IMS_CX_PUSH_PORT", "3868")) {
-        Ok(v) => { port = v }
-        Err(_) => {}
+    if let Ok(v) = parse_int(env_get_or("SIP_IMS_CX_PUSH_PORT", "3868")) {
+        port = v
     }
     if port < 1 || port > 65535 { return -1 }
     return port
@@ -238,7 +237,6 @@ fn ims_cx_push_server_worker(reg: CMap) -> int {
             sleep_ms(5)
             continue
         }
-        let _ = io_set_nonblocking(c, 0)
         let _ = tcp_nodelay(c)
         let conn = tls_accept(srv, c)
         if tls_conn_fd(conn) < 0 {

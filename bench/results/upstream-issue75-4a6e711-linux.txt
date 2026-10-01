@@ -1,0 +1,10 @@
+mako test: /tmp/madis-makori-4a6e711/examples/testing/issue75_sha256_leak_test.mko
+=== /tmp/madis-makori-4a6e711/examples/testing/issue75_sha256_leak_test.mko ===
+--- PASS: TestConcatArgLeak
+--- PASS: TestConcatPassedToBuiltin
+--- PASS: TestReturnConcatSlice
+--- PASS: TestSha256SliceBase
+PASS
+ok  /tmp/madis-makori-4a6e711/examples/testing/issue75_sha256_leak_test.mko (4602ms)
+
+mako test: 1 passed, 0 failed

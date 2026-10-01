@@ -1,0 +1,129 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 1K of event 'cpu-clock'
+# Event count (approx.): 22346938485
+#
+# Children      Self  Command          Shared Object        Symbol                                       
+# ........  ........  ...............  ...................  .............................................
+#
+    96.35%     0.09%  madis-owned-rel  madis-owned-release  [.] udp_worker
+    81.28%     0.37%  madis-owned-rel  madis-owned-release  [.] process_sip
+    64.11%     1.00%  madis-owned-rel  madis-owned-release  [.] process_sip_core__impl
+    63.38%     0.00%  madis-owned-rel  [unknown]            [.] 0xffffffffffffffff
+    41.74%     0.00%  madis-owned-rel  madis-owned-release  [.] __kick_udp_worker_16786
+    40.82%     0.00%  madis-owned-rel  libc.so.6            [.] start_thread
+    38.72%     0.00%  madis-owned-rel  madis-owned-release  [.] mako_task_trampoline
+    36.44%     0.00%  madis-owned-rel  libc.so.6            [.] clone3
+    26.58%     0.27%  madis-owned-rel  [kernel.kallsyms]    [k] do_syscall_64
+    26.58%     0.00%  madis-owned-rel  [kernel.kallsyms]    [k] entry_SYSCALL_64_after_hwframe
+    26.03%     0.00%  madis-owned-rel  [kernel.kallsyms]    [k] x64_sys_call
+    23.84%     0.09%  madis-owned-rel  madis-owned-release  [.] sip_forward_target
+    22.56%     0.00%  madis-owned-rel  libc.so.6            [.] __GI___libc_malloc (inlined)
+    18.45%     0.18%  madis-owned-rel  libc.so.6            [.] __libc_sendto
+    18.08%     0.09%  madis-owned-rel  [kernel.kallsyms]    [k] __sys_sendto
+    18.08%     0.00%  madis-owned-rel  [kernel.kallsyms]    [k] __x64_sys_sendto
+    17.81%     2.74%  madis-owned-rel  libc.so.6            [.] _int_malloc
+    17.63%     0.18%  madis-owned-rel  [kernel.kallsyms]    [k] udp_sendmsg
+    17.63%     0.00%  madis-owned-rel  [kernel.kallsyms]    [k] inet_sendmsg
+    16.16%     0.09%  madis-owned-rel  madis-owned-release  [.] sip_forward_udp
+    15.07%     0.00%  madis-owned-rel  [kernel.kallsyms]    [k] ip_send_skb
+    15.07%     0.00%  madis-owned-rel  [kernel.kallsyms]    [k] udp_send_skb
+    14.61%     0.00%  madis-owned-rel  madis-owned-release  [.] mako_udp_send_to.isra.0
+    13.06%     7.21%  madis-owned-rel  madis-owned-release  [.] mako_sip_header_n.constprop.0.isra.0
+    12.97%     0.18%  madis-owned-rel  [kernel.kallsyms]    [k] ip_output
+    12.69%     0.09%  madis-owned-rel  [kernel.kallsyms]    [k] __dev_queue_xmit
+    12.69%     0.00%  madis-owned-rel  [kernel.kallsyms]    [k] __ip_finish_output
+    12.69%     0.00%  madis-owned-rel  [kernel.kallsyms]    [k] ip_finish_output
+    12.69%     0.00%  madis-owned-rel  [kernel.kallsyms]    [k] ip_finish_output2
+    12.69%     0.00%  madis-owned-rel  [kernel.kallsyms]    [k] neigh_hh_output
+    12.51%     0.00%  madis-owned-rel  libc.so.6            [.] sysmalloc (inlined)
+    12.15%     0.27%  madis-owned-rel  [kernel.kallsyms]    [k] handle_softirqs
+    11.78%     0.09%  madis-owned-rel  [kernel.kallsyms]    [k] __local_bh_enable_ip
+    11.69%     0.09%  madis-owned-rel  [kernel.kallsyms]    [k] do_softirq.part.0
+    11.60%     0.00%  madis-owned-rel  [kernel.kallsyms]    [k] __do_softirq
+    11.32%     0.09%  madis-owned-rel  [kernel.kallsyms]    [k] __napi_poll
+    11.32%     0.00%  madis-owned-rel  [kernel.kallsyms]    [k] net_rx_action
+    11.23%     0.09%  madis-owned-rel  [kernel.kallsyms]    [k] process_backlog
+    11.05%     0.00%  madis-owned-rel  [kernel.kallsyms]    [k] __netif_receive_skb
+    11.05%     0.00%  madis-owned-rel  [kernel.kallsyms]    [k] __netif_receive_skb_one_core
+    10.87%     0.09%  madis-owned-rel  [kernel.kallsyms]    [k] ip_rcv
+    10.50%     0.00%  madis-owned-rel  [kernel.kallsyms]    [k] ip_local_deliver
+    10.32%    10.32%  madis-owned-rel  [kernel.kallsyms]    [k] _raw_spin_unlock_irqrestore
+    10.32%     0.18%  madis-owned-rel  [kernel.kallsyms]    [k] ip_protocol_deliver_rcu
+    10.23%     0.00%  madis-owned-rel  [kernel.kallsyms]    [k] ip_local_deliver_finish
+    10.14%     0.00%  madis-owned-rel  [kernel.kallsyms]    [k] udp_rcv
+    10.05%     0.00%  madis-owned-rel  [kernel.kallsyms]    [k] __udp4_lib_rcv
+    10.05%     0.00%  madis-owned-rel  [kernel.kallsyms]    [k] udp_queue_rcv_skb
+    10.05%     0.00%  madis-owned-rel  [kernel.kallsyms]    [k] udp_unicast_rcv_skb
+     9.95%     0.09%  madis-owned-rel  [kernel.kallsyms]    [k] udp_queue_rcv_one_skb
+     9.86%     0.18%  madis-owned-rel  madis-owned-release  [.] sip_forward_dialog_request
+     9.77%     0.09%  madis-owned-rel  [kernel.kallsyms]    [k] __udp_enqueue_schedule_skb
+     9.59%     0.09%  madis-owned-rel  [kernel.kallsyms]    [k] sock_def_readable
+     9.50%     0.00%  madis-owned-rel  [kernel.kallsyms]    [k] __wake_up_sync_key
+     9.32%     0.73%  madis-owned-rel  [kernel.kallsyms]    [k] do_user_addr_fault
+     9.32%     0.00%  madis-owned-rel  [kernel.kallsyms]    [k] asm_exc_page_fault
+     9.32%     0.00%  madis-owned-rel  [kernel.kallsyms]    [k] exc_page_fault
+     9.22%     0.27%  madis-owned-rel  madis-owned-release  [.] sip_validate_message
+     8.40%     0.18%  madis-owned-rel  [kernel.kallsyms]    [k] handle_mm_fault
+     8.13%     0.27%  madis-owned-rel  [kernel.kallsyms]    [k] __handle_mm_fault
+     7.85%     0.09%  madis-owned-rel  madis-owned-release  [.] sip_forward_reply
+     7.76%     0.09%  madis-owned-rel  [kernel.kallsyms]    [k] handle_pte_fault
+     7.58%     0.37%  madis-owned-rel  [kernel.kallsyms]    [k] do_anonymous_page
+     5.94%     0.00%  madis-owned-rel  [kernel.kallsyms]    [k] alloc_anon_folio
+     5.75%     0.00%  madis-owned-rel  [kernel.kallsyms]    [k] vma_alloc_folio
+     5.66%     0.27%  madis-owned-rel  [kernel.kallsyms]    [k] __alloc_pages
+     5.66%     0.00%  madis-owned-rel  [kernel.kallsyms]    [k] alloc_pages_mpol
+     5.66%     0.00%  madis-owned-rel  libc.so.6            [.] __GI_mprotect (inlined)
+     5.66%     0.00%  madis-owned-rel  libc.so.6            [.] grow_heap (inlined)
+     5.57%     0.37%  madis-owned-rel  [kernel.kallsyms]    [k] do_mprotect_pkey
+     5.57%     0.00%  madis-owned-rel  [kernel.kallsyms]    [k] __x64_sys_mprotect
+     5.39%     0.09%  madis-owned-rel  [kernel.kallsyms]    [k] get_page_from_freelist
+     4.93%     4.93%  madis-owned-rel  [kernel.kallsyms]    [k] clear_page_rep
+     4.84%     0.46%  madis-owned-rel  madis-owned-release  [.] ims_lifecycle_decode_ok
+     4.75%     2.65%  madis-owned-rel  madis-owned-release  [.] mako_sip_header_line_is
+     4.75%     0.09%  madis-owned-rel  madis-owned-release  [.] app_gateway_request_id.isra.0
+     4.66%     4.66%  madis-owned-rel  libc.so.6            [.] malloc
+     4.66%     3.74%  madis-owned-rel  madis-owned-release  [.] mako_cmap_has.isra.0
+     4.38%     0.00%  madis-owned-rel  madis-owned-release  [.] ims_lifecycle_mt_target_resolved
+     4.29%     0.27%  madis-owned-rel  [kernel.kallsyms]    [k] mprotect_fixup
+     4.29%     0.09%  madis-owned-rel  madis-owned-release  [.] mako_str_concat.isra.0
+     4.20%     2.83%  madis-owned-rel  libc.so.6            [.] __printf_buffer
+     3.93%     2.10%  madis-owned-rel  madis-owned-release  [.] mako_cmap_set.isra.0
+     3.93%     0.09%  madis-owned-rel  madis-owned-release  [.] sip_client_txn_record
+     3.74%     0.18%  madis-owned-rel  madis-owned-release  [.] ims_lifecycle_find
+     3.56%     0.00%  madis-owned-rel  libc.so.6            [.] ___sprintf_chk (inlined)
+     3.38%     0.27%  madis-owned-rel  libc.so.6            [.] __vsprintf_internal
+     3.11%     0.27%  madis-owned-rel  madis-owned-release  [.] ims_lifecycle_live
+     3.01%     0.55%  madis-owned-rel  madis-owned-release  [.] bounded_state_set
+     2.92%     0.00%  madis-owned-rel  madis-owned-release  [.] mako_str_concat_own.isra.0
+     2.83%     1.00%  madis-owned-rel  madis-owned-release  [.] mako_cmap_get.isra.0
+     2.83%     0.18%  madis-owned-rel  madis-owned-release  [.] sip_decrement_max_forwards
+     2.83%     0.09%  madis-owned-rel  libcrypto.so.3       [.] SHA256
+     2.83%     0.00%  madis-owned-rel  madis-owned-release  [.] ims_lifecycle_mt_target
+     2.74%     0.09%  madis-owned-rel  libcrypto.so.3       [.] EVP_Q_digest
+     2.65%     2.19%  madis-owned-rel  madis-owned-release  [.] mako_cmap_del.isra.0
+     2.65%     0.27%  madis-owned-rel  madis-owned-release  [.] sip_server_txn_tick
+     2.65%     0.18%  madis-owned-rel  madis-owned-release  [.] b2bua_lookup_in
+     2.65%     0.18%  madis-owned-rel  madis-owned-release  [.] sip_name_addr_valid
+     2.65%     0.00%  madis-owned-rel  libc.so.6            [.] __GI___libc_free (inlined)
+     2.65%     0.00%  madis-owned-rel  madis-owned-release  [.] __kick_sip_server_txn_tick_14916
+     2.65%     0.00%  madis-owned-rel  madis-owned-release  [.] mako_sched_worker_main
+     2.56%     0.27%  madis-owned-rel  madis-owned-release  [.] mako_str_slice.isra.0
+     2.56%     0.09%  madis-owned-rel  libc.so.6            [.] __libc_recvfrom
+     2.56%     0.00%  madis-owned-rel  madis-owned-release  [.] ims_lifecycle_resolve_aor
+     2.37%     0.18%  madis-owned-rel  [kernel.kallsyms]    [k] __x64_sys_recvfrom
+     2.28%     0.27%  madis-owned-rel  madis-owned-release  [.] sip_transaction_key
+     2.28%     0.09%  madis-owned-rel  [kernel.kallsyms]    [k] nf_hook_slow
+     2.28%     0.09%  madis-owned-rel  madis-owned-release  [.] sip_dialog_observe
+     2.19%     0.09%  madis-owned-rel  [kernel.kallsyms]    [k] __sys_recvfrom
+     2.10%     0.00%  madis-owned-rel  [kernel.kallsyms]    [k] __ip_local_out
+     2.01%     0.09%  madis-owned-rel  madis-owned-release  [.] sip_uri_syntax_valid
+     2.01%     0.00%  madis-owned-rel  madis-owned-release  [.] sip_client_txn_finish
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

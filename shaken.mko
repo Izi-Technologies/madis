@@ -68,7 +68,7 @@ fn shaken_iat_from_payload(payload: string) -> int {
     }
     if end == start { return 0 }
     let mut val = 0
-    match parse_int(payload[start:end]) { Ok(v) => { val = v } Err(_) => {} }
+    if let Ok(v) = parse_int(payload[start:end]) { val = v }
     return val
 }
 
@@ -95,10 +95,7 @@ fn shaken_dest_from_payload(payload: string) -> string {
 // Configurable iat freshness window (RFC 8224 §6.2.1)
 fn shaken_iat_max_age_sec() -> int {
     let mut age = 60
-    match parse_int(env_get_or("STIR_SHAKEN_IAT_MAX_AGE", "60")) {
-        Ok(v) => { age = v }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(env_get_or("STIR_SHAKEN_IAT_MAX_AGE", "60")) { age = v }
     if age < 10 { age = 10 }
     if age > 3600 { age = 3600 }
     return age

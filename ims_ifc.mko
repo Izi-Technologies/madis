@@ -394,9 +394,8 @@ fn ims_ifc_3preg_branch(branch: string) -> int {
 
 fn ims_ifc_3preg_timeout_ms() -> int {
     let mut ms = 200
-    match parse_int(env_get_or("SIP_IMS_3PREG_TIMEOUT_MS", "200")) {
-        Ok(v) => { ms = v }
-        Err(_) => {}
+    if let Ok(v) = parse_int(env_get_or("SIP_IMS_3PREG_TIMEOUT_MS", "200")) {
+        ms = v
     }
     if ms < 50 { ms = 50 }
     if ms > 2000 { ms = 2000 }

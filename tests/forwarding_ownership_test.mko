@@ -1,0 +1,47 @@
+pull . "../main.mko"
+
+fn forwarding_test_message() -> string {
+    return "INVITE sip:b@example.com SIP/2.0\r\nVia: SIP/2.0/UDP 192.0.2.1:5060;branch=z9hG4bK-one\r\nVia: SIP/2.0/UDP 192.0.2.2:5060;branch=z9hG4bK-two\r\nFrom: <sip:a@example.com>;tag=a\r\nTo: <sip:b@example.com>\r\nCall-ID: forward-own\r\nCSeq: 1 INVITE\r\nMax-Forwards: 70\r\nContent-Length: 4\r\n\r\nbody"
+}
+
+fn TestForwardingHelpersBoundedOwnership() {
+    let msg = forwarding_test_message()
+    let mf_line = "Max-Forwards: 70\r\n"
+    let without_mf = str_replace(msg, mf_line, "")
+    let second_via = "\r\nVia: SIP/2.0/UDP 192.0.2.2"
+    let comma_via = ", SIP/2.0/UDP 192.0.2.2"
+    let joined = str_replace(msg, second_via, comma_via)
+    let mut i = 0
+    while i < 1000 {
+        let rewritten = sip_decrement_max_forwards(msg, len(msg))
+        assert_eq(sip_get_max_forwards(rewritten, len(rewritten)), 69)
+        let defaulted = sip_decrement_max_forwards(without_mf, len(without_mf))
+        assert_eq(sip_get_max_forwards(defaulted, len(defaulted)), 70)
+        let stripped = sip_strip_top_via(msg)
+        let stripped_joined = sip_strip_top_via(joined)
+        assert_eq_str(stripped, stripped_joined)
+        assert_eq(sip_detect_loop(msg, len(msg), "192.0.2.1", 5060), 1)
+        i = i + 1
+    }
+}
+
+fn forwarding_owned_identity(msg: string) -> string {
+    return msg
+}
+
+fn TestMessageReplacementPreservesSnapshots() {
+    let original = forwarding_test_message()
+    let mut i = 0
+    while i < 1000 {
+        let mut msg = forwarding_test_message()
+        let snapshot = msg
+        let unchanged = forwarding_owned_identity(msg)
+        msg = unchanged
+        let rewritten = sip_decrement_max_forwards(msg, len(msg))
+        msg = rewritten
+        assert_eq_str(snapshot, original)
+        assert_eq(sip_get_max_forwards(msg, len(msg)), 69)
+        assert_eq(sip_get_max_forwards(snapshot, len(snapshot)), 70)
+        i = i + 1
+    }
+}

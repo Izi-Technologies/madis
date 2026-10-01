@@ -44,10 +44,7 @@ fn charging_request_json(cid: string, caller: string, callee: string) -> string 
 
 fn charging_timeout_ms() -> int {
     let mut wait_ms = 150
-    match parse_int(env_get_or("SIP_CHARGING_TIMEOUT_MS", "150")) {
-        Ok(v) => { wait_ms = v }
-        Err(_) => {}
-    }
+    if let Ok(v) = parse_int(env_get_or("SIP_CHARGING_TIMEOUT_MS", "150")) { wait_ms = v }
     if wait_ms < 20 { wait_ms = 20 }
     if wait_ms > 1000 { wait_ms = 1000 }
     return wait_ms

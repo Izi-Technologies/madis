@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE scenario SYSTEM "sipp.dtd">
+<scenario name="Stateful UDP comparison callee">
+  <recv request="INVITE"/>
+  <send retrans="500"><![CDATA[
+SIP/2.0 200 OK
+[last_Via:]
+[last_Record-Route:]
+[last_From:]
+[last_To:];tag=callee[call_number]
+[last_Call-ID:]
+[last_CSeq:]
+Contact: <sip:bench@[local_ip]:[local_port]>
+Content-Length: 0
+
+]]></send>
+  <recv request="ACK"/>
+  <!-- A retransmitted INVITE 200 can trigger another ACK before BYE. -->
+  <label id="1"/>
+  <recv request="ACK" optional="true" next="1"/>
+  <recv request="BYE"/>
+  <send><![CDATA[
+SIP/2.0 200 OK
+[last_Via:]
+[last_From:]
+[last_To:]
+[last_Call-ID:]
+[last_CSeq:]
+Content-Length: 0
+
+]]></send>
+</scenario>

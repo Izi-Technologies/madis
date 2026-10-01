@@ -1,0 +1,175 @@
+// Frozen pre-optimization validation is an independent differential oracle.
+// Keep it unchanged when optimizing the production scanner.
+pull . "../parser.mko"
+
+fn reference_header_block_valid(msg: string, header_end: int) -> int {
+    let first_crlf = str_index(msg, "\r\n")
+    if first_crlf < 0 || first_crlf >= header_end { return 0 }
+    let mut line_start = first_crlf + 2
+    let mut header_count = 1
+    let mut have_header = 0
+    while line_start < header_end {
+        let mut line_end = line_start
+        while line_end < header_end {
+            if int(msg[line_end]) == 13 && int(msg[line_end + 1]) == 10 { break }
+            line_end = line_end + 1
+        }
+        if line_end >= header_end || int(msg[line_end]) != 13 || int(msg[line_end + 1]) != 10 { return 0 }
+        let width = line_end - line_start
+        if width <= 0 || width > 8192 { return 0 }
+        let first = int(msg[line_start])
+        if first == 32 || first == 9 {
+            if have_header == 0 { return 0 }
+        } else {
+            let mut colon = -1
+            let mut i = line_start
+            while i < line_end {
+                if int(msg[i]) == 58 { colon = i; break }
+                i = i + 1
+            }
+            if colon <= line_start { return 0 }
+            let name_width = colon - line_start
+            i = line_start
+            while i < colon {
+                if sip_token_char(int(msg[i])) == 0 { return 0 }
+                i = i + 1
+            }
+            if name_width <= 0 { return 0 }
+            have_header = 1
+        }
+        header_count = header_count + 1
+        line_start = line_end + 2
+    }
+    if line_start != header_end || header_count < 2 || header_count > 129 { return 0 }
+    return 1
+}
+
+fn reference_validate_message(msg: string, n: int) -> int {
+    if n < 12 || n > 65535 { return 0 }
+    if sip_ingress_header_safe(msg, n) == 0 { return 0 }
+    if sip_ok(msg) == 0 { return 0 }
+    let mut header_end = -1
+    let mut i = 0
+    while i + 3 < n {
+        if int(msg[i]) == 13 && int(msg[i + 1]) == 10 && int(msg[i + 2]) == 13 && int(msg[i + 3]) == 10 {
+            // Include the terminating CRLF of the final header line. The
+            // validation helpers use this as an exclusive line boundary.
+            header_end = i + 2
+            break
+        }
+        i = i + 1
+    }
+    if header_end < 0 { return 0 }
+
+    let response = sip_is_response(msg)
+    let version = sip_version(msg)
+    if not str_eq(version, "SIP/2.0") { return 0 }
+    if response == 1 {
+        let code = sip_status_code(msg)
+        if code < 100 || code > 699 { return 0 }
+    } else {
+        if sip_request_uri_valid(msg) == 0 { return 0 }
+    }
+    let via = sip_header(msg, "Via")
+    let from = sip_header(msg, "From")
+    let to = sip_header(msg, "To")
+    let call_id = sip_header(msg, "Call-ID")
+    if len(via) == 0 || len(from) == 0 || len(to) == 0 || len(call_id) == 0 { return 0 }
+    if sip_name_addr_valid(from) == 0 { return 0 }
+    if sip_name_addr_valid(to) == 0 { return 0 }
+    if sip_call_id_valid(call_id) == 0 { return 0 }
+    if sip_cseq_valid(msg, response) == 0 { return 0 }
+    if sip_via_valid(msg) == 0 { return 0 }
+
+    // These are singleton headers in a SIP message.  Accepting duplicates
+    // would make different stacks validate different identity/transaction
+    // contexts because the platform accessor returns only one occurrence.
+    if reference_header_block_valid(msg, header_end) == 0 { return 0 }
+    if madis_header_count(msg, "From") != 1 || madis_header_count(msg, "To") != 1 || madis_header_count(msg, "Call-ID") != 1 || madis_header_count(msg, "CSeq") != 1 { return 0 }
+    if madis_header_count(msg, "Max-Forwards") > 1 { return 0 }
+
+    // Reject NUL and other C0 characters in the start line/header area. HTAB
+    // is valid horizontal whitespace; the body is left to SDP/RTP handling.
+    i = 0
+    while i < header_end {
+        let c = int(msg[i])
+        if c == 0 || c == 127 || (c < 32 && c != 9 && c != 10 && c != 13) { return 0 }
+        i = i + 1
+    }
+    let body = sip_body(msg)
+    let content_length_count = madis_header_count(msg, "Content-Length")
+    if content_length_count == 0 { return 0 }
+    let mut declared_length = -1
+    let mut content_i = 0
+    while content_i < content_length_count {
+        let raw_length = str_trim_space(sip_header_n(msg, "Content-Length", content_i))
+        if len(raw_length) == 0 { return 0 }
+        match parse_int(raw_length) {
+            Ok(v) => {
+                if v < 0 || v > 1048576 { return 0 }
+                if declared_length >= 0 && declared_length != v { return 0 }
+                declared_length = v
+            }
+            Err(_) => { return 0 }
+        }
+        content_i = content_i + 1
+    }
+    if declared_length != len(body) { return 0 }
+    return 1
+}
+
+
+fn scan_test_message(extra: string) -> string {
+    return "INVITE sip:b@example.com SIP/2.0\r\nVia: SIP/2.0/UDP 192.0.2.1:5060;branch=z9hG4bK-scan\r\nFrom: <sip:a@example.com>;tag=a\r\nTo: <sip:b@example.com>\r\nCall-ID: scan-test\r\nCSeq: 1 INVITE\r\nMax-Forwards: 70\r\n" + extra + "Content-Length: 0\r\n\r\n"
+}
+
+fn TestHeaderScanAliasesAndSingletons() {
+    let original = scan_test_message("")
+    assert_eq(sip_validate_message(original, len(original)), 1)
+    let compact = original |> str_replace("From:", "f:") |> str_replace("To:", "T:") |> str_replace("Call-ID:", "I:") |> str_replace("Content-Length:", "l:")
+    assert_eq(sip_validate_message(compact, len(compact)), 1)
+    let duplicates = ["f: <sip:a@example.com>\r\n", "t: <sip:b@example.com>\r\n", "i: other\r\n", "cSeQ: 1 INVITE\r\n", "mAx-FoRwArDs: 70\r\n"]
+    for extra in duplicates {
+        let msg = scan_test_message(extra)
+        assert_eq(reference_validate_message(msg, len(msg)), 0)
+        assert_eq(sip_validate_message(msg, len(msg)), 0)
+    }
+    let equal_lengths = scan_test_message("l: 0\r\n")
+    assert_eq(sip_validate_message(equal_lengths, len(equal_lengths)), 1)
+    let unequal_lengths = scan_test_message("l: 1\r\n")
+    assert_eq(sip_validate_message(unequal_lengths, len(unequal_lengths)), 0)
+    let folded = scan_test_message("X-Test: ok\r\n From: continuation, not another header\r\n")
+    assert_eq(sip_validate_message(folded, len(folded)), 1)
+}
+
+fn TestHeaderScanMatchesReferenceForMutations() {
+    let request = scan_test_message("X-Test: value\r\n\tcontinued\r\n")
+    let response = "SIP/2.0 200 OK\r\n" + request[str_index(request, "\r\n") + 2:]
+    let cases = [request, response]
+    let bytes = [0, 9, 10, 13, 32, 58, 65, 97, 127, 255]
+    for msg in cases {
+        let mut position = 0
+        while position < len(msg) {
+            for value in bytes {
+                let b = str_builder()
+                builder_write(b, msg[0:position])
+                builder_write_byte(b, byte(value))
+                builder_write(b, msg[position + 1:])
+                let changed = builder_string(b)
+                assert_eq(sip_validate_message(changed, len(changed)), reference_validate_message(changed, len(changed)))
+            }
+            position = position + 1
+        }
+    }
+}
+
+fn TestHeaderScanLineLimitsMatchReference() {
+    let mut extra = ""
+    let mut count = 0
+    while count < 132 {
+        let msg = scan_test_message(extra)
+        assert_eq(sip_validate_message(msg, len(msg)), reference_validate_message(msg, len(msg)))
+        extra = extra + "X-Test: a\r\n"
+        count = count + 1
+    }
+}

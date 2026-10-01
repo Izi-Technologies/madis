@@ -1,0 +1,43 @@
+{
+  "date": "2026-09-28",
+  "runtime": "Mako 0.6.38, C backend --release",
+  "platform": "macOS arm64",
+  "messages_per_round": 100000,
+  "reference": "Frozen pre-scan validator, sharing current semantic helpers",
+  "candidate": "Single-pass scan and named owned header values",
+  "order": [
+    0,
+    1,
+    1,
+    0,
+    0,
+    1,
+    1,
+    0,
+    0,
+    1
+  ],
+  "elapsed_ms": [
+    567,
+    374,
+    459,
+    622,
+    657,
+    441,
+    434,
+    706,
+    619,
+    472
+  ],
+  "median_ms": {
+    "reference": 622,
+    "candidate": 441
+  },
+  "time_reduction_percent": 29.1,
+  "limitations": "Local microbenchmark; not SIP throughput. Shared semantic helper ownership fixes apply to both variants. Frozen reference validator retains known temporary leaks.",
+  "source_sha256": {
+    "parser.mko": "f5c127633eb10282eade1d056ecb9517424a4e8ea9a78aab36a22dea6ac910cc",
+    "tests/parser_scan_test.mko": "9d5bbd074d44e82ada1e66587983a1beb260c10cc79d43e47852ca27b30e0b64",
+    "bench/validation_scan.mko": "06f01a87ac1c0c560cc371e5f1cb649b03090df7e354fcd38502b975181c9606"
+  }
+}

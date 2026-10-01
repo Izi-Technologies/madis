@@ -26,10 +26,7 @@ fn event_package_supported(pkg: string) -> int {
 
 fn event_package_max_expires() -> int {
     let mut v = 3600
-    match parse_int(env_get_or("SIP_EVENT_MAX_EXPIRES", "3600")) {
-        Ok(n) => { v = n }
-        Err(_) => {}
-    }
+    if let Ok(n) = parse_int(env_get_or("SIP_EVENT_MAX_EXPIRES", "3600")) { v = n }
     if v < 60 { v = 60 }
     if v > 86400 { v = 86400 }
     return v
@@ -152,7 +149,7 @@ fn event_package_send_notify(cache: CMap, reg: CMap, sub_key: string, terminated
     let to_tag = event_package_sub_field(packed, 5)
     let call_id = event_package_sub_field(packed, 6)
     let mut cseq = 1
-    match parse_int(event_package_sub_field(packed, 7)) { Ok(v) => { cseq = v } Err(_) => {} }
+    if let Ok(v) = parse_int(event_package_sub_field(packed, 7)) { cseq = v }
     let contact = event_package_sub_field(packed, 8)
     cseq = cseq + 1
 
@@ -161,7 +158,7 @@ fn event_package_send_notify(cache: CMap, reg: CMap, sub_key: string, terminated
         sub_state = "terminated;reason=timeout"
     } else {
         let mut expires_at = 0
-        match parse_int(expires_at_s) { Ok(v) => { expires_at = v } Err(_) => {} }
+        if let Ok(v) = parse_int(expires_at_s) { expires_at = v }
         let remaining = (expires_at - mono_ms()) / 1000
         let rem = if remaining > 0 { remaining } else { 0 }
         sub_state = "active;expires=" + string(rem)
@@ -176,7 +173,7 @@ fn event_package_send_notify(cache: CMap, reg: CMap, sub_key: string, terminated
     // Update stored cseq
     let mut update_expires = 0
     if terminated == 0 {
-        match parse_int(expires_at_s) { Ok(v) => { update_expires = v } Err(_) => {} }
+        if let Ok(v) = parse_int(expires_at_s) { update_expires = v }
     }
     let updated = event_package_pack_sub(from_uri, resource, event, update_expires,
         from_tag, to_tag, call_id, cseq, contact)
@@ -223,7 +220,7 @@ fn event_package_handle_subscribe(data: string, dl: int, cache: CMap, reg: CMap)
     let mut expires = 3600
     let exp_hdr = str_trim_space(sip_hdr(data, "Expires", dl))
     if len(exp_hdr) > 0 {
-        match parse_int(exp_hdr) { Ok(v) => { expires = v } Err(_) => {} }
+        if let Ok(v) = parse_int(exp_hdr) { expires = v }
     }
 
     // Extract subscriber contact
@@ -245,7 +242,7 @@ fn event_package_handle_subscribe(data: string, dl: int, cache: CMap, reg: CMap)
     let mut cseq_num = 1
     let space = str_index(cseq_hdr, " ")
     if space > 0 {
-        match parse_int(cseq_hdr[0:space]) { Ok(v) => { cseq_num = v } Err(_) => {} }
+        if let Ok(v) = parse_int(cseq_hdr[0:space]) { cseq_num = v }
     }
 
     // Unsubscribe
@@ -308,7 +305,7 @@ fn event_package_notify(cache: CMap, reg: CMap, event: string, resource: string)
                 let sub_event = event_package_sub_field(packed, 2)
                 let sub_resource = event_package_sub_field(packed, 1)
                 let mut expires_at = 0
-                match parse_int(event_package_sub_field(packed, 3)) { Ok(v) => { expires_at = v } Err(_) => {} }
+                if let Ok(v) = parse_int(event_package_sub_field(packed, 3)) { expires_at = v }
                 if str_eq(sub_event, event) && str_eq(sub_resource, resource) && expires_at > now {
                     // Extract sub_key from data key ("evt_sub|<key>" → "<key>")
                     let sk = sub_data_key[8:]
@@ -361,7 +358,7 @@ fn event_package_sweep(cache: CMap, reg: CMap) -> int {
             if len(sub_data_key) > 0 && cmap_has(cache, sub_data_key) == 1 {
                 let packed = cmap_get(cache, sub_data_key)
                 let mut expires_at = 0
-                match parse_int(event_package_sub_field(packed, 3)) { Ok(v) => { expires_at = v } Err(_) => {} }
+                if let Ok(v) = parse_int(event_package_sub_field(packed, 3)) { expires_at = v }
                 if expires_at > 0 && expires_at <= now {
                     let sk = sub_data_key[8:]
                     let _ = event_package_send_notify(cache, reg, sk, 1)

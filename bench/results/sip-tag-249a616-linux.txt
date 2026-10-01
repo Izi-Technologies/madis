@@ -1,0 +1,7 @@
+mako test: /tmp/madis-sip-tag-4a6e711/ownership_test.mko
+=== /tmp/madis-sip-tag-4a6e711/ownership_test.mko ===
+--- PASS: TestSipTagTemporaryOwnership
+PASS
+ok  /tmp/madis-sip-tag-4a6e711/ownership_test.mko (4158ms)
+
+mako test: 1 passed, 0 failed

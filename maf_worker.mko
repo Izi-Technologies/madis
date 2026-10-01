@@ -1,3 +1,4 @@
+pull . "./cache_owned.mko"
 // MAF worker-side command handoff.
 //
 // The admin process accepts authenticated commands into PostgreSQL. SIP
@@ -185,7 +186,7 @@ fn maf_worker_fire_webhooks(db: SqlDB, ok: int, tenant: string, event_type: stri
     let mut webhooks = ""
     if cmap_has(cache, wh_key) == 1 && cmap_has(cache, wh_ts) == 1 {
         let mut at = 0
-        match parse_int(cmap_get(cache, wh_ts)) { Ok(v) => { at = v } Err(_) => {} }
+        if let Ok(v) = parse_int(cmap_get(cache, wh_ts)) { at = v }
         if at > 0 && now - at < 30000 { webhooks = cmap_get(cache, wh_key) }
     }
     if len(webhooks) == 0 {
@@ -288,7 +289,7 @@ fn maf_worker_command_state(db: SqlDB, ok: int, tenant: string, command_id: stri
 fn maf_worker_metric(cache: CMap, name: string, labels: string) -> int {
     if cmap_has(cache, "_prom_active") == 0 { return 0 }
     if len(name) == 0 || len(labels) == 0 { return 0 }
-    let _ = cmap_incr(cache, "prom|" + name + "|" + labels, 1)
+    let _ = cache_incr(cache, "prom|" + name + "|" + labels, 1)
     return 1
 }
 
@@ -411,7 +412,7 @@ fn maf_worker_inbound_cancel_terminate(db: SqlDB, ok: int, msg: string, cache: C
     let ip = json_get_string(packed, "ip")
     let tr = json_get_string(packed, "transport")
     let mut port = 5060
-    match parse_int(json_get_string(packed, "port")) { Ok(v) => { port = v } Err(_) => {} }
+    if let Ok(v) = parse_int(json_get_string(packed, "port")) { port = v }
     let invite = maf_worker_cached_invite(packed)
     let _ = sip_server_txn_record(invite, response, ip, port, tr, out_fd, cache)
     if sip_forward_reply(response, cache, out_fd) == 1 { return 1 }
@@ -512,7 +513,7 @@ fn maf_worker_inbound_answer(db: SqlDB, ok: int, tenant: string, call_id: string
     let ip = json_get_string(packed, "ip")
     let tr = json_get_string(packed, "transport")
     let mut port = 5060
-    match parse_int(json_get_string(packed, "port")) { Ok(v) => { port = v } Err(_) => {} }
+    if let Ok(v) = parse_int(json_get_string(packed, "port")) { port = v }
     let _ = sip_server_txn_record(invite, response, ip, port, tr, out_fd, cache)
     if sip_forward_reply(response, cache, out_fd) == 0 { return "answer_delivery_failed|the worker could not deliver the SIP response" }
     let _ = maf_worker_inbound_cache_put(cache, call_id, maf_worker_inbound_cache_value(invite, ip, port, tr))
@@ -536,7 +537,7 @@ fn maf_worker_inbound_reject(db: SqlDB, ok: int, tenant: string, call_id: string
     let ip = json_get_string(packed, "ip")
     let tr = json_get_string(packed, "transport")
     let mut port = 5060
-    match parse_int(json_get_string(packed, "port")) { Ok(v) => { port = v } Err(_) => {} }
+    if let Ok(v) = parse_int(json_get_string(packed, "port")) { port = v }
     let _ = sip_server_txn_record(invite, response, ip, port, tr, out_fd, cache)
     if sip_forward_reply(response, cache, out_fd) == 0 { return "reject_delivery_failed|the worker could not deliver the SIP response" }
     let _ = maf_worker_call_final(db, ok, tenant, call_id, "rejected", code, reason, "application", trace)
@@ -818,7 +819,7 @@ fn maf_worker_handle_outbound_response(db: SqlDB, ok: int, msg: string, cache: C
                     let ip = json_get_string(packed, "ip")
                     let inbound_tr = json_get_string(packed, "transport")
                     let mut inbound_port = 5060
-                    match parse_int(json_get_string(packed, "port")) { Ok(v) => { inbound_port = v } Err(_) => {} }
+                    if let Ok(v) = parse_int(json_get_string(packed, "port")) { inbound_port = v }
                     let _ = sip_server_txn_record(inbound_invite, inbound_response, ip, inbound_port, inbound_tr, out_fd, cache)
                     if str_eq(str_to_lower(inbound_tr), "udp") {
                         let _ = udp_send_to(out_fd, ip, inbound_port, inbound_response)
@@ -931,12 +932,12 @@ fn maf_worker_bridge(db: SqlDB, ok: int, tenant: string, call_id: string, reques
     if not str_eq(current, "answered") && not str_eq(current, "bridged") { return "bridge_state_conflict|bridging requires an answered call" }
     let count_raw = sql_query_str(db, "SELECT jsonb_array_length($1::jsonb->'channel_ids')::text", request)
     let mut count = -1
-    match parse_int(count_raw) { Ok(v) => { count = v } Err(_) => {} }
+    if let Ok(v) = parse_int(count_raw) { count = v }
     if count < 2 || count > 8 { return "invalid_bridge|channel_ids must contain 2 to 8 channels" }
     let owned_packed = "{\"request\":" + request + ",\"tenant_id\":\"" + maf_worker_json_escape(tenant) + "\",\"call_id\":\"" + maf_worker_json_escape(call_id) + "\"}"
     let owned_raw = sql_query_str(db, "SELECT COUNT(*)::text FROM maf_channels WHERE tenant_id = $1::jsonb->>'tenant_id' AND call_id = $1::jsonb->>'call_id' AND channel_id IN (SELECT jsonb_array_elements_text($1::jsonb->'request'->'channel_ids'))", owned_packed)
     let mut owned = -1
-    match parse_int(owned_raw) { Ok(v) => { owned = v } Err(_) => {} }
+    if let Ok(v) = parse_int(owned_raw) { owned = v }
     if owned != count { return "invalid_bridge|all channels must belong to the call" }
     let bridge_id = "bridge-" + sha256("madis.maf.bridge|" + tenant + "|" + call_id + "|" + sha256(request))[0:32]
     let existing = sql_query_str2(db, "SELECT state FROM maf_bridges WHERE tenant_id = $1 AND bridge_id = $2", tenant, bridge_id)
@@ -1265,7 +1266,7 @@ fn maf_worker_rtp(db: SqlDB, ok: int, tenant: string, call_id: string, request: 
     let cfg = rtp_config(db, ok, cache)
     if str_eq(cfg[0], "0") { return "rtp_disabled|rtpengine is not enabled" }
     let mut rtp_port = 2223
-    match parse_int(cfg[2]) { Ok(v) => { rtp_port = v } Err(_) => {} }
+    if let Ok(v) = parse_int(cfg[2]) { rtp_port = v }
 
     // Resolve wire call-id from MAF call-id. Outbound calls use
     // "call_id@node_id" as the SIP Call-ID; append only if not present.
@@ -1382,7 +1383,7 @@ fn maf_worker_route(db: SqlDB, ok: int, tenant: string, call_id: string, command
     let public_ip = env_get_or("SIP_PUBLIC_IP", ip)
     let udp_port_str = env_get_or("SIP_UDP_PORT", "5060")
     let mut udp_port = 5060
-    match parse_int(udp_port_str) { Ok(v) => { udp_port = v } Err(_) => {} }
+    if let Ok(v) = parse_int(udp_port_str) { udp_port = v }
     // B2BUA mode: terminate both legs locally instead of proxy forwarding
     let mode = json_get_string(request, "mode") |> str_trim_space() |> str_to_lower()
     if str_eq(mode, "b2bua") && b2bua_enabled() == 1 {
@@ -1546,11 +1547,11 @@ fn maf_worker_poll(db: SqlDB, ok: int, cache: CMap, out_fd: int, node_id: string
     let now = mono_ms()
     let mut last_poll = 0
     if cmap_has(cache, "maf_poll_at") == 1 {
-        match parse_int(cmap_get(cache, "maf_poll_at")) { Ok(v) => { last_poll = v } Err(_) => {} }
+        if let Ok(v) = parse_int(cmap_get(cache, "maf_poll_at")) { last_poll = v }
     }
     let mut interval = 100
     if cmap_has(cache, "maf_poll_interval") == 1 {
-        match parse_int(cmap_get(cache, "maf_poll_interval")) { Ok(v) => { interval = v } Err(_) => {} }
+        if let Ok(v) = parse_int(cmap_get(cache, "maf_poll_interval")) { interval = v }
     }
     if last_poll > 0 && now - last_poll < interval { return 0 }
     cmap_set(cache, "maf_poll_at", string(now))
@@ -1607,7 +1608,7 @@ fn maf_worker_recover_stale_commands(db: SqlDB, ok: int, tenant: string, cache: 
     let now = mono_ms()
     let mut last = 0
     if cmap_has(cache, "maf_recover_at") == 1 {
-        match parse_int(cmap_get(cache, "maf_recover_at")) { Ok(v) => { last = v } Err(_) => {} }
+        if let Ok(v) = parse_int(cmap_get(cache, "maf_recover_at")) { last = v }
     }
     if last > 0 && now - last < 5000 { return 0 }
     cmap_set(cache, "maf_recover_at", string(now))
@@ -1652,7 +1653,7 @@ fn maf_worker_sync_sip(db: SqlDB, ok: int, msg: string, cache: CMap) -> int {
             let created_key = "maf_created_ms|" + inbound_call_id
             if cmap_has(cache, created_key) == 1 {
                 let mut created_ms = 0
-                match parse_int(cmap_get(cache, created_key)) { Ok(v) => { created_ms = v } Err(_) => {} }
+                if let Ok(v) = parse_int(cmap_get(cache, created_key)) { created_ms = v }
                 if created_ms > 0 { end_detail = end_detail + ",\"duration_ms\":" + string(mono_ms() - created_ms) }
             }
             return if maf_worker_call_state_detail(db, ok, inbound_tenant, inbound_call_id, "ended", inbound_trace, end_detail) == 1 { 1 } else { 0 }
@@ -1711,7 +1712,7 @@ fn maf_worker_sync_sip(db: SqlDB, ok: int, msg: string, cache: CMap) -> int {
             let created_key = "maf_created_ms|" + call_id
             if cmap_has(cache, created_key) == 1 {
                 let mut created_ms = 0
-                match parse_int(cmap_get(cache, created_key)) { Ok(v) => { created_ms = v } Err(_) => {} }
+                if let Ok(v) = parse_int(cmap_get(cache, created_key)) { created_ms = v }
                 if created_ms > 0 {
                     let duration_ms = mono_ms() - created_ms
                     sip_detail = sip_detail + ",\"duration_ms\":" + string(duration_ms)
@@ -1726,7 +1727,7 @@ fn maf_worker_sync_sip(db: SqlDB, ok: int, msg: string, cache: CMap) -> int {
             let created_key = "maf_created_ms|" + call_id
             if cmap_has(cache, created_key) == 1 {
                 let mut created_ms = 0
-                match parse_int(cmap_get(cache, created_key)) { Ok(v) => { created_ms = v } Err(_) => {} }
+                if let Ok(v) = parse_int(cmap_get(cache, created_key)) { created_ms = v }
                 if created_ms > 0 {
                     let duration_ms = mono_ms() - created_ms
                     sip_detail = sip_detail + ",\"duration_ms\":" + string(duration_ms)
@@ -1745,7 +1746,7 @@ fn maf_worker_sync_sip(db: SqlDB, ok: int, msg: string, cache: CMap) -> int {
             let ri_created_key = "maf_created_ms|" + call_id
             if cmap_has(cache, ri_created_key) == 1 {
                 let mut ri_created = 0
-                match parse_int(cmap_get(cache, ri_created_key)) { Ok(v) => { ri_created = v } Err(_) => {} }
+                if let Ok(v) = parse_int(cmap_get(cache, ri_created_key)) { ri_created = v }
                 if ri_created > 0 { ri_pdd = mono_ms() - ri_created }
             }
             let _ = routing_record_outcome(cache, ri_target, ri_callee, 1, 0, ri_pdd)

@@ -1,4 +1,4 @@
-// Structured crew policies from Makori 0.6.32, shaped like SIP worker
+// Structured crew policies shaped like SIP worker
 // lifetime and first-healthy dispatch. The process crews in main.mko and
 // admin/main.mko use crew:all so one listener or WebSocket ending cannot
 // cancel the rest. crew:race is for first-complete probes, not the

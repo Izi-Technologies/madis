@@ -1,0 +1,129 @@
+// Compiler ownership regressions for Mako issues #74, #75, and #76.
+// Standalone source-build capability probe; Linux LSan also checks raw allocations.
+fn compiler_owned_identity(value: string) -> string {
+    return value
+}
+
+fn compiler_crypto_key(cid: string, tag: string) -> string {
+    return sha256("madis.b2bua.key|" + cid + "|" + tag)[0:32]
+}
+
+fn TestCompilerCryptoTemporaryOwnership() {
+    let cid = "call" + "-id"
+    let tag = "from" + "-tag"
+    let input = "madis.b2bua.key|" + cid + "|" + tag
+    let digest = sha256(input)
+    let expected = digest[0:32]
+    let mut i = 0
+    while i < 100 {
+        let key = compiler_crypto_key(cid, tag)
+        assert_eq_str(key, expected)
+        let chained = "call-in-" + sha256("madis.b2bua.key|" + cid + "|" + tag)[0:32]
+        let expected_chained = "call-in-" + expected
+        assert_eq_str(chained, expected_chained)
+        i = i + 1
+    }
+    // Slicing a named digest must preserve that owner's backing.
+    assert_eq(len(digest), 64)
+    assert_eq_str(digest[0:32], expected)
+}
+
+fn TestCompilerRetainedStringReplacement() {
+    let seed = "message"
+    let mut msg = seed + " body"
+    let snapshot = msg
+    let mut i = 0
+    while i < 1000 {
+        let replacement = compiler_owned_identity(msg)
+        msg = replacement
+        msg = compiler_owned_identity(msg)
+        i = i + 1
+    }
+    assert_eq_str(msg, snapshot)
+    msg = msg + "!"
+    assert_eq_str(snapshot, "message body")
+    assert_eq_str(msg, "message body!")
+}
+
+fn TestNamedSliceOwnership() {
+    let source = "abcd" + "efgh"
+    let mut i = 0
+    while i < 100 {
+        let piece = source[0:4]
+        assert_eq_str(piece, "abcd")
+        assert_eq_str(source, "abcdefgh")
+        i = i + 1
+    }
+}
+
+fn TestSipTagTemporaryOwnership() {
+    let msg = "INVITE sip:b@example.com SIP/2.0\r\nFrom: <sip:a@example.com>;tag=a\r\n\r\n"
+    let mut i = 0
+    while i < 100 {
+        let tag = msg |> sip_header("From") |> sip_addr_tag()
+        assert_eq_str(tag, "a")
+        i = i + 1
+    }
+}
+
+fn copied_config(values: []string) -> []string {
+    let mut result = make([]string, 3)
+    result[0] = values[0]
+    result[1] = values[1]
+    result[2] = values[2]
+    return result
+}
+
+fn TestStringArrayReplacementOwnership() {
+    let mut i = 0
+    while i < 100 {
+        let mut cfg = make([]string, 3)
+        cfg[0] = "0"
+        cfg[1] = "127.0.0.1"
+        cfg[2] = "2223"
+        cfg = copied_config(cfg)
+        assert_eq_str(cfg[0], "0")
+        assert_eq_str(cfg[1], "127.0.0.1")
+        assert_eq_str(cfg[2], "2223")
+        i = i + 1
+    }
+}
+
+fn copied_numeric_config(values: []string) -> []string {
+    let mut result = make([]string, 3)
+    result[0] = values[0]
+    result[1] = values[1]
+    result[2] = values[2]
+    return result
+}
+
+fn TestNumericStringArrayReplacementOwnership() {
+    let mut i = 0
+    while i < 100 {
+        let mut cfg = make([]string, 3)
+        cfg[0] = "0"
+        cfg[1] = "127.0.0.1"
+        cfg[2] = string(2223)
+        cfg = copied_numeric_config(cfg)
+        assert_eq_str(cfg[0], "0")
+        assert_eq_str(cfg[1], "127.0.0.1")
+        assert_eq_str(cfg[2], "2223")
+        i = i + 1
+    }
+}
+
+fn appended_numeric_config(values: []string) -> []string {
+    return append(values, "next")
+}
+
+fn TestNumericStringArrayAppendOwnership() {
+    let mut i = 0
+    while i < 100 {
+        let mut cfg = make([]string, 1)
+        cfg[0] = string(2223)
+        cfg = appended_numeric_config(cfg)
+        assert_eq_str(cfg[0], "2223")
+        assert_eq_str(cfg[1], "next")
+        i = i + 1
+    }
+}

@@ -10,9 +10,8 @@ fn ims_flow_dynamic_enabled() -> int {
 
 fn ims_flow_keepalive_s() -> int {
     let mut s = 120
-    match parse_int(env_get_or("SIP_IMS_FLOW_KEEPALIVE_S", "120")) {
-        Ok(v) => { s = v }
-        Err(_) => {}
+    if let Ok(v) = parse_int(env_get_or("SIP_IMS_FLOW_KEEPALIVE_S", "120")) {
+        s = v
     }
     if s < 30 { s = 30 }
     if s > 3600 { s = 3600 }
@@ -21,9 +20,8 @@ fn ims_flow_keepalive_s() -> int {
 
 fn ims_flow_capacity() -> int {
     let mut n = 65536
-    match parse_int(env_get_or("SIP_IMS_FLOW_CAPACITY", "65536")) {
-        Ok(v) => { n = v }
-        Err(_) => {}
+    if let Ok(v) = parse_int(env_get_or("SIP_IMS_FLOW_CAPACITY", "65536")) {
+        n = v
     }
     if n < 64 { n = 64 }
     if n > 1048576 { n = 1048576 }
@@ -72,9 +70,8 @@ fn ims_flow_mint(cache: CMap, conn_key: string, transport: string, contact: stri
     }
     let mut count = 0
     if cmap_has(cache, "ims_flow_count") == 1 {
-        match parse_int(cmap_get(cache, "ims_flow_count")) {
-            Ok(v) => { count = v }
-            Err(_) => {}
+        if let Ok(v) = parse_int(cmap_get(cache, "ims_flow_count")) {
+            count = v
         }
     }
     if count >= ims_flow_capacity() && cmap_has(cache, key) == 0 { return "" }
@@ -129,26 +126,32 @@ fn ims_flow_path_uri(value: string) -> string {
     return parts[3]
 }
 
-fn ims_flow_touch(cache: CMap, token: string) -> int {
-    let value = ims_flow_get(cache, token)
-    if len(value) == 0 { return 0 }
+// Pure value update so retained snapshots and renewal ownership can be checked
+// independently of the process-lifetime concurrent cache.
+fn ims_flow_refresh_value(value: string, now: int, keepalive_ms: int) -> string {
     let parts = ims_flow_fields(value)
-    if len(parts) < 6 { return 0 }
-    // Copy fields before concat: array slots are owned by parts.
-    let p0 = "" + parts[0]
-    let p1 = "" + parts[1]
-    let p2 = "" + parts[2]
-    let p3 = "" + parts[3]
+    if len(parts) < 6 { return "" }
+    // String aliases retain ownership; no forced concatenation copies needed.
+    let p0 = parts[0]
+    let p1 = parts[1]
+    let p2 = parts[2]
+    let p3 = parts[3]
     let mut expires_at = 0
     match parse_int(parts[4]) {
         Ok(v) => { expires_at = v }
-        Err(_) => { return 0 }
+        Err(_) => { return "" }
     }
-    let keepalive = ims_flow_keepalive_s() * 1000
-    let new_exp = mono_ms() + keepalive
+    let new_exp = now + keepalive_ms
     if new_exp > expires_at { expires_at = new_exp }
     let sep = "~~"
-    let updated = "" + p0 + sep + p1 + sep + p2 + sep + p3 + sep + string(expires_at) + sep + string(mono_ms())
+    return p0 + sep + p1 + sep + p2 + sep + p3 + sep + string(expires_at) + sep + string(now)
+}
+
+fn ims_flow_touch(cache: CMap, token: string) -> int {
+    let value = ims_flow_get(cache, token)
+    if len(value) == 0 { return 0 }
+    let updated = ims_flow_refresh_value(value, mono_ms(), ims_flow_keepalive_s() * 1000)
+    if len(updated) == 0 { return 0 }
     cmap_set(cache, ims_flow_key(token), updated)
     return 1
 }
@@ -165,9 +168,8 @@ fn ims_flow_clear(cache: CMap, token: string) -> int {
     let _ = cmap_del(cache, key)
     let mut count = 0
     if cmap_has(cache, "ims_flow_count") == 1 {
-        match parse_int(cmap_get(cache, "ims_flow_count")) {
-            Ok(v) => { count = v }
-            Err(_) => {}
+        if let Ok(v) = parse_int(cmap_get(cache, "ims_flow_count")) {
+            count = v
         }
     }
     if count > 0 { cmap_set(cache, "ims_flow_count", string(count - 1)) }

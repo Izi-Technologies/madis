@@ -47,7 +47,7 @@ fn tls_reuse_lookup(cache: CMap, host: string, port: int) -> int {
     let key = "tls_alias|" + host + ":" + string(port)
     if cmap_has(cache, key) == 0 { return -1 }
     let mut handle = -1
-    match parse_int(cmap_get(cache, key)) { Ok(v) => { handle = v } Err(_) => {} }
+    if let Ok(v) = parse_int(cmap_get(cache, key)) { handle = v }
     return handle
 }
 
@@ -57,7 +57,7 @@ fn tls_reuse_clear(cache: CMap, handle: int) -> int {
     // ponytail: linear scan over alias ring, reverse-index if volume matters.
     let mut seq = 0
     if cmap_has(cache, "tls_alias_seq") == 1 {
-        match parse_int(cmap_get(cache, "tls_alias_seq")) { Ok(v) => { seq = v } Err(_) => {} }
+        if let Ok(v) = parse_int(cmap_get(cache, "tls_alias_seq")) { seq = v }
     }
     let handle_str = string(handle)
     let mut i = 0

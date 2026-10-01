@@ -1,3 +1,4 @@
+pull . "./cache_owned.mko"
 // ============ DISPATCHER / LOAD BALANCER ============
 // dispatch_sets table: groups of servers with algorithm
 //   Algorithms: round-robin, weight, priority, hash, broadcast
@@ -48,8 +49,8 @@ fn parse_hhmm(s: string) -> int {
     if colon < 1 { return 0 }
     let mut h = 0
     let mut m = 0
-    match parse_int(s[0:colon]) { Ok(v) => { h = v } Err(_) => {} }
-    match parse_int(s[colon + 1:]) { Ok(v) => { m = v } Err(_) => {} }
+    if let Ok(v) = parse_int(s[0:colon]) { h = v }
+    if let Ok(v) = parse_int(s[colon + 1:]) { m = v }
     return h * 100 + m
 }
 
@@ -140,7 +141,7 @@ fn dispatch_is_healthy(addr: string, cache: CMap) -> int {
     let until_key = "health_until|" + addr
     if cmap_has(cache, until_key) == 1 {
         let mut until = 0
-        match parse_int(cmap_get(cache, until_key)) { Ok(v) => { until = v } Err(_) => {} }
+        if let Ok(v) = parse_int(cmap_get(cache, until_key)) { until = v }
         if until > mono_ms() { return 0 }
         let _ = cmap_del(cache, until_key)
         let _ = bounded_cache_set(cache, "health_state_seq", "health_state_ring|", key, "half-open", 16384)
@@ -160,7 +161,7 @@ fn dispatch_health_note(addr: string, ok: int, cache: CMap) -> int {
         let _ = cmap_del(cache, "health_until|" + addr)
         return 1
     }
-    let failures = cmap_incr(cache, fail_key, 1)
+    let failures = cache_incr(cache, fail_key, 1)
     if failures >= 3 {
         let mut backoff = failures * 1000
         if backoff > 60000 { backoff = 60000 }
@@ -191,7 +192,7 @@ fn dispatch_probe_member(addr: string, cache: CMap) -> string {
 }
 
 // Probe result on a cap-4 int channel: the index if healthy, else -1.
-// chan_new(4) uses the 0.6.32 inline ring — no heap buffer.
+// chan_new(4) uses the inline ring — no heap buffer.
 fn dispatch_probe_send(addr: string, idx: int, cache: CMap, ch: chan[int]) -> int {
     if len(addr) > 0 && dispatch_is_healthy(addr, cache) == 1 {
         let _ = ch.send(idx)
@@ -241,14 +242,14 @@ fn resolve_dispatch_set(db: SqlDB, set_name: string, from_user: string, call_id:
 
     if cmap_has(cache, meta_key) == 1 && cmap_has(cache, meta_ts_key) == 1 {
         let mut at = 0
-        match parse_int(cmap_get(cache, meta_ts_key)) { Ok(v) => { at = v } Err(_) => {} }
+        if let Ok(v) = parse_int(cmap_get(cache, meta_ts_key)) { at = v }
         if at > 0 && now_dsp - at < 5000 {
             meta_fresh = 1
             let cached = cmap_get(cache, meta_key)
             // Format: "set_id|algo|addr1,addr2,..."
             let pipe1 = str_index(cached, "|")
             if pipe1 > 0 {
-                match parse_int(cached[0:pipe1]) { Ok(v) => { set_id = v } Err(_) => {} }
+                if let Ok(v) = parse_int(cached[0:pipe1]) { set_id = v }
                 let rest = "" + cached[pipe1 + 1:]
                 let pipe2 = str_index(rest, "|")
                 if pipe2 >= 0 {
@@ -366,7 +367,7 @@ fn resolve_gateway_cached(db: SqlDB, gw_name: string, cache: CMap) -> string {
     let ts_key = "gw_ts|" + gw_name
     if cmap_has(cache, key) == 1 && cmap_has(cache, ts_key) == 1 {
         let mut at = 0
-        match parse_int(cmap_get(cache, ts_key)) { Ok(v) => { at = v } Err(_) => {} }
+        if let Ok(v) = parse_int(cmap_get(cache, ts_key)) { at = v }
         if at > 0 && mono_ms() - at < 30000 { return cmap_get(cache, key) }
     }
     let addr = sql_query_str(db, "SELECT address || ':' || port FROM gateways WHERE name = $1 AND enabled = true", gw_name)
@@ -419,7 +420,7 @@ fn db_route_call(db: SqlDB, db_ok: int, callee: string, caller: string, src_ip: 
     let mut rules_fresh = 0
     if cmap_has(cache, rule_cache_key) == 1 && cmap_has(cache, rule_ts_key) == 1 {
         let mut rule_at = 0
-        match parse_int(cmap_get(cache, rule_ts_key)) { Ok(v) => { rule_at = v } Err(_) => {} }
+        if let Ok(v) = parse_int(cmap_get(cache, rule_ts_key)) { rule_at = v }
         if rule_at > 0 && now_cache - rule_at < 10000 {
             rules_fresh = 1
             rule_rows = str_split(cmap_get(cache, rule_cache_key), "\n")
@@ -631,16 +632,16 @@ fn routing_record_outcome(cache: CMap, gateway: string, prefix: string, answered
         let cached = cmap_get(cache, key)
         let p1 = str_index(cached, "|")
         if p1 > 0 {
-            match parse_int(cached[0:p1]) { Ok(v) => { attempts = v } Err(_) => {} }
+            if let Ok(v) = parse_int(cached[0:p1]) { attempts = v }
             let r1 = cached[p1 + 1:]
             let p2 = str_index(r1, "|")
             if p2 > 0 {
-                match parse_int(r1[0:p2]) { Ok(v) => { ans = v } Err(_) => {} }
+                if let Ok(v) = parse_int(r1[0:p2]) { ans = v }
                 let r2 = r1[p2 + 1:]
                 let p3 = str_index(r2, "|")
                 if p3 > 0 {
-                    match parse_int(r2[0:p3]) { Ok(v) => { dur = v } Err(_) => {} }
-                    match parse_int(r2[p3 + 1:]) { Ok(v) => { pdd_total = v } Err(_) => {} }
+                    if let Ok(v) = parse_int(r2[0:p3]) { dur = v }
+                    if let Ok(v) = parse_int(r2[p3 + 1:]) { pdd_total = v }
                 }
             }
         }
@@ -686,16 +687,16 @@ fn routing_gateway_score(cache: CMap, gateway: string, prefix: string) -> int {
     let mut pdd_total = 0
     let p1 = str_index(cached, "|")
     if p1 > 0 {
-        match parse_int(cached[0:p1]) { Ok(v) => { attempts = v } Err(_) => {} }
+        if let Ok(v) = parse_int(cached[0:p1]) { attempts = v }
         let r1 = cached[p1 + 1:]
         let p2 = str_index(r1, "|")
         if p2 > 0 {
-            match parse_int(r1[0:p2]) { Ok(v) => { ans = v } Err(_) => {} }
+            if let Ok(v) = parse_int(r1[0:p2]) { ans = v }
             let r2 = r1[p2 + 1:]
             let p3 = str_index(r2, "|")
             if p3 > 0 {
-                match parse_int(r2[0:p3]) { Ok(v) => { dur = v } Err(_) => {} }
-                match parse_int(r2[p3 + 1:]) { Ok(v) => { pdd_total = v } Err(_) => {} }
+                if let Ok(v) = parse_int(r2[0:p3]) { dur = v }
+                if let Ok(v) = parse_int(r2[p3 + 1:]) { pdd_total = v }
             }
         }
     }

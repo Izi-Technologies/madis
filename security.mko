@@ -12,7 +12,7 @@ fn sec_is_banned(db: SqlDB, db_ok: int, src_ip: string, cache: CMap) -> int {
         let pipe = str_index(cached, "|")
         if pipe > 0 {
             let mut cached_at = 0
-            match parse_int(cached[pipe + 1:]) { Ok(v) => { cached_at = v } Err(_) => {} }
+            if let Ok(v) = parse_int(cached[pipe + 1:]) { cached_at = v }
             if cached_at > 0 && now - cached_at < 5000 {
                 if int(cached[0]) == 49 { return 1 }
                 return 0
@@ -48,10 +48,10 @@ fn sec_auth_failure(db: SqlDB, db_ok: int, src_ip: string, sip_user: string, cac
     let mut threshold = 5
     let thresh_key = "sec_auth_thresh"
     if cmap_has(cache, thresh_key) == 1 {
-        match parse_int(cmap_get(cache, thresh_key)) { Ok(v) => { threshold = v } Err(_) => {} }
+        if let Ok(v) = parse_int(cmap_get(cache, thresh_key)) { threshold = v }
     } else if db_ok == 1 {
         let thresh_str = sql_query_str(db, "SELECT value FROM config WHERE key = $1", "security_max_auth_failures")
-        if len(thresh_str) > 0 { match parse_int(thresh_str) { Ok(v) => { threshold = v } Err(_) => {} } }
+        if len(thresh_str) > 0 { if let Ok(v) = parse_int(thresh_str) { threshold = v } }
         cmap_set(cache, thresh_key, string(threshold))
     }
     if threshold < 1 || threshold > 100000 { threshold = 5 }
@@ -61,10 +61,10 @@ fn sec_auth_failure(db: SqlDB, db_ok: int, src_ip: string, sip_user: string, cac
         let mut ban_dur = 60
         let ban_key = "sec_ban_dur"
         if cmap_has(cache, ban_key) == 1 {
-            match parse_int(cmap_get(cache, ban_key)) { Ok(v) => { ban_dur = v } Err(_) => {} }
+            if let Ok(v) = parse_int(cmap_get(cache, ban_key)) { ban_dur = v }
         } else if db_ok == 1 {
             let raw = sql_query_str(db, "SELECT value FROM config WHERE key = $1", "security_ban_duration_min")
-            if len(raw) > 0 { match parse_int(raw) { Ok(v) => { if v >= 1 && v <= 10080 { ban_dur = v } } Err(_) => {} } }
+            if len(raw) > 0 { if let Ok(v) = parse_int(raw) { if v >= 1 && v <= 10080 { ban_dur = v } } }
             cmap_set(cache, ban_key, string(ban_dur))
         }
         if db_ok == 1 {
@@ -174,7 +174,7 @@ fn sec_is_enum_scanner(src_ip: string, username: string, cache: CMap) -> int {
     // Reset window every 60s
     let mut last = 0
     if cmap_has(cache, ts_key) == 1 {
-        match parse_int(cmap_get(cache, ts_key)) { Ok(v) => { last = v } Err(_) => {} }
+        if let Ok(v) = parse_int(cmap_get(cache, ts_key)) { last = v }
     }
     if last == 0 || now - last > 60000 {
         let _ = bounded_cache_set(cache, "enum_seq", "enum_ring|", set_key, safe_user, 16384)
@@ -216,14 +216,14 @@ fn sec_method_rate_check(src_ip: string, method: string, cache: CMap) -> int {
     if str_eq(method, "INVITE") {
         // Default: 20 INVITE/sec per IP — enough for a PBX, kills dialers
         let mut limit = 20
-        match parse_int(env_get_or("SIP_INVITE_RATE_LIMIT", "20")) { Ok(v) => { limit = v } Err(_) => {} }
+        if let Ok(v) = parse_int(env_get_or("SIP_INVITE_RATE_LIMIT", "20")) { limit = v }
         if limit <= 0 { return 1 }
         return rate_allow("sip_inv|" + src_ip, limit, 1000)
     }
     if str_eq(method, "REGISTER") {
         // Default: 10 REGISTER/sec per IP
         let mut limit = 10
-        match parse_int(env_get_or("SIP_REGISTER_RATE_LIMIT", "10")) { Ok(v) => { limit = v } Err(_) => {} }
+        if let Ok(v) = parse_int(env_get_or("SIP_REGISTER_RATE_LIMIT", "10")) { limit = v }
         if limit <= 0 { return 1 }
         return rate_allow("sip_reg|" + src_ip, limit, 1000)
     }
@@ -236,7 +236,7 @@ fn sec_auth_delay_ms(src_ip: string, cache: CMap) -> int {
     let key = "auth_fail_count|" + src_ip
     let mut count = 0
     if cmap_has(cache, key) == 1 {
-        match parse_int(cmap_get(cache, key)) { Ok(v) => { count = v } Err(_) => {} }
+        if let Ok(v) = parse_int(cmap_get(cache, key)) { count = v }
     }
     // 0-2 failures: no delay. 3-5: 500ms. 6-9: 1s. 10+: 2s.
     if count < 3 { return 0 }
@@ -249,7 +249,7 @@ fn sec_auth_fail_incr(src_ip: string, cache: CMap) -> int {
     let key = "auth_fail_count|" + src_ip
     let mut count = 0
     if cmap_has(cache, key) == 1 {
-        match parse_int(cmap_get(cache, key)) { Ok(v) => { count = v } Err(_) => {} }
+        if let Ok(v) = parse_int(cmap_get(cache, key)) { count = v }
     }
     count = count + 1
     let _ = bounded_cache_set(cache, "auth_fail_seq", "auth_fail_ring|", key, string(count), 16384)

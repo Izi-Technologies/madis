@@ -66,36 +66,64 @@ fn TestStreamAppendEmpty() {
 }
 
 fn TestStreamAppendOverCap() {
-    // stream_max_buf is 1MB. Verify that appending past the cap returns ""
-    let buf = "existing-buffer-data"
-    // A chunk that would push total past 1MB should fail
-    let result = stream_append(buf, "")
-    // Empty chunk returns buf unchanged
-    assert_eq_str(result, buf)
-    // Verify the cap function
     assert_eq(stream_max_buf(), 1048576)
+    let mut chunk = "0123456789abcdef"
+    let mut i = 0
+    while i < 16 { chunk = chunk + chunk; i = i + 1 }
+    assert_eq(len(chunk), stream_max_buf())
+    let retained = stream_append("", chunk)
+    assert_eq_str(retained, chunk)
+    assert_eq_str(stream_append("x", chunk), "")
+    chunk = chunk + "x"
+    assert_eq_str(stream_append("", chunk), "")
+    assert_eq(len(retained), stream_max_buf())
 }
 
 fn TestStreamNextMsgComplete() {
     let msg = "REGISTER sip:x SIP/2.0\r\nVia: SIP/2.0/UDP 1.2.3.4;branch=z9hG4bK1\r\nFrom: <sip:a@b>;tag=t\r\nTo: <sip:a@b>\r\nCall-ID: c\r\nCSeq: 1 REGISTER\r\nMax-Forwards: 70\r\nContent-Length: 0\r\n\r\n"
     let parts = stream_next_msg(msg)
-    assert_eq_str(parts[0], msg)
-    assert_eq_str(parts[1], "")
+    assert_eq_str(parts.message, msg)
+    assert_eq_str(parts.remainder, "")
 }
 
 fn TestStreamNextMsgIncomplete() {
     let partial = "REGISTER sip:x SIP/2.0\r\nVia: SIP/2.0/UDP 1.2.3.4;branch=z9"
     let parts = stream_next_msg(partial)
-    assert_eq_str(parts[0], "")
-    assert_eq_str(parts[1], partial)
+    assert_eq_str(parts.message, "")
+    assert_eq_str(parts.remainder, partial)
+}
+
+// Return through a local struct, then replace the input and an alias. This
+// exercises RC retention and same-storage reassignment in the worker pattern.
+fn stream_test_owned_message(buf: string) -> string {
+    let parts = stream_next_msg(buf)
+    return parts.message
+}
+
+fn TestStreamMessageSurvivesBufferReplacement() {
+    let mut i = 0
+    while i < 500 {
+        let expected = "OPTIONS sip:test@example.com SIP/2.0\r\nCall-ID: rc-" + string(i) + "\r\nContent-Length: 0\r\n\r\n"
+        let mut buffer = stream_append("", expected)
+        let message = stream_test_owned_message(buffer)
+        buffer = "next-" + string(i)
+        let mut alias = message
+        alias = message
+        assert_eq_str(alias, expected)
+        alias = alias + "changed"
+        assert_eq_str(message, expected)
+        assert_eq_str(buffer, "next-" + string(i))
+        assert_eq_str(alias, expected + "changed")
+        i = i + 1
+    }
 }
 
 fn TestStreamNextMsgTwoMessages() {
     let msg1 = "REGISTER sip:x SIP/2.0\r\nVia: SIP/2.0/UDP 1.2.3.4;branch=z9hG4bK1\r\nFrom: <sip:a@b>;tag=t\r\nTo: <sip:a@b>\r\nCall-ID: c1\r\nCSeq: 1 REGISTER\r\nMax-Forwards: 70\r\nContent-Length: 0\r\n\r\n"
     let msg2 = "REGISTER sip:x SIP/2.0\r\nVia: SIP/2.0/UDP 1.2.3.4;branch=z9hG4bK2\r\nFrom: <sip:a@b>;tag=t\r\nTo: <sip:a@b>\r\nCall-ID: c2\r\nCSeq: 2 REGISTER\r\nMax-Forwards: 70\r\nContent-Length: 0\r\n\r\n"
     let parts = stream_next_msg(msg1 + msg2)
-    assert_eq_str(parts[0], msg1)
-    assert_eq_str(parts[1], msg2)
+    assert_eq_str(parts.message, msg1)
+    assert_eq_str(parts.remainder, msg2)
 }
 
 fn TestStreamHasComplete() {
@@ -103,6 +131,75 @@ fn TestStreamHasComplete() {
     assert_eq(stream_has_complete(complete), 1)
     assert_eq(stream_has_complete("partial SIP header"), 0)
     assert_eq(stream_has_complete(""), 0)
+}
+
+fn stream_test_wire(id: string, body: string) -> string {
+    return "MESSAGE sip:test@example.com SIP/2.0\r\nCall-ID: " + id + "\r\nContent-Length: " + string(len(body)) + "\r\n\r\n" + body
+}
+
+fn stream_test_retained_tail(frame: StreamFrame) -> string {
+    return frame.remainder
+}
+
+fn TestStreamBinaryBodyAndIncompleteTail() {
+    let b = str_builder()
+    builder_write(b, "prefix")
+    builder_write_byte(b, byte(0))
+    builder_write(b, "\r\n\r\nSIP/2.0 200 OK\r\nsuffix")
+    let body = builder_string(b)
+    let expected = stream_test_wire("binary", body)
+    let tail = "OPTIONS sip:next@example.com SIP/2.0\r\nContent-Len"
+    let mut buffer = expected + tail
+    let first = stream_next_msg(buffer)
+    buffer = stream_test_retained_tail(first)
+    let pending = stream_next_msg(buffer)
+    buffer = "replaced"
+    assert_eq_str(first.message, expected)
+    assert_eq(len(first.message), len(expected))
+    assert_eq_str(first.remainder, tail)
+    assert_eq_str(pending.message, "")
+    assert_eq_str(pending.remainder, tail)
+    assert_eq_str(buffer, "replaced")
+}
+
+fn TestStreamEveryFragmentBoundary() {
+    let expected = stream_test_wire("fragmented", "v=0\r\nm=audio 4000 RTP/AVP 0\r\n")
+    let mut cut = 1
+    while cut < len(expected) {
+        let mut buffer = stream_append("", expected[0:cut])
+        let pending = stream_next_msg(buffer)
+        assert_eq_str(pending.message, "")
+        assert_eq_str(pending.remainder, buffer)
+        buffer = stream_append(pending.remainder, expected[cut:])
+        let complete = stream_next_msg(buffer)
+        buffer = ""
+        assert_eq_str(complete.message, expected)
+        assert_eq_str(complete.remainder, "")
+        assert_eq_str(pending.remainder, expected[0:cut])
+        cut = cut + 1
+    }
+}
+
+fn TestStreamRetainedPipelineFrames() {
+    let one = stream_test_wire("one", "one")
+    let two = stream_test_wire("two", "two\r\n\r\n")
+    let three = stream_test_wire("three", "three")
+    let mut buffer = one + two + three
+    let first = stream_next_msg(buffer)
+    buffer = stream_test_retained_tail(first)
+    let second = stream_next_msg(buffer)
+    buffer = stream_test_retained_tail(second)
+    let third = stream_next_msg(buffer)
+    buffer = third.remainder
+    assert_eq_str(buffer, "")
+    assert_eq_str(first.message, one)
+    assert_eq_str(second.message, two)
+    assert_eq_str(third.message, three)
+    assert_eq_str(first.remainder, two + three)
+    assert_eq_str(second.remainder, three)
+    let empty = stream_next_msg(buffer)
+    assert_eq_str(empty.message, "")
+    assert_eq_str(empty.remainder, "")
 }
 
 // --- PROXY protocol config ---
