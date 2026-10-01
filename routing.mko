@@ -1,3 +1,4 @@
+pull . "./cache_owned.mko"
 // ============ DISPATCHER / LOAD BALANCER ============
 // dispatch_sets table: groups of servers with algorithm
 //   Algorithms: round-robin, weight, priority, hash, broadcast
@@ -160,7 +161,7 @@ fn dispatch_health_note(addr: string, ok: int, cache: CMap) -> int {
         let _ = cmap_del(cache, "health_until|" + addr)
         return 1
     }
-    let failures = cmap_incr(cache, fail_key, 1)
+    let failures = cache_incr(cache, fail_key, 1)
     if failures >= 3 {
         let mut backoff = failures * 1000
         if backoff > 60000 { backoff = 60000 }

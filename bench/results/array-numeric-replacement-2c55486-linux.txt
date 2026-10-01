@@ -1,0 +1,24 @@
+mako test: /tmp/madis-array-numeric-2c55486/ownership_test.mko
+=== /tmp/madis-array-numeric-2c55486/ownership_test.mko ===
+--- PASS: TestNumericStringArrayReplacementOwnership
+PASS
+
+=================================================================
+==1802337==ERROR: LeakSanitizer: detected memory leaks
+
+Direct leak of 500 byte(s) in 100 object(s) allocated from:
+    #0 0x6056ce88c3d3 in malloc (/tmp/mako_gotest_c_ownership_test_1802231+0xca3d3) (BuildId: b228c36a6054cbe929ddd4dd85b5ea3c45d93894)
+    #1 0x6056ce8c6c3f in mako_int_to_string /tmp/madis-makori-2c55486/runtime/mako_rt.h:2657:23
+    #2 0x6056ce8c4bdc in TestNumericStringArrayReplacementOwnership /tmp/madis-array-numeric-2c55486/ownership_test.mko:17:59
+    #3 0x6056ce8c8646 in mako_test_run /tmp/madis-makori-2c55486/runtime/mako_rt.h:11912:9
+    #4 0x6056ce8c8118 in main /root/<mako-codegen>:6:15
+    #5 0x726f2fc2a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+    #6 0x726f2fc2a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+    #7 0x6056ce7f3394 in _start (/tmp/mako_gotest_c_ownership_test_1802231+0x31394) (BuildId: b228c36a6054cbe929ddd4dd85b5ea3c45d93894)
+
+SUMMARY: AddressSanitizer: 500 byte(s) leaked in 100 allocation(s).
+error: /tmp/madis-array-numeric-2c55486/ownership_test.mko: test process exited with code 1 (see the assertion output above)
+
+FAIL  /tmp/madis-array-numeric-2c55486/ownership_test.mko
+
+mako test: 0 passed, 1 failed

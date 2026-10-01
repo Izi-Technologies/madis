@@ -1,0 +1,9 @@
+normal exit=0
+missing exit=0
+mode=missing iterations=1000 fallback_checks=passed
+empty exit=1
+
+SUMMARY: AddressSanitizer: 1000 byte(s) leaked in 1000 allocation(s).
+composite exit=1
+
+SUMMARY: AddressSanitizer: 1000 byte(s) leaked in 1000 allocation(s).

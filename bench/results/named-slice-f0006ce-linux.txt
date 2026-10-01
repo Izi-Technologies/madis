@@ -1,0 +1,7 @@
+mako test: /tmp/madis-named-slice-e241e7a/ownership_test.mko
+=== /tmp/madis-named-slice-e241e7a/ownership_test.mko ===
+--- PASS: TestNamedSliceOwnership
+PASS
+ok  /tmp/madis-named-slice-e241e7a/ownership_test.mko (4340ms)
+
+mako test: 1 passed, 0 failed

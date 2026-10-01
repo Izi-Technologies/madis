@@ -1,3 +1,4 @@
+pull . "./cache_owned.mko"
 // ============ REGISTRATION LIFECYCLE ============
 // In-memory bindings are deliberately bounded and expire lazily on lookup.
 // The database keeps the same binding data for cluster failover.
@@ -118,18 +119,13 @@ fn registration_nat_target(value: string) -> string {
     if p3 < 0 { return "" }
     let rest3 = rest2[p3 + 1:]
     let p4 = str_index(rest3, "|")
-    let mut src_ip = ""
-    let mut src_port = ""
-    if p4 >= 0 {
-        src_ip = rest3[0:p4]
-        src_port = rest3[p4 + 1:]
-        // src_port may have more fields after it
-        let p5 = str_index(src_port, "|")
-        if p5 >= 0 { src_port = src_port[0:p5] }
-    } else {
-        src_ip = rest3
-    }
+    if p4 < 0 { return "" }
+    let src_ip = str_slice(rest3, 0, p4)
     if len(src_ip) == 0 || is_private_ip(src_ip) == 1 { return "" }
+    let port_tail = str_slice(rest3, p4 + 1, len(rest3))
+    let p5 = str_index(port_tail, "|")
+    let port_end = if p5 >= 0 { p5 } else { len(port_tail) }
+    let src_port = str_slice(port_tail, 0, port_end)
     if len(src_port) == 0 || str_eq(src_port, "0") { return "" }
     return src_ip + ":" + src_port
 }
@@ -228,7 +224,7 @@ fn registration_clear_aor(reg: CMap, aor: string) -> int {
 fn registration_track_aor(reg: CMap, aor: string) -> int {
     let first_slot = "reg|" + aor + "|0"
     if cmap_has(reg, first_slot) == 1 { return 1 }
-    let seq = cmap_incr(reg, "reg_aor_seq", 1)
+    let seq = cache_incr(reg, "reg_aor_seq", 1)
     let capacity = 65536
     let slot = seq - (seq / capacity) * capacity
     let ring_key = "reg_aor_ring|" + string(slot)

@@ -1,0 +1,346 @@
+mako: pg_connect: bad url
+probe_status=404
+
+=================================================================
+==1752136==ERROR: LeakSanitizer: detected memory leaks
+
+Direct leak of 8000 byte(s) in 100 object(s) allocated from:
+    #0 0x7e71c00fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5ca11f6f6771 in mako_rc_alloc /root/.local/share/mako/runtime/mako_rt.h:95
+    #2 0x5ca11f6f6771 in mako_rc_calloc /root/.local/share/mako/runtime/mako_rt.h:107
+    #3 0x5ca11f6f6771 in mako_str_array_make /root/.local/share/mako/runtime/mako_rt.h:1068
+    #4 0x5ca11f6f6771 in rtp_config /tmp/madis-framing.CaJYWe/rtpengine.mko:312
+    #5 0x5ca11f6fc82c in rtp_process_offer /tmp/madis-framing.CaJYWe/rtpengine.mko:491
+    #6 0x5ca11f8f7e30 in process_sip_core__impl /tmp/madis-framing.CaJYWe/workers.mko:1241
+    #7 0x5ca11f91f200 in process_sip_core /tmp/madis-framing.CaJYWe/workers.mko:1710
+    #8 0x5ca11f95776d in main /tmp/madis-opensips.6Xq9rD/proxy_allocation_probe.c:34
+    #9 0x7e71bee2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #10 0x7e71bee2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #11 0x5ca11f537104 in _start (/tmp/madis-opensips.6Xq9rD/proxy-allocation-transfer+0x1db104) (BuildId: 0748aefaf6082e25dab31ecbdd575a40c0557408)
+
+Direct leak of 6500 byte(s) in 100 object(s) allocated from:
+    #0 0x7e71c00fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5ca11f737f75 in mako_sha256_hex /root/.local/share/mako/runtime/mako_std.h:6607
+    #2 0x5ca11f737f75 in b2bua_key /tmp/madis-framing.CaJYWe/b2bua.mko:31
+    #3 0x5ca11f737f75 in b2bua_lookup_in /tmp/madis-framing.CaJYWe/b2bua.mko:171
+    #4 0x5ca11f8d18fc in process_sip_core__impl /tmp/madis-framing.CaJYWe/workers.mko:590
+    #5 0x5ca11f91f200 in process_sip_core /tmp/madis-framing.CaJYWe/workers.mko:1710
+    #6 0x5ca11f95776d in main /tmp/madis-opensips.6Xq9rD/proxy_allocation_probe.c:34
+    #7 0x7e71bee2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #8 0x7e71bee2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #9 0x5ca11f537104 in _start (/tmp/madis-opensips.6Xq9rD/proxy-allocation-transfer+0x1db104) (BuildId: 0748aefaf6082e25dab31ecbdd575a40c0557408)
+
+Direct leak of 6500 byte(s) in 100 object(s) allocated from:
+    #0 0x7e71c00fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5ca11f81a43f in mako_sha256_hex /root/.local/share/mako/runtime/mako_std.h:6607
+    #2 0x5ca11f81a43f in maf_worker_inbound_call_id /tmp/madis-framing.CaJYWe/maf_worker.mko:353
+    #3 0x5ca11f81c436 in maf_worker_inbound_call_for_wire /tmp/madis-framing.CaJYWe/maf_worker.mko:432
+    #4 0x5ca11f8d990f in process_sip_core__impl /tmp/madis-framing.CaJYWe/workers.mko:641
+    #5 0x5ca11f91f200 in process_sip_core /tmp/madis-framing.CaJYWe/workers.mko:1710
+    #6 0x5ca11f95776d in main /tmp/madis-opensips.6Xq9rD/proxy_allocation_probe.c:34
+    #7 0x7e71bee2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #8 0x7e71bee2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #9 0x5ca11f537104 in _start (/tmp/madis-opensips.6Xq9rD/proxy-allocation-transfer+0x1db104) (BuildId: 0748aefaf6082e25dab31ecbdd575a40c0557408)
+
+Direct leak of 6100 byte(s) in 100 object(s) allocated from:
+    #0 0x7e71c00fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5ca11f580218 in mako_rc_alloc /root/.local/share/mako/runtime/mako_rt.h:95
+    #2 0x5ca11f580218 in mako_str_concat /root/.local/share/mako/runtime/mako_rt.h:529
+    #3 0x5ca11f81c4e6 in maf_worker_inbound_cache_get /tmp/madis-framing.CaJYWe/maf_worker.mko:428
+    #4 0x5ca11f81c4e6 in maf_worker_inbound_call_for_wire /tmp/madis-framing.CaJYWe/maf_worker.mko:435
+    #5 0x5ca11f8d990f in process_sip_core__impl /tmp/madis-framing.CaJYWe/workers.mko:641
+    #6 0x5ca11f91f200 in process_sip_core /tmp/madis-framing.CaJYWe/workers.mko:1710
+    #7 0x5ca11f95776d in main /tmp/madis-opensips.6Xq9rD/proxy_allocation_probe.c:34
+    #8 0x7e71bee2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #9 0x7e71bee2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #10 0x5ca11f537104 in _start (/tmp/madis-opensips.6Xq9rD/proxy-allocation-transfer+0x1db104) (BuildId: 0748aefaf6082e25dab31ecbdd575a40c0557408)
+
+Direct leak of 5390 byte(s) in 100 object(s) allocated from:
+    #0 0x7e71c00fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5ca11f5bbdc1 in mako_rc_alloc /root/.local/share/mako/runtime/mako_rt.h:95
+    #2 0x5ca11f5bbdc1 in mako_str_concat_own /root/.local/share/mako/runtime/mako_rt.h:551
+    #3 0x5ca11f81a417 in maf_worker_inbound_call_id /tmp/madis-framing.CaJYWe/maf_worker.mko:352
+    #4 0x5ca11f81c436 in maf_worker_inbound_call_for_wire /tmp/madis-framing.CaJYWe/maf_worker.mko:432
+    #5 0x5ca11f8d990f in process_sip_core__impl /tmp/madis-framing.CaJYWe/workers.mko:641
+    #6 0x5ca11f91f200 in process_sip_core /tmp/madis-framing.CaJYWe/workers.mko:1710
+    #7 0x5ca11f95776d in main /tmp/madis-opensips.6Xq9rD/proxy_allocation_probe.c:34
+    #8 0x7e71bee2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #9 0x7e71bee2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #10 0x5ca11f537104 in _start (/tmp/madis-opensips.6Xq9rD/proxy-allocation-transfer+0x1db104) (BuildId: 0748aefaf6082e25dab31ecbdd575a40c0557408)
+
+Direct leak of 5300 byte(s) in 100 object(s) allocated from:
+    #0 0x7e71c00fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5ca11f580218 in mako_rc_alloc /root/.local/share/mako/runtime/mako_rt.h:95
+    #2 0x5ca11f580218 in mako_str_concat /root/.local/share/mako/runtime/mako_rt.h:529
+    #3 0x5ca11f735c2d in b2bua_active /tmp/madis-framing.CaJYWe/b2bua.mko:118
+    #4 0x5ca11f737d68 in b2bua_lookup_in /tmp/madis-framing.CaJYWe/b2bua.mko:167
+    #5 0x5ca11f8d18fc in process_sip_core__impl /tmp/madis-framing.CaJYWe/workers.mko:590
+    #6 0x5ca11f91f200 in process_sip_core /tmp/madis-framing.CaJYWe/workers.mko:1710
+    #7 0x5ca11f95776d in main /tmp/madis-opensips.6Xq9rD/proxy_allocation_probe.c:34
+    #8 0x7e71bee2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #9 0x7e71bee2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #10 0x5ca11f537104 in _start (/tmp/madis-opensips.6Xq9rD/proxy-allocation-transfer+0x1db104) (BuildId: 0748aefaf6082e25dab31ecbdd575a40c0557408)
+
+Direct leak of 4590 byte(s) in 100 object(s) allocated from:
+    #0 0x7e71c00fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5ca11f5bbdc1 in mako_rc_alloc /root/.local/share/mako/runtime/mako_rt.h:95
+    #2 0x5ca11f5bbdc1 in mako_str_concat_own /root/.local/share/mako/runtime/mako_rt.h:551
+    #3 0x5ca11f737f50 in b2bua_key /tmp/madis-framing.CaJYWe/b2bua.mko:30
+    #4 0x5ca11f737f50 in b2bua_lookup_in /tmp/madis-framing.CaJYWe/b2bua.mko:171
+    #5 0x5ca11f8d18fc in process_sip_core__impl /tmp/madis-framing.CaJYWe/workers.mko:590
+    #6 0x5ca11f91f200 in process_sip_core /tmp/madis-framing.CaJYWe/workers.mko:1710
+    #7 0x5ca11f95776d in main /tmp/madis-opensips.6Xq9rD/proxy_allocation_probe.c:34
+    #8 0x7e71bee2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #9 0x7e71bee2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #10 0x5ca11f537104 in _start (/tmp/madis-opensips.6Xq9rD/proxy-allocation-transfer+0x1db104) (BuildId: 0748aefaf6082e25dab31ecbdd575a40c0557408)
+
+Direct leak of 4190 byte(s) in 100 object(s) allocated from:
+    #0 0x7e71c00fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5ca11f580218 in mako_rc_alloc /root/.local/share/mako/runtime/mako_rt.h:95
+    #2 0x5ca11f580218 in mako_str_concat /root/.local/share/mako/runtime/mako_rt.h:529
+    #3 0x5ca11f738914 in b2bua_lookup_out /tmp/madis-framing.CaJYWe/b2bua.mko:175
+    #4 0x5ca11f8d1952 in process_sip_core__impl /tmp/madis-framing.CaJYWe/workers.mko:591
+    #5 0x5ca11f91f200 in process_sip_core /tmp/madis-framing.CaJYWe/workers.mko:1710
+    #6 0x5ca11f95776d in main /tmp/madis-opensips.6Xq9rD/proxy_allocation_probe.c:34
+    #7 0x7e71bee2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #8 0x7e71bee2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #9 0x5ca11f537104 in _start (/tmp/madis-opensips.6Xq9rD/proxy-allocation-transfer+0x1db104) (BuildId: 0748aefaf6082e25dab31ecbdd575a40c0557408)
+
+Direct leak of 3300 byte(s) in 100 object(s) allocated from:
+    #0 0x7e71c00fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5ca11f81a6c6 in mako_str_slice /root/.local/share/mako/runtime/mako_rt.h:2284
+    #2 0x5ca11f81a6c6 in maf_worker_inbound_call_id /tmp/madis-framing.CaJYWe/maf_worker.mko:354
+    #3 0x5ca11f81c436 in maf_worker_inbound_call_for_wire /tmp/madis-framing.CaJYWe/maf_worker.mko:432
+    #4 0x5ca11f8d990f in process_sip_core__impl /tmp/madis-framing.CaJYWe/workers.mko:641
+    #5 0x5ca11f91f200 in process_sip_core /tmp/madis-framing.CaJYWe/workers.mko:1710
+    #6 0x5ca11f95776d in main /tmp/madis-opensips.6Xq9rD/proxy_allocation_probe.c:34
+    #7 0x7e71bee2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #8 0x7e71bee2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #9 0x5ca11f537104 in _start (/tmp/madis-opensips.6Xq9rD/proxy-allocation-transfer+0x1db104) (BuildId: 0748aefaf6082e25dab31ecbdd575a40c0557408)
+
+Direct leak of 2600 byte(s) in 100 object(s) allocated from:
+    #0 0x7e71c00fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5ca11f5845fe in mako_sip_header_n /root/.local/share/mako/runtime/mako_sip.h:518
+    #2 0x5ca11f737c5e in mako_sip_header /root/.local/share/mako/runtime/mako_sip.h:541
+    #3 0x5ca11f737c5e in b2bua_lookup_in /tmp/madis-framing.CaJYWe/b2bua.mko:168
+    #4 0x5ca11f8d18fc in process_sip_core__impl /tmp/madis-framing.CaJYWe/workers.mko:590
+    #5 0x5ca11f91f200 in process_sip_core /tmp/madis-framing.CaJYWe/workers.mko:1710
+    #6 0x5ca11f95776d in main /tmp/madis-opensips.6Xq9rD/proxy_allocation_probe.c:34
+    #7 0x7e71bee2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #8 0x7e71bee2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #9 0x5ca11f537104 in _start (/tmp/madis-opensips.6Xq9rD/proxy-allocation-transfer+0x1db104) (BuildId: 0748aefaf6082e25dab31ecbdd575a40c0557408)
+
+Direct leak of 1900 byte(s) in 100 object(s) allocated from:
+    #0 0x7e71c00fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5ca11f57133e in mako_rc_alloc /root/.local/share/mako/runtime/mako_rt.h:95
+    #2 0x5ca11f57133e in mako_str_from_cstr /root/.local/share/mako/runtime/mako_rt.h:473
+    #3 0x5ca11f8d058b in process_sip_core__impl /tmp/madis-framing.CaJYWe/workers.mko:348
+    #4 0x5ca11f91f200 in process_sip_core /tmp/madis-framing.CaJYWe/workers.mko:1710
+    #5 0x5ca11f95776d in main /tmp/madis-opensips.6Xq9rD/proxy_allocation_probe.c:34
+    #6 0x7e71bee2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #7 0x7e71bee2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #8 0x5ca11f537104 in _start (/tmp/madis-opensips.6Xq9rD/proxy-allocation-transfer+0x1db104) (BuildId: 0748aefaf6082e25dab31ecbdd575a40c0557408)
+
+Direct leak of 1900 byte(s) in 100 object(s) allocated from:
+    #0 0x7e71c00fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5ca11f57133e in mako_rc_alloc /root/.local/share/mako/runtime/mako_rt.h:95
+    #2 0x5ca11f57133e in mako_str_from_cstr /root/.local/share/mako/runtime/mako_rt.h:473
+    #3 0x5ca11f8c75ff in process_sip_core__impl /tmp/madis-framing.CaJYWe/workers.mko:107
+    #4 0x5ca11f91f200 in process_sip_core /tmp/madis-framing.CaJYWe/workers.mko:1710
+    #5 0x5ca11f95776d in main /tmp/madis-opensips.6Xq9rD/proxy_allocation_probe.c:34
+    #6 0x7e71bee2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #7 0x7e71bee2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #8 0x5ca11f537104 in _start (/tmp/madis-opensips.6Xq9rD/proxy-allocation-transfer+0x1db104) (BuildId: 0748aefaf6082e25dab31ecbdd575a40c0557408)
+
+Direct leak of 1881 byte(s) in 99 object(s) allocated from:
+    #0 0x7e71c00fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5ca11f57133e in mako_rc_alloc /root/.local/share/mako/runtime/mako_rt.h:95
+    #2 0x5ca11f57133e in mako_str_from_cstr /root/.local/share/mako/runtime/mako_rt.h:473
+    #3 0x5ca11f8c80ff in process_sip_core__impl /tmp/madis-framing.CaJYWe/workers.mko:108
+    #4 0x5ca11f91f200 in process_sip_core /tmp/madis-framing.CaJYWe/workers.mko:1710
+    #5 0x5ca11f95776d in main /tmp/madis-opensips.6Xq9rD/proxy_allocation_probe.c:34
+    #6 0x7e71bee2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #7 0x7e71bee2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #8 0x5ca11f537104 in _start (/tmp/madis-opensips.6Xq9rD/proxy-allocation-transfer+0x1db104) (BuildId: 0748aefaf6082e25dab31ecbdd575a40c0557408)
+
+Direct leak of 1600 byte(s) in 100 object(s) allocated from:
+    #0 0x7e71c00fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5ca11f5481b3 in mako_rc_alloc /root/.local/share/mako/runtime/mako_rt.h:95
+    #2 0x5ca11f737b07 in mako_str_from_cstr /root/.local/share/mako/runtime/mako_rt.h:473
+    #3 0x5ca11f737b07 in b2bua_lookup_in /tmp/madis-framing.CaJYWe/b2bua.mko:166
+    #4 0x5ca11f8d18fc in process_sip_core__impl /tmp/madis-framing.CaJYWe/workers.mko:590
+    #5 0x5ca11f91f200 in process_sip_core /tmp/madis-framing.CaJYWe/workers.mko:1710
+    #6 0x5ca11f95776d in main /tmp/madis-opensips.6Xq9rD/proxy_allocation_probe.c:34
+    #7 0x7e71bee2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #8 0x7e71bee2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #9 0x5ca11f537104 in _start (/tmp/madis-opensips.6Xq9rD/proxy-allocation-transfer+0x1db104) (BuildId: 0748aefaf6082e25dab31ecbdd575a40c0557408)
+
+Direct leak of 1600 byte(s) in 100 object(s) allocated from:
+    #0 0x7e71c00fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5ca11f57133e in mako_rc_alloc /root/.local/share/mako/runtime/mako_rt.h:95
+    #2 0x5ca11f57133e in mako_str_from_cstr /root/.local/share/mako/runtime/mako_rt.h:473
+    #3 0x5ca11f8c788b in process_sip_core__impl /tmp/madis-framing.CaJYWe/workers.mko:343
+    #4 0x5ca11f91f200 in process_sip_core /tmp/madis-framing.CaJYWe/workers.mko:1710
+    #5 0x5ca11f95776d in main /tmp/madis-opensips.6Xq9rD/proxy_allocation_probe.c:34
+    #6 0x7e71bee2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #7 0x7e71bee2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #8 0x5ca11f537104 in _start (/tmp/madis-opensips.6Xq9rD/proxy-allocation-transfer+0x1db104) (BuildId: 0748aefaf6082e25dab31ecbdd575a40c0557408)
+
+Direct leak of 1600 byte(s) in 100 object(s) allocated from:
+    #0 0x7e71c00fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5ca11f738762 in mako_rc_alloc /root/.local/share/mako/runtime/mako_rt.h:95
+    #2 0x5ca11f738762 in mako_str_from_cstr /root/.local/share/mako/runtime/mako_rt.h:473
+    #3 0x5ca11f738762 in b2bua_lookup_out /tmp/madis-framing.CaJYWe/b2bua.mko:172
+    #4 0x5ca11f8d1952 in process_sip_core__impl /tmp/madis-framing.CaJYWe/workers.mko:591
+    #5 0x5ca11f91f200 in process_sip_core /tmp/madis-framing.CaJYWe/workers.mko:1710
+    #6 0x5ca11f95776d in main /tmp/madis-opensips.6Xq9rD/proxy_allocation_probe.c:34
+    #7 0x7e71bee2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #8 0x7e71bee2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #9 0x5ca11f537104 in _start (/tmp/madis-opensips.6Xq9rD/proxy-allocation-transfer+0x1db104) (BuildId: 0748aefaf6082e25dab31ecbdd575a40c0557408)
+
+Direct leak of 1300 byte(s) in 100 object(s) allocated from:
+    #0 0x7e71c00fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5ca11f5481b3 in mako_rc_alloc /root/.local/share/mako/runtime/mako_rt.h:95
+    #2 0x5ca11f737bc8 in mako_str_from_cstr /root/.local/share/mako/runtime/mako_rt.h:473
+    #3 0x5ca11f737bc8 in b2bua_lookup_in /tmp/madis-framing.CaJYWe/b2bua.mko:168
+    #4 0x5ca11f8d18fc in process_sip_core__impl /tmp/madis-framing.CaJYWe/workers.mko:590
+    #5 0x5ca11f91f200 in process_sip_core /tmp/madis-framing.CaJYWe/workers.mko:1710
+    #6 0x5ca11f95776d in main /tmp/madis-opensips.6Xq9rD/proxy_allocation_probe.c:34
+    #7 0x7e71bee2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #8 0x7e71bee2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #9 0x5ca11f537104 in _start (/tmp/madis-opensips.6Xq9rD/proxy-allocation-transfer+0x1db104) (BuildId: 0748aefaf6082e25dab31ecbdd575a40c0557408)
+
+Direct leak of 1300 byte(s) in 100 object(s) allocated from:
+    #0 0x7e71c00fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5ca11f57133e in mako_rc_alloc /root/.local/share/mako/runtime/mako_rt.h:95
+    #2 0x5ca11f57133e in mako_str_from_cstr /root/.local/share/mako/runtime/mako_rt.h:473
+    #3 0x5ca11f8c7955 in process_sip_core__impl /tmp/madis-framing.CaJYWe/workers.mko:344
+    #4 0x5ca11f91f200 in process_sip_core /tmp/madis-framing.CaJYWe/workers.mko:1710
+    #5 0x5ca11f95776d in main /tmp/madis-opensips.6Xq9rD/proxy_allocation_probe.c:34
+    #6 0x7e71bee2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #7 0x7e71bee2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #8 0x5ca11f537104 in _start (/tmp/madis-opensips.6Xq9rD/proxy-allocation-transfer+0x1db104) (BuildId: 0748aefaf6082e25dab31ecbdd575a40c0557408)
+
+Direct leak of 1300 byte(s) in 100 object(s) allocated from:
+    #0 0x7e71c00fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5ca11f57133e in mako_rc_alloc /root/.local/share/mako/runtime/mako_rt.h:95
+    #2 0x5ca11f57133e in mako_str_from_cstr /root/.local/share/mako/runtime/mako_rt.h:473
+    #3 0x5ca11f6c05a2 in sip_transaction_fresh /tmp/madis-framing.CaJYWe/rfc.mko:341
+    #4 0x5ca11f8d0d00 in sip_is_retransmit /tmp/madis-framing.CaJYWe/rfc.mko:414
+    #5 0x5ca11f8d0d00 in process_sip_core__impl /tmp/madis-framing.CaJYWe/workers.mko:508
+    #6 0x5ca11f91f200 in process_sip_core /tmp/madis-framing.CaJYWe/workers.mko:1710
+    #7 0x5ca11f95776d in main /tmp/madis-opensips.6Xq9rD/proxy_allocation_probe.c:34
+    #8 0x7e71bee2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #9 0x7e71bee2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #10 0x5ca11f537104 in _start (/tmp/madis-opensips.6Xq9rD/proxy-allocation-transfer+0x1db104) (BuildId: 0748aefaf6082e25dab31ecbdd575a40c0557408)
+
+Direct leak of 1100 byte(s) in 100 object(s) allocated from:
+    #0 0x7e71c00fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5ca11f57133e in mako_rc_alloc /root/.local/share/mako/runtime/mako_rt.h:95
+    #2 0x5ca11f57133e in mako_str_from_cstr /root/.local/share/mako/runtime/mako_rt.h:473
+    #3 0x5ca11f8c7a1f in process_sip_core__impl /tmp/madis-framing.CaJYWe/workers.mko:345
+    #4 0x5ca11f91f200 in process_sip_core /tmp/madis-framing.CaJYWe/workers.mko:1710
+    #5 0x5ca11f95776d in main /tmp/madis-opensips.6Xq9rD/proxy_allocation_probe.c:34
+    #6 0x7e71bee2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #7 0x7e71bee2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #8 0x5ca11f537104 in _start (/tmp/madis-opensips.6Xq9rD/proxy-allocation-transfer+0x1db104) (BuildId: 0748aefaf6082e25dab31ecbdd575a40c0557408)
+
+Direct leak of 19 byte(s) in 1 object(s) allocated from:
+    #0 0x7e71c00fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5ca11f57133e in mako_rc_alloc /root/.local/share/mako/runtime/mako_rt.h:95
+    #2 0x5ca11f57133e in mako_str_from_cstr /root/.local/share/mako/runtime/mako_rt.h:473
+    #3 0x5ca11f8c825e in process_sip_core__impl /tmp/madis-framing.CaJYWe/workers.mko:113
+    #4 0x5ca11f91f200 in process_sip_core /tmp/madis-framing.CaJYWe/workers.mko:1710
+    #5 0x5ca11f95776d in main /tmp/madis-opensips.6Xq9rD/proxy_allocation_probe.c:34
+    #6 0x7e71bee2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #7 0x7e71bee2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #8 0x5ca11f537104 in _start (/tmp/madis-opensips.6Xq9rD/proxy-allocation-transfer+0x1db104) (BuildId: 0748aefaf6082e25dab31ecbdd575a40c0557408)
+
+Direct leak of 8 byte(s) in 1 object(s) allocated from:
+    #0 0x7e71c00fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5ca11f546f55 in mako_int_to_string /root/.local/share/mako/runtime/mako_rt.h:2592
+    #2 0x5ca11f697936 in db_rate_ok /tmp/madis-framing.CaJYWe/dialplan.mko:171
+    #3 0x5ca11f8d18c0 in process_sip_core__impl /tmp/madis-framing.CaJYWe/workers.mko:583
+    #4 0x5ca11f91f200 in process_sip_core /tmp/madis-framing.CaJYWe/workers.mko:1710
+    #5 0x5ca11f95776d in main /tmp/madis-opensips.6Xq9rD/proxy_allocation_probe.c:34
+    #6 0x7e71bee2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #7 0x7e71bee2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #8 0x5ca11f537104 in _start (/tmp/madis-opensips.6Xq9rD/proxy-allocation-transfer+0x1db104) (BuildId: 0748aefaf6082e25dab31ecbdd575a40c0557408)
+
+Indirect leak of 1782 byte(s) in 99 object(s) allocated from:
+    #0 0x7e71c00fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5ca11f58bfb4 in mako_rc_alloc /root/.local/share/mako/runtime/mako_rt.h:95
+    #2 0x5ca11f58bfb4 in mako_str_clone /root/.local/share/mako/runtime/mako_rt.h:3432
+    #3 0x5ca11f6f77a1 in rtp_config /tmp/madis-framing.CaJYWe/rtpengine.mko:325
+    #4 0x5ca11f6fc82c in rtp_process_offer /tmp/madis-framing.CaJYWe/rtpengine.mko:491
+    #5 0x5ca11f8f7e30 in process_sip_core__impl /tmp/madis-framing.CaJYWe/workers.mko:1241
+    #6 0x5ca11f91f200 in process_sip_core /tmp/madis-framing.CaJYWe/workers.mko:1710
+    #7 0x5ca11f95776d in main /tmp/madis-opensips.6Xq9rD/proxy_allocation_probe.c:34
+    #8 0x7e71bee2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #9 0x7e71bee2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #10 0x5ca11f537104 in _start (/tmp/madis-opensips.6Xq9rD/proxy-allocation-transfer+0x1db104) (BuildId: 0748aefaf6082e25dab31ecbdd575a40c0557408)
+
+Indirect leak of 990 byte(s) in 99 object(s) allocated from:
+    #0 0x7e71c00fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5ca11f58bfb4 in mako_rc_alloc /root/.local/share/mako/runtime/mako_rt.h:95
+    #2 0x5ca11f58bfb4 in mako_str_clone /root/.local/share/mako/runtime/mako_rt.h:3432
+    #3 0x5ca11f6f767a in rtp_config /tmp/madis-framing.CaJYWe/rtpengine.mko:324
+    #4 0x5ca11f6fc82c in rtp_process_offer /tmp/madis-framing.CaJYWe/rtpengine.mko:491
+    #5 0x5ca11f8f7e30 in process_sip_core__impl /tmp/madis-framing.CaJYWe/workers.mko:1241
+    #6 0x5ca11f91f200 in process_sip_core /tmp/madis-framing.CaJYWe/workers.mko:1710
+    #7 0x5ca11f95776d in main /tmp/madis-opensips.6Xq9rD/proxy_allocation_probe.c:34
+    #8 0x7e71bee2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #9 0x7e71bee2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #10 0x5ca11f537104 in _start (/tmp/madis-opensips.6Xq9rD/proxy-allocation-transfer+0x1db104) (BuildId: 0748aefaf6082e25dab31ecbdd575a40c0557408)
+
+Indirect leak of 495 byte(s) in 99 object(s) allocated from:
+    #0 0x7e71c00fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5ca11f546f55 in mako_int_to_string /root/.local/share/mako/runtime/mako_rt.h:2592
+    #2 0x5ca11f6f7915 in rtp_config /tmp/madis-framing.CaJYWe/rtpengine.mko:328
+    #3 0x5ca11f6fc82c in rtp_process_offer /tmp/madis-framing.CaJYWe/rtpengine.mko:491
+    #4 0x5ca11f8f7e30 in process_sip_core__impl /tmp/madis-framing.CaJYWe/workers.mko:1241
+    #5 0x5ca11f91f200 in process_sip_core /tmp/madis-framing.CaJYWe/workers.mko:1710
+    #6 0x5ca11f95776d in main /tmp/madis-opensips.6Xq9rD/proxy_allocation_probe.c:34
+    #7 0x7e71bee2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #8 0x7e71bee2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #9 0x5ca11f537104 in _start (/tmp/madis-opensips.6Xq9rD/proxy-allocation-transfer+0x1db104) (BuildId: 0748aefaf6082e25dab31ecbdd575a40c0557408)
+
+Indirect leak of 18 byte(s) in 1 object(s) allocated from:
+    #0 0x7e71c00fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5ca11f57133e in mako_rc_alloc /root/.local/share/mako/runtime/mako_rt.h:95
+    #2 0x5ca11f57133e in mako_str_from_cstr /root/.local/share/mako/runtime/mako_rt.h:473
+    #3 0x5ca11f6f694e in rtp_config /tmp/madis-framing.CaJYWe/rtpengine.mko:315
+    #4 0x5ca11f6fc82c in rtp_process_offer /tmp/madis-framing.CaJYWe/rtpengine.mko:491
+    #5 0x5ca11f8f7e30 in process_sip_core__impl /tmp/madis-framing.CaJYWe/workers.mko:1241
+    #6 0x5ca11f91f200 in process_sip_core /tmp/madis-framing.CaJYWe/workers.mko:1710
+    #7 0x5ca11f95776d in main /tmp/madis-opensips.6Xq9rD/proxy_allocation_probe.c:34
+    #8 0x7e71bee2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #9 0x7e71bee2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #10 0x5ca11f537104 in _start (/tmp/madis-opensips.6Xq9rD/proxy-allocation-transfer+0x1db104) (BuildId: 0748aefaf6082e25dab31ecbdd575a40c0557408)
+
+Indirect leak of 10 byte(s) in 1 object(s) allocated from:
+    #0 0x7e71c00fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5ca11f57133e in mako_rc_alloc /root/.local/share/mako/runtime/mako_rt.h:95
+    #2 0x5ca11f57133e in mako_str_from_cstr /root/.local/share/mako/runtime/mako_rt.h:473
+    #3 0x5ca11f6f6819 in rtp_config /tmp/madis-framing.CaJYWe/rtpengine.mko:314
+    #4 0x5ca11f6fc82c in rtp_process_offer /tmp/madis-framing.CaJYWe/rtpengine.mko:491
+    #5 0x5ca11f8f7e30 in process_sip_core__impl /tmp/madis-framing.CaJYWe/workers.mko:1241
+    #6 0x5ca11f91f200 in process_sip_core /tmp/madis-framing.CaJYWe/workers.mko:1710
+    #7 0x5ca11f95776d in main /tmp/madis-opensips.6Xq9rD/proxy_allocation_probe.c:34
+    #8 0x7e71bee2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #9 0x7e71bee2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #10 0x5ca11f537104 in _start (/tmp/madis-opensips.6Xq9rD/proxy-allocation-transfer+0x1db104) (BuildId: 0748aefaf6082e25dab31ecbdd575a40c0557408)
+
+Indirect leak of 5 byte(s) in 1 object(s) allocated from:
+    #0 0x7e71c00fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5ca11f546f55 in mako_int_to_string /root/.local/share/mako/runtime/mako_rt.h:2592
+    #2 0x5ca11f6f6be4 in rtp_config /tmp/madis-framing.CaJYWe/rtpengine.mko:342
+    #3 0x5ca11f6fc82c in rtp_process_offer /tmp/madis-framing.CaJYWe/rtpengine.mko:491
+    #4 0x5ca11f8f7e30 in process_sip_core__impl /tmp/madis-framing.CaJYWe/workers.mko:1241
+    #5 0x5ca11f91f200 in process_sip_core /tmp/madis-framing.CaJYWe/workers.mko:1710
+    #6 0x5ca11f95776d in main /tmp/madis-opensips.6Xq9rD/proxy_allocation_probe.c:34
+    #7 0x7e71bee2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #8 0x7e71bee2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #9 0x5ca11f537104 in _start (/tmp/madis-opensips.6Xq9rD/proxy-allocation-transfer+0x1db104) (BuildId: 0748aefaf6082e25dab31ecbdd575a40c0557408)
+
+SUMMARY: AddressSanitizer: 71278 byte(s) leaked in 2301 allocation(s).

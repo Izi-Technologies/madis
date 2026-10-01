@@ -1,0 +1,10 @@
+// Run from an isolated directory to avoid importing neighboring benchmarks.
+fn TestSipTagTemporaryOwnership() {
+    let msg = "INVITE sip:b@example.com SIP/2.0\r\nFrom: <sip:a@example.com>;tag=a\r\n\r\n"
+    let mut i = 0
+    while i < 100 {
+        let tag = msg |> sip_header("From") |> sip_addr_tag()
+        assert_eq_str(tag, "a")
+        i = i + 1
+    }
+}

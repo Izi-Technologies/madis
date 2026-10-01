@@ -1,3 +1,4 @@
+pull . "./cache_owned.mko"
 // ============ DIGEST AUTH (RFC 7616 / RFC 3261) ============
 // Keep MD5 for legacy SIP devices, while accepting SHA-256 and both standard
 // qop values. The database stores the algorithm-specific HA1 in
@@ -36,7 +37,7 @@ fn bounded_state_set(store: CMap, index: CMap, seq_key: string, ring_prefix: str
         cmap_set(store, key, value)
         return 0
     }
-    let seq = cmap_incr(index, seq_key, 1)
+    let seq = cache_incr(index, seq_key, 1)
     let slot = seq - (seq / capacity) * capacity
     let ring_key = ring_prefix + string(slot)
     if cmap_has(index, ring_key) == 1 {
@@ -59,7 +60,7 @@ fn bounded_cache_pair_set(cache: CMap, seq_key: string, ring_prefix: string, key
         cmap_set(cache, key + "|at", string(at))
         return 0
     }
-    let seq = cmap_incr(cache, seq_key, 1)
+    let seq = cache_incr(cache, seq_key, 1)
     let slot = seq - (seq / capacity) * capacity
     let ring_key = ring_prefix + string(slot)
     if cmap_has(cache, ring_key) == 1 {

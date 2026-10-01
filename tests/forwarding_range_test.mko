@@ -1,0 +1,113 @@
+// Frozen pre-range implementations are only a behavioral oracle.
+// Their known allocation leaks are excluded from LSan; production has its own fixture.
+pull . "./forwarding_ownership_test.mko"
+
+fn reference_decrement_max_forwards(msg: string, n: int) -> string {
+    let mf_str = sip_hdr(msg, "Max-Forwards", n)
+    if len(mf_str) == 0 {
+        // RFC 3261 §16.6 step 3: add 70 when absent. The proxy decrements
+        // only a header that was actually present in the received request.
+        return sip_prepend_header(msg, "Max-Forwards", "70")
+    }
+    let mut mf = 70
+    match parse_int(mf_str) {
+        Ok(v) => { mf = v }
+        Err(_) => { mf = 70 }
+    }
+    let new_mf = mf - 1
+    // Replace the value in-place so capitalization and optional whitespace
+    // in the received header do not affect forwarding correctness.
+    let first = str_index(msg, "\r\n")
+    if first < 0 { return msg }
+    let mut i = first + 2
+    while i < len(msg) {
+        let rel_end = str_index(msg[i:], "\r\n")
+        if rel_end < 0 { return msg }
+        let end = i + rel_end
+        if end == i { return msg }
+        let line = msg[i:end]
+        let low = str_to_lower(line)
+        if str_has_prefix(low, "max-forwards:") {
+            let colon = str_index(line, ":")
+            if colon >= 0 {
+                return msg[0:i] + line[0:colon + 1] + " " + string(new_mf) + msg[end:]
+            }
+        }
+        i = end + 2
+    }
+    return msg
+}
+
+fn reference_strip_top_via(msg: string) -> string {
+    let first = str_index(msg, "\r\n")
+    if first < 0 { return msg }
+    let mut i = first + 2
+    while i < len(msg) {
+        let rel_end = str_index(msg[i:], "\r\n")
+        if rel_end < 0 { return msg }
+        let end = i + rel_end
+        if end == i { return msg }
+        let line = msg[i:end]
+        let mut value_start = -1
+        // Case-insensitive "Via:" / "v:" without str_to_lower allocation
+        if len(line) >= 4 {
+            let c0 = int(line[0])
+            let c1 = int(line[1])
+            let c2 = int(line[2])
+            let c3 = int(line[3])
+            if (c0 == 86 || c0 == 118) && (c1 == 73 || c1 == 105) && (c2 == 65 || c2 == 97) && c3 == 58 {
+                value_start = 4
+            }
+        }
+        if value_start < 0 && len(line) >= 2 {
+            let c0 = int(line[0])
+            let c1 = int(line[1])
+            if (c0 == 86 || c0 == 118) && c1 == 58 {
+                value_start = 2
+            }
+        }
+        if value_start >= 0 {
+            let value = line[value_start:]
+            let comma = str_index(value, ",")
+            if comma >= 0 {
+                let rest = str_trim_space(value[comma + 1:])
+                return msg[0:i] + "Via: " + rest + "\r\n" + msg[end + 2:]
+            }
+            return msg[0:i] + msg[end + 2:]
+        }
+        i = end + 2
+    }
+    return msg
+}
+
+
+fn TestForwardingRangeMatchesOldByteMutations() {
+    let msg = forwarding_test_message()
+    let bytes = [0, 9, 10, 13, 32, 44, 58, 65, 97, 127, 255]
+    let mut position = 0
+    while position < len(msg) {
+        for value in bytes {
+            let b = str_builder()
+            builder_write_slice(b, msg, 0, position)
+            builder_write_byte(b, byte(value))
+            builder_write_slice(b, msg, position + 1, len(msg) - position - 1)
+            let changed = builder_string(b)
+            assert_eq_str(sip_decrement_max_forwards(changed, len(changed)), reference_decrement_max_forwards(changed, len(changed)))
+            assert_eq_str(sip_strip_top_via(changed), reference_strip_top_via(changed))
+        }
+        position = position + 1
+    }
+}
+
+fn TestForwardingRangeVariants() {
+    let msg = forwarding_test_message()
+    let cases = ["", "no-crlf", "OPTIONS * SIP/2.0\r\n\r\n", msg,
+        str_replace(msg, "Max-Forwards: 70", "mAx-FoRwArDs:\t70"),
+        str_replace(msg, "Max-Forwards: 70\r\n", ""),
+        str_replace(msg, "Via:", "v:"),
+        str_replace(msg, "\r\nVia: SIP/2.0/UDP 192.0.2.2", ", SIP/2.0/UDP 192.0.2.2")]
+    for value in cases {
+        assert_eq_str(sip_decrement_max_forwards(value, len(value)), reference_decrement_max_forwards(value, len(value)))
+        assert_eq_str(sip_strip_top_via(value), reference_strip_top_via(value))
+    }
+}

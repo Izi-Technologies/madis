@@ -1,0 +1,38 @@
+pull . "../parser.mko"
+
+// No maps, sockets or process-lifetime resources: LSan must stay clean.
+fn TestValidatorBoundedOwnership() {
+    let valid = "INVITE sip:b@example.com SIP/2.0\r\nVia: SIP/2.0/UDP 192.0.2.1:5060;branch=z9hG4bK-scan\r\nFrom: <sip:a@example.com>;tag=a\r\nTo: <sip:b@example.com>\r\nCall-ID: scan-test\r\nCSeq: 1 INVITE\r\nMax-Forwards: 70\r\nContent-Length: 0\r\n\r\n"
+    let invalid = "INVITE sip:b@example.com SIP/2.0\r\nVia: SIP/2.0/UDP 192.0.2.1:5060;branch=z9hG4bK-scan\r\nFrom: <sip:a@example.com>;tag=a\r\nTo: <sip:b@example.com>\r\nCall-ID: scan-test\r\nCSeq: 1 INVITE\r\nMax-Forwards: 70\r\nContent-Length: 1\r\n\r\n"
+    let rich = "INVITE sips:b@example.com;transport=tcp?subject=test SIP/2.0\r\nVia: SIP/2.0/TCP 192.0.2.1:5060;branch=z9hG4bK-rich;received=192.0.2.2;maddr=example.com;ttl=32;rport=5060\r\nFrom: <sip:a@example.com>;tag=a\r\nTo: <sip:b@example.com>\r\nCall-ID: rich-test\r\nCSeq: 1 INVITE\r\nContent-Length: 0\r\n\r\n"
+    let options = "OPTIONS * SIP/2.0\r\nVia: SIP/2.0/UDP 192.0.2.1;branch=z9hG4bK-opt\r\nFrom: sip:a@example.com;tag=a\r\nTo: sip:b@example.com\r\nCall-ID: opt-test\r\nCSeq: 1 OPTIONS\r\nContent-Length: 0\r\n\r\n"
+    let mut i = 0
+    while i < 1000 {
+        assert_eq(sip_validate_message(valid, len(valid)), 1)
+        assert_eq(sip_validate_message(invalid, len(invalid)), 0)
+        assert_eq(sip_validate_message(rich, len(rich)), 1)
+        assert_eq(sip_validate_message(options, len(options)), 1)
+        i = i + 1
+    }
+}
+
+// Exercise early returns without the intentionally old differential oracle.
+fn TestValidatorMalformedOwnership() {
+    let msg = "INVITE sip:b@example.com;transport=udp?subject=test SIP/2.0\r\nVia: SIP/2.0/UDP 192.0.2.1;branch=z9hG4bK-own;rport=5060\r\nFrom: <sip:a@example.com>;tag=a\r\nTo: <sip:b@example.com>\r\nCall-ID: own-test\r\nCSeq: 1 INVITE\r\nContent-Length: 0\r\n\r\n"
+    let bytes = [0, 9, 10, 13, 32, 58, 65, 97, 127, 255]
+    let mut position = 0
+    while position < len(msg) {
+        for value in bytes {
+            let prefix = str_slice(msg, 0, position)
+            let suffix = str_slice(msg, position + 1, len(msg))
+            let b = str_builder()
+            builder_write(b, prefix)
+            builder_write_byte(b, byte(value))
+            builder_write(b, suffix)
+            let changed = builder_string(b)
+            let verdict = sip_validate_message(changed, len(changed))
+            assert(verdict == 0 || verdict == 1)
+        }
+        position = position + 1
+    }
+}

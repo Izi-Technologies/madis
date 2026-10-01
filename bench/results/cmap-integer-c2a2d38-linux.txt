@@ -1,0 +1,7 @@
+normal exit=0
+missing exit=0
+mode=missing iterations=1000 fallback_checks=passed
+empty exit=0
+mode=empty iterations=1000 fallback_checks=passed
+composite exit=0
+mode=composite iterations=1000 fallback_checks=passed

@@ -1,0 +1,7 @@
+mako test: /tmp/madis-array-4a6e711/ownership_test.mko
+=== /tmp/madis-array-4a6e711/ownership_test.mko ===
+--- PASS: TestStringArrayReplacementOwnership
+PASS
+ok  /tmp/madis-array-4a6e711/ownership_test.mko (4130ms)
+
+mako test: 1 passed, 0 failed

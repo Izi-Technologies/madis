@@ -248,37 +248,44 @@ fn ims_lifecycle_find(reg: CMap, aor: string) -> string {
 
 fn ims_lifecycle_private(value: string) -> string {
     if ims_lifecycle_decode_ok(value) == 0 { return "" }
-    return ims_lifecycle_parts(value)[1]
+    let parts = ims_lifecycle_parts(value)
+    return parts[1]
 }
 
 fn ims_lifecycle_public(value: string) -> string {
     if ims_lifecycle_decode_ok(value) == 0 { return "" }
-    return ims_lifecycle_parts(value)[2]
+    let parts = ims_lifecycle_parts(value)
+    return parts[2]
 }
 
 fn ims_lifecycle_contact(value: string) -> string {
     if ims_lifecycle_decode_ok(value) == 0 { return "" }
-    return ims_lifecycle_parts(value)[3]
+    let parts = ims_lifecycle_parts(value)
+    return parts[3]
 }
 
 fn ims_lifecycle_transport(value: string) -> string {
     if ims_lifecycle_decode_ok(value) == 0 { return "" }
-    return ims_lifecycle_parts(value)[4]
+    let parts = ims_lifecycle_parts(value)
+    return parts[4]
 }
 
 fn ims_lifecycle_path(value: string) -> string {
     if ims_lifecycle_decode_ok(value) == 0 { return "" }
-    return ims_lifecycle_parts(value)[8]
+    let parts = ims_lifecycle_parts(value)
+    return parts[8]
 }
 
 fn ims_lifecycle_service_route(value: string) -> string {
     if ims_lifecycle_decode_ok(value) == 0 { return "" }
-    return ims_lifecycle_parts(value)[9]
+    let parts = ims_lifecycle_parts(value)
+    return parts[9]
 }
 
 fn ims_lifecycle_server_name(value: string) -> string {
     if ims_lifecycle_decode_ok(value) == 0 { return "" }
-    return ims_lifecycle_parts(value)[10]
+    let parts = ims_lifecycle_parts(value)
+    return parts[10]
 }
 
 // Map a public identity (sip:/sips: URI or bare user@host) to AOR user@host.
@@ -601,9 +608,12 @@ fn ims_lifecycle_apply_path_route(msg: string, path: string) -> string {
 fn ims_lifecycle_mt_target(reg: CMap, aor: string) -> string {
     let value = ims_lifecycle_find(reg, aor)
     if len(value) == 0 { return "" }
-    let path = ims_lifecycle_path(value)
-    let contact = ims_lifecycle_contact(value)
-    let transport = ims_lifecycle_transport(value)
+    // find() returned an owned, validated live snapshot. Decode that same
+    // snapshot once instead of re-validating all 12 fields for each accessor.
+    let parts = ims_lifecycle_parts(value)
+    let path = parts[8]
+    let contact = parts[3]
+    let transport = parts[4]
     if len(path) > 0 {
         if ims_lifecycle_uri_ok(path) == 0 { return "" }
         return path + "|" + sip_transport_param(path, transport)

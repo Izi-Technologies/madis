@@ -1,3 +1,4 @@
+pull . "./cache_owned.mko"
 // ============ STRUCTURED LOGGING ============
 // Levels: error=0, warn=1, info=2, debug=3
 // Format: ISO timestamp + level + component + message + optional key=value pairs
@@ -13,10 +14,10 @@ fn log_level_configured() -> int {
 
 fn log_level_cached(cache: CMap) -> int {
     if cmap_has(cache, "_log_level") == 1 {
-        return cmap_get_int(cache, "_log_level", 2)
+        return cache_get_int(cache, "_log_level", 2)
     }
     let level = log_level_configured()
-    cmap_set_int(cache, "_log_level", level)
+    cache_set_int(cache, "_log_level", level)
     return level
 }
 
@@ -29,12 +30,15 @@ fn log_level_name(level: int) -> string {
 
 // Core log function — all others delegate here
 fn slog(msg: string) -> int {
-    print(f"{time_format(now_ms())} {msg}")
+    let timestamp = time_format(now_ms())
+    print(f"{timestamp} {msg}")
     return 0
 }
 
 fn log_at(level: int, component: string, msg: string) -> int {
-    print(f"{time_format(now_ms())} [{log_level_name(level)}] [{component}] {msg}")
+    let timestamp = time_format(now_ms())
+    let level_name = log_level_name(level)
+    print(f"{timestamp} [{level_name}] [{component}] {msg}")
     return 0
 }
 
@@ -78,7 +82,9 @@ fn log_error_always(component: string, msg: string) -> int {
 
 // Structured key=value log for machine parsing (JSON-ish single line)
 fn log_structured(level: int, component: string, event: string, kv: string) -> int {
-    print(f"{time_format(now_ms())} [{log_level_name(level)}] [{component}] {event} {kv}")
+    let timestamp = time_format(now_ms())
+    let level_name = log_level_name(level)
+    print(f"{timestamp} [{level_name}] [{component}] {event} {kv}")
     return 0
 }
 

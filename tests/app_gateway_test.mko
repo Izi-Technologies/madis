@@ -64,3 +64,20 @@ fn TestModuleAllowlist() {
     assert_eq(module_gateway_request_allowed("tts", "DROP TABLE users"), 0)
     assert_eq(module_gateway_request_allowed("../../etc", "read"), 0)
 }
+
+fn TestEmptyApplicationHookSkipsCommandIdentity() {
+    let msg = app_test_request()
+    assert_eq_str(app_gateway_response_request_id(msg, "request", ""), "")
+    assert_eq_str(app_gateway_action("", "", 0), "continue")
+    let expected = app_gateway_request_id_for(msg, "request")
+    let token = "01234567890123456789012345678901"
+    let command = app_test_command("proxy", "sip:gateway.example.net:5060", token, expected)
+    let actual = app_gateway_response_request_id(msg, "request", command)
+    assert_eq_str(actual, expected)
+    assert_eq(app_gateway_command_valid_token(command, actual, 0, token), 1)
+    let changed = str_replace(msg, "CSeq: 1 INVITE", "CSeq: 2 INVITE")
+    let changed_id = app_gateway_response_request_id(changed, "request", command)
+    assert_eq(app_gateway_command_valid_token(command, changed_id, 0, token), 0)
+    assert_eq_str(app_gateway_response_request_id(msg, "request", "not-json"), expected)
+    assert_eq_str(app_gateway_action("__APP_FAIL_CLOSED__", "", 0), "fail")
+}

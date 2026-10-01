@@ -458,3 +458,11 @@ fn app_gateway_reply_headers(raw: string) -> string {
 fn app_gateway_request_id_for(msg: string, event: string) -> string {
     return app_gateway_request_id(msg, event)
 }
+
+// Empty hook results mean continue and carry no command to authenticate.
+// Preserve exact message binding whenever a command is present, including
+// malformed input; this is not a shortcut around signature validation.
+fn app_gateway_response_request_id(msg: string, event: string, raw: string) -> string {
+    if len(raw) == 0 { return "" }
+    return app_gateway_request_id_for(msg, event)
+}

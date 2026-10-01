@@ -1,0 +1,16 @@
+// Run in an isolated directory. An append wrapper transfers existing elements.
+fn appended_numeric_config(values: []string) -> []string {
+    return append(values, "next")
+}
+
+fn TestNumericStringArrayAppendOwnership() {
+    let mut i = 0
+    while i < 100 {
+        let mut cfg = make([]string, 1)
+        cfg[0] = string(2223)
+        cfg = appended_numeric_config(cfg)
+        assert_eq_str(cfg[0], "2223")
+        assert_eq_str(cfg[1], "next")
+        i = i + 1
+    }
+}

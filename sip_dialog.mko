@@ -1,3 +1,4 @@
+pull . "./cache_owned.mko"
 // In-dialog routing, client transaction ticking, and app gateway command mapping.
 
 fn sip_dialog_target_for_request(msg: string, cid: string, route_target: string, cache: CMap) -> string {
@@ -40,8 +41,8 @@ fn sip_client_txn_tick(cache: CMap, out_fd: int, calls: CMap, db: SqlDB, db_ok: 
     let now = mono_ms()
     let mut acted = 0
     let owner_s = string(out_fd)
-    if cmap_get_int2(cache, "client_active|", owner_s, 0) <= 0 { return 0 }
-    let mut start = cmap_get_int2(cache, "client_scan|", owner_s, 0)
+    if cache_get_int2(cache, "client_active|", owner_s, 0) <= 0 { return 0 }
+    let mut start = cache_get_int2(cache, "client_scan|", owner_s, 0)
     let mut scanned = 0
     let mut live_seen = 0
     // Sweep a small bounded slice of the 16384-slot ring per tick.
@@ -49,12 +50,12 @@ fn sip_client_txn_tick(cache: CMap, out_fd: int, calls: CMap, db: SqlDB, db_ok: 
     while scanned < 64 {
         let slot = (start + scanned) - ((start + scanned) / 16384) * 16384
         if cmap_has3i(cache, "client_ring|", "", slot) == 1 {
-            let key = cmap_get3i(cache, "client_ring|", "", slot)
+            let key = cache_get3i(cache, "client_ring|", "", slot)
             if len(key) > 2 && cmap_has2(cache, "client_req|", key) == 1 {
-                let owner = cmap_get_int2(cache, "client_owner|", key, -1)
+                let owner = cache_get_int2(cache, "client_owner|", key, -1)
                 if owner == out_fd {
                     live_seen = 1
-                    let expiry = cmap_get_int2(cache, "client_exp|", key, 0)
+                    let expiry = cache_get_int2(cache, "client_exp|", key, 0)
                     if expiry > 0 && now >= expiry {
                         let req = cmap_get2(cache, "client_req|", key)
                         if str_eq(madis_method(req), "CANCEL") {
@@ -121,7 +122,7 @@ fn sip_client_txn_tick(cache: CMap, out_fd: int, calls: CMap, db: SqlDB, db_ok: 
                                 let timeout_state = if timeout_code == 487 { "canceled" } else { "timeout" }
                                 let _ = maf_worker_call_final(db, db_ok, maf_worker_tenant(), maf_timeout_call, timeout_state, timeout_code, timeout_reason, "timer", sha256("madis.maf.inbound.timeout|" + maf_timeout_call)[0:32])
                                 let _ = maf_worker_route_attempt_finish(db, db_ok, maf_worker_tenant(), maf_timeout_call, "failed", timeout_code, "timer_expired", timeout_reason)
-                                let _ = cmap_incr(cache, "prom|maf_stale_cleanups|reason=\"timer_expired\"", 1)
+                                let _ = cache_incr(cache, "prom|maf_stale_cleanups|reason=\"timer_expired\"", 1)
                                 let _ = cmap_del(cache, "maf_inbound|" + maf_timeout_call)
                                 let _ = cmap_del(cache, "maf_created_ms|" + maf_timeout_call)
                                 let _ = cmap_del(cache, "maf_invite|" + maf_timeout_call)
@@ -136,12 +137,12 @@ fn sip_client_txn_tick(cache: CMap, out_fd: int, calls: CMap, db: SqlDB, db_ok: 
                     } else {
                         let transport = cmap_get2(cache, "client_transport|", key)
                         if str_eq(transport, "udp") {
-                            let next = cmap_get_int2(cache, "client_next|", key, 0)
+                            let next = cache_get_int2(cache, "client_next|", key, 0)
                             if next > 0 && now >= next {
                                 let req = cmap_get2(cache, "client_req|", key)
                                 let target = cmap_get2(cache, "client_target|", key)
                                 let _ = sip_resend_target(target, req, transport, cache, out_fd)
-                                let mut attempt = cmap_get_int2(cache, "client_attempt|", key, 0)
+                                let mut attempt = cache_get_int2(cache, "client_attempt|", key, 0)
                                 attempt = attempt + 1
                                 let mut interval = sip_t1_ms()
                                 let mut i = 0
@@ -151,8 +152,8 @@ fn sip_client_txn_tick(cache: CMap, out_fd: int, calls: CMap, db: SqlDB, db_ok: 
                                     if interval > sip_t2_ms() { interval = sip_t2_ms() }
                                     i = i + 1
                                 }
-                                cmap_set_int2(cache, "client_attempt|", key, attempt)
-                                cmap_set_int2(cache, "client_next|", key, now + interval)
+                                cache_set_int2(cache, "client_attempt|", key, attempt)
+                                cache_set_int2(cache, "client_next|", key, now + interval)
                                 acted = acted + 1
                             }
                         }
@@ -162,17 +163,17 @@ fn sip_client_txn_tick(cache: CMap, out_fd: int, calls: CMap, db: SqlDB, db_ok: 
         }
         scanned = scanned + 1
     }
-    cmap_set_int2(cache, "client_scan|", owner_s, (start + scanned) - ((start + scanned) / 16384) * 16384)
+    cache_set_int2(cache, "client_scan|", owner_s, (start + scanned) - ((start + scanned) / 16384) * 16384)
     if live_seen == 0 {
-        let empty = cmap_get_int2(cache, "client_empty_scan|", owner_s, 0) + 1
+        let empty = cache_get_int2(cache, "client_empty_scan|", owner_s, 0) + 1
         if empty >= 256 {
-            cmap_set_int2(cache, "client_active|", owner_s, 0)
-            cmap_set_int2(cache, "client_empty_scan|", owner_s, 0)
+            cache_set_int2(cache, "client_active|", owner_s, 0)
+            cache_set_int2(cache, "client_empty_scan|", owner_s, 0)
         } else {
-            cmap_set_int2(cache, "client_empty_scan|", owner_s, empty)
+            cache_set_int2(cache, "client_empty_scan|", owner_s, empty)
         }
     } else {
-        cmap_set_int2(cache, "client_empty_scan|", owner_s, 0)
+        cache_set_int2(cache, "client_empty_scan|", owner_s, 0)
     }
     return acted
 }

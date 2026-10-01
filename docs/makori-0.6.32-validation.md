@@ -38,7 +38,7 @@ the [0.6.31 report](makori-0.6.31-validation.md) for the leak-gate history.
 | macOS arm64 ownership sanitizer (ASan/UBSan; no LeakSanitizer) | Pass |
 | macOS arm64 proxy/admin C builds and SIGPIPE check | Pass; both remain healthy |
 | Linux x86_64 C link of 0.6.32 emit-c output | Pass |
-| Linux x86_64 deploy on medis.lancethedev.com | Pass: `madis` and `madis-admin` active |
+| Linux x86_64 deploy on sip-test.example.invalid | Pass: `madis` and `madis-admin` active |
 | Authenticated `/healthz` and `/readyz` | `{"ok":true,"version":"0.7.4"}` and `{"ready":true}` |
 | SIP OPTIONS UDP and TCP to bound IPv4 | Both return `200 OK` with To-tag |
 | Admin `/admin/login` | HTTP 200 HTML |

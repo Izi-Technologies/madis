@@ -1,0 +1,42 @@
+mako test: tests/cache_owned_test.mko
+=== tests/cache_owned_test.mko ===
+--- PASS: TestOwnedIntegerCache
+PASS
+ok  tests/cache_owned_test.mko (2958ms)
+
+mako test: 1 passed, 0 failed
+mako test: tests/proxy_state_test.mko
+=== tests/proxy_state_test.mko ===
+--- PASS: TestByeResponseCseqIdentifiesTermination
+--- PASS: TestClientTransactionLifecycle
+--- PASS: TestClientTransactionRejectsResponses
+--- PASS: TestClusterOwnerQueryUsesLiveBindings
+--- PASS: TestContactListParsing
+--- PASS: TestDialogByeWithOkReplyStaysTerminated
+--- PASS: TestDialogCacheCleanupRemovesTaggedDestination
+--- PASS: TestDialogLifecycleTeardown
+--- PASS: TestExpiredLegacyBindingIsNotResurrected
+--- PASS: TestForkFinalResponseSelection
+--- PASS: TestForkSelectionAndCancellationState
+--- PASS: TestForkSixxxImmediateAndAuthAggregation
+--- PASS: TestForkSixxxPriority
+--- PASS: TestHeaderInjectionProtection
+--- PASS: TestInviteAckAndCancelConstruction
+--- PASS: TestInviteRetransmitCacheAndCancelIsolation
+--- PASS: TestInviteTimeoutCleanupClearsCallAndDialogState
+--- PASS: TestInviteTwoxxServerTransactionLifecycle
+--- PASS: TestMaxForwardsBounds
+--- PASS: TestPendingByeTransaction
+--- PASS: TestProxyMessageValidation
+--- PASS: TestRegistrationCxAssignmentTypes
+--- PASS: TestRegistrationExpiryAndMultipleBindings
+--- PASS: TestRegistrationExpiryPolicy
+--- PASS: TestResponseViaKeepsCallerHop
+--- PASS: TestRouteListProcessing
+--- PASS: TestServerTransactionAckLifecycle
+--- PASS: TestTransactionReplayExpiry
+--- PASS: TestTransactionReplaySweepExpired
+PASS
+ok  tests/proxy_state_test.mko (2894ms)
+
+mako test: 1 passed, 0 failed

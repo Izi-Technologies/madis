@@ -1,0 +1,31 @@
+mako: pg_connect: bad url
+probe_status=404
+
+=================================================================
+==1803209==ERROR: LeakSanitizer: detected memory leaks
+
+Direct leak of 495 byte(s) in 99 object(s) allocated from:
+    #0 0x78d2d5afd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x61b7c0ba50aa in mako_int_to_string /tmp/madis-makori-2c55486/runtime/mako_rt.h:2657
+    #2 0x61b7c0d578b9 in rtp_config /tmp/madis-integration-47f661b/rtpengine.mko:328
+    #3 0x61b7c0d5cdfe in rtp_process_offer /tmp/madis-integration-47f661b/rtpengine.mko:491
+    #4 0x61b7c0f51d25 in process_sip_core__impl /tmp/madis-integration-47f661b/workers.mko:1227
+    #5 0x61b7c0f774a4 in process_sip_core /tmp/madis-integration-47f661b/workers.mko:1695
+    #6 0x61b7c0fb015d in main bench/proxy_allocation_probe.c:34
+    #7 0x78d2d462a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #8 0x78d2d462a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #9 0x61b7c0b95124 in _start (/tmp/madis-2c55486-probe+0x1c4124) (BuildId: beb9bd4f9c35063fc5e47324e177a9b52c9ed228)
+
+Direct leak of 5 byte(s) in 1 object(s) allocated from:
+    #0 0x78d2d5afd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x61b7c0ba50aa in mako_int_to_string /tmp/madis-makori-2c55486/runtime/mako_rt.h:2657
+    #2 0x61b7c0d57020 in rtp_config /tmp/madis-integration-47f661b/rtpengine.mko:342
+    #3 0x61b7c0d5cdfe in rtp_process_offer /tmp/madis-integration-47f661b/rtpengine.mko:491
+    #4 0x61b7c0f51d25 in process_sip_core__impl /tmp/madis-integration-47f661b/workers.mko:1227
+    #5 0x61b7c0f774a4 in process_sip_core /tmp/madis-integration-47f661b/workers.mko:1695
+    #6 0x61b7c0fb015d in main bench/proxy_allocation_probe.c:34
+    #7 0x78d2d462a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #8 0x78d2d462a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #9 0x61b7c0b95124 in _start (/tmp/madis-2c55486-probe+0x1c4124) (BuildId: beb9bd4f9c35063fc5e47324e177a9b52c9ed228)
+
+SUMMARY: AddressSanitizer: 500 byte(s) leaked in 100 allocation(s).

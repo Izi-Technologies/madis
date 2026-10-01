@@ -1,5 +1,11 @@
 # SIP CPS/concurrency benchmark
 
+For the reproducible stateful UDP OpenSIPS comparison, use
+[`compare_opensips.py`](compare_opensips.py) and read the
+[methodology and limitations](../docs/opensips-comparison.md).
+The latest [server load-test report](../docs/opensips-249a616-load-test.md)
+covers compiler `249a616`, repeated 250/500/1,000-CPS runs, and three-minute soaks.
+
 Set `BENCH_TIMEOUT` longer than `CALLS / RATE` plus dialog drain time for
 long runs (for example `BENCH_TIMEOUT=420s RATE=50 CALLS=15000`). The default
 is 180 seconds. The harness fails if the proxy exits, SIPp returns an error,
@@ -22,7 +28,7 @@ RATE=100 CALLS=1000 CONCURRENCY=200 WORKERS=1 ./bench/benchmark.sh
 ```
 
 The harness expects `sipp` unless `SIPP=/path/to/sipp` is set. Build the
-proxy with Mako 0.5.0 first, and keep the UAS, database, route data, CPU
+proxy with Mako 0.6.38 and its matching runtime first, and keep the UAS, database, route data, CPU
 affinity, and message mix identical across candidates.
 
 The scenario holds each dialog for one second. Change that pause in
@@ -53,6 +59,26 @@ and file-descriptor usage for each run. The repository does not contain a
 current Kamailio comparison.
 
 Additional validation commands:
+
+For an offline comparison of stream framing allocations and throughput:
+
+```sh
+MAKO_BIN=/path/to/mako MAKO_RUNTIME=/path/to/mako/runtime \
+  python3 bench/stream_framing.py --output /tmp/framing.json
+```
+
+This compares the frozen RC-aware array result with the production typed result
+using the same compiler, runtime, and C optimization flags. Complete messages,
+three-fragment messages, and two-message pipelines with incomplete tails are
+measured in alternating fresh processes. Timing is uninstrumented; a separate
+binary counts generated-code malloc/calloc/realloc calls. Results include raw
+samples, source hashes, allocation requests, batch-mean p50/p95 latency, and peak
+process RSS. Batch-mean latency is not request tail latency; this has no sockets
+or database work and does not establish SIP capacity. CI runs a short checksum
+and generated-code smoke check without imposing noisy throughput thresholds.
+See [the measured 0.6.38 results](../docs/stream-framing-0.6.38.md).
+
+Transport and interoperability checks:
 
 ```sh
 python3 bench/transport_matrix.py --binary ./main
@@ -102,3 +128,41 @@ For a broader local performance run, `bench/perf_matrix.py` combines UDP CPS,
 long-dialog retention, TCP/TLS/WSS stateless OPTIONS load, and TCP connection
 retention into one timestamped output directory. It reuses `benchmark.sh` for
 INVITE dialogs and `transport_options_load.py` for stream transport load.
+
+## Validator scan microbenchmark
+
+Build `bench/validation_scan.mko` with Mako 0.6.38's C backend and `--release`.
+It alternates the pre-scan validator and current validator over 100,000 messages
+per round, sharing the current semantic helpers. The reference intentionally
+retains old validator ownership behavior. This measures local validation cost,
+not SIP call capacity. Recorded timings and the end-to-end comparison are in
+[`results/validation-scan-0.6.38-macos.json`](results/validation-scan-0.6.38-macos.json)
+and [`docs/opensips-comparison.md`](../docs/opensips-comparison.md).
+
+## Request allocation diagnostic
+
+`proxy_allocation_probe.c` includes a generated `main.c` with its entry point
+renamed, then exercises 100 unregistered INVITEs. It requires 404 responses and
+keeps its maps as process-lifetime roots. This is a diagnostic, not a clean
+ownership gate: it covers only rejected INVITEs with reachable map roots.
+With compiler `249a616`, this probe exits cleanly under Linux LSan; the
+successful-call load test still shows unresolved RSS growth.
+Use a clean environment with no routing/application settings. Generate C with
+Mako 0.6.38 and build on Linux, for example:
+
+```sh
+MAKO_BIN=/path/to/mako MAKO_RUNTIME=/path/to/runtime \
+  bash scripts/build-native.sh main.mko /tmp/madis-probe-source
+cc -std=c11 -O1 -g -fno-omit-frame-pointer -DNDEBUG -w \
+  -fsanitize=address,undefined -I/path/to/runtime -I/usr/include/postgresql \
+  -DMAKO_HAS_OPENSSL -DMAKO_USE_OPENSSL -DMAKO_HAS_LIBPQ \
+  -DMADIS_GENERATED_C='"/absolute/path/to/main.c"' \
+  bench/proxy_allocation_probe.c -o /tmp/proxy-allocation-probe \
+  -pthread -lm -ldl -lresolv -lssl -lcrypto -lpq
+env -i ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:fast_unwind_on_malloc=0 \
+  UBSAN_OPTIONS=halt_on_error=1 /tmp/proxy-allocation-probe
+```
+
+The C harness avoids a 0.6.38 test-codegen error (duplicate actor-state types)
+when directly importing the complete request core into a Mako test. Normal
+release builds and the focused Mako contract suites compile successfully.

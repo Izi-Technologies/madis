@@ -1,0 +1,17 @@
+mode=composite iterations=1000 fallback_checks=passed
+
+=================================================================
+==1840451==ERROR: LeakSanitizer: detected memory leaks
+
+Direct leak of 1000 byte(s) in 1000 object(s) allocated from:
+    #0 0x7b84160fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x624ac400da9b in cmap_dup_bytes /tmp/madis-makori-5d9681a/runtime/mako_cmap.h:60
+    #2 0x624ac400da9b in mako_cmap_get /tmp/madis-makori-5d9681a/runtime/mako_cmap.h:241
+    #3 0x624ac400da9b in mako_cmap_get_int /tmp/madis-makori-5d9681a/runtime/mako_cmap.h:483
+    #4 0x624ac400fc85 in mako_cmap_get_int2 /tmp/madis-makori-5d9681a/runtime/mako_cmap.h:497
+    #5 0x624ac400fc85 in main /tmp/madis-dialog-fix/source/bench/cmap_integer_empty_leak_probe.c:26
+    #6 0x7b841542a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #7 0x7b841542a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #8 0x624ac400c624 in _start (/tmp/madis-verify-5d9681a/empty+0x7624) (BuildId: f583f795c06d06ad1ac81efba9c27f806682e068)
+
+SUMMARY: AddressSanitizer: 1000 byte(s) leaked in 1000 allocation(s).

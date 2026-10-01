@@ -1,0 +1,12 @@
+mako test: tests/stream_ownership_test.mko
+=== tests/stream_ownership_test.mko ===
+--- PASS: TestLifecycleFieldsAndNatOwnership
+2026-10-01T12:37:47.244Z ownership probe
+2026-10-01T12:37:47.244Z [INFO] [ownership] probe
+2026-10-01T12:37:47.245Z [INFO] [ownership] probe ok=1
+--- PASS: TestLogTimestampOwnership
+--- PASS: TestStreamAndIMSRefreshBoundedOwnership
+PASS
+ok  tests/stream_ownership_test.mko (17526ms)
+
+mako test: 1 passed, 0 failed

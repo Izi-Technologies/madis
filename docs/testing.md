@@ -1,7 +1,7 @@
 # Testing and release checks
 
-The [0.6.34 validation report](makori-0.6.34-validation.md) records the current
-compiler pin, crew-policy contract, and sanitizer gate.
+The [0.6.38 validation report](makori-0.6.38-validation.md) records the original upgrade results and remaining validation.
+The [retained-string integration](makori-string-ownership-integration.md) records the current compiler pin.
 
 The [0.6.31 validation report](makori-0.6.31-validation.md) records the clean
 Linux sanitizer gate that first closed the ownership leaks. The
@@ -9,11 +9,18 @@ Linux sanitizer gate that first closed the ownership leaks. The
 Linux leak failure and traffic findings. Recheck ownership on every compiler
 upgrade; functional checks alone do not establish memory safety.
 
-CI, release, and the optional IMS workflow use Makori 0.6.34 at commit
-`45c8e61a94a13dce9f01c3c913a6a5f28610ce8c`, including the runtime from that
+CI, release, and the optional IMS workflow use Makori 0.6.38 at commit
+`249a6168338d290966e9248257cd752cf03bd681`, including the runtime from that
 checkout. Keep the compiler and runtime together when updating the pin. The
-build/check scripts reject compilers older than 0.6.34 so a local build cannot
-silently drop crew policies or restore the JSON escaping bug. The
+build/check scripts reject compilers older than 0.6.38 and run a standalone
+string and array ownership probe. Both pre-fix and fixed compilers report 0.6.38,
+so the probe requires a positive allocation count and an explicit zero-leak report.
+It covers retained strings, crypto and slice temporaries, SIP-tag extraction,
+literal and numeric-string array replacement, and a numeric-string append wrapper.
+Linux ownership checks also run this fixture with LSan to detect raw allocations
+that the compiler's built-in checker does not track.
+A successful process exit alone is insufficient: upstream leak checking reports
+leaks without setting a failing exit code. The
 application uses `--backend c`; the direct native backend does not yet lower
 all of its SIP and event-loop builtins.
 
@@ -21,8 +28,16 @@ Run `bash scripts/check-ownership.sh` for focused AddressSanitizer and
 UndefinedBehaviorSanitizer checks. It honors `MAKO_BIN` and `MAKO_RUNTIME`.
 The bounded offline ownership fixture repeatedly copies and mutates Contact
 arrays, transfers HEP packets to joined workers, reuses the parent's channel,
-and rejects sends to full/closed queues. Linux also checks this fixture with
-LeakSanitizer; macOS runs without leak detection. Stream, HEP, and MAF contract
+and rejects sends to full/closed queues. A second bounded fixture retains typed
+stream frames across buffer replacement and renews IMS flow values 2,000 times
+without creating process-lifetime caches. A third fixture validates SIP messages
+and byte mutations, including URI/Via parameters and wildcard OPTIONS. Linux
+checks these fixtures with LeakSanitizer; macOS runs without leak detection.
+A forwarding fixture also repeats Max-Forwards rewriting, Via removal, and loop
+detection under LSan. Its separate range-equivalence suite uses frozen old
+implementations and therefore disables LSan while retaining ASan/UBSan.
+The scan differential fixture retains an old validator oracle with known
+temporary leaks, so it runs ASan/UBSan without LSan. Stream, HEP, and MAF contract
 suites run with address/undefined checks but without leak detection because
 they use process-lifetime runtime resources. CI and release require these checks.
 This does not replace a sustained traffic/RSS soak or the opt-in transport
@@ -31,7 +46,7 @@ matrices in `bench/sanitizer.sh`.
 The MAF error-response pilot uses `#[derive(json)]` with boolean/string fields.
 Its contract test compares the complete HTTP response, including control-byte
 normalization, escaping, UTF-8, content length, and the trailing newline.
-Makori 0.6.34 keeps the upstream JSON control-byte escaping fix. The pilot
+Makori 0.6.38 keeps the upstream JSON control-byte escaping fix. The pilot
 uses the generated serializer directly and retains the API's existing
 control-byte normalization. The complete wire-contract test guards this
 behavior without the previous tab/carriage-return workaround.
@@ -46,7 +61,7 @@ The opt-in session-timer worker regression additionally verifies a `422 Min-SE` 
 
 The opt-in worker-backed two-subscriber IMS smoke runs the worker against the lab HSS with TLS Cx/AKA **and** the fail-closed HTTPS subscriber-authorization boundary (ephemeral certificates, bearer token), then exercises authenticated REGISTER retransmission replay, initial-INVITE forwarding, in-dialog `UPDATE` and re-INVITE offer/answer exchanges through the RTP sidecar, and authenticated INVITE cancellation with downstream `487 Request Terminated` handling. Separate opt-in cases provision two target-only iFC application branches and verify a reliable `183 Session Progress`/PRACK exchange with To-tag routing, downstream `200 OK` acknowledgement, CANCEL cleanup after one branch answers, and a correlated `408 Request Timeout` when an INVITE receives no final response.
 
-Madis builds and tests with Makori **0.6.34** and a matching runtime directory. The contract suite selects the C backend explicitly while production C emission remains exercised. The codebase is pure Mako with no C bridge code; tests run without linking any C. Do not mix a different compiler/runtime pair with generated C.
+Madis builds and tests with Makori **0.6.38** and a matching runtime directory. The contract suite selects the C backend explicitly while production C emission remains exercised. The codebase is pure Mako with no C bridge code; tests run without linking any C. Do not mix a different compiler/runtime pair with generated C.
 
 ## Local CI
 
@@ -66,8 +81,8 @@ MAKO_RUNTIME=/path/to/mako/runtime \
 ./scripts/test.sh tests/proxy_state_test.mko
 ```
 
-The current suite totals **49 Mako test files** plus the Python MAF, lab, and
-media checks. Extra Mako files cover 0.6.34 crew policies, actors, arenas,
+The current suite totals **55 Mako test files** plus the Python MAF, lab, and
+media checks. Extra Mako files cover crew policies, actors, arenas,
 inline channels, and parallel fork/CANCEL.
 
 The CI script runs:

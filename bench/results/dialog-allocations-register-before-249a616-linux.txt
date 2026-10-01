@@ -1,0 +1,22 @@
+mako: pg_connect: bad url
+2026-10-01T12:44:03.882Z   reg: store aor=bench@mako.local contact=sip:bench@127.0.0.1:33545 expires=3600
+2026-10-01T12:44:03.884Z   ims: lifecycle aor=bench@mako.local state=registered
+completed_dialogs=100 calls_entries=2 cache_entries=2576
+
+=================================================================
+==1835945==ERROR: LeakSanitizer: detected memory leaks
+
+Direct leak of 11 byte(s) in 1 object(s) allocated from:
+    #0 0x7f4d87cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5d79e7f058ba in mako_rc_alloc /tmp/madis-makori-249a616/runtime/mako_rt.h:143
+    #2 0x5d79e7f05cfd in mako_str_from_cstr /tmp/madis-makori-249a616/runtime/mako_rt.h:535
+    #3 0x5d79e82a1a29 in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:991
+    #4 0x5d79e82cf629 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1704
+    #5 0x5d79e82d1ae4 in process_sip /tmp/madis-dialog-fix/source/workers.mko:1734
+    #6 0x5d79e82f47d5 in process bench/dialog_allocation_probe.c:27
+    #7 0x5d79e8308214 in main bench/dialog_allocation_probe.c:64
+    #8 0x7f4d86a2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #9 0x7f4d86a2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #10 0x5d79e7eeb144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c5144) (BuildId: 8bb5c35e3d7fa7ad823f94c17fcb15a5b11fa2b9)
+
+SUMMARY: AddressSanitizer: 11 byte(s) leaked in 1 allocation(s).

@@ -1,0 +1,282 @@
+mako: pg_connect: bad url
+probe_status=404
+
+=================================================================
+==1769542==ERROR: LeakSanitizer: detected memory leaks
+
+Direct leak of 6100 byte(s) in 100 object(s) allocated from:
+    #0 0x7b01a8afd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x608a64bb1d07 in mako_rc_alloc /tmp/madis-makori-f6ca048/runtime/mako_rt.h:143
+    #2 0x608a64bb3673 in mako_str_concat /tmp/madis-makori-f6ca048/runtime/mako_rt.h:591
+    #3 0x608a64e69033 in maf_worker_inbound_cache_get /tmp/madis-integration-47f661b/maf_worker.mko:428
+    #4 0x608a64e69033 in maf_worker_inbound_call_for_wire /tmp/madis-integration-47f661b/maf_worker.mko:435
+    #5 0x608a64f20b8c in process_sip_core__impl /tmp/madis-integration-47f661b/workers.mko:633
+    #6 0x608a64f636b6 in process_sip_core /tmp/madis-integration-47f661b/workers.mko:1695
+    #7 0x608a64f9b07e in main bench/proxy_allocation_probe.c:34
+    #8 0x7b01a782a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #9 0x7b01a782a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #10 0x608a64b97124 in _start (/tmp/madis-f6ca048-probe+0x1c1124) (BuildId: b51e107cb9e2848ac172c06cc195fddfc82584c5)
+
+Direct leak of 5300 byte(s) in 100 object(s) allocated from:
+    #0 0x7b01a8afd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x608a64bb1d07 in mako_rc_alloc /tmp/madis-makori-f6ca048/runtime/mako_rt.h:143
+    #2 0x608a64bb3673 in mako_str_concat /tmp/madis-makori-f6ca048/runtime/mako_rt.h:591
+    #3 0x608a64d8cffd in b2bua_active /tmp/madis-integration-47f661b/b2bua.mko:118
+    #4 0x608a64d8f63c in b2bua_lookup_in /tmp/madis-integration-47f661b/b2bua.mko:167
+    #5 0x608a64f19620 in process_sip_core__impl /tmp/madis-integration-47f661b/workers.mko:582
+    #6 0x608a64f636b6 in process_sip_core /tmp/madis-integration-47f661b/workers.mko:1695
+    #7 0x608a64f9b07e in main bench/proxy_allocation_probe.c:34
+    #8 0x7b01a782a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #9 0x7b01a782a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #10 0x608a64b97124 in _start (/tmp/madis-f6ca048-probe+0x1c1124) (BuildId: b51e107cb9e2848ac172c06cc195fddfc82584c5)
+
+Direct leak of 4190 byte(s) in 100 object(s) allocated from:
+    #0 0x7b01a8afd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x608a64bb1d07 in mako_rc_alloc /tmp/madis-makori-f6ca048/runtime/mako_rt.h:143
+    #2 0x608a64bb3673 in mako_str_concat /tmp/madis-makori-f6ca048/runtime/mako_rt.h:591
+    #3 0x608a64d8fb35 in b2bua_lookup_out /tmp/madis-integration-47f661b/b2bua.mko:175
+    #4 0x608a64f19676 in process_sip_core__impl /tmp/madis-integration-47f661b/workers.mko:583
+    #5 0x608a64f636b6 in process_sip_core /tmp/madis-integration-47f661b/workers.mko:1695
+    #6 0x608a64f9b07e in main bench/proxy_allocation_probe.c:34
+    #7 0x7b01a782a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #8 0x7b01a782a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #9 0x608a64b97124 in _start (/tmp/madis-f6ca048-probe+0x1c1124) (BuildId: b51e107cb9e2848ac172c06cc195fddfc82584c5)
+
+Direct leak of 3300 byte(s) in 100 object(s) allocated from:
+    #0 0x7b01a8afd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x608a64e67045 in mako_str_slice /tmp/madis-makori-f6ca048/runtime/mako_rt.h:2349
+    #2 0x608a64e67045 in maf_worker_inbound_call_id /tmp/madis-integration-47f661b/maf_worker.mko:355
+    #3 0x608a64e68f83 in maf_worker_inbound_call_for_wire /tmp/madis-integration-47f661b/maf_worker.mko:432
+    #4 0x608a64f20b8c in process_sip_core__impl /tmp/madis-integration-47f661b/workers.mko:633
+    #5 0x608a64f636b6 in process_sip_core /tmp/madis-integration-47f661b/workers.mko:1695
+    #6 0x608a64f9b07e in main bench/proxy_allocation_probe.c:34
+    #7 0x7b01a782a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #8 0x7b01a782a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #9 0x608a64b97124 in _start (/tmp/madis-f6ca048-probe+0x1c1124) (BuildId: b51e107cb9e2848ac172c06cc195fddfc82584c5)
+
+Direct leak of 2600 byte(s) in 100 object(s) allocated from:
+    #0 0x7b01a8afd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x608a64bfe7be in mako_sip_header_n /tmp/madis-makori-f6ca048/runtime/mako_sip.h:518
+    #2 0x608a64d8f023 in mako_sip_header /tmp/madis-makori-f6ca048/runtime/mako_sip.h:541
+    #3 0x608a64d8f023 in b2bua_lookup_in /tmp/madis-integration-47f661b/b2bua.mko:168
+    #4 0x608a64f19620 in process_sip_core__impl /tmp/madis-integration-47f661b/workers.mko:582
+    #5 0x608a64f636b6 in process_sip_core /tmp/madis-integration-47f661b/workers.mko:1695
+    #6 0x608a64f9b07e in main bench/proxy_allocation_probe.c:34
+    #7 0x7b01a782a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #8 0x7b01a782a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #9 0x608a64b97124 in _start (/tmp/madis-f6ca048-probe+0x1c1124) (BuildId: b51e107cb9e2848ac172c06cc195fddfc82584c5)
+
+Direct leak of 1900 byte(s) in 100 object(s) allocated from:
+    #0 0x7b01a8afd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x608a64bb1d07 in mako_rc_alloc /tmp/madis-makori-f6ca048/runtime/mako_rt.h:143
+    #2 0x608a64bb3ac7 in mako_str_from_cstr /tmp/madis-makori-f6ca048/runtime/mako_rt.h:535
+    #3 0x608a64f1853c in process_sip_core__impl /tmp/madis-integration-47f661b/workers.mko:346
+    #4 0x608a64f636b6 in process_sip_core /tmp/madis-integration-47f661b/workers.mko:1695
+    #5 0x608a64f9b07e in main bench/proxy_allocation_probe.c:34
+    #6 0x7b01a782a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #7 0x7b01a782a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #8 0x608a64b97124 in _start (/tmp/madis-f6ca048-probe+0x1c1124) (BuildId: b51e107cb9e2848ac172c06cc195fddfc82584c5)
+
+Direct leak of 1900 byte(s) in 100 object(s) allocated from:
+    #0 0x7b01a8afd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x608a64bb1d07 in mako_rc_alloc /tmp/madis-makori-f6ca048/runtime/mako_rt.h:143
+    #2 0x608a64bb3ac7 in mako_str_from_cstr /tmp/madis-makori-f6ca048/runtime/mako_rt.h:535
+    #3 0x608a64f0fc9b in process_sip_core__impl /tmp/madis-integration-47f661b/workers.mko:107
+    #4 0x608a64f636b6 in process_sip_core /tmp/madis-integration-47f661b/workers.mko:1695
+    #5 0x608a64f9b07e in main bench/proxy_allocation_probe.c:34
+    #6 0x7b01a782a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #7 0x7b01a782a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #8 0x608a64b97124 in _start (/tmp/madis-f6ca048-probe+0x1c1124) (BuildId: b51e107cb9e2848ac172c06cc195fddfc82584c5)
+
+Direct leak of 1881 byte(s) in 99 object(s) allocated from:
+    #0 0x7b01a8afd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x608a64bb1d07 in mako_rc_alloc /tmp/madis-makori-f6ca048/runtime/mako_rt.h:143
+    #2 0x608a64bb3ac7 in mako_str_from_cstr /tmp/madis-makori-f6ca048/runtime/mako_rt.h:535
+    #3 0x608a64f10754 in process_sip_core__impl /tmp/madis-integration-47f661b/workers.mko:108
+    #4 0x608a64f636b6 in process_sip_core /tmp/madis-integration-47f661b/workers.mko:1695
+    #5 0x608a64f9b07e in main bench/proxy_allocation_probe.c:34
+    #6 0x7b01a782a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #7 0x7b01a782a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #8 0x608a64b97124 in _start (/tmp/madis-f6ca048-probe+0x1c1124) (BuildId: b51e107cb9e2848ac172c06cc195fddfc82584c5)
+
+Direct leak of 1782 byte(s) in 99 object(s) allocated from:
+    #0 0x7b01a8afd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x608a64bb1d07 in mako_rc_alloc /tmp/madis-makori-f6ca048/runtime/mako_rt.h:143
+    #2 0x608a64bb21e9 in mako_str_clone /tmp/madis-makori-f6ca048/runtime/mako_rt.h:3497
+    #3 0x608a64d503bc in rtp_config /tmp/madis-integration-47f661b/rtpengine.mko:325
+    #4 0x608a64d54d91 in rtp_process_offer /tmp/madis-integration-47f661b/rtpengine.mko:491
+    #5 0x608a64f3e254 in process_sip_core__impl /tmp/madis-integration-47f661b/workers.mko:1227
+    #6 0x608a64f636b6 in process_sip_core /tmp/madis-integration-47f661b/workers.mko:1695
+    #7 0x608a64f9b07e in main bench/proxy_allocation_probe.c:34
+    #8 0x7b01a782a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #9 0x7b01a782a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #10 0x608a64b97124 in _start (/tmp/madis-f6ca048-probe+0x1c1124) (BuildId: b51e107cb9e2848ac172c06cc195fddfc82584c5)
+
+Direct leak of 1600 byte(s) in 100 object(s) allocated from:
+    #0 0x7b01a8afd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x608a64bb1d07 in mako_rc_alloc /tmp/madis-makori-f6ca048/runtime/mako_rt.h:143
+    #2 0x608a64d8eecc in mako_str_from_cstr /tmp/madis-makori-f6ca048/runtime/mako_rt.h:535
+    #3 0x608a64d8eecc in b2bua_lookup_in /tmp/madis-integration-47f661b/b2bua.mko:166
+    #4 0x608a64f19620 in process_sip_core__impl /tmp/madis-integration-47f661b/workers.mko:582
+    #5 0x608a64f636b6 in process_sip_core /tmp/madis-integration-47f661b/workers.mko:1695
+    #6 0x608a64f9b07e in main bench/proxy_allocation_probe.c:34
+    #7 0x7b01a782a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #8 0x7b01a782a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #9 0x608a64b97124 in _start (/tmp/madis-f6ca048-probe+0x1c1124) (BuildId: b51e107cb9e2848ac172c06cc195fddfc82584c5)
+
+Direct leak of 1600 byte(s) in 100 object(s) allocated from:
+    #0 0x7b01a8afd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x608a64bb1d07 in mako_rc_alloc /tmp/madis-makori-f6ca048/runtime/mako_rt.h:143
+    #2 0x608a64bb3ac7 in mako_str_from_cstr /tmp/madis-makori-f6ca048/runtime/mako_rt.h:535
+    #3 0x608a64f0ff0d in process_sip_core__impl /tmp/madis-integration-47f661b/workers.mko:341
+    #4 0x608a64f636b6 in process_sip_core /tmp/madis-integration-47f661b/workers.mko:1695
+    #5 0x608a64f9b07e in main bench/proxy_allocation_probe.c:34
+    #6 0x7b01a782a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #7 0x7b01a782a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #8 0x608a64b97124 in _start (/tmp/madis-f6ca048-probe+0x1c1124) (BuildId: b51e107cb9e2848ac172c06cc195fddfc82584c5)
+
+Direct leak of 1600 byte(s) in 100 object(s) allocated from:
+    #0 0x7b01a8afd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x608a64bb1d07 in mako_rc_alloc /tmp/madis-makori-f6ca048/runtime/mako_rt.h:143
+    #2 0x608a64d8f9fb in mako_str_from_cstr /tmp/madis-makori-f6ca048/runtime/mako_rt.h:535
+    #3 0x608a64d8f9fb in b2bua_lookup_out /tmp/madis-integration-47f661b/b2bua.mko:172
+    #4 0x608a64f19676 in process_sip_core__impl /tmp/madis-integration-47f661b/workers.mko:583
+    #5 0x608a64f636b6 in process_sip_core /tmp/madis-integration-47f661b/workers.mko:1695
+    #6 0x608a64f9b07e in main bench/proxy_allocation_probe.c:34
+    #7 0x7b01a782a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #8 0x7b01a782a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #9 0x608a64b97124 in _start (/tmp/madis-f6ca048-probe+0x1c1124) (BuildId: b51e107cb9e2848ac172c06cc195fddfc82584c5)
+
+Direct leak of 1300 byte(s) in 100 object(s) allocated from:
+    #0 0x7b01a8afd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x608a64bb1d07 in mako_rc_alloc /tmp/madis-makori-f6ca048/runtime/mako_rt.h:143
+    #2 0x608a64d8ef8d in mako_str_from_cstr /tmp/madis-makori-f6ca048/runtime/mako_rt.h:535
+    #3 0x608a64d8ef8d in b2bua_lookup_in /tmp/madis-integration-47f661b/b2bua.mko:168
+    #4 0x608a64f19620 in process_sip_core__impl /tmp/madis-integration-47f661b/workers.mko:582
+    #5 0x608a64f636b6 in process_sip_core /tmp/madis-integration-47f661b/workers.mko:1695
+    #6 0x608a64f9b07e in main bench/proxy_allocation_probe.c:34
+    #7 0x7b01a782a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #8 0x7b01a782a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #9 0x608a64b97124 in _start (/tmp/madis-f6ca048-probe+0x1c1124) (BuildId: b51e107cb9e2848ac172c06cc195fddfc82584c5)
+
+Direct leak of 1300 byte(s) in 100 object(s) allocated from:
+    #0 0x7b01a8afd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x608a64bb1d07 in mako_rc_alloc /tmp/madis-makori-f6ca048/runtime/mako_rt.h:143
+    #2 0x608a64bb3ac7 in mako_str_from_cstr /tmp/madis-makori-f6ca048/runtime/mako_rt.h:535
+    #3 0x608a64f0ffd7 in process_sip_core__impl /tmp/madis-integration-47f661b/workers.mko:342
+    #4 0x608a64f636b6 in process_sip_core /tmp/madis-integration-47f661b/workers.mko:1695
+    #5 0x608a64f9b07e in main bench/proxy_allocation_probe.c:34
+    #6 0x7b01a782a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #7 0x7b01a782a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #8 0x608a64b97124 in _start (/tmp/madis-f6ca048-probe+0x1c1124) (BuildId: b51e107cb9e2848ac172c06cc195fddfc82584c5)
+
+Direct leak of 1300 byte(s) in 100 object(s) allocated from:
+    #0 0x7b01a8afd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x608a64bb1d07 in mako_rc_alloc /tmp/madis-makori-f6ca048/runtime/mako_rt.h:143
+    #2 0x608a64d1ab31 in mako_str_from_cstr /tmp/madis-makori-f6ca048/runtime/mako_rt.h:535
+    #3 0x608a64d1ab31 in sip_transaction_fresh /tmp/madis-integration-47f661b/rfc.mko:341
+    #4 0x608a64f18c93 in sip_is_retransmit /tmp/madis-integration-47f661b/rfc.mko:414
+    #5 0x608a64f18c93 in process_sip_core__impl /tmp/madis-integration-47f661b/workers.mko:506
+    #6 0x608a64f636b6 in process_sip_core /tmp/madis-integration-47f661b/workers.mko:1695
+    #7 0x608a64f9b07e in main bench/proxy_allocation_probe.c:34
+    #8 0x7b01a782a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #9 0x7b01a782a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #10 0x608a64b97124 in _start (/tmp/madis-f6ca048-probe+0x1c1124) (BuildId: b51e107cb9e2848ac172c06cc195fddfc82584c5)
+
+Direct leak of 1100 byte(s) in 100 object(s) allocated from:
+    #0 0x7b01a8afd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x608a64bb1d07 in mako_rc_alloc /tmp/madis-makori-f6ca048/runtime/mako_rt.h:143
+    #2 0x608a64bb3ac7 in mako_str_from_cstr /tmp/madis-makori-f6ca048/runtime/mako_rt.h:535
+    #3 0x608a64f100a1 in process_sip_core__impl /tmp/madis-integration-47f661b/workers.mko:343
+    #4 0x608a64f636b6 in process_sip_core /tmp/madis-integration-47f661b/workers.mko:1695
+    #5 0x608a64f9b07e in main bench/proxy_allocation_probe.c:34
+    #6 0x7b01a782a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #7 0x7b01a782a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #8 0x608a64b97124 in _start (/tmp/madis-f6ca048-probe+0x1c1124) (BuildId: b51e107cb9e2848ac172c06cc195fddfc82584c5)
+
+Direct leak of 990 byte(s) in 99 object(s) allocated from:
+    #0 0x7b01a8afd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x608a64bb1d07 in mako_rc_alloc /tmp/madis-makori-f6ca048/runtime/mako_rt.h:143
+    #2 0x608a64bb21e9 in mako_str_clone /tmp/madis-makori-f6ca048/runtime/mako_rt.h:3497
+    #3 0x608a64d502a1 in rtp_config /tmp/madis-integration-47f661b/rtpengine.mko:324
+    #4 0x608a64d54d91 in rtp_process_offer /tmp/madis-integration-47f661b/rtpengine.mko:491
+    #5 0x608a64f3e254 in process_sip_core__impl /tmp/madis-integration-47f661b/workers.mko:1227
+    #6 0x608a64f636b6 in process_sip_core /tmp/madis-integration-47f661b/workers.mko:1695
+    #7 0x608a64f9b07e in main bench/proxy_allocation_probe.c:34
+    #8 0x7b01a782a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #9 0x7b01a782a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #10 0x608a64b97124 in _start (/tmp/madis-f6ca048-probe+0x1c1124) (BuildId: b51e107cb9e2848ac172c06cc195fddfc82584c5)
+
+Direct leak of 495 byte(s) in 99 object(s) allocated from:
+    #0 0x7b01a8afd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x608a64ba70aa in mako_int_to_string /tmp/madis-makori-f6ca048/runtime/mako_rt.h:2657
+    #2 0x608a64d5051f in rtp_config /tmp/madis-integration-47f661b/rtpengine.mko:328
+    #3 0x608a64d54d91 in rtp_process_offer /tmp/madis-integration-47f661b/rtpengine.mko:491
+    #4 0x608a64f3e254 in process_sip_core__impl /tmp/madis-integration-47f661b/workers.mko:1227
+    #5 0x608a64f636b6 in process_sip_core /tmp/madis-integration-47f661b/workers.mko:1695
+    #6 0x608a64f9b07e in main bench/proxy_allocation_probe.c:34
+    #7 0x7b01a782a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #8 0x7b01a782a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #9 0x608a64b97124 in _start (/tmp/madis-f6ca048-probe+0x1c1124) (BuildId: b51e107cb9e2848ac172c06cc195fddfc82584c5)
+
+Direct leak of 19 byte(s) in 1 object(s) allocated from:
+    #0 0x7b01a8afd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x608a64bb1d07 in mako_rc_alloc /tmp/madis-makori-f6ca048/runtime/mako_rt.h:143
+    #2 0x608a64bb3ac7 in mako_str_from_cstr /tmp/madis-makori-f6ca048/runtime/mako_rt.h:535
+    #3 0x608a64f10886 in process_sip_core__impl /tmp/madis-integration-47f661b/workers.mko:113
+    #4 0x608a64f636b6 in process_sip_core /tmp/madis-integration-47f661b/workers.mko:1695
+    #5 0x608a64f9b07e in main bench/proxy_allocation_probe.c:34
+    #6 0x7b01a782a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #7 0x7b01a782a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #8 0x608a64b97124 in _start (/tmp/madis-f6ca048-probe+0x1c1124) (BuildId: b51e107cb9e2848ac172c06cc195fddfc82584c5)
+
+Direct leak of 18 byte(s) in 1 object(s) allocated from:
+    #0 0x7b01a8afd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x608a64bb1d07 in mako_rc_alloc /tmp/madis-makori-f6ca048/runtime/mako_rt.h:143
+    #2 0x608a64d4f513 in mako_str_from_cstr /tmp/madis-makori-f6ca048/runtime/mako_rt.h:535
+    #3 0x608a64d4f513 in rtp_config /tmp/madis-integration-47f661b/rtpengine.mko:315
+    #4 0x608a64d54d91 in rtp_process_offer /tmp/madis-integration-47f661b/rtpengine.mko:491
+    #5 0x608a64f3e254 in process_sip_core__impl /tmp/madis-integration-47f661b/workers.mko:1227
+    #6 0x608a64f636b6 in process_sip_core /tmp/madis-integration-47f661b/workers.mko:1695
+    #7 0x608a64f9b07e in main bench/proxy_allocation_probe.c:34
+    #8 0x7b01a782a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #9 0x7b01a782a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #10 0x608a64b97124 in _start (/tmp/madis-f6ca048-probe+0x1c1124) (BuildId: b51e107cb9e2848ac172c06cc195fddfc82584c5)
+
+Direct leak of 10 byte(s) in 1 object(s) allocated from:
+    #0 0x7b01a8afd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x608a64bb1d07 in mako_rc_alloc /tmp/madis-makori-f6ca048/runtime/mako_rt.h:143
+    #2 0x608a64d4f3ef in mako_str_from_cstr /tmp/madis-makori-f6ca048/runtime/mako_rt.h:535
+    #3 0x608a64d4f3ef in rtp_config /tmp/madis-integration-47f661b/rtpengine.mko:314
+    #4 0x608a64d54d91 in rtp_process_offer /tmp/madis-integration-47f661b/rtpengine.mko:491
+    #5 0x608a64f3e254 in process_sip_core__impl /tmp/madis-integration-47f661b/workers.mko:1227
+    #6 0x608a64f636b6 in process_sip_core /tmp/madis-integration-47f661b/workers.mko:1695
+    #7 0x608a64f9b07e in main bench/proxy_allocation_probe.c:34
+    #8 0x7b01a782a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #9 0x7b01a782a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #10 0x608a64b97124 in _start (/tmp/madis-f6ca048-probe+0x1c1124) (BuildId: b51e107cb9e2848ac172c06cc195fddfc82584c5)
+
+Direct leak of 8 byte(s) in 1 object(s) allocated from:
+    #0 0x7b01a8afd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x608a64ba70aa in mako_int_to_string /tmp/madis-makori-f6ca048/runtime/mako_rt.h:2657
+    #2 0x608a64cf3fa9 in db_rate_ok /tmp/madis-integration-47f661b/dialplan.mko:171
+    #3 0x608a64f195e4 in process_sip_core__impl /tmp/madis-integration-47f661b/workers.mko:575
+    #4 0x608a64f636b6 in process_sip_core /tmp/madis-integration-47f661b/workers.mko:1695
+    #5 0x608a64f9b07e in main bench/proxy_allocation_probe.c:34
+    #6 0x7b01a782a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #7 0x7b01a782a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #8 0x608a64b97124 in _start (/tmp/madis-f6ca048-probe+0x1c1124) (BuildId: b51e107cb9e2848ac172c06cc195fddfc82584c5)
+
+Direct leak of 5 byte(s) in 1 object(s) allocated from:
+    #0 0x7b01a8afd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x608a64ba70aa in mako_int_to_string /tmp/madis-makori-f6ca048/runtime/mako_rt.h:2657
+    #2 0x608a64d4f82b in rtp_config /tmp/madis-integration-47f661b/rtpengine.mko:342
+    #3 0x608a64d54d91 in rtp_process_offer /tmp/madis-integration-47f661b/rtpengine.mko:491
+    #4 0x608a64f3e254 in process_sip_core__impl /tmp/madis-integration-47f661b/workers.mko:1227
+    #5 0x608a64f636b6 in process_sip_core /tmp/madis-integration-47f661b/workers.mko:1695
+    #6 0x608a64f9b07e in main bench/proxy_allocation_probe.c:34
+    #7 0x7b01a782a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #8 0x7b01a782a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #9 0x608a64b97124 in _start (/tmp/madis-f6ca048-probe+0x1c1124) (BuildId: b51e107cb9e2848ac172c06cc195fddfc82584c5)
+
+SUMMARY: AddressSanitizer: 40298 byte(s) leaked in 1801 allocation(s).

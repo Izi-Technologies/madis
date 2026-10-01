@@ -1,3 +1,4 @@
+pull . "./cache_owned.mko"
 // B2BUA leg management.
 //
 // This module is deliberately opt-in. A b2bua:<target> routing action makes
@@ -126,7 +127,7 @@ fn b2bua_active(key: string, cache: CMap) -> int {
 
 fn b2bua_store(key: string, in_cid: string, out_cid: string, from: string, to: string, via: string, in_tag: string, out_tag: string, invite: string, target: string, transport: string, peer: string, peer_transport: string, invite_cseq: string, cache: CMap) -> int {
     if len(key) == 0 || len(in_cid) == 0 || len(out_cid) == 0 || len(invite) > 32768 { return 0 }
-    let seq = cmap_incr(cache, "b2bua_seq", 1)
+    let seq = cache_incr(cache, "b2bua_seq", 1)
     if seq < 0 { return 0 }
     let cap = b2bua_state_capacity()
     let slot = seq - (seq / cap) * cap

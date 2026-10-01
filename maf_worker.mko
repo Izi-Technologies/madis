@@ -1,3 +1,4 @@
+pull . "./cache_owned.mko"
 // MAF worker-side command handoff.
 //
 // The admin process accepts authenticated commands into PostgreSQL. SIP
@@ -288,7 +289,7 @@ fn maf_worker_command_state(db: SqlDB, ok: int, tenant: string, command_id: stri
 fn maf_worker_metric(cache: CMap, name: string, labels: string) -> int {
     if cmap_has(cache, "_prom_active") == 0 { return 0 }
     if len(name) == 0 || len(labels) == 0 { return 0 }
-    let _ = cmap_incr(cache, "prom|" + name + "|" + labels, 1)
+    let _ = cache_incr(cache, "prom|" + name + "|" + labels, 1)
     return 1
 }
 

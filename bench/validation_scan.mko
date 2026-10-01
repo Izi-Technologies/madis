@@ -1,0 +1,32 @@
+// Compare the production validator with the frozen pre-optimization oracle.
+// Compile with Mako 0.6.38 --backend c --release; values are milliseconds.
+pull . "../tests/parser_scan_test.mko"
+
+fn validation_bench_run(variant: int, iterations: int, msg: string) -> int {
+    let mut checksum = 0
+    let mut i = 0
+    while i < iterations {
+        if variant == 0 {
+            checksum = checksum + reference_validate_message(msg, len(msg))
+        } else {
+            checksum = checksum + sip_validate_message(msg, len(msg))
+        }
+        i = i + 1
+    }
+    return checksum
+}
+
+fn main() {
+    let wire = scan_test_message("User-Agent: validation-benchmark\r\nContact: <sip:a@192.0.2.1>\r\n")
+    let iterations = 100000
+    let _ = validation_bench_run(0, 100, wire)
+    let _ = validation_bench_run(1, 100, wire)
+    let order = [0, 1, 1, 0, 0, 1, 1, 0, 0, 1]
+    for variant in order {
+        let started = mono_ms()
+        let checksum = validation_bench_run(variant, iterations, wire)
+        let elapsed = mono_ms() - started
+        assert_eq(checksum, iterations)
+        print("variant=" + string(variant) + " elapsed_ms=" + string(elapsed) + " messages=" + string(checksum))
+    }
+}

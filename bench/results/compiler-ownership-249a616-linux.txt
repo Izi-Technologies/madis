@@ -1,0 +1,13 @@
+mako test: /tmp/madis-combined-249a616/ownership_test.mko
+=== /tmp/madis-combined-249a616/ownership_test.mko ===
+--- PASS: TestCompilerCryptoTemporaryOwnership
+--- PASS: TestCompilerRetainedStringReplacement
+--- PASS: TestNamedSliceOwnership
+--- PASS: TestNumericStringArrayAppendOwnership
+--- PASS: TestNumericStringArrayReplacementOwnership
+--- PASS: TestSipTagTemporaryOwnership
+--- PASS: TestStringArrayReplacementOwnership
+PASS
+ok  /tmp/madis-combined-249a616/ownership_test.mko (6889ms)
+
+mako test: 1 passed, 0 failed

@@ -1,0 +1,1391 @@
+{
+  "description": "Single-pass header scan before ownership fixes; shared-host exploratory runs, 2026-09-28.",
+  "runs": [
+    {
+      "kind": "opensips",
+      "binary_sha256": "2f233c7b2e0e68ae11791b9bb4f13bb341f56bd8d23216a29ec33246a5317b08",
+      "proxy_command": [
+        "/tmp/madis-opensips.6Xq9rD/opensips/usr/sbin/opensips",
+        "-F",
+        "-m",
+        "256",
+        "-M",
+        "16",
+        "-f",
+        "/tmp/madis-opensips.6Xq9rD/scan-opensips-1000-1/opensips.cfg",
+        "-w",
+        "/tmp/madis-opensips.6Xq9rD/scan-opensips-1000-1"
+      ],
+      "system": "Linux-6.8.0-136-generic-x86_64-with-glibc2.39",
+      "cpu_affinity": {
+        "proxy": 2,
+        "caller": 3,
+        "callee": 4
+      },
+      "fixture_sha256": {
+        "compare_opensips.py": "d44f5465262af739474686c46a5703b51b4b5e750435220a867bc5c23803e4b6",
+        "compare_uac.xml": "473c5676afc0703782280103b1d3e7ab2bebd00d195039a3a28518807738f6ca",
+        "compare_uas.xml": "e42e60a453eaada25522d397c84e7d962dfdf3d1ab41b12743ec5839ebd35f7e",
+        "opensips.cfg.in": "80e7ad96203e716630987a7687ed3100b8eb3cda339e957e5c3c1b608295309d"
+      },
+      "offered_cps": 1000,
+      "expected_calls": 5000,
+      "elapsed_seconds": 5.383779517374933,
+      "caller_exit": 0,
+      "callee_exit": 0,
+      "socket_samples": {
+        "15060": {
+          "sampled_max_rx_bytes": 229760,
+          "drops": 0
+        },
+        "15070": {
+          "sampled_max_rx_bytes": 75520,
+          "drops": 0
+        },
+        "15071": {
+          "sampled_max_rx_bytes": 81280,
+          "drops": 0
+        }
+      },
+      "generator_socket_drops": 0,
+      "sipp_requested_buffer_bytes": 1048576,
+      "host_cpu_during_caller": {
+        "cpu2": {
+          "busy_fraction": 0.6950207468879668,
+          "steal_fraction": 0
+        },
+        "cpu3": {
+          "busy_fraction": 0.30246913580246915,
+          "steal_fraction": 0
+        },
+        "cpu4": {
+          "busy_fraction": 0.2903885480572597,
+          "steal_fraction": 0
+        }
+      },
+      "caller": {
+        "SuccessfulCall(C)": 5000,
+        "FailedCall(C)": 0,
+        "Retransmissions(C)": 0,
+        "WatchdogMajor(C)": 0
+      },
+      "callee": {
+        "SuccessfulCall(C)": 5000,
+        "FailedCall(C)": 0,
+        "Retransmissions(C)": 0,
+        "WatchdogMajor(C)": 0
+      },
+      "rtt_samples": 5000,
+      "valid": true,
+      "invite_rtt_ms": {
+        "0.5": 4,
+        "0.95": 80.001,
+        "0.99": 120.001
+      },
+      "run_directory": "scan-opensips-1000-1"
+    },
+    {
+      "kind": "opensips",
+      "binary_sha256": "2f233c7b2e0e68ae11791b9bb4f13bb341f56bd8d23216a29ec33246a5317b08",
+      "proxy_command": [
+        "/tmp/madis-opensips.6Xq9rD/opensips/usr/sbin/opensips",
+        "-F",
+        "-m",
+        "256",
+        "-M",
+        "16",
+        "-f",
+        "/tmp/madis-opensips.6Xq9rD/scan-opensips-1000-2/opensips.cfg",
+        "-w",
+        "/tmp/madis-opensips.6Xq9rD/scan-opensips-1000-2"
+      ],
+      "system": "Linux-6.8.0-136-generic-x86_64-with-glibc2.39",
+      "cpu_affinity": {
+        "proxy": 2,
+        "caller": 3,
+        "callee": 4
+      },
+      "fixture_sha256": {
+        "compare_opensips.py": "d44f5465262af739474686c46a5703b51b4b5e750435220a867bc5c23803e4b6",
+        "compare_uac.xml": "473c5676afc0703782280103b1d3e7ab2bebd00d195039a3a28518807738f6ca",
+        "compare_uas.xml": "e42e60a453eaada25522d397c84e7d962dfdf3d1ab41b12743ec5839ebd35f7e",
+        "opensips.cfg.in": "80e7ad96203e716630987a7687ed3100b8eb3cda339e957e5c3c1b608295309d"
+      },
+      "offered_cps": 1000,
+      "expected_calls": 5000,
+      "elapsed_seconds": 5.325273868627846,
+      "caller_exit": 0,
+      "callee_exit": 0,
+      "socket_samples": {
+        "15060": {
+          "sampled_max_rx_bytes": 242240,
+          "drops": 0
+        },
+        "15070": {
+          "sampled_max_rx_bytes": 66560,
+          "drops": 0
+        },
+        "15071": {
+          "sampled_max_rx_bytes": 83520,
+          "drops": 0
+        }
+      },
+      "generator_socket_drops": 0,
+      "sipp_requested_buffer_bytes": 1048576,
+      "host_cpu_during_caller": {
+        "cpu2": {
+          "busy_fraction": 0.6756198347107438,
+          "steal_fraction": 0
+        },
+        "cpu3": {
+          "busy_fraction": 0.3020408163265306,
+          "steal_fraction": 0
+        },
+        "cpu4": {
+          "busy_fraction": 0.28542914171656686,
+          "steal_fraction": 0
+        }
+      },
+      "caller": {
+        "SuccessfulCall(C)": 5000,
+        "FailedCall(C)": 0,
+        "Retransmissions(C)": 2,
+        "WatchdogMajor(C)": 0
+      },
+      "callee": {
+        "SuccessfulCall(C)": 5000,
+        "FailedCall(C)": 0,
+        "Retransmissions(C)": 2,
+        "WatchdogMajor(C)": 0
+      },
+      "rtt_samples": 5000,
+      "valid": true,
+      "invite_rtt_ms": {
+        "0.5": 3,
+        "0.95": 50,
+        "0.99": 102
+      },
+      "run_directory": "scan-opensips-1000-2"
+    },
+    {
+      "kind": "opensips",
+      "binary_sha256": "2f233c7b2e0e68ae11791b9bb4f13bb341f56bd8d23216a29ec33246a5317b08",
+      "proxy_command": [
+        "/tmp/madis-opensips.6Xq9rD/opensips/usr/sbin/opensips",
+        "-F",
+        "-m",
+        "256",
+        "-M",
+        "16",
+        "-f",
+        "/tmp/madis-opensips.6Xq9rD/scan-opensips-1000-3/opensips.cfg",
+        "-w",
+        "/tmp/madis-opensips.6Xq9rD/scan-opensips-1000-3"
+      ],
+      "system": "Linux-6.8.0-136-generic-x86_64-with-glibc2.39",
+      "cpu_affinity": {
+        "proxy": 2,
+        "caller": 3,
+        "callee": 4
+      },
+      "fixture_sha256": {
+        "compare_opensips.py": "d44f5465262af739474686c46a5703b51b4b5e750435220a867bc5c23803e4b6",
+        "compare_uac.xml": "473c5676afc0703782280103b1d3e7ab2bebd00d195039a3a28518807738f6ca",
+        "compare_uas.xml": "e42e60a453eaada25522d397c84e7d962dfdf3d1ab41b12743ec5839ebd35f7e",
+        "opensips.cfg.in": "80e7ad96203e716630987a7687ed3100b8eb3cda339e957e5c3c1b608295309d"
+      },
+      "offered_cps": 1000,
+      "expected_calls": 5000,
+      "elapsed_seconds": 20.638910836540163,
+      "caller_exit": 255,
+      "callee_exit": 255,
+      "socket_samples": {
+        "15060": {
+          "sampled_max_rx_bytes": 400640,
+          "drops": 1726
+        },
+        "15070": {
+          "sampled_max_rx_bytes": 371200,
+          "drops": 456
+        },
+        "15071": {
+          "sampled_max_rx_bytes": 352960,
+          "drops": 127
+        }
+      },
+      "generator_socket_drops": 583,
+      "sipp_requested_buffer_bytes": 1048576,
+      "host_cpu_during_caller": {
+        "cpu2": {
+          "busy_fraction": 0.21249302844394868,
+          "steal_fraction": 0
+        },
+        "cpu3": {
+          "busy_fraction": 0.11522872032426172,
+          "steal_fraction": 0
+        },
+        "cpu4": {
+          "busy_fraction": 0.09888268156424582,
+          "steal_fraction": 0
+        }
+      },
+      "caller": {
+        "SuccessfulCall(C)": 4526,
+        "FailedCall(C)": 0,
+        "Retransmissions(C)": 3555,
+        "WatchdogMajor(C)": 0
+      },
+      "callee": {
+        "SuccessfulCall(C)": 4818,
+        "FailedCall(C)": 149,
+        "Retransmissions(C)": 840,
+        "WatchdogMajor(C)": 0
+      },
+      "rtt_samples": 4996,
+      "valid": false,
+      "invite_rtt_ms": {
+        "0.5": 87.001,
+        "0.95": 737.003,
+        "0.99": 1258.01
+      },
+      "run_directory": "scan-opensips-1000-3"
+    },
+    {
+      "kind": "opensips",
+      "binary_sha256": "2f233c7b2e0e68ae11791b9bb4f13bb341f56bd8d23216a29ec33246a5317b08",
+      "proxy_command": [
+        "/tmp/madis-opensips.6Xq9rD/opensips/usr/sbin/opensips",
+        "-F",
+        "-m",
+        "256",
+        "-M",
+        "16",
+        "-f",
+        "/tmp/madis-opensips.6Xq9rD/scan-opensips-250-1/opensips.cfg",
+        "-w",
+        "/tmp/madis-opensips.6Xq9rD/scan-opensips-250-1"
+      ],
+      "system": "Linux-6.8.0-136-generic-x86_64-with-glibc2.39",
+      "cpu_affinity": {
+        "proxy": 2,
+        "caller": 3,
+        "callee": 4
+      },
+      "fixture_sha256": {
+        "compare_opensips.py": "d44f5465262af739474686c46a5703b51b4b5e750435220a867bc5c23803e4b6",
+        "compare_uac.xml": "473c5676afc0703782280103b1d3e7ab2bebd00d195039a3a28518807738f6ca",
+        "compare_uas.xml": "e42e60a453eaada25522d397c84e7d962dfdf3d1ab41b12743ec5839ebd35f7e",
+        "opensips.cfg.in": "80e7ad96203e716630987a7687ed3100b8eb3cda339e957e5c3c1b608295309d"
+      },
+      "offered_cps": 250,
+      "expected_calls": 1250,
+      "elapsed_seconds": 5.152732524089515,
+      "caller_exit": 0,
+      "callee_exit": 0,
+      "socket_samples": {
+        "15060": {
+          "sampled_max_rx_bytes": 9920,
+          "drops": 0
+        },
+        "15070": {
+          "sampled_max_rx_bytes": 11520,
+          "drops": 0
+        },
+        "15071": {
+          "sampled_max_rx_bytes": 3520,
+          "drops": 0
+        }
+      },
+      "generator_socket_drops": 0,
+      "sipp_requested_buffer_bytes": 1048576,
+      "host_cpu_during_caller": {
+        "cpu2": {
+          "busy_fraction": 0.39669421487603307,
+          "steal_fraction": 0
+        },
+        "cpu3": {
+          "busy_fraction": 0.19294605809128632,
+          "steal_fraction": 0
+        },
+        "cpu4": {
+          "busy_fraction": 0.15843621399176955,
+          "steal_fraction": 0
+        }
+      },
+      "caller": {
+        "SuccessfulCall(C)": 1250,
+        "FailedCall(C)": 0,
+        "Retransmissions(C)": 0,
+        "WatchdogMajor(C)": 0
+      },
+      "callee": {
+        "SuccessfulCall(C)": 1250,
+        "FailedCall(C)": 0,
+        "Retransmissions(C)": 0,
+        "WatchdogMajor(C)": 0
+      },
+      "rtt_samples": 1250,
+      "valid": true,
+      "invite_rtt_ms": {
+        "0.5": 2,
+        "0.95": 12,
+        "0.99": 25
+      },
+      "run_directory": "scan-opensips-250-1"
+    },
+    {
+      "kind": "opensips",
+      "binary_sha256": "2f233c7b2e0e68ae11791b9bb4f13bb341f56bd8d23216a29ec33246a5317b08",
+      "proxy_command": [
+        "/tmp/madis-opensips.6Xq9rD/opensips/usr/sbin/opensips",
+        "-F",
+        "-m",
+        "256",
+        "-M",
+        "16",
+        "-f",
+        "/tmp/madis-opensips.6Xq9rD/scan-opensips-250-2/opensips.cfg",
+        "-w",
+        "/tmp/madis-opensips.6Xq9rD/scan-opensips-250-2"
+      ],
+      "system": "Linux-6.8.0-136-generic-x86_64-with-glibc2.39",
+      "cpu_affinity": {
+        "proxy": 2,
+        "caller": 3,
+        "callee": 4
+      },
+      "fixture_sha256": {
+        "compare_opensips.py": "d44f5465262af739474686c46a5703b51b4b5e750435220a867bc5c23803e4b6",
+        "compare_uac.xml": "473c5676afc0703782280103b1d3e7ab2bebd00d195039a3a28518807738f6ca",
+        "compare_uas.xml": "e42e60a453eaada25522d397c84e7d962dfdf3d1ab41b12743ec5839ebd35f7e",
+        "opensips.cfg.in": "80e7ad96203e716630987a7687ed3100b8eb3cda339e957e5c3c1b608295309d"
+      },
+      "offered_cps": 250,
+      "expected_calls": 1250,
+      "elapsed_seconds": 5.381401656195521,
+      "caller_exit": 0,
+      "callee_exit": 0,
+      "socket_samples": {
+        "15060": {
+          "sampled_max_rx_bytes": 50560,
+          "drops": 0
+        },
+        "15070": {
+          "sampled_max_rx_bytes": 26880,
+          "drops": 0
+        },
+        "15071": {
+          "sampled_max_rx_bytes": 63680,
+          "drops": 0
+        }
+      },
+      "generator_socket_drops": 0,
+      "sipp_requested_buffer_bytes": 1048576,
+      "host_cpu_during_caller": {
+        "cpu2": {
+          "busy_fraction": 0.41721854304635764,
+          "steal_fraction": 0
+        },
+        "cpu3": {
+          "busy_fraction": 0.2127659574468085,
+          "steal_fraction": 0
+        },
+        "cpu4": {
+          "busy_fraction": 0.15353535353535352,
+          "steal_fraction": 0
+        }
+      },
+      "caller": {
+        "SuccessfulCall(C)": 1250,
+        "FailedCall(C)": 0,
+        "Retransmissions(C)": 0,
+        "WatchdogMajor(C)": 0
+      },
+      "callee": {
+        "SuccessfulCall(C)": 1250,
+        "FailedCall(C)": 0,
+        "Retransmissions(C)": 0,
+        "WatchdogMajor(C)": 0
+      },
+      "rtt_samples": 1250,
+      "valid": true,
+      "invite_rtt_ms": {
+        "0.5": 4,
+        "0.95": 66,
+        "0.99": 139.001
+      },
+      "run_directory": "scan-opensips-250-2"
+    },
+    {
+      "kind": "opensips",
+      "binary_sha256": "2f233c7b2e0e68ae11791b9bb4f13bb341f56bd8d23216a29ec33246a5317b08",
+      "proxy_command": [
+        "/tmp/madis-opensips.6Xq9rD/opensips/usr/sbin/opensips",
+        "-F",
+        "-m",
+        "256",
+        "-M",
+        "16",
+        "-f",
+        "/tmp/madis-opensips.6Xq9rD/scan-opensips-250-3/opensips.cfg",
+        "-w",
+        "/tmp/madis-opensips.6Xq9rD/scan-opensips-250-3"
+      ],
+      "system": "Linux-6.8.0-136-generic-x86_64-with-glibc2.39",
+      "cpu_affinity": {
+        "proxy": 2,
+        "caller": 3,
+        "callee": 4
+      },
+      "fixture_sha256": {
+        "compare_opensips.py": "d44f5465262af739474686c46a5703b51b4b5e750435220a867bc5c23803e4b6",
+        "compare_uac.xml": "473c5676afc0703782280103b1d3e7ab2bebd00d195039a3a28518807738f6ca",
+        "compare_uas.xml": "e42e60a453eaada25522d397c84e7d962dfdf3d1ab41b12743ec5839ebd35f7e",
+        "opensips.cfg.in": "80e7ad96203e716630987a7687ed3100b8eb3cda339e957e5c3c1b608295309d"
+      },
+      "offered_cps": 250,
+      "expected_calls": 1250,
+      "elapsed_seconds": 5.325007064267993,
+      "caller_exit": 0,
+      "callee_exit": 0,
+      "socket_samples": {
+        "15060": {
+          "sampled_max_rx_bytes": 61440,
+          "drops": 0
+        },
+        "15070": {
+          "sampled_max_rx_bytes": 39680,
+          "drops": 0
+        },
+        "15071": {
+          "sampled_max_rx_bytes": 11520,
+          "drops": 0
+        }
+      },
+      "generator_socket_drops": 0,
+      "sipp_requested_buffer_bytes": 1048576,
+      "host_cpu_during_caller": {
+        "cpu2": {
+          "busy_fraction": 0.43412526997840173,
+          "steal_fraction": 0
+        },
+        "cpu3": {
+          "busy_fraction": 0.21267893660531698,
+          "steal_fraction": 0
+        },
+        "cpu4": {
+          "busy_fraction": 0.1574642126789366,
+          "steal_fraction": 0
+        }
+      },
+      "caller": {
+        "SuccessfulCall(C)": 1250,
+        "FailedCall(C)": 0,
+        "Retransmissions(C)": 0,
+        "WatchdogMajor(C)": 0
+      },
+      "callee": {
+        "SuccessfulCall(C)": 1250,
+        "FailedCall(C)": 0,
+        "Retransmissions(C)": 0,
+        "WatchdogMajor(C)": 0
+      },
+      "rtt_samples": 1250,
+      "valid": true,
+      "invite_rtt_ms": {
+        "0.5": 3,
+        "0.95": 48,
+        "0.99": 114.001
+      },
+      "run_directory": "scan-opensips-250-3"
+    },
+    {
+      "kind": "madis",
+      "binary_sha256": "74f13fa591520f8219a32cb097b1ea64152ac4d07c3ac6dee7e351fd59ab2670",
+      "proxy_command": [
+        "/tmp/madis-opensips.6Xq9rD/madis-scan-release"
+      ],
+      "system": "Linux-6.8.0-136-generic-x86_64-with-glibc2.39",
+      "cpu_affinity": {
+        "proxy": 2,
+        "caller": 3,
+        "callee": 4
+      },
+      "fixture_sha256": {
+        "compare_opensips.py": "d44f5465262af739474686c46a5703b51b4b5e750435220a867bc5c23803e4b6",
+        "compare_uac.xml": "473c5676afc0703782280103b1d3e7ab2bebd00d195039a3a28518807738f6ca",
+        "compare_uas.xml": "e42e60a453eaada25522d397c84e7d962dfdf3d1ab41b12743ec5839ebd35f7e",
+        "opensips.cfg.in": "80e7ad96203e716630987a7687ed3100b8eb3cda339e957e5c3c1b608295309d"
+      },
+      "offered_cps": 1000,
+      "expected_calls": 5000,
+      "elapsed_seconds": 5.30284321308136,
+      "caller_exit": 0,
+      "callee_exit": 0,
+      "socket_samples": {
+        "15060": {
+          "sampled_max_rx_bytes": 232000,
+          "drops": 0
+        },
+        "15070": {
+          "sampled_max_rx_bytes": 81920,
+          "drops": 0
+        },
+        "15071": {
+          "sampled_max_rx_bytes": 108480,
+          "drops": 0
+        }
+      },
+      "generator_socket_drops": 0,
+      "sipp_requested_buffer_bytes": 1048576,
+      "host_cpu_during_caller": {
+        "cpu2": {
+          "busy_fraction": 0.9005964214711729,
+          "steal_fraction": 0
+        },
+        "cpu3": {
+          "busy_fraction": 0.2857142857142857,
+          "steal_fraction": 0
+        },
+        "cpu4": {
+          "busy_fraction": 0.28542094455852157,
+          "steal_fraction": 0
+        }
+      },
+      "caller": {
+        "SuccessfulCall(C)": 5000,
+        "FailedCall(C)": 0,
+        "Retransmissions(C)": 0,
+        "WatchdogMajor(C)": 0
+      },
+      "callee": {
+        "SuccessfulCall(C)": 5000,
+        "FailedCall(C)": 0,
+        "Retransmissions(C)": 0,
+        "WatchdogMajor(C)": 0
+      },
+      "rtt_samples": 5000,
+      "valid": true,
+      "invite_rtt_ms": {
+        "0.5": 12,
+        "0.95": 67,
+        "0.99": 98.001
+      },
+      "run_directory": "scan-scan-release-1000-1"
+    },
+    {
+      "kind": "madis",
+      "binary_sha256": "74f13fa591520f8219a32cb097b1ea64152ac4d07c3ac6dee7e351fd59ab2670",
+      "proxy_command": [
+        "/tmp/madis-opensips.6Xq9rD/madis-scan-release"
+      ],
+      "system": "Linux-6.8.0-136-generic-x86_64-with-glibc2.39",
+      "cpu_affinity": {
+        "proxy": 2,
+        "caller": 3,
+        "callee": 4
+      },
+      "fixture_sha256": {
+        "compare_opensips.py": "d44f5465262af739474686c46a5703b51b4b5e750435220a867bc5c23803e4b6",
+        "compare_uac.xml": "473c5676afc0703782280103b1d3e7ab2bebd00d195039a3a28518807738f6ca",
+        "compare_uas.xml": "e42e60a453eaada25522d397c84e7d962dfdf3d1ab41b12743ec5839ebd35f7e",
+        "opensips.cfg.in": "80e7ad96203e716630987a7687ed3100b8eb3cda339e957e5c3c1b608295309d"
+      },
+      "offered_cps": 1000,
+      "expected_calls": 5000,
+      "elapsed_seconds": 5.285174180753529,
+      "caller_exit": 0,
+      "callee_exit": 0,
+      "socket_samples": {
+        "15060": {
+          "sampled_max_rx_bytes": 196480,
+          "drops": 0
+        },
+        "15070": {
+          "sampled_max_rx_bytes": 58880,
+          "drops": 0
+        },
+        "15071": {
+          "sampled_max_rx_bytes": 34240,
+          "drops": 0
+        }
+      },
+      "generator_socket_drops": 0,
+      "sipp_requested_buffer_bytes": 1048576,
+      "host_cpu_during_caller": {
+        "cpu2": {
+          "busy_fraction": 0.8817829457364341,
+          "steal_fraction": 0
+        },
+        "cpu3": {
+          "busy_fraction": 0.2639175257731959,
+          "steal_fraction": 0
+        },
+        "cpu4": {
+          "busy_fraction": 0.268389662027833,
+          "steal_fraction": 0
+        }
+      },
+      "caller": {
+        "SuccessfulCall(C)": 5000,
+        "FailedCall(C)": 0,
+        "Retransmissions(C)": 0,
+        "WatchdogMajor(C)": 0
+      },
+      "callee": {
+        "SuccessfulCall(C)": 5000,
+        "FailedCall(C)": 0,
+        "Retransmissions(C)": 0,
+        "WatchdogMajor(C)": 0
+      },
+      "rtt_samples": 5000,
+      "valid": true,
+      "invite_rtt_ms": {
+        "0.5": 6,
+        "0.95": 45,
+        "0.99": 83.001
+      },
+      "run_directory": "scan-scan-release-1000-2"
+    },
+    {
+      "kind": "madis",
+      "binary_sha256": "74f13fa591520f8219a32cb097b1ea64152ac4d07c3ac6dee7e351fd59ab2670",
+      "proxy_command": [
+        "/tmp/madis-opensips.6Xq9rD/madis-scan-release"
+      ],
+      "system": "Linux-6.8.0-136-generic-x86_64-with-glibc2.39",
+      "cpu_affinity": {
+        "proxy": 2,
+        "caller": 3,
+        "callee": 4
+      },
+      "fixture_sha256": {
+        "compare_opensips.py": "d44f5465262af739474686c46a5703b51b4b5e750435220a867bc5c23803e4b6",
+        "compare_uac.xml": "473c5676afc0703782280103b1d3e7ab2bebd00d195039a3a28518807738f6ca",
+        "compare_uas.xml": "e42e60a453eaada25522d397c84e7d962dfdf3d1ab41b12743ec5839ebd35f7e",
+        "opensips.cfg.in": "80e7ad96203e716630987a7687ed3100b8eb3cda339e957e5c3c1b608295309d"
+      },
+      "offered_cps": 1000,
+      "expected_calls": 5000,
+      "elapsed_seconds": 5.290426841005683,
+      "caller_exit": 1,
+      "callee_exit": 255,
+      "socket_samples": {
+        "15060": {
+          "sampled_max_rx_bytes": 363840,
+          "drops": 556
+        },
+        "15070": {
+          "sampled_max_rx_bytes": 161280,
+          "drops": 0
+        },
+        "15071": {
+          "sampled_max_rx_bytes": 31360,
+          "drops": 0
+        }
+      },
+      "generator_socket_drops": 0,
+      "sipp_requested_buffer_bytes": 1048576,
+      "host_cpu_during_caller": {
+        "cpu2": {
+          "busy_fraction": 0.9467455621301775,
+          "steal_fraction": 0
+        },
+        "cpu3": {
+          "busy_fraction": 0.29591836734693877,
+          "steal_fraction": 0
+        },
+        "cpu4": {
+          "busy_fraction": 0.3094262295081967,
+          "steal_fraction": 0
+        }
+      },
+      "caller": {
+        "SuccessfulCall(C)": 4946,
+        "FailedCall(C)": 54,
+        "Retransmissions(C)": 356,
+        "WatchdogMajor(C)": 0
+      },
+      "callee": {
+        "SuccessfulCall(C)": 4900,
+        "FailedCall(C)": 90,
+        "Retransmissions(C)": 149,
+        "WatchdogMajor(C)": 0
+      },
+      "rtt_samples": 5000,
+      "valid": false,
+      "invite_rtt_ms": {
+        "0.5": 29,
+        "0.95": 223.001,
+        "0.99": 644.003
+      },
+      "run_directory": "scan-scan-release-1000-3"
+    },
+    {
+      "kind": "madis",
+      "binary_sha256": "74f13fa591520f8219a32cb097b1ea64152ac4d07c3ac6dee7e351fd59ab2670",
+      "proxy_command": [
+        "/tmp/madis-opensips.6Xq9rD/madis-scan-release"
+      ],
+      "system": "Linux-6.8.0-136-generic-x86_64-with-glibc2.39",
+      "cpu_affinity": {
+        "proxy": 2,
+        "caller": 3,
+        "callee": 4
+      },
+      "fixture_sha256": {
+        "compare_opensips.py": "d44f5465262af739474686c46a5703b51b4b5e750435220a867bc5c23803e4b6",
+        "compare_uac.xml": "473c5676afc0703782280103b1d3e7ab2bebd00d195039a3a28518807738f6ca",
+        "compare_uas.xml": "e42e60a453eaada25522d397c84e7d962dfdf3d1ab41b12743ec5839ebd35f7e",
+        "opensips.cfg.in": "80e7ad96203e716630987a7687ed3100b8eb3cda339e957e5c3c1b608295309d"
+      },
+      "offered_cps": 250,
+      "expected_calls": 1250,
+      "elapsed_seconds": 5.21447510831058,
+      "caller_exit": 0,
+      "callee_exit": 0,
+      "socket_samples": {
+        "15060": {
+          "sampled_max_rx_bytes": 99840,
+          "drops": 0
+        },
+        "15070": {
+          "sampled_max_rx_bytes": 20480,
+          "drops": 0
+        },
+        "15071": {
+          "sampled_max_rx_bytes": 7360,
+          "drops": 0
+        }
+      },
+      "generator_socket_drops": 0,
+      "sipp_requested_buffer_bytes": 1048576,
+      "host_cpu_during_caller": {
+        "cpu2": {
+          "busy_fraction": 0.5859728506787331,
+          "steal_fraction": 0
+        },
+        "cpu3": {
+          "busy_fraction": 0.17427385892116182,
+          "steal_fraction": 0
+        },
+        "cpu4": {
+          "busy_fraction": 0.15856236786469344,
+          "steal_fraction": 0
+        }
+      },
+      "caller": {
+        "SuccessfulCall(C)": 1250,
+        "FailedCall(C)": 0,
+        "Retransmissions(C)": 0,
+        "WatchdogMajor(C)": 0
+      },
+      "callee": {
+        "SuccessfulCall(C)": 1250,
+        "FailedCall(C)": 0,
+        "Retransmissions(C)": 0,
+        "WatchdogMajor(C)": 0
+      },
+      "rtt_samples": 1250,
+      "valid": true,
+      "invite_rtt_ms": {
+        "0.5": 4.001,
+        "0.95": 120.001,
+        "0.99": 230.001
+      },
+      "run_directory": "scan-scan-release-250-1"
+    },
+    {
+      "kind": "madis",
+      "binary_sha256": "74f13fa591520f8219a32cb097b1ea64152ac4d07c3ac6dee7e351fd59ab2670",
+      "proxy_command": [
+        "/tmp/madis-opensips.6Xq9rD/madis-scan-release"
+      ],
+      "system": "Linux-6.8.0-136-generic-x86_64-with-glibc2.39",
+      "cpu_affinity": {
+        "proxy": 2,
+        "caller": 3,
+        "callee": 4
+      },
+      "fixture_sha256": {
+        "compare_opensips.py": "d44f5465262af739474686c46a5703b51b4b5e750435220a867bc5c23803e4b6",
+        "compare_uac.xml": "473c5676afc0703782280103b1d3e7ab2bebd00d195039a3a28518807738f6ca",
+        "compare_uas.xml": "e42e60a453eaada25522d397c84e7d962dfdf3d1ab41b12743ec5839ebd35f7e",
+        "opensips.cfg.in": "80e7ad96203e716630987a7687ed3100b8eb3cda339e957e5c3c1b608295309d"
+      },
+      "offered_cps": 250,
+      "expected_calls": 1250,
+      "elapsed_seconds": 5.215188768692315,
+      "caller_exit": 0,
+      "callee_exit": 0,
+      "socket_samples": {
+        "15060": {
+          "sampled_max_rx_bytes": 60800,
+          "drops": 0
+        },
+        "15070": {
+          "sampled_max_rx_bytes": 26880,
+          "drops": 0
+        },
+        "15071": {
+          "sampled_max_rx_bytes": 56640,
+          "drops": 0
+        }
+      },
+      "generator_socket_drops": 0,
+      "sipp_requested_buffer_bytes": 1048576,
+      "host_cpu_during_caller": {
+        "cpu2": {
+          "busy_fraction": 0.5317286652078774,
+          "steal_fraction": 0
+        },
+        "cpu3": {
+          "busy_fraction": 0.16194331983805668,
+          "steal_fraction": 0
+        },
+        "cpu4": {
+          "busy_fraction": 0.1483050847457627,
+          "steal_fraction": 0
+        }
+      },
+      "caller": {
+        "SuccessfulCall(C)": 1250,
+        "FailedCall(C)": 0,
+        "Retransmissions(C)": 0,
+        "WatchdogMajor(C)": 0
+      },
+      "callee": {
+        "SuccessfulCall(C)": 1250,
+        "FailedCall(C)": 0,
+        "Retransmissions(C)": 0,
+        "WatchdogMajor(C)": 0
+      },
+      "rtt_samples": 1250,
+      "valid": true,
+      "invite_rtt_ms": {
+        "0.5": 4,
+        "0.95": 55,
+        "0.99": 135.001
+      },
+      "run_directory": "scan-scan-release-250-2"
+    },
+    {
+      "kind": "madis",
+      "binary_sha256": "74f13fa591520f8219a32cb097b1ea64152ac4d07c3ac6dee7e351fd59ab2670",
+      "proxy_command": [
+        "/tmp/madis-opensips.6Xq9rD/madis-scan-release"
+      ],
+      "system": "Linux-6.8.0-136-generic-x86_64-with-glibc2.39",
+      "cpu_affinity": {
+        "proxy": 2,
+        "caller": 3,
+        "callee": 4
+      },
+      "fixture_sha256": {
+        "compare_opensips.py": "d44f5465262af739474686c46a5703b51b4b5e750435220a867bc5c23803e4b6",
+        "compare_uac.xml": "473c5676afc0703782280103b1d3e7ab2bebd00d195039a3a28518807738f6ca",
+        "compare_uas.xml": "e42e60a453eaada25522d397c84e7d962dfdf3d1ab41b12743ec5839ebd35f7e",
+        "opensips.cfg.in": "80e7ad96203e716630987a7687ed3100b8eb3cda339e957e5c3c1b608295309d"
+      },
+      "offered_cps": 250,
+      "expected_calls": 1250,
+      "elapsed_seconds": 5.160348269157112,
+      "caller_exit": 0,
+      "callee_exit": 0,
+      "socket_samples": {
+        "15060": {
+          "sampled_max_rx_bytes": 50560,
+          "drops": 0
+        },
+        "15070": {
+          "sampled_max_rx_bytes": 15360,
+          "drops": 0
+        },
+        "15071": {
+          "sampled_max_rx_bytes": 10880,
+          "drops": 0
+        }
+      },
+      "generator_socket_drops": 0,
+      "sipp_requested_buffer_bytes": 1048576,
+      "host_cpu_during_caller": {
+        "cpu2": {
+          "busy_fraction": 0.4957805907172996,
+          "steal_fraction": 0
+        },
+        "cpu3": {
+          "busy_fraction": 0.15416666666666667,
+          "steal_fraction": 0
+        },
+        "cpu4": {
+          "busy_fraction": 0.1419753086419753,
+          "steal_fraction": 0
+        }
+      },
+      "caller": {
+        "SuccessfulCall(C)": 1250,
+        "FailedCall(C)": 0,
+        "Retransmissions(C)": 0,
+        "WatchdogMajor(C)": 0
+      },
+      "callee": {
+        "SuccessfulCall(C)": 1250,
+        "FailedCall(C)": 0,
+        "Retransmissions(C)": 0,
+        "WatchdogMajor(C)": 0
+      },
+      "rtt_samples": 1250,
+      "valid": true,
+      "invite_rtt_ms": {
+        "0.5": 3,
+        "0.95": 30,
+        "0.99": 72.001
+      },
+      "run_directory": "scan-scan-release-250-3"
+    },
+    {
+      "kind": "madis",
+      "binary_sha256": "5e870bb9a7a7c9f39356e26e3395ab17b25a81badbd3553caf7a87d301be1df9",
+      "proxy_command": [
+        "/tmp/madis-opensips.6Xq9rD/madis-tuned-release"
+      ],
+      "system": "Linux-6.8.0-136-generic-x86_64-with-glibc2.39",
+      "cpu_affinity": {
+        "proxy": 2,
+        "caller": 3,
+        "callee": 4
+      },
+      "fixture_sha256": {
+        "compare_opensips.py": "d44f5465262af739474686c46a5703b51b4b5e750435220a867bc5c23803e4b6",
+        "compare_uac.xml": "473c5676afc0703782280103b1d3e7ab2bebd00d195039a3a28518807738f6ca",
+        "compare_uas.xml": "e42e60a453eaada25522d397c84e7d962dfdf3d1ab41b12743ec5839ebd35f7e",
+        "opensips.cfg.in": "80e7ad96203e716630987a7687ed3100b8eb3cda339e957e5c3c1b608295309d"
+      },
+      "offered_cps": 1000,
+      "expected_calls": 5000,
+      "elapsed_seconds": 20.06796152330935,
+      "caller_exit": 255,
+      "callee_exit": 255,
+      "socket_samples": {
+        "15060": {
+          "sampled_max_rx_bytes": 418240,
+          "drops": 11197
+        },
+        "15070": {
+          "sampled_max_rx_bytes": 346880,
+          "drops": 27
+        },
+        "15071": {
+          "sampled_max_rx_bytes": 225920,
+          "drops": 0
+        }
+      },
+      "generator_socket_drops": 27,
+      "sipp_requested_buffer_bytes": 1048576,
+      "host_cpu_during_caller": {
+        "cpu2": {
+          "busy_fraction": 0.4222222222222222,
+          "steal_fraction": 0
+        },
+        "cpu3": {
+          "busy_fraction": 0.16581487791027824,
+          "steal_fraction": 0
+        },
+        "cpu4": {
+          "busy_fraction": 0.12281690140845071,
+          "steal_fraction": 0
+        }
+      },
+      "caller": {
+        "SuccessfulCall(C)": 3846,
+        "FailedCall(C)": 1144,
+        "Retransmissions(C)": 6787,
+        "WatchdogMajor(C)": 0
+      },
+      "callee": {
+        "SuccessfulCall(C)": 3632,
+        "FailedCall(C)": 996,
+        "Retransmissions(C)": 4269,
+        "WatchdogMajor(C)": 0
+      },
+      "rtt_samples": 4990,
+      "valid": false,
+      "invite_rtt_ms": {
+        "0.5": 625.003,
+        "0.95": 4053.02,
+        "0.99": 7669.03
+      },
+      "run_directory": "scan-tuned-release-1000-1"
+    },
+    {
+      "kind": "madis",
+      "binary_sha256": "5e870bb9a7a7c9f39356e26e3395ab17b25a81badbd3553caf7a87d301be1df9",
+      "proxy_command": [
+        "/tmp/madis-opensips.6Xq9rD/madis-tuned-release"
+      ],
+      "system": "Linux-6.8.0-136-generic-x86_64-with-glibc2.39",
+      "cpu_affinity": {
+        "proxy": 2,
+        "caller": 3,
+        "callee": 4
+      },
+      "fixture_sha256": {
+        "compare_opensips.py": "d44f5465262af739474686c46a5703b51b4b5e750435220a867bc5c23803e4b6",
+        "compare_uac.xml": "473c5676afc0703782280103b1d3e7ab2bebd00d195039a3a28518807738f6ca",
+        "compare_uas.xml": "e42e60a453eaada25522d397c84e7d962dfdf3d1ab41b12743ec5839ebd35f7e",
+        "opensips.cfg.in": "80e7ad96203e716630987a7687ed3100b8eb3cda339e957e5c3c1b608295309d"
+      },
+      "offered_cps": 1000,
+      "expected_calls": 5000,
+      "elapsed_seconds": 10.376015682704747,
+      "caller_exit": 1,
+      "callee_exit": 255,
+      "socket_samples": {
+        "15060": {
+          "sampled_max_rx_bytes": 401280,
+          "drops": 7560
+        },
+        "15070": {
+          "sampled_max_rx_bytes": 335360,
+          "drops": 0
+        },
+        "15071": {
+          "sampled_max_rx_bytes": 422080,
+          "drops": 989
+        }
+      },
+      "generator_socket_drops": 989,
+      "sipp_requested_buffer_bytes": 1048576,
+      "host_cpu_during_caller": {
+        "cpu2": {
+          "busy_fraction": 0.6837209302325581,
+          "steal_fraction": 0
+        },
+        "cpu3": {
+          "busy_fraction": 0.24043062200956938,
+          "steal_fraction": 0
+        },
+        "cpu4": {
+          "busy_fraction": 0.19794050343249428,
+          "steal_fraction": 0
+        }
+      },
+      "caller": {
+        "SuccessfulCall(C)": 4191,
+        "FailedCall(C)": 809,
+        "Retransmissions(C)": 5134,
+        "WatchdogMajor(C)": 0
+      },
+      "callee": {
+        "SuccessfulCall(C)": 4119,
+        "FailedCall(C)": 667,
+        "Retransmissions(C)": 3046,
+        "WatchdogMajor(C)": 0
+      },
+      "rtt_samples": 5000,
+      "valid": false,
+      "invite_rtt_ms": {
+        "0.5": 261.001,
+        "0.95": 2178.01,
+        "0.99": 4110.02
+      },
+      "run_directory": "scan-tuned-release-1000-2"
+    },
+    {
+      "kind": "madis",
+      "binary_sha256": "5e870bb9a7a7c9f39356e26e3395ab17b25a81badbd3553caf7a87d301be1df9",
+      "proxy_command": [
+        "/tmp/madis-opensips.6Xq9rD/madis-tuned-release"
+      ],
+      "system": "Linux-6.8.0-136-generic-x86_64-with-glibc2.39",
+      "cpu_affinity": {
+        "proxy": 2,
+        "caller": 3,
+        "callee": 4
+      },
+      "fixture_sha256": {
+        "compare_opensips.py": "d44f5465262af739474686c46a5703b51b4b5e750435220a867bc5c23803e4b6",
+        "compare_uac.xml": "473c5676afc0703782280103b1d3e7ab2bebd00d195039a3a28518807738f6ca",
+        "compare_uas.xml": "e42e60a453eaada25522d397c84e7d962dfdf3d1ab41b12743ec5839ebd35f7e",
+        "opensips.cfg.in": "80e7ad96203e716630987a7687ed3100b8eb3cda339e957e5c3c1b608295309d"
+      },
+      "offered_cps": 1000,
+      "expected_calls": 5000,
+      "elapsed_seconds": 5.224341306835413,
+      "caller_exit": 0,
+      "callee_exit": 0,
+      "socket_samples": {
+        "15060": {
+          "sampled_max_rx_bytes": 213760,
+          "drops": 0
+        },
+        "15070": {
+          "sampled_max_rx_bytes": 6400,
+          "drops": 0
+        },
+        "15071": {
+          "sampled_max_rx_bytes": 11840,
+          "drops": 0
+        }
+      },
+      "generator_socket_drops": 0,
+      "sipp_requested_buffer_bytes": 1048576,
+      "host_cpu_during_caller": {
+        "cpu2": {
+          "busy_fraction": 0.913894324853229,
+          "steal_fraction": 0
+        },
+        "cpu3": {
+          "busy_fraction": 0.27253668763102723,
+          "steal_fraction": 0
+        },
+        "cpu4": {
+          "busy_fraction": 0.2701612903225806,
+          "steal_fraction": 0
+        }
+      },
+      "caller": {
+        "SuccessfulCall(C)": 5000,
+        "FailedCall(C)": 0,
+        "Retransmissions(C)": 0,
+        "WatchdogMajor(C)": 0
+      },
+      "callee": {
+        "SuccessfulCall(C)": 5000,
+        "FailedCall(C)": 0,
+        "Retransmissions(C)": 0,
+        "WatchdogMajor(C)": 0
+      },
+      "rtt_samples": 5000,
+      "valid": true,
+      "invite_rtt_ms": {
+        "0.5": 7,
+        "0.95": 59,
+        "0.99": 76
+      },
+      "run_directory": "scan-tuned-release-1000-3"
+    },
+    {
+      "kind": "madis",
+      "binary_sha256": "5e870bb9a7a7c9f39356e26e3395ab17b25a81badbd3553caf7a87d301be1df9",
+      "proxy_command": [
+        "/tmp/madis-opensips.6Xq9rD/madis-tuned-release"
+      ],
+      "system": "Linux-6.8.0-136-generic-x86_64-with-glibc2.39",
+      "cpu_affinity": {
+        "proxy": 2,
+        "caller": 3,
+        "callee": 4
+      },
+      "fixture_sha256": {
+        "compare_opensips.py": "d44f5465262af739474686c46a5703b51b4b5e750435220a867bc5c23803e4b6",
+        "compare_uac.xml": "473c5676afc0703782280103b1d3e7ab2bebd00d195039a3a28518807738f6ca",
+        "compare_uas.xml": "e42e60a453eaada25522d397c84e7d962dfdf3d1ab41b12743ec5839ebd35f7e",
+        "opensips.cfg.in": "80e7ad96203e716630987a7687ed3100b8eb3cda339e957e5c3c1b608295309d"
+      },
+      "offered_cps": 250,
+      "expected_calls": 1250,
+      "elapsed_seconds": 5.405006252229214,
+      "caller_exit": 0,
+      "callee_exit": 0,
+      "socket_samples": {
+        "15060": {
+          "sampled_max_rx_bytes": 95040,
+          "drops": 0
+        },
+        "15070": {
+          "sampled_max_rx_bytes": 61440,
+          "drops": 0
+        },
+        "15071": {
+          "sampled_max_rx_bytes": 75840,
+          "drops": 0
+        }
+      },
+      "generator_socket_drops": 0,
+      "sipp_requested_buffer_bytes": 1048576,
+      "host_cpu_during_caller": {
+        "cpu2": {
+          "busy_fraction": 0.6093023255813953,
+          "steal_fraction": 0
+        },
+        "cpu3": {
+          "busy_fraction": 0.1733615221987315,
+          "steal_fraction": 0
+        },
+        "cpu4": {
+          "busy_fraction": 0.17173913043478262,
+          "steal_fraction": 0
+        }
+      },
+      "caller": {
+        "SuccessfulCall(C)": 1250,
+        "FailedCall(C)": 0,
+        "Retransmissions(C)": 0,
+        "WatchdogMajor(C)": 0
+      },
+      "callee": {
+        "SuccessfulCall(C)": 1250,
+        "FailedCall(C)": 0,
+        "Retransmissions(C)": 0,
+        "WatchdogMajor(C)": 0
+      },
+      "rtt_samples": 1250,
+      "valid": true,
+      "invite_rtt_ms": {
+        "0.5": 8,
+        "0.95": 217.001,
+        "0.99": 334.001
+      },
+      "run_directory": "scan-tuned-release-250-1"
+    },
+    {
+      "kind": "madis",
+      "binary_sha256": "5e870bb9a7a7c9f39356e26e3395ab17b25a81badbd3553caf7a87d301be1df9",
+      "proxy_command": [
+        "/tmp/madis-opensips.6Xq9rD/madis-tuned-release"
+      ],
+      "system": "Linux-6.8.0-136-generic-x86_64-with-glibc2.39",
+      "cpu_affinity": {
+        "proxy": 2,
+        "caller": 3,
+        "callee": 4
+      },
+      "fixture_sha256": {
+        "compare_opensips.py": "d44f5465262af739474686c46a5703b51b4b5e750435220a867bc5c23803e4b6",
+        "compare_uac.xml": "473c5676afc0703782280103b1d3e7ab2bebd00d195039a3a28518807738f6ca",
+        "compare_uas.xml": "e42e60a453eaada25522d397c84e7d962dfdf3d1ab41b12743ec5839ebd35f7e",
+        "opensips.cfg.in": "80e7ad96203e716630987a7687ed3100b8eb3cda339e957e5c3c1b608295309d"
+      },
+      "offered_cps": 250,
+      "expected_calls": 1250,
+      "elapsed_seconds": 5.287667814642191,
+      "caller_exit": 0,
+      "callee_exit": 0,
+      "socket_samples": {
+        "15060": {
+          "sampled_max_rx_bytes": 62080,
+          "drops": 0
+        },
+        "15070": {
+          "sampled_max_rx_bytes": 29440,
+          "drops": 0
+        },
+        "15071": {
+          "sampled_max_rx_bytes": 15040,
+          "drops": 0
+        }
+      },
+      "generator_socket_drops": 0,
+      "sipp_requested_buffer_bytes": 1048576,
+      "host_cpu_during_caller": {
+        "cpu2": {
+          "busy_fraction": 0.5717391304347826,
+          "steal_fraction": 0
+        },
+        "cpu3": {
+          "busy_fraction": 0.18049792531120332,
+          "steal_fraction": 0
+        },
+        "cpu4": {
+          "busy_fraction": 0.1704781704781705,
+          "steal_fraction": 0
+        }
+      },
+      "caller": {
+        "SuccessfulCall(C)": 1250,
+        "FailedCall(C)": 0,
+        "Retransmissions(C)": 0,
+        "WatchdogMajor(C)": 0
+      },
+      "callee": {
+        "SuccessfulCall(C)": 1250,
+        "FailedCall(C)": 0,
+        "Retransmissions(C)": 0,
+        "WatchdogMajor(C)": 0
+      },
+      "rtt_samples": 1250,
+      "valid": true,
+      "invite_rtt_ms": {
+        "0.5": 5,
+        "0.95": 52,
+        "0.99": 129
+      },
+      "run_directory": "scan-tuned-release-250-2"
+    },
+    {
+      "kind": "madis",
+      "binary_sha256": "5e870bb9a7a7c9f39356e26e3395ab17b25a81badbd3553caf7a87d301be1df9",
+      "proxy_command": [
+        "/tmp/madis-opensips.6Xq9rD/madis-tuned-release"
+      ],
+      "system": "Linux-6.8.0-136-generic-x86_64-with-glibc2.39",
+      "cpu_affinity": {
+        "proxy": 2,
+        "caller": 3,
+        "callee": 4
+      },
+      "fixture_sha256": {
+        "compare_opensips.py": "d44f5465262af739474686c46a5703b51b4b5e750435220a867bc5c23803e4b6",
+        "compare_uac.xml": "473c5676afc0703782280103b1d3e7ab2bebd00d195039a3a28518807738f6ca",
+        "compare_uas.xml": "e42e60a453eaada25522d397c84e7d962dfdf3d1ab41b12743ec5839ebd35f7e",
+        "opensips.cfg.in": "80e7ad96203e716630987a7687ed3100b8eb3cda339e957e5c3c1b608295309d"
+      },
+      "offered_cps": 250,
+      "expected_calls": 1250,
+      "elapsed_seconds": 5.230549222789705,
+      "caller_exit": 0,
+      "callee_exit": 0,
+      "socket_samples": {
+        "15060": {
+          "sampled_max_rx_bytes": 64640,
+          "drops": 0
+        },
+        "15070": {
+          "sampled_max_rx_bytes": 5120,
+          "drops": 0
+        },
+        "15071": {
+          "sampled_max_rx_bytes": 8320,
+          "drops": 0
+        }
+      },
+      "generator_socket_drops": 0,
+      "sipp_requested_buffer_bytes": 1048576,
+      "host_cpu_during_caller": {
+        "cpu2": {
+          "busy_fraction": 0.48945147679324896,
+          "steal_fraction": 0
+        },
+        "cpu3": {
+          "busy_fraction": 0.15368852459016394,
+          "steal_fraction": 0
+        },
+        "cpu4": {
+          "busy_fraction": 0.1402805611222445,
+          "steal_fraction": 0
+        }
+      },
+      "caller": {
+        "SuccessfulCall(C)": 1250,
+        "FailedCall(C)": 0,
+        "Retransmissions(C)": 0,
+        "WatchdogMajor(C)": 0
+      },
+      "callee": {
+        "SuccessfulCall(C)": 1250,
+        "FailedCall(C)": 0,
+        "Retransmissions(C)": 0,
+        "WatchdogMajor(C)": 0
+      },
+      "rtt_samples": 1250,
+      "valid": true,
+      "invite_rtt_ms": {
+        "0.5": 3,
+        "0.95": 26.001,
+        "0.99": 88.001
+      },
+      "run_directory": "scan-tuned-release-250-3"
+    }
+  ]
+}

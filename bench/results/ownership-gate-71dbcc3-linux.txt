@@ -1,0 +1,122 @@
+mako test: tests/compiler_ownership_test.mko
+=== tests/compiler_ownership_test.mko ===
+--- PASS: TestCompilerCryptoTemporaryOwnership
+--- PASS: TestCompilerRetainedStringReplacement
+PASS
+ok  tests/compiler_ownership_test.mko (3804ms)
+
+mako test: 1 passed, 0 failed
+mako test: tests/ownership_stress_test.mko
+=== tests/ownership_stress_test.mko ===
+--- PASS: TestOwnershipChannelAfterWorkerAndRejectedSend
+--- PASS: TestOwnershipContactArrayCopyAndOverwrite
+PASS
+ok  tests/ownership_stress_test.mko (6012ms)
+
+mako test: 1 passed, 0 failed
+mako test: tests/stream_ownership_test.mko
+=== tests/stream_ownership_test.mko ===
+--- PASS: TestStreamAndIMSRefreshBoundedOwnership
+PASS
+ok  tests/stream_ownership_test.mko (39428ms)
+
+mako test: 1 passed, 0 failed
+mako test: tests/parser_ownership_test.mko
+=== tests/parser_ownership_test.mko ===
+--- PASS: TestValidatorBoundedOwnership
+--- PASS: TestValidatorMalformedOwnership
+PASS
+ok  tests/parser_ownership_test.mko (7182ms)
+
+mako test: 1 passed, 0 failed
+mako test: tests/forwarding_ownership_test.mko
+=== tests/forwarding_ownership_test.mko ===
+--- PASS: TestForwardingHelpersBoundedOwnership
+--- PASS: TestMessageReplacementPreservesSnapshots
+PASS
+ok  tests/forwarding_ownership_test.mko (42487ms)
+
+mako test: 1 passed, 0 failed
+mako test: tests/stream_transport_test.mko
+=== tests/stream_transport_test.mko ===
+--- PASS: TestPeerSplitEmpty
+--- PASS: TestPeerSplitIPv4
+--- PASS: TestPeerSplitIPv4NoPort
+--- PASS: TestPeerSplitIPv6Bracket
+--- PASS: TestPeerSplitIPv6NoPort
+--- PASS: TestPeerSplitPortBounds
+--- PASS: TestProxyProtocolDisabledByDefault
+--- PASS: TestProxyProtocolLineTooLong
+--- PASS: TestProxyProtocolMissingFields
+--- PASS: TestProxyProtocolPort0Rejected
+--- PASS: TestStreamAppendEmpty
+--- PASS: TestStreamAppendOverCap
+--- PASS: TestStreamAppendUnderCap
+--- PASS: TestStreamBinaryBodyAndIncompleteTail
+--- PASS: TestStreamEveryFragmentBoundary
+--- PASS: TestStreamHasComplete
+--- PASS: TestStreamMessageSurvivesBufferReplacement
+--- PASS: TestStreamNextMsgComplete
+--- PASS: TestStreamNextMsgIncomplete
+--- PASS: TestStreamNextMsgTwoMessages
+--- PASS: TestStreamRetainedPipelineFrames
+PASS
+ok  tests/stream_transport_test.mko (5416ms)
+
+mako test: 1 passed, 0 failed
+mako test: tests/hep_test.mko
+=== tests/hep_test.mko ===
+--- PASS: TestHEP3IPv4Packet
+--- PASS: TestHEP3RejectsNonIPv4
+--- PASS: TestHEPCaptureActorCountsPackets
+--- PASS: TestHEPDisabledIsNoop
+--- PASS: TestHEPEnabledQueuesPacket
+--- PASS: TestHEPProtocolMapping
+--- PASS: TestHEPQueueCapacityBounds
+--- PASS: TestHEPWorkerSendsPacket
+PASS
+ok  tests/hep_test.mko (7269ms)
+
+mako test: 1 passed, 0 failed
+mako test: tests/maf_contract_test.mko
+=== tests/maf_contract_test.mko ===
+--- PASS: TestMafAuthComparisonAndFramingBoundaries
+--- PASS: TestMafCommandIdentityAndBodyLimits
+--- PASS: TestMafCursorAndBoundedQueryValues
+--- PASS: TestMafEveryHttpRouteIsAllowlisted
+--- PASS: TestMafInboundAnswerMessage
+--- PASS: TestMafInboundAnswerSdpBoundaries
+--- PASS: TestMafInboundAnswerSdpRejectsControls
+--- PASS: TestMafInboundAnswerSdpRequiresMedia
+--- PASS: TestMafInboundAnswerSdpRequiresSessionVersion
+--- PASS: TestMafInboundCallIdentifiers
+--- PASS: TestMafJsonEscapingAndCredentialScopes
+--- PASS: TestMafPresentationControlsCallerIdentity
+--- PASS: TestMafPresentationRejectsUnsafeApiFields
+--- PASS: TestMafRejectsPathConfusionAndUnsafeIdentifiers
+--- PASS: TestMafTypedErrorResponsePreservesWireContract
+--- PASS: TestMafWorkerEndpointAndInviteBoundaries
+--- PASS: TestMafWorkerSipReasonPhrase
+PASS
+ok  tests/maf_contract_test.mko (16552ms)
+
+mako test: 1 passed, 0 failed
+mako test: tests/parser_scan_test.mko
+=== tests/parser_scan_test.mko ===
+--- PASS: TestHeaderScanAliasesAndSingletons
+--- PASS: TestHeaderScanLineLimitsMatchReference
+--- PASS: TestHeaderScanMatchesReferenceForMutations
+PASS
+ok  tests/parser_scan_test.mko (10120ms)
+
+mako test: 1 passed, 0 failed
+mako test: tests/forwarding_range_test.mko
+=== tests/forwarding_range_test.mko ===
+--- PASS: TestForwardingHelpersBoundedOwnership
+--- PASS: TestForwardingRangeMatchesOldByteMutations
+--- PASS: TestForwardingRangeVariants
+--- PASS: TestMessageReplacementPreservesSnapshots
+PASS
+ok  tests/forwarding_range_test.mko (41242ms)
+
+mako test: 1 passed, 0 failed

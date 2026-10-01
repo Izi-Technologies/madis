@@ -1,3 +1,4 @@
+pull . "./cache_owned.mko"
 // ============ OBSERVABILITY / ADMIN PLANE ============
 
 // ============ CONFIG VALIDATION ============
@@ -193,13 +194,13 @@ fn proxy_metric_labeled(msg: string, reply: string, tr: string, method: string, 
     // Per-method counter — method is already parsed by the caller
     if len(method) > 0 {
         // Build the CMap key directly to avoid intermediate label string
-        let _ = cmap_incr(cache, "prom|sip_requests|method=\"" + method + "\",transport=\"" + tr + "\"", 1)
+        let _ = cache_incr(cache, "prom|sip_requests|method=\"" + method + "\",transport=\"" + tr + "\"", 1)
     }
     // Per-code counter
     if len(reply) > 0 {
         let code = sip_status_code(reply)
         if code > 0 {
-            let _ = cmap_incr(cache, "prom|sip_responses|code=\"" + string(code) + "\",class=\"" + string(code / 100) + "xx\"", 1)
+            let _ = cache_incr(cache, "prom|sip_responses|code=\"" + string(code) + "\",class=\"" + string(code / 100) + "xx\"", 1)
         }
     }
     return 0
@@ -207,7 +208,7 @@ fn proxy_metric_labeled(msg: string, reply: string, tr: string, method: string, 
 
 // Connection gauge tracking per transport
 fn proxy_conn_incr(cache: CMap, transport: string) -> int {
-    let _ = cmap_incr(cache, "prom|sip_connections|transport=\"" + transport + "\"", 1)
+    let _ = cache_incr(cache, "prom|sip_connections|transport=\"" + transport + "\"", 1)
     return 1
 }
 
@@ -401,7 +402,7 @@ fn proxy_cache_ring_count(cache: CMap, ring_prefix: string, value_prefix: string
     let mut i = 0
     while i < capacity {
         if cmap_has3i(cache, ring_prefix, "", i) == 1 {
-            let key = cmap_get3i(cache, ring_prefix, "", i)
+            let key = cache_get3i(cache, ring_prefix, "", i)
             if len(value_prefix) == 0 {
                 if len(key) > 0 && cmap_has(cache, key) == 1 { count = count + 1 }
             } else {
@@ -418,7 +419,7 @@ fn proxy_client_txn_method_count(cache: CMap, expected: string) -> int {
     let mut i = 0
     while i < 16384 {
         if cmap_has3i(cache, "client_ring|", "", i) == 1 {
-            let key = cmap_get3i(cache, "client_ring|", "", i)
+            let key = cache_get3i(cache, "client_ring|", "", i)
             if len(key) > 0 && cmap_has2(cache, "client_req|", key) == 1 {
                 let method = cmap_get2(cache, "client_method|", key)
                 if str_eq(expected, "OTHER") {

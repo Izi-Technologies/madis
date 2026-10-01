@@ -6,6 +6,25 @@ pull . "../registration.mko"
 pull . "../headers.mko"
 
 // Stub: is_private_ip lives in nat.mko, called by registration.mko
+fn TestPendingByeTransaction() {
+    let cache = cmap_new()
+    let key = "z9hG4bK-pending-bye|2 BYE"
+    let _ = sip_store_txn(key, "", cache)
+    assert_eq(sip_is_retransmit(key, cache), 1)
+    assert_eq_str(sip_get_txn_response(key, cache), "")
+    assert_eq_str(cmap_get(cache, "txn_state|" + key), "pending")
+    assert(sip_transaction_expiry_ms(cache, key) > mono_ms())
+    let final = "SIP/2.0 200 OK\r\nContent-Length: 0\r\n\r\n"
+    let _ = sip_store_txn(key, final, cache)
+    assert_eq_str(sip_get_txn_response(key, cache), final)
+    assert_eq_str(cmap_get(cache, "txn_state|" + key), "responded")
+    assert_eq(sip_is_retransmit("z9hG4bK-new-bye|3 BYE", cache), 0)
+    let _ = sip_store_txn(key, "", cache)
+    cmap_set(cache, "txn_exp|" + key, string(mono_ms() - 1))
+    assert_eq(sip_is_retransmit(key, cache), 0)
+    assert_eq(cmap_has(cache, "txn_state|" + key), 0)
+}
+
 fn is_private_ip(ip: string) -> int { return 0 }
 
 fn log_info_if(cache: CMap, component: string, msg: string) int { return 0 }

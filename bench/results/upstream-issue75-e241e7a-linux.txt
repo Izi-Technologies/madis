@@ -1,0 +1,37 @@
+mako test: /tmp/madis-makori-e241e7a/examples/testing/issue75_sha256_leak_test.mko
+=== /tmp/madis-makori-e241e7a/examples/testing/issue75_sha256_leak_test.mko ===
+--- PASS: TestConcatArgLeak
+--- PASS: TestConcatPassedToBuiltin
+--- PASS: TestReturnConcatSlice
+--- PASS: TestSha256SliceBase
+PASS
+
+=================================================================
+==1777599==ERROR: LeakSanitizer: detected memory leaks
+
+Direct leak of 330 byte(s) in 10 object(s) allocated from:
+    #0 0x650e993163e3 in malloc (/tmp/mako_gotest_c_issue75_sha256_leak_test_1777485+0xca3e3) (BuildId: 19884660f2a98868ad270fb7fb7e4eb1145b3fcc)
+    #1 0x650e9934e66a in mako_str_slice /tmp/madis-makori-e241e7a/runtime/mako_rt.h:2349:23
+    #2 0x650e9934abc9 in TestSha256SliceBase /tmp/madis-makori-e241e7a/examples/testing/issue75_sha256_leak_test.mko:11:34
+    #3 0x650e993520e6 in mako_test_run /tmp/madis-makori-e241e7a/runtime/mako_rt.h:11912:9
+    #4 0x650e99351bb8 in main /root/<mako-codegen>:9:15
+    #5 0x7f5588c2a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+    #6 0x7f5588c2a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+    #7 0x650e9927d3a4 in _start (/tmp/mako_gotest_c_issue75_sha256_leak_test_1777485+0x313a4) (BuildId: 19884660f2a98868ad270fb7fb7e4eb1145b3fcc)
+
+Direct leak of 330 byte(s) in 10 object(s) allocated from:
+    #0 0x650e993163e3 in malloc (/tmp/mako_gotest_c_issue75_sha256_leak_test_1777485+0xca3e3) (BuildId: 19884660f2a98868ad270fb7fb7e4eb1145b3fcc)
+    #1 0x650e9934e66a in mako_str_slice /tmp/madis-makori-e241e7a/runtime/mako_rt.h:2349:23
+    #2 0x650e9934f907 in TestConcatArgLeak /tmp/madis-makori-e241e7a/examples/testing/issue75_sha256_leak_test.mko:22:35
+    #3 0x650e993520e6 in mako_test_run /tmp/madis-makori-e241e7a/runtime/mako_rt.h:11912:9
+    #4 0x650e99351ac8 in main /root/<mako-codegen>:6:15
+    #5 0x7f5588c2a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+    #6 0x7f5588c2a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+    #7 0x650e9927d3a4 in _start (/tmp/mako_gotest_c_issue75_sha256_leak_test_1777485+0x313a4) (BuildId: 19884660f2a98868ad270fb7fb7e4eb1145b3fcc)
+
+SUMMARY: AddressSanitizer: 660 byte(s) leaked in 20 allocation(s).
+error: /tmp/madis-makori-e241e7a/examples/testing/issue75_sha256_leak_test.mko: test process exited with code 1 (see the assertion output above)
+
+FAIL  /tmp/madis-makori-e241e7a/examples/testing/issue75_sha256_leak_test.mko
+
+mako test: 0 passed, 1 failed

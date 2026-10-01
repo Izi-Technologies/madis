@@ -1,0 +1,25 @@
+mako test: /tmp/madis-sip-tag-4a6e711/ownership_test.mko
+=== /tmp/madis-sip-tag-4a6e711/ownership_test.mko ===
+--- PASS: TestSipTagTemporaryOwnership
+PASS
+
+=================================================================
+==1782194==ERROR: LeakSanitizer: detected memory leaks
+
+Direct leak of 2600 byte(s) in 100 object(s) allocated from:
+    #0 0x58f535eaf3d3 in malloc (/tmp/mako_gotest_c_ownership_test_1782083+0xca3d3) (BuildId: 4035390abbf8abe0fdb7737c7c94fdd0ab2c4eb2)
+    #1 0x58f535eea6d8 in mako_sip_header_n /tmp/madis-makori-4a6e711/runtime/mako_sip.h:518:35
+    #2 0x58f535ee44df in mako_sip_header /tmp/madis-makori-4a6e711/runtime/mako_sip.h:541:12
+    #3 0x58f535ee3b2d in TestSipTagTemporaryOwnership /tmp/madis-sip-tag-4a6e711/ownership_test.mko:6:34
+    #4 0x58f535ee72b6 in mako_test_run /tmp/madis-makori-4a6e711/runtime/mako_rt.h:11912:9
+    #5 0x58f535ee6d88 in main /root/<mako-codegen>:6:15
+    #6 0x74646d62a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+    #7 0x74646d62a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+    #8 0x58f535e16394 in _start (/tmp/mako_gotest_c_ownership_test_1782083+0x31394) (BuildId: 4035390abbf8abe0fdb7737c7c94fdd0ab2c4eb2)
+
+SUMMARY: AddressSanitizer: 2600 byte(s) leaked in 100 allocation(s).
+error: /tmp/madis-sip-tag-4a6e711/ownership_test.mko: test process exited with code 1 (see the assertion output above)
+
+FAIL  /tmp/madis-sip-tag-4a6e711/ownership_test.mko
+
+mako test: 0 passed, 1 failed

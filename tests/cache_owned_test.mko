@@ -1,0 +1,17 @@
+pull . "../cache_owned.mko"
+
+fn TestOwnedIntegerCache() {
+    let cache = cmap_new()
+    assert_eq(cache_get_int(cache, "missing", 41), 41)
+    cmap_set(cache, "bad", "not-an-integer")
+    assert_eq(cache_get_int(cache, "bad", 42), 42)
+    cache_set_int(cache, "number", -123)
+    assert_eq(cache_get_int(cache, "number", 0), -123)
+    cache_set_int2(cache, "prefix|", "key", 456)
+    assert_eq(cache_get_int2(cache, "prefix|", "key", 0), 456)
+    assert_eq(cache_incr(cache, "number", 124), 1)
+    cmap_set(cache, "slot|owner|7", "value")
+    assert_eq_str(cache_get3i(cache, "slot|", "owner|", 7), "value")
+    assert_eq(cache_del3i(cache, "slot|", "owner|", 7), 1)
+    assert_eq_str(cache_get3i(cache, "slot|", "owner|", 7), "")
+}

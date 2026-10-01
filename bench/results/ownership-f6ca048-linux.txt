@@ -1,0 +1,35 @@
+mako test: /tmp/madis-issue75-f6ca048_test.mko
+=== /tmp/madis-issue75-f6ca048_test.mko ===
+--- PASS: TestCompilerCryptoTemporaryOwnership
+--- PASS: TestCompilerRetainedStringReplacement
+PASS
+
+=================================================================
+==1769247==ERROR: LeakSanitizer: detected memory leaks
+
+Direct leak of 3300 byte(s) in 100 object(s) allocated from:
+    #0 0x5840488dc3e3 in malloc (/tmp/mako_gotest_c_madis-issue75-f6ca048_test_1769135+0xca3e3) (BuildId: bdc346c3a16641e1aeb1f3986ce72ccef7c9e734)
+    #1 0x584048914e8a in mako_str_slice /tmp/madis-makori-f6ca048/runtime/mako_rt.h:2349:23
+    #2 0x584048910ed4 in TestCompilerCryptoTemporaryOwnership /tmp/madis-issue75-f6ca048_test.mko:27:35
+    #3 0x584048919e16 in mako_test_run /tmp/madis-makori-f6ca048/runtime/mako_rt.h:11912:9
+    #4 0x584048919898 in main /root/<mako-codegen>:6:15
+    #5 0x73780d62a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+    #6 0x73780d62a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+    #7 0x5840488433a4 in _start (/tmp/mako_gotest_c_madis-issue75-f6ca048_test_1769135+0x313a4) (BuildId: bdc346c3a16641e1aeb1f3986ce72ccef7c9e734)
+
+Direct leak of 33 byte(s) in 1 object(s) allocated from:
+    #0 0x5840488dc3e3 in malloc (/tmp/mako_gotest_c_madis-issue75-f6ca048_test_1769135+0xca3e3) (BuildId: bdc346c3a16641e1aeb1f3986ce72ccef7c9e734)
+    #1 0x584048914e8a in mako_str_slice /tmp/madis-makori-f6ca048/runtime/mako_rt.h:2349:23
+    #2 0x584048910c6a in TestCompilerCryptoTemporaryOwnership /tmp/madis-issue75-f6ca048_test.mko:17:31
+    #3 0x584048919e16 in mako_test_run /tmp/madis-makori-f6ca048/runtime/mako_rt.h:11912:9
+    #4 0x584048919898 in main /root/<mako-codegen>:6:15
+    #5 0x73780d62a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+    #6 0x73780d62a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+    #7 0x5840488433a4 in _start (/tmp/mako_gotest_c_madis-issue75-f6ca048_test_1769135+0x313a4) (BuildId: bdc346c3a16641e1aeb1f3986ce72ccef7c9e734)
+
+SUMMARY: AddressSanitizer: 3333 byte(s) leaked in 101 allocation(s).
+error: /tmp/madis-issue75-f6ca048_test.mko: test process exited with code 1 (see the assertion output above)
+
+FAIL  /tmp/madis-issue75-f6ca048_test.mko
+
+mako test: 0 passed, 1 failed

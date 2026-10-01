@@ -1,0 +1,81 @@
+{
+  "description": "Single Madis process RSS/virtual memory samples at nominal four-second intervals, starting approximately four seconds after harness launch. Shared host, 1000 CPS. Fault-profile candidate has debug symbols and perf instrumentation; range candidate is unprofiled. These are diagnostic observations, not an OpenSIPS memory comparison.",
+  "samples": [
+    {
+      "file": "profile-faults-memory.log",
+      "rss_kib": [
+        179680,
+        316456,
+        448640,
+        580232,
+        712204,
+        843740
+      ],
+      "virtual_kib": [
+        1012108,
+        1143180,
+        1274252,
+        1405324,
+        1536396,
+        1667468
+      ]
+    },
+    {
+      "file": "range-memory-1.log",
+      "rss_kib": [
+        172096,
+        298460,
+        417564,
+        540568,
+        660720,
+        778720
+      ],
+      "virtual_kib": [
+        1012112,
+        1143184,
+        1274256,
+        1339792,
+        1470864,
+        1601936
+      ]
+    },
+    {
+      "file": "range-memory-2.log",
+      "rss_kib": [
+        173460,
+        300628,
+        423532,
+        546556,
+        666492,
+        778448
+      ],
+      "virtual_kib": [
+        1012112,
+        1143184,
+        1274256,
+        1339792,
+        1470864,
+        1601936
+      ]
+    },
+    {
+      "file": "range-memory-3.log",
+      "rss_kib": [
+        174440,
+        300956,
+        422476,
+        543736,
+        664584,
+        785312
+      ],
+      "virtual_kib": [
+        1012112,
+        1143184,
+        1274256,
+        1339792,
+        1470864,
+        1601936
+      ]
+    }
+  ]
+}

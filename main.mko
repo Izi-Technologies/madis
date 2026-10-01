@@ -1,3 +1,4 @@
+pull . "./cache_owned.mko"
 // Mako SIP Proxy — main entry point
 // Dot-pulls merge modules into the free namespace (see Mako pull .).
 // SIP data-path: platform sip_* / sdp_* builtins (no local shadowing).
@@ -150,7 +151,7 @@ live fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: stri
                 let mut app_drop = 0
                 if len(translated) > 0 {
                     let app_raw = app_gateway_call(translated, ip, port, tr, "response")
-                    let app_id = app_gateway_request_id_for(translated, "response")
+                    let app_id = app_gateway_response_request_id(translated, "response", app_raw)
                     let app_action = app_gateway_action(app_raw, app_id, 1)
                     if str_eq(app_action, "fail") || str_eq(app_action, "drop") { app_drop = 1 }
                     if str_eq(app_action, "replace") || str_eq(app_action, "reply") {
@@ -179,7 +180,7 @@ live fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: stri
         }
         let _ = sip_client_txn_finish(data, cache)
         let app_raw = app_gateway_call(data, ip, port, tr, "response")
-        let app_id = app_gateway_request_id_for(data, "response")
+        let app_id = app_gateway_response_request_id(data, "response", app_raw)
         let app_action = app_gateway_action(app_raw, app_id, 1)
         if str_eq(app_action, "fail") || str_eq(app_action, "drop") { return "" }
         let mut response_input = data
@@ -296,11 +297,13 @@ live fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: stri
         let _ = ims_session_timer_bind_from_response(cache, response_cid, downstream_request, response_data)
         let mut resp = sip_strip_top_via(response_data)
         if len(sip_header(resp, "Via")) == 0 { return "" }
-        resp = nat_fix_sdp(resp, len(resp), public_ip)
+        let nat_response = nat_fix_sdp(resp, len(resp), public_ip)
+        resp = nat_response
         let resp_cid = sip_header(resp, "Call-ID")
         let resp_from_tag = resp |> sip_header("From") |> sip_addr_tag()
         let resp_to_tag = resp |> sip_header("To") |> sip_addr_tag()
-        resp = rtp_process_answer(resp, len(resp), resp_cid, resp_from_tag, resp_to_tag, db, db_ok, cache)
+        let media_response = rtp_process_answer(resp, len(resp), resp_cid, resp_from_tag, resp_to_tag, db, db_ok, cache)
+        resp = media_response
         let resp_code = string(response_code)
         let resp_code_int = response_code
         if resp_code_int >= 300 && resp_code_int < 700 {
@@ -505,6 +508,9 @@ live fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: stri
         // Retransmit: return cached response
         let cached_resp = sip_get_txn_response(txn_key, cache)
         if len(cached_resp) > 0 { return cached_resp }
+        // A forwarded non-INVITE transaction can still be awaiting its first
+        // response after dialog teardown. Its client transaction owns retries.
+        if str_eq(cmap_get2(cache, "txn_state|", txn_key), "pending") { return "" }
     }
 
     // RFC 4028 request-side validation is opt-in. Retransmissions are checked
@@ -547,14 +553,17 @@ live fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: stri
         msg = identity_msg
     }
     // TS 24.229 §5.2.6.3: P-CSCF adds P-Access-Network-Info
-    msg = ims_access_network_apply(msg, tr, ip)
+    let access_network_msg = ims_access_network_apply(msg, tr, ip)
+    msg = access_network_msg
 
     // Add received= and rport= to Via for NAT detection
-    msg = via_add_received(msg, len(msg), ip, source_port)
+    let received_msg = via_add_received(msg, len(msg), ip, source_port)
+    msg = received_msg
     let msglen = len(msg)
 
     // --- Section 16.6 step 3: Decrement Max-Forwards ---
-    msg = sip_decrement_max_forwards(msg, msglen)
+    let decremented_msg = sip_decrement_max_forwards(msg, msglen)
+    msg = decremented_msg
 
     // Lazy-parse From user/domain — only after security short-circuits.
     // Saves sip_user + sip_domain calls on every rejected/rate-limited message.
@@ -803,7 +812,7 @@ live fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: stri
             return cx_reply
         }
         let mut reg_app_raw = app_gateway_call(msg, ip, port, tr, "request")
-        let mut reg_app_id = app_gateway_request_id_for(msg, "request")
+        let mut reg_app_id = app_gateway_response_request_id(msg, "request", reg_app_raw)
         let mut reg_app_action = app_gateway_action(reg_app_raw, reg_app_id, 0)
         let mut reg_command_token = cached_env(cache, "_app_token", "SIP_APP_TOKEN", "")
         if str_eq(reg_app_action, "module") && app_gateway_command_valid(reg_app_raw, reg_app_id, 0) == 1 {
@@ -976,8 +985,11 @@ live fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: stri
             extra = extra + "P-Associated-URI: <" + configured_associated_uri + ">\r\n"
         }
         // RFC 5626 §5.1: advertise outbound support in 200 OK
-        extra = outbound_add_supported(extra)
-        return sip_reply_with_to_tag(data, 200, "OK", extra, "", "r" + string(now_ms()))
+        let supported_extra = outbound_add_supported(extra)
+        let registration_time = string(now_ms())
+        let registration_tag = "r" + registration_time
+        let registration_reason = "OK"
+        return sip_reply_with_to_tag(data, 200, registration_reason, supported_extra, "", registration_tag)
 
     } else {
     // === INVITE ===
@@ -1073,11 +1085,14 @@ live fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: stri
             return sip_resp(481, "Call/Transaction Does Not Exist", data, dl, "ims-dialog")
         }
         // P-Charging-Vector on originating initial INVITE + optional PAI.
-        msg = ims_pcv_apply_originating(msg, cid)
-        msg = ims_identity_assert_apply(msg, "sip:" + from_user + "@" + from_domain)
+        let charging_msg = ims_pcv_apply_originating(msg, cid)
+        msg = charging_msg
+        let asserted_msg = ims_identity_assert_apply(msg, "sip:" + from_user + "@" + from_domain)
+        msg = asserted_msg
         let _ = ims_session_timer_bind_from_request(cache, cid, msg)
         // §7.1: ensure refresher= is present before forwarding
-        msg = ims_session_timer_ensure_refresher(msg)
+        let session_msg = ims_session_timer_ensure_refresher(msg)
+        msg = session_msg
 
         // P-/I-CSCF roles route the initial terminating session toward the
         // next IMS role before dialplan, application, charging, or local
@@ -1157,7 +1172,7 @@ live fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: stri
         // external application can make the call decision, but cannot bypass
         // those controls or mutate transaction identity headers.
         let mut inv_app_raw = app_gateway_call(msg, ip, port, tr, "request")
-        let mut inv_app_id = app_gateway_request_id_for(msg, "request")
+        let mut inv_app_id = app_gateway_response_request_id(msg, "request", inv_app_raw)
         let mut inv_app_action = app_gateway_action(inv_app_raw, inv_app_id, 0)
         let mut inv_command_token = cached_env(cache, "_app_token", "SIP_APP_TOKEN", "")
         if str_eq(inv_app_action, "module") && app_gateway_command_valid(inv_app_raw, inv_app_id, 0) == 1 {
@@ -1203,17 +1218,21 @@ live fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: stri
         let shaken_cfg = db_shaken_config(db, db_ok, cache)
         if str_eq(shaken_cfg[0], "1") {
             // Verify inbound Identity (if present)
-            inv_msg = shaken_verify_and_annotate_cfg(inv_msg, len(inv_msg), shaken_cfg, cache)
+            let verified_msg = shaken_verify_and_annotate_cfg(inv_msg, len(inv_msg), shaken_cfg, cache)
+            inv_msg = verified_msg
             // Sign outbound only if no valid Identity already present
             // RFC 8224 §4: a proxy that verifies should not re-sign unless
             // acting as an authentication service
             if len(sip_header(inv_msg, "P-Identity-Verified")) == 0 || str_eq(sip_header(inv_msg, "P-Identity-Verified"), "false") {
-                inv_msg = shaken_add_identity_cfg(inv_msg, caller_id, translated, shaken_cfg[2], shaken_cfg)
+                let signed_msg = shaken_add_identity_cfg(inv_msg, caller_id, translated, shaken_cfg[2], shaken_cfg)
+                inv_msg = signed_msg
             }
         }
-        inv_msg = ims_identity_apply_privacy(inv_msg)
+        let private_msg = ims_identity_apply_privacy(inv_msg)
+        inv_msg = private_msg
         // rtpengine: process offer SDP (INVITE with SDP)
-        inv_msg = rtp_process_offer(inv_msg, len(inv_msg), cid, from_tag, db, db_ok, cache)
+        let offered_msg = rtp_process_offer(inv_msg, len(inv_msg), cid, from_tag, db, db_ok, cache)
+        inv_msg = offered_msg
         let inv_dl = len(inv_msg)
 
         if (str_eq(inv_app_action, "proxy") || str_eq(inv_app_action, "route") || str_eq(inv_app_action, "dispatch")) && len(next_hop) == 0 {
@@ -1472,7 +1491,7 @@ live fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: stri
         return sip_resp(481, "Call/Transaction Does Not Exist", data, dl, "dialog-method")
     }
     let mut other_app_raw = app_gateway_call(msg, ip, port, tr, "request")
-    let mut other_app_id = app_gateway_request_id_for(msg, "request")
+    let mut other_app_id = app_gateway_response_request_id(msg, "request", other_app_raw)
     let mut other_app_action = app_gateway_action(other_app_raw, other_app_id, 0)
     let mut other_command_token = cached_env(cache, "_app_token", "SIP_APP_TOKEN", "")
     if str_eq(other_app_action, "module") && app_gateway_command_valid(other_app_raw, other_app_id, 0) == 1 {
@@ -1523,6 +1542,9 @@ live fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: stri
     } else {
     // === BYE ===
     if is_bye == 1 {
+        // Publish before forwarding/teardown: a duplicate BYE must not fall
+        // through the missing-dialog path while the downstream reply is pending.
+        let _ = sip_store_txn(txn_key, "", cache)
         if cmap_has(calls, cid) == 1 {
             let _ = db_cdr(db, db_ok, cid, from_user, "", "COMPLETED")
             let _ = charging_session_event(cid, from_user, "", "termination", 1, 0, cache, diameter_lock)
@@ -1642,12 +1664,12 @@ fn sip_max_message_size_cached(cache: CMap) -> int {
 
 fn sip_stateless_options_enabled(cache: CMap) -> int {
     if cmap_has(cache, "_stateless_options") == 1 {
-        return cmap_get_int(cache, "_stateless_options", 1)
+        return cache_get_int(cache, "_stateless_options", 1)
     }
     let raw = env_get_or("SIP_STATELESS_OPTIONS", "1")
     let mut enabled = 1
     if str_eq(raw, "0") || str_eq(str_to_lower(raw), "false") { enabled = 0 }
-    cmap_set_int(cache, "_stateless_options", enabled)
+    cache_set_int(cache, "_stateless_options", enabled)
     return enabled
 }
 
@@ -1666,11 +1688,11 @@ fn sip_record_basic_metrics(cache: CMap, calls: CMap, data: string, reply: strin
     if cmap_has(cache, "_prom_active") == 1 {
         if is_resp == 0 {
             let m = madis_method(data)
-            let _ = cmap_incr(cache, "prom|sip_requests|method=\"" + m + "\",transport=\"" + tr + "\"", 1)
+            let _ = cache_incr(cache, "prom|sip_requests|method=\"" + m + "\",transport=\"" + tr + "\"", 1)
         }
         if len(reply) > 0 {
             let c = sip_status_code(reply)
-            if c > 0 { let _ = cmap_incr(cache, "prom|sip_responses|code=\"" + string(c) + "\",class=\"" + string(c / 100) + "xx\"", 1) }
+            if c > 0 { let _ = cache_incr(cache, "prom|sip_responses|code=\"" + string(c) + "\",class=\"" + string(c / 100) + "xx\"", 1) }
         }
     }
     return 0
@@ -1691,13 +1713,13 @@ fn process_sip(data: string, dl: int, reg: CMap, calls: CMap, ip: string, port: 
         return reply_fast
     }
     // HEP — fully skipped when off (single CMap check)
-    if cmap_get_int(cache, "_hep_on", -1) != 0 {
-        if cmap_get_int(cache, "_hep_on", -1) < 0 {
+    if cache_get_int(cache, "_hep_on", -1) != 0 {
+        if cache_get_int(cache, "_hep_on", -1) < 0 {
             let h = hep_enabled()
-            cmap_set_int(cache, "_hep_on", h)
+            cache_set_int(cache, "_hep_on", h)
             if h == 0 { /* skip */ }
         }
-        if cmap_get_int(cache, "_hep_on", 0) == 1 {
+        if cache_get_int(cache, "_hep_on", 0) == 1 {
             let mut hep_ip = ""
             if cmap_has(cache, "_hep_local_ip") == 1 {
                 hep_ip = cmap_get(cache, "_hep_local_ip")

@@ -48,9 +48,8 @@ fn peer_split(addr: string) -> []string {
 
 fn peer_host(fd: int) -> string {
     let parts = peer_split(tcp_peer_addr(fd))
-    // Do not return an element owned by the temporary array: the array drop
-    // releases its strings before the caller owns the result.
-    return "" + parts[0]
+    // Makori retains the returned string before dropping the local array.
+    return parts[0]
 }
 
 fn peer_port(fd: int) -> int {
@@ -64,32 +63,30 @@ fn peer_port(fd: int) -> int {
 fn stream_append(buf: string, chunk: string) -> string {
     if len(chunk) == 0 { return buf }
     if len(buf) + len(chunk) > stream_max_buf() { return "" }
+    // Retain the incoming RC string on the first read; only fragments need
+    // concatenation. Keep the size check before this fast path.
+    if len(buf) == 0 { return chunk }
     return buf + chunk
 }
 
-// Process all complete SIP messages in buf; returns remaining incomplete tail.
-// write_fn style: caller supplies transport write via process callback results.
-// Here we return processed count indirectly by mutating through returned remainder.
-//
-// sip_on_msg is process_sip — returns reply body to write (may be empty).
-// For stream transports we call process and write via the provided write_reply helper
-// is inlined in workers; this helper only slices messages.
+// Both fields own their strings; replacing the input cannot invalidate them.
+// A value result avoids allocating an array for every framed message.
+struct StreamFrame {
+    message: string
+    remainder: string
+}
 
-fn stream_next_msg(buf: string) -> []string {
-    // Returns [message, remainder]. message empty if incomplete.
-    let mut out = make([]string, 2)
-    out[0] = ""
-    out[1] = buf
+fn stream_next_msg(buf: string) -> StreamFrame {
     let n = sip_first_message_len(buf)
-    if n <= 0 {
-        return out
+    if n <= 0 || n > len(buf) {
+        return StreamFrame { message: "", remainder: buf }
     }
-    if n > len(buf) {
-        return out
+    // A complete single-message buffer can share its RC storage instead of
+    // allocating a full-length substring. The caller may replace its buffer.
+    if n == len(buf) {
+        return StreamFrame { message: buf, remainder: "" }
     }
-    out[0] = buf[0:n]
-    out[1] = buf[n:]
-    return out
+    return StreamFrame { message: buf[0:n], remainder: buf[n:] }
 }
 
 // True if buffer has at least one complete message

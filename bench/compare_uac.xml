@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE scenario SYSTEM "sipp.dtd">
+<scenario name="Stateful UDP comparison caller">
+  <send retrans="500" start_rtd="1"><![CDATA[
+INVITE sip:bench@mako.local SIP/2.0
+Via: SIP/2.0/UDP [local_ip]:[local_port];branch=[branch];rport
+From: caller <sip:caller@mako.local>;tag=[call_number]
+To: bench <sip:bench@mako.local>
+Call-ID: [call_id]
+CSeq: 1 INVITE
+Contact: <sip:caller@[local_ip]:[local_port]>
+Max-Forwards: 70
+Content-Length: 0
+
+]]></send>
+  <recv response="100" optional="true"/>
+  <recv response="180" optional="true"/>
+  <recv response="183" optional="true"/>
+  <recv response="200" rrs="true" rtd="1"/>
+  <send><![CDATA[
+ACK [next_url] SIP/2.0
+Via: SIP/2.0/UDP [local_ip]:[local_port];branch=[branch];rport
+From: caller <sip:caller@mako.local>;tag=[call_number]
+To: bench <sip:bench@mako.local>[peer_tag_param]
+Call-ID: [call_id]
+CSeq: 1 ACK
+Contact: <sip:caller@[local_ip]:[local_port]>
+[routes]
+Max-Forwards: 70
+Content-Length: 0
+
+]]></send>
+  <pause milliseconds="100"/>
+  <send retrans="500"><![CDATA[
+BYE [next_url] SIP/2.0
+Via: SIP/2.0/UDP [local_ip]:[local_port];branch=[branch];rport
+From: caller <sip:caller@mako.local>;tag=[call_number]
+To: bench <sip:bench@mako.local>[peer_tag_param]
+Call-ID: [call_id]
+CSeq: 2 BYE
+[routes]
+Max-Forwards: 70
+Content-Length: 0
+
+]]></send>
+  <recv response="200"/>
+</scenario>

@@ -1,0 +1,11 @@
+// Linux LSan diagnostic for e241e7a; copy into a clean directory before testing.
+fn TestNamedSliceOwnership() {
+    let source = "abcd" + "efgh"
+    let mut i = 0
+    while i < 100 {
+        let piece = source[0:4]
+        assert_eq_str(piece, "abcd")
+        assert_eq_str(source, "abcdefgh")
+        i = i + 1
+    }
+}

@@ -1,0 +1,41 @@
+// Ownership adapters for the 249a616 runtime. Keep temporary keys and values
+// in Mako scope: integer helpers leak their internal copies in that revision.
+fn cache_set_int(cache: CMap, key: string, value: int) {
+    let encoded = string(value)
+    cmap_set(cache, key, encoded)
+}
+
+fn cache_get_int(cache: CMap, key: string, fallback: int) -> int {
+    let encoded = cmap_get(cache, key)
+    if len(encoded) == 0 { return fallback }
+    if let Ok(value) = parse_int(encoded) { return value }
+    return fallback
+}
+
+fn cache_set_int2(cache: CMap, prefix: string, suffix: string, value: int) {
+    let key = prefix + suffix
+    cache_set_int(cache, key, value)
+}
+
+fn cache_get_int2(cache: CMap, prefix: string, suffix: string, fallback: int) -> int {
+    let key = prefix + suffix
+    return cache_get_int(cache, key, fallback)
+}
+
+// These builtin codegen paths do not manage temporary key arguments. Borrow
+// named parameters instead; cmap_incr itself retains its atomic operation.
+fn cache_incr(cache: CMap, key: string, delta: int) -> int {
+    return cmap_incr(cache, key, delta)
+}
+
+fn cache_get3i(cache: CMap, prefix: string, suffix: string, index: int) -> string {
+    return cmap_get3i(cache, prefix, suffix, index)
+}
+
+fn cache_get2(cache: CMap, prefix: string, suffix: string) -> string {
+    return cmap_get2(cache, prefix, suffix)
+}
+
+fn cache_del3i(cache: CMap, prefix: string, suffix: string, index: int) -> int {
+    return cmap_del3i(cache, prefix, suffix, index)
+}

@@ -1,0 +1,45 @@
+mako test: /tmp/madis-bb36025-isolated/ownership_test.mko
+=== /tmp/madis-bb36025-isolated/ownership_test.mko ===
+--- PASS: TestCompilerCryptoTemporaryOwnership
+--- PASS: TestCompilerRetainedStringReplacement
+PASS
+
+=================================================================
+==1772493==ERROR: LeakSanitizer: detected memory leaks
+
+Direct leak of 3300 byte(s) in 100 object(s) allocated from:
+    #0 0x5b245a5663e3 in malloc (/tmp/mako_gotest_c_ownership_test_1772381+0xca3e3) (BuildId: 653b422523c50112e23de03243a2cad6543bf424)
+    #1 0x5b245a59ee4a in mako_str_slice /tmp/madis-makori-bb36025/runtime/mako_rt.h:2349:23
+    #2 0x5b245a59aed4 in TestCompilerCryptoTemporaryOwnership /tmp/madis-bb36025-isolated/ownership_test.mko:27:35
+    #3 0x5b245a5a22a6 in mako_test_run /tmp/madis-makori-bb36025/runtime/mako_rt.h:11912:9
+    #4 0x5b245a5a1d28 in main /root/<mako-codegen>:6:15
+    #5 0x70756dc2a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+    #6 0x70756dc2a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+    #7 0x5b245a4cd3a4 in _start (/tmp/mako_gotest_c_ownership_test_1772381+0x313a4) (BuildId: 653b422523c50112e23de03243a2cad6543bf424)
+
+Direct leak of 33 byte(s) in 1 object(s) allocated from:
+    #0 0x5b245a5663e3 in malloc (/tmp/mako_gotest_c_ownership_test_1772381+0xca3e3) (BuildId: 653b422523c50112e23de03243a2cad6543bf424)
+    #1 0x5b245a59ee4a in mako_str_slice /tmp/madis-makori-bb36025/runtime/mako_rt.h:2349:23
+    #2 0x5b245a59b151 in TestCompilerCryptoTemporaryOwnership /tmp/madis-bb36025-isolated/ownership_test.mko:29:31
+    #3 0x5b245a5a22a6 in mako_test_run /tmp/madis-makori-bb36025/runtime/mako_rt.h:11912:9
+    #4 0x5b245a5a1d28 in main /root/<mako-codegen>:6:15
+    #5 0x70756dc2a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+    #6 0x70756dc2a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+    #7 0x5b245a4cd3a4 in _start (/tmp/mako_gotest_c_ownership_test_1772381+0x313a4) (BuildId: 653b422523c50112e23de03243a2cad6543bf424)
+
+Direct leak of 33 byte(s) in 1 object(s) allocated from:
+    #0 0x5b245a5663e3 in malloc (/tmp/mako_gotest_c_ownership_test_1772381+0xca3e3) (BuildId: 653b422523c50112e23de03243a2cad6543bf424)
+    #1 0x5b245a59ee4a in mako_str_slice /tmp/madis-makori-bb36025/runtime/mako_rt.h:2349:23
+    #2 0x5b245a59ac6a in TestCompilerCryptoTemporaryOwnership /tmp/madis-bb36025-isolated/ownership_test.mko:17:31
+    #3 0x5b245a5a22a6 in mako_test_run /tmp/madis-makori-bb36025/runtime/mako_rt.h:11912:9
+    #4 0x5b245a5a1d28 in main /root/<mako-codegen>:6:15
+    #5 0x70756dc2a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+    #6 0x70756dc2a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+    #7 0x5b245a4cd3a4 in _start (/tmp/mako_gotest_c_ownership_test_1772381+0x313a4) (BuildId: 653b422523c50112e23de03243a2cad6543bf424)
+
+SUMMARY: AddressSanitizer: 3366 byte(s) leaked in 102 allocation(s).
+error: /tmp/madis-bb36025-isolated/ownership_test.mko: test process exited with code 1 (see the assertion output above)
+
+FAIL  /tmp/madis-bb36025-isolated/ownership_test.mko
+
+mako test: 0 passed, 1 failed

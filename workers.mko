@@ -1,3 +1,4 @@
+pull . "./cache_owned.mko"
 // Transport stream polling, connection tracking, and worker loops (UDP, TLS, WSS, MAF).
 
 // Process-lifetime listener count. Mailbox cap 4 is the inline ring.
@@ -41,7 +42,9 @@ fn sip_tls_stream_poll(owner: int, reg: CMap, calls: CMap, db: SqlDB, db_ok: int
                         let buf_key = "tls_buf|" + string(owner) + "|" + item
                         let mut buf = ""
                         if cmap_has(cache, buf_key) == 1 { buf = cmap_get(cache, buf_key) }
-                        buf = stream_append(buf, raw)
+                        // Separate the borrowed call from replacing its input (0.6.38 ownership).
+                        let combined = stream_append(buf, raw)
+                        buf = combined
                         if len(buf) == 0 {
                             let _ = tls_pool_close(handle)
                             let _ = cmap_del(cache, assoc_key)
@@ -50,8 +53,8 @@ fn sip_tls_stream_poll(owner: int, reg: CMap, calls: CMap, db: SqlDB, db_ok: int
                         } else {
                             while stream_has_complete(buf) == 1 {
                                 let parts = stream_next_msg(buf)
-                                let msg = parts[0]
-                                buf = parts[1]
+                                let msg = parts.message
+                                buf = parts.remainder
                                 if len(msg) == 0 { break }
                                 let reply = process_sip(msg, len(msg), reg, calls, peer_host(fd), peer_port(fd), peer_port(fd), "TLS", owner, db, db_ok, cache, outbox, realm, node_id, diameter_lock)
                                 if len(reply) > 0 { let _ = sip_forward_reply(reply, cache, owner) }
@@ -123,14 +126,16 @@ fn sip_wss_stream_poll(owner: int, reg: CMap, calls: CMap, db: SqlDB, db_ok: int
                         let buf_key = "wss_buf|" + string(owner) + "|" + item
                         let mut buf = ""
                         if cmap_has(cache, buf_key) == 1 { buf = cmap_get(cache, buf_key) }
-                        buf = stream_append(buf, raw)
+                        // Separate the borrowed call from replacing its input (0.6.38 ownership).
+                        let combined = stream_append(buf, raw)
+                        buf = combined
                         if len(buf) == 0 {
                             let _ = sip_wss_drop_assoc(owner, item, handle, cache)
                         } else {
                             while stream_has_complete(buf) == 1 {
                                 let parts = stream_next_msg(buf)
-                                let msg = parts[0]
-                                buf = parts[1]
+                                let msg = parts.message
+                                buf = parts.remainder
                                 if len(msg) == 0 { break }
                                 let reply = process_sip(msg, len(msg), reg, calls, peer_host(fd), peer_port(fd), peer_port(fd), "WSS", owner, db, db_ok, cache, outbox, realm, node_id, diameter_lock)
                                 if len(reply) > 0 { let _ = sip_forward_reply(reply, cache, owner) }
@@ -179,7 +184,9 @@ fn sip_stream_poll(owner: int, reg: CMap, calls: CMap, db: SqlDB, db_ok: int, ca
                         let buf_key = "tcp_buf|" + string(owner) + "|" + item
                         let mut buf = ""
                         if cmap_has(cache, buf_key) == 1 { buf = cmap_get(cache, buf_key) }
-                        buf = stream_append(buf, raw)
+                        // Separate the borrowed call from replacing its input (0.6.38 ownership).
+                        let combined = stream_append(buf, raw)
+                        buf = combined
                         if len(buf) == 0 {
                             let _ = tcp_close(fd)
                             let _ = cmap_del(cache, assoc_key)
@@ -188,8 +195,8 @@ fn sip_stream_poll(owner: int, reg: CMap, calls: CMap, db: SqlDB, db_ok: int, ca
                         } else {
                             while stream_has_complete(buf) == 1 {
                                 let parts = stream_next_msg(buf)
-                                let msg = parts[0]
-                                buf = parts[1]
+                                let msg = parts.message
+                                buf = parts.remainder
                                 if len(msg) == 0 { break }
                                 let reply = process_sip(msg, len(msg), reg, calls, peer_host(fd), peer_port(fd), peer_port(fd), "TCP", owner, db, db_ok, cache, outbox, realm, node_id, diameter_lock)
                                 if len(reply) > 0 { let _ = sip_forward_reply(reply, cache, owner) }
@@ -226,7 +233,7 @@ fn sip_server_conn_track_tls(cache: CMap, txn: string, c: int, handle: int) -> i
 
 fn sip_server_conn_track(cache: CMap, txn: string, c: int) -> int {
     if len(txn) <= 2 { return 0 }
-    let seq = cmap_incr(cache, "server_conn_seq", 1)
+    let seq = cache_incr(cache, "server_conn_seq", 1)
     if seq < 0 { return 0 }
     let slot = seq - (seq / 8192) * 8192
     let ring_key = "server_conn_ring|" + string(slot)
@@ -290,11 +297,15 @@ fn udp_worker(id: int, fd: int, port: int, reg: CMap, calls: CMap, cache: CMap, 
     let mut db_ok = 0
     let mut db = sql_open_postgres(db_url)
     if len(db_url) > 0 { db_ok = 1 }
+    // This runtime helper sets SOL_SOCKET/SO_RCVBUF and also works for UDP.
+    // Absorb short bursts; the OS may cap the requested size.
+    if tcp_set_recv_buf(fd, 262144) != 1 {
+        slog("  UDP:     receive buffer tuning failed; using system default")
+    }
     let mut last_txn_tick = mono_ms()
     while shutdown_requested() == 0 {
-        // Drain up to 512 datagrams per evloop wakeup. A single epoll/kqueue
-        // event can mean many packets queued; reading one per wakeup adds
-        // syscall overhead on busy sockets.
+        // Drain a bounded batch before housekeeping. Read queued packets
+        // without inserting an idle wait between them.
         let mut ei = 0
         while ei < 512 {
             let data = udp_recv(fd, 65535)
@@ -326,7 +337,8 @@ fn udp_worker(id: int, fd: int, port: int, reg: CMap, calls: CMap, cache: CMap, 
             last_txn_tick = tick_now
         }
         if ei == 0 {
-            sleep_ms(10)
+            // Keep a real idle sleep without adding 10 ms to arriving traffic.
+            sleep_ms(1)
         }
     }
     return 0
@@ -513,8 +525,8 @@ fn tls_worker(fd: int, srv: TlsServer, port: int, reg: CMap, calls: CMap, cache:
                             let mut budget = 64
                             while budget > 0 && stream_has_complete(buffers[fd_key]) == 1 {
                                 let parts = stream_next_msg(buffers[fd_key])
-                                let msg = parts[0]
-                                buffers[fd_key] = parts[1]
+                                let msg = parts.message
+                                buffers[fd_key] = parts.remainder
                                 if len(msg) == 0 { break }
                                 if sip_ingress_header_safe(msg, len(msg)) == 0 || sip_ok(msg) == 0 { budget = budget - 1; continue }
                                 let tls_txn = sip_transaction_key(msg, len(msg))
@@ -687,8 +699,8 @@ fn wss_worker(fd: int, port: int, reg: CMap, calls: CMap, cache: CMap, outbox: c
                         let mut message_budget = 64
                         while message_budget > 0 && stream_has_complete(buffer) == 1 {
                             let parts = stream_next_msg(buffer)
-                            let msg = parts[0]
-                            buffer = parts[1]
+                            let msg = parts.message
+                            buffer = parts.remainder
                             if len(msg) == 0 { break }
                             if sip_ingress_header_safe(msg, len(msg)) == 1 && sip_ok(msg) == 1 {
                                 let txn = sip_transaction_key(msg, len(msg))

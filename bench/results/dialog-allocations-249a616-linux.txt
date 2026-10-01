@@ -1,0 +1,807 @@
+mako: pg_connect: bad url
+2026-10-01T12:19:16.651Z   reg: store aor=bench@mako.local contact=sip:bench@127.0.0.1:49578 expires=3600
+2026-10-01T12:19:16.653Z   ims: lifecycle aor=bench@mako.local state=registered
+completed_dialogs=100 calls_entries=2 cache_entries=2571
+
+=================================================================
+==1831478==ERROR: LeakSanitizer: detected memory leaks
+
+Direct leak of 29600 byte(s) in 100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25b305d in mako_rc_alloc /tmp/madis-makori-249a616/runtime/mako_rt.h:143
+    #2 0x5fd3a27ff6d1 in mako_rc_calloc /tmp/madis-makori-249a616/runtime/mako_rt.h:161
+    #3 0x5fd3a27ff6d1 in mako_str_array_make /tmp/madis-makori-249a616/runtime/mako_rt.h:1130
+    #4 0x5fd3a27ff6d1 in mako_str_split /tmp/madis-makori-249a616/runtime/mako_stdlib.h:202
+    #5 0x5fd3a27ff6d1 in ims_lifecycle_parts /tmp/madis-dialog-fix/source/ims_lifecycle.mko:194
+    #6 0x5fd3a27ff6d1 in ims_lifecycle_path /tmp/madis-dialog-fix/source/ims_lifecycle.mko:271
+    #7 0x5fd3a2967403 in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:1367
+    #8 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #9 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #10 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #11 0x5fd3a29b4eb2 in main bench/dialog_allocation_probe.c:72
+    #12 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #13 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #14 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 29600 byte(s) in 100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25b305d in mako_rc_alloc /tmp/madis-makori-249a616/runtime/mako_rt.h:143
+    #2 0x5fd3a27ff6d1 in mako_rc_calloc /tmp/madis-makori-249a616/runtime/mako_rt.h:161
+    #3 0x5fd3a27ff6d1 in mako_str_array_make /tmp/madis-makori-249a616/runtime/mako_rt.h:1130
+    #4 0x5fd3a27ff6d1 in mako_str_split /tmp/madis-makori-249a616/runtime/mako_stdlib.h:202
+    #5 0x5fd3a27ff6d1 in ims_lifecycle_parts /tmp/madis-dialog-fix/source/ims_lifecycle.mko:194
+    #6 0x5fd3a27ff6d1 in ims_lifecycle_path /tmp/madis-dialog-fix/source/ims_lifecycle.mko:271
+    #7 0x5fd3a29686aa in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:1353
+    #8 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #9 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #10 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #11 0x5fd3a29b4eb2 in main bench/dialog_allocation_probe.c:72
+    #12 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #13 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #14 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 1900 byte(s) in 100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25b305d in mako_rc_alloc /tmp/madis-makori-249a616/runtime/mako_rt.h:143
+    #2 0x5fd3a25b470b in mako_str_from_cstr /tmp/madis-makori-249a616/runtime/mako_rt.h:535
+    #3 0x5fd3a273bb42 in sip_client_txn_record /tmp/madis-dialog-fix/source/rfc.mko:887
+    #4 0x5fd3a28ca751 in sip_forward_target /tmp/madis-dialog-fix/source/transport.mko:585
+    #5 0x5fd3a290afed in sip_forward_dialog_request /tmp/madis-dialog-fix/source/sip_dialog.mko:37
+    #6 0x5fd3a2975ccc in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:1554
+    #7 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #8 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #9 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #10 0x5fd3a29b5d06 in main bench/dialog_allocation_probe.c:86
+    #11 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #12 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #13 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 1900 byte(s) in 100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25b305d in mako_rc_alloc /tmp/madis-makori-249a616/runtime/mako_rt.h:143
+    #2 0x5fd3a25b470b in mako_str_from_cstr /tmp/madis-makori-249a616/runtime/mako_rt.h:535
+    #3 0x5fd3a273bb42 in sip_client_txn_record /tmp/madis-dialog-fix/source/rfc.mko:887
+    #4 0x5fd3a28ca751 in sip_forward_target /tmp/madis-dialog-fix/source/transport.mko:585
+    #5 0x5fd3a2967ab0 in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:1376
+    #6 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #7 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #8 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #9 0x5fd3a29b4eb2 in main bench/dialog_allocation_probe.c:72
+    #10 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #11 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #12 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 1600 byte(s) in 100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25b305d in mako_rc_alloc /tmp/madis-makori-249a616/runtime/mako_rt.h:143
+    #2 0x5fd3a27213e1 in mako_str_from_cstr /tmp/madis-makori-249a616/runtime/mako_rt.h:535
+    #3 0x5fd3a27213e1 in sip_txn_index_response /tmp/madis-dialog-fix/source/rfc.mko:324
+    #4 0x5fd3a272fe3f in sip_store_txn /tmp/madis-dialog-fix/source/rfc.mko:422
+    #5 0x5fd3a2975b88 in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:1543
+    #6 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #7 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #8 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #9 0x5fd3a29b5d06 in main bench/dialog_allocation_probe.c:86
+    #10 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #11 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #12 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 1600 byte(s) in 100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25b305d in mako_rc_alloc /tmp/madis-makori-249a616/runtime/mako_rt.h:143
+    #2 0x5fd3a27213e1 in mako_str_from_cstr /tmp/madis-makori-249a616/runtime/mako_rt.h:535
+    #3 0x5fd3a27213e1 in sip_txn_index_response /tmp/madis-dialog-fix/source/rfc.mko:324
+    #4 0x5fd3a272fe3f in sip_store_txn /tmp/madis-dialog-fix/source/rfc.mko:422
+    #5 0x5fd3a27319e8 in sip_txn_cache_response /tmp/madis-dialog-fix/source/rfc.mko:577
+    #6 0x5fd3a297fa4f in process_sip /tmp/madis-dialog-fix/source/workers.mko:1739
+    #7 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #8 0x5fd3a29b4eb2 in main bench/dialog_allocation_probe.c:72
+    #9 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #10 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #11 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 1600 byte(s) in 100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25a7e30 in mako_str_slice /tmp/madis-makori-249a616/runtime/mako_rt.h:2349
+    #2 0x5fd3a27711a8 in registration_nat_target /tmp/madis-dialog-fix/source/registration.mko:119
+    #3 0x5fd3a29670d7 in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:1345
+    #4 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #5 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #6 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #7 0x5fd3a29b4eb2 in main bench/dialog_allocation_probe.c:72
+    #8 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #9 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #10 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 1147 byte(s) in 100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25b305d in mako_rc_alloc /tmp/madis-makori-249a616/runtime/mako_rt.h:143
+    #2 0x5fd3a25b353f in mako_str_clone /tmp/madis-makori-249a616/runtime/mako_rt.h:3497
+    #3 0x5fd3a27302ee in mako_cmap_set_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:479
+    #4 0x5fd3a27302ee in sip_store_txn /tmp/madis-dialog-fix/source/rfc.mko:420
+    #5 0x5fd3a2975b88 in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:1543
+    #6 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #7 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #8 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #9 0x5fd3a29b5d06 in main bench/dialog_allocation_probe.c:86
+    #10 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #11 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #12 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 1147 byte(s) in 100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25b305d in mako_rc_alloc /tmp/madis-makori-249a616/runtime/mako_rt.h:143
+    #2 0x5fd3a25b353f in mako_str_clone /tmp/madis-makori-249a616/runtime/mako_rt.h:3497
+    #3 0x5fd3a25f6cdf in mako_cmap_set_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:479
+    #4 0x5fd3a25f6cdf in mako_cmap_set_int2 /tmp/madis-makori-249a616/runtime/mako_cmap.h:503
+    #5 0x5fd3a273c260 in sip_client_txn_record /tmp/madis-dialog-fix/source/rfc.mko:907
+    #6 0x5fd3a28ca751 in sip_forward_target /tmp/madis-dialog-fix/source/transport.mko:585
+    #7 0x5fd3a290afed in sip_forward_dialog_request /tmp/madis-dialog-fix/source/sip_dialog.mko:37
+    #8 0x5fd3a2975ccc in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:1554
+    #9 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #10 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #11 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #12 0x5fd3a29b5d06 in main bench/dialog_allocation_probe.c:86
+    #13 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #14 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #15 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 1147 byte(s) in 100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25b305d in mako_rc_alloc /tmp/madis-makori-249a616/runtime/mako_rt.h:143
+    #2 0x5fd3a25b353f in mako_str_clone /tmp/madis-makori-249a616/runtime/mako_rt.h:3497
+    #3 0x5fd3a27302ee in mako_cmap_set_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:479
+    #4 0x5fd3a27302ee in sip_store_txn /tmp/madis-dialog-fix/source/rfc.mko:420
+    #5 0x5fd3a27319e8 in sip_txn_cache_response /tmp/madis-dialog-fix/source/rfc.mko:577
+    #6 0x5fd3a297fa4f in process_sip /tmp/madis-dialog-fix/source/workers.mko:1739
+    #7 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #8 0x5fd3a29b4eb2 in main bench/dialog_allocation_probe.c:72
+    #9 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #10 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #11 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 1145 byte(s) in 100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25b305d in mako_rc_alloc /tmp/madis-makori-249a616/runtime/mako_rt.h:143
+    #2 0x5fd3a25b353f in mako_str_clone /tmp/madis-makori-249a616/runtime/mako_rt.h:3497
+    #3 0x5fd3a25f6cdf in mako_cmap_set_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:479
+    #4 0x5fd3a25f6cdf in mako_cmap_set_int2 /tmp/madis-makori-249a616/runtime/mako_cmap.h:503
+    #5 0x5fd3a273c260 in sip_client_txn_record /tmp/madis-dialog-fix/source/rfc.mko:907
+    #6 0x5fd3a28ca751 in sip_forward_target /tmp/madis-dialog-fix/source/transport.mko:585
+    #7 0x5fd3a2967ab0 in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:1376
+    #8 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #9 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #10 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #11 0x5fd3a29b4eb2 in main bench/dialog_allocation_probe.c:72
+    #12 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #13 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #14 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 1000 byte(s) in 100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25b305d in mako_rc_alloc /tmp/madis-makori-249a616/runtime/mako_rt.h:143
+    #2 0x5fd3a25b353f in mako_str_clone /tmp/madis-makori-249a616/runtime/mako_rt.h:3497
+    #3 0x5fd3a2721376 in mako_cmap_set_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:479
+    #4 0x5fd3a2721376 in sip_txn_index_response /tmp/madis-dialog-fix/source/rfc.mko:323
+    #5 0x5fd3a272fe3f in sip_store_txn /tmp/madis-dialog-fix/source/rfc.mko:422
+    #6 0x5fd3a2975b88 in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:1543
+    #7 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #8 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #9 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #10 0x5fd3a29b5d06 in main bench/dialog_allocation_probe.c:86
+    #11 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #12 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #13 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 1000 byte(s) in 100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25b305d in mako_rc_alloc /tmp/madis-makori-249a616/runtime/mako_rt.h:143
+    #2 0x5fd3a25b353f in mako_str_clone /tmp/madis-makori-249a616/runtime/mako_rt.h:3497
+    #3 0x5fd3a2721376 in mako_cmap_set_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:479
+    #4 0x5fd3a2721376 in sip_txn_index_response /tmp/madis-dialog-fix/source/rfc.mko:323
+    #5 0x5fd3a272fe3f in sip_store_txn /tmp/madis-dialog-fix/source/rfc.mko:422
+    #6 0x5fd3a27319e8 in sip_txn_cache_response /tmp/madis-dialog-fix/source/rfc.mko:577
+    #7 0x5fd3a297fa4f in process_sip /tmp/madis-dialog-fix/source/workers.mko:1739
+    #8 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #9 0x5fd3a29b4eb2 in main bench/dialog_allocation_probe.c:72
+    #10 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #11 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #12 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 1000 byte(s) in 100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25b305d in mako_rc_alloc /tmp/madis-makori-249a616/runtime/mako_rt.h:143
+    #2 0x5fd3a25b353f in mako_str_clone /tmp/madis-makori-249a616/runtime/mako_rt.h:3497
+    #3 0x5fd3a25f6cdf in mako_cmap_set_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:479
+    #4 0x5fd3a25f6cdf in mako_cmap_set_int2 /tmp/madis-makori-249a616/runtime/mako_cmap.h:503
+    #5 0x5fd3a273cc43 in sip_client_txn_record /tmp/madis-dialog-fix/source/rfc.mko:884
+    #6 0x5fd3a28ca751 in sip_forward_target /tmp/madis-dialog-fix/source/transport.mko:585
+    #7 0x5fd3a2967ab0 in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:1376
+    #8 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #9 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #10 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #11 0x5fd3a29b4eb2 in main bench/dialog_allocation_probe.c:72
+    #12 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #13 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #14 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 1000 byte(s) in 100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25b305d in mako_rc_alloc /tmp/madis-makori-249a616/runtime/mako_rt.h:143
+    #2 0x5fd3a25b353f in mako_str_clone /tmp/madis-makori-249a616/runtime/mako_rt.h:3497
+    #3 0x5fd3a25f6cdf in mako_cmap_set_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:479
+    #4 0x5fd3a25f6cdf in mako_cmap_set_int2 /tmp/madis-makori-249a616/runtime/mako_cmap.h:503
+    #5 0x5fd3a273cc43 in sip_client_txn_record /tmp/madis-dialog-fix/source/rfc.mko:884
+    #6 0x5fd3a28ca751 in sip_forward_target /tmp/madis-dialog-fix/source/transport.mko:585
+    #7 0x5fd3a290afed in sip_forward_dialog_request /tmp/madis-dialog-fix/source/sip_dialog.mko:37
+    #8 0x5fd3a2975ccc in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:1554
+    #9 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #10 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #11 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #12 0x5fd3a29b5d06 in main bench/dialog_allocation_probe.c:86
+    #13 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #14 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #15 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 1000 byte(s) in 100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25b305d in mako_rc_alloc /tmp/madis-makori-249a616/runtime/mako_rt.h:143
+    #2 0x5fd3a25b353f in mako_str_clone /tmp/madis-makori-249a616/runtime/mako_rt.h:3497
+    #3 0x5fd3a25f6cdf in mako_cmap_set_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:479
+    #4 0x5fd3a25f6cdf in mako_cmap_set_int2 /tmp/madis-makori-249a616/runtime/mako_cmap.h:503
+    #5 0x5fd3a273b122 in sip_client_txn_cleanup /tmp/madis-dialog-fix/source/rfc.mko:867
+    #6 0x5fd3a273d8e2 in sip_client_txn_finish /tmp/madis-dialog-fix/source/rfc.mko:929
+    #7 0x5fd3a292a07b in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:180
+    #8 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #9 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #10 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #11 0x5fd3a29b57e2 in main bench/dialog_allocation_probe.c:92
+    #12 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #13 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #14 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 1000 byte(s) in 100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25b305d in mako_rc_alloc /tmp/madis-makori-249a616/runtime/mako_rt.h:143
+    #2 0x5fd3a25b353f in mako_str_clone /tmp/madis-makori-249a616/runtime/mako_rt.h:3497
+    #3 0x5fd3a25f6cdf in mako_cmap_set_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:479
+    #4 0x5fd3a25f6cdf in mako_cmap_set_int2 /tmp/madis-makori-249a616/runtime/mako_cmap.h:503
+    #5 0x5fd3a273b122 in sip_client_txn_cleanup /tmp/madis-dialog-fix/source/rfc.mko:867
+    #6 0x5fd3a273d8e2 in sip_client_txn_finish /tmp/madis-dialog-fix/source/rfc.mko:929
+    #7 0x5fd3a292a07b in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:180
+    #8 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #9 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #10 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #11 0x5fd3a29b5032 in main bench/dialog_allocation_probe.c:76
+    #12 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #13 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #14 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 400 byte(s) in 200 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25d1ca3 in cmap_dup_bytes /tmp/madis-makori-249a616/runtime/mako_cmap.h:60
+    #2 0x5fd3a25d1ca3 in mako_cmap_get /tmp/madis-makori-249a616/runtime/mako_cmap.h:241
+    #3 0x5fd3a297e952 in mako_cmap_get_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:484
+    #4 0x5fd3a297e952 in process_sip /tmp/madis-dialog-fix/source/workers.mko:1712
+    #5 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #6 0x5fd3a29b5d06 in main bench/dialog_allocation_probe.c:86
+    #7 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #8 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #9 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 347 byte(s) in 100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25d1ca3 in cmap_dup_bytes /tmp/madis-makori-249a616/runtime/mako_cmap.h:60
+    #2 0x5fd3a25d1ca3 in mako_cmap_get /tmp/madis-makori-249a616/runtime/mako_cmap.h:241
+    #3 0x5fd3a2730174 in mako_cmap_get_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:484
+    #4 0x5fd3a2730174 in sip_store_txn /tmp/madis-dialog-fix/source/rfc.mko:419
+    #5 0x5fd3a2975b88 in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:1543
+    #6 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #7 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #8 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #9 0x5fd3a29b5d06 in main bench/dialog_allocation_probe.c:86
+    #10 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #11 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #12 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 345 byte(s) in 100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25d1ca3 in cmap_dup_bytes /tmp/madis-makori-249a616/runtime/mako_cmap.h:60
+    #2 0x5fd3a25d1ca3 in mako_cmap_get /tmp/madis-makori-249a616/runtime/mako_cmap.h:241
+    #3 0x5fd3a2730174 in mako_cmap_get_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:484
+    #4 0x5fd3a2730174 in sip_store_txn /tmp/madis-dialog-fix/source/rfc.mko:419
+    #5 0x5fd3a27319e8 in sip_txn_cache_response /tmp/madis-dialog-fix/source/rfc.mko:577
+    #6 0x5fd3a297fa4f in process_sip /tmp/madis-dialog-fix/source/workers.mko:1739
+    #7 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #8 0x5fd3a29b4eb2 in main bench/dialog_allocation_probe.c:72
+    #9 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #10 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #11 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 200 byte(s) in 100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25d1ca3 in cmap_dup_bytes /tmp/madis-makori-249a616/runtime/mako_cmap.h:60
+    #2 0x5fd3a25d1ca3 in mako_cmap_get /tmp/madis-makori-249a616/runtime/mako_cmap.h:241
+    #3 0x5fd3a263a850 in mako_cmap_get_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:484
+    #4 0x5fd3a263a850 in log_level_cached /tmp/madis-dialog-fix/source/log.mko:16
+    #5 0x5fd3a28c19bf in log_debug_if /tmp/madis-dialog-fix/source/log.mko:70
+    #6 0x5fd3a28c19bf in sip_forward_udp /tmp/madis-dialog-fix/source/sip_forwarding.mko:122
+    #7 0x5fd3a28c99c6 in sip_forward_target /tmp/madis-dialog-fix/source/transport.mko:561
+    #8 0x5fd3a290afed in sip_forward_dialog_request /tmp/madis-dialog-fix/source/sip_dialog.mko:37
+    #9 0x5fd3a2975ccc in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:1554
+    #10 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #11 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #12 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #13 0x5fd3a29b5d06 in main bench/dialog_allocation_probe.c:86
+    #14 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #15 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #16 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 200 byte(s) in 100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25d1ca3 in cmap_dup_bytes /tmp/madis-makori-249a616/runtime/mako_cmap.h:60
+    #2 0x5fd3a25d1ca3 in mako_cmap_get /tmp/madis-makori-249a616/runtime/mako_cmap.h:241
+    #3 0x5fd3a263a850 in mako_cmap_get_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:484
+    #4 0x5fd3a263a850 in log_level_cached /tmp/madis-dialog-fix/source/log.mko:16
+    #5 0x5fd3a28c19bf in log_debug_if /tmp/madis-dialog-fix/source/log.mko:70
+    #6 0x5fd3a28c19bf in sip_forward_udp /tmp/madis-dialog-fix/source/sip_forwarding.mko:122
+    #7 0x5fd3a28c99c6 in sip_forward_target /tmp/madis-dialog-fix/source/transport.mko:561
+    #8 0x5fd3a290afed in sip_forward_dialog_request /tmp/madis-dialog-fix/source/sip_dialog.mko:37
+    #9 0x5fd3a29754d5 in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:1535
+    #10 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #11 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #12 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #13 0x5fd3a29b5d06 in main bench/dialog_allocation_probe.c:86
+    #14 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #15 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #16 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 200 byte(s) in 100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25d1ca3 in cmap_dup_bytes /tmp/madis-makori-249a616/runtime/mako_cmap.h:60
+    #2 0x5fd3a25d1ca3 in mako_cmap_get /tmp/madis-makori-249a616/runtime/mako_cmap.h:241
+    #3 0x5fd3a297e952 in mako_cmap_get_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:484
+    #4 0x5fd3a297e952 in process_sip /tmp/madis-dialog-fix/source/workers.mko:1712
+    #5 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #6 0x5fd3a29b5032 in main bench/dialog_allocation_probe.c:76
+    #7 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #8 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #9 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 200 byte(s) in 100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25d1ca3 in cmap_dup_bytes /tmp/madis-makori-249a616/runtime/mako_cmap.h:60
+    #2 0x5fd3a25d1ca3 in mako_cmap_get /tmp/madis-makori-249a616/runtime/mako_cmap.h:241
+    #3 0x5fd3a25d31c1 in mako_cmap_get_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:484
+    #4 0x5fd3a25d31c1 in mako_cmap_get_int2 /tmp/madis-makori-249a616/runtime/mako_cmap.h:496
+    #5 0x5fd3a273b0bb in sip_client_txn_cleanup /tmp/madis-dialog-fix/source/rfc.mko:865
+    #6 0x5fd3a273d8e2 in sip_client_txn_finish /tmp/madis-dialog-fix/source/rfc.mko:929
+    #7 0x5fd3a292a07b in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:180
+    #8 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #9 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #10 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #11 0x5fd3a29b5032 in main bench/dialog_allocation_probe.c:76
+    #12 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #13 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #14 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 200 byte(s) in 100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25d1ca3 in cmap_dup_bytes /tmp/madis-makori-249a616/runtime/mako_cmap.h:60
+    #2 0x5fd3a25d1ca3 in mako_cmap_get /tmp/madis-makori-249a616/runtime/mako_cmap.h:241
+    #3 0x5fd3a25d2a8a in mako_cmap_get_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:484
+    #4 0x5fd3a273b04c in sip_client_txn_cleanup /tmp/madis-dialog-fix/source/rfc.mko:863
+    #5 0x5fd3a273d8e2 in sip_client_txn_finish /tmp/madis-dialog-fix/source/rfc.mko:929
+    #6 0x5fd3a292a07b in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:180
+    #7 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #8 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #9 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #10 0x5fd3a29b5032 in main bench/dialog_allocation_probe.c:76
+    #11 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #12 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #13 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 200 byte(s) in 100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25d1ca3 in cmap_dup_bytes /tmp/madis-makori-249a616/runtime/mako_cmap.h:60
+    #2 0x5fd3a25d1ca3 in mako_cmap_get /tmp/madis-makori-249a616/runtime/mako_cmap.h:241
+    #3 0x5fd3a25d31c1 in mako_cmap_get_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:484
+    #4 0x5fd3a25d31c1 in mako_cmap_get_int2 /tmp/madis-makori-249a616/runtime/mako_cmap.h:496
+    #5 0x5fd3a273b0bb in sip_client_txn_cleanup /tmp/madis-dialog-fix/source/rfc.mko:865
+    #6 0x5fd3a273d8e2 in sip_client_txn_finish /tmp/madis-dialog-fix/source/rfc.mko:929
+    #7 0x5fd3a292a07b in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:180
+    #8 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #9 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #10 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #11 0x5fd3a29b57e2 in main bench/dialog_allocation_probe.c:92
+    #12 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #13 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #14 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 200 byte(s) in 100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25d1ca3 in cmap_dup_bytes /tmp/madis-makori-249a616/runtime/mako_cmap.h:60
+    #2 0x5fd3a25d1ca3 in mako_cmap_get /tmp/madis-makori-249a616/runtime/mako_cmap.h:241
+    #3 0x5fd3a25d2a8a in mako_cmap_get_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:484
+    #4 0x5fd3a273b04c in sip_client_txn_cleanup /tmp/madis-dialog-fix/source/rfc.mko:863
+    #5 0x5fd3a273d8e2 in sip_client_txn_finish /tmp/madis-dialog-fix/source/rfc.mko:929
+    #6 0x5fd3a292a07b in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:180
+    #7 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #8 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #9 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #10 0x5fd3a29b57e2 in main bench/dialog_allocation_probe.c:92
+    #11 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #12 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #13 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 200 byte(s) in 100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25d1ca3 in cmap_dup_bytes /tmp/madis-makori-249a616/runtime/mako_cmap.h:60
+    #2 0x5fd3a25d1ca3 in mako_cmap_get /tmp/madis-makori-249a616/runtime/mako_cmap.h:241
+    #3 0x5fd3a297e952 in mako_cmap_get_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:484
+    #4 0x5fd3a297e952 in process_sip /tmp/madis-dialog-fix/source/workers.mko:1712
+    #5 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #6 0x5fd3a29b57e2 in main bench/dialog_allocation_probe.c:92
+    #7 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #8 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #9 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 200 byte(s) in 100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25d1ca3 in cmap_dup_bytes /tmp/madis-makori-249a616/runtime/mako_cmap.h:60
+    #2 0x5fd3a25d1ca3 in mako_cmap_get /tmp/madis-makori-249a616/runtime/mako_cmap.h:241
+    #3 0x5fd3a263a850 in mako_cmap_get_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:484
+    #4 0x5fd3a263a850 in log_level_cached /tmp/madis-dialog-fix/source/log.mko:16
+    #5 0x5fd3a263c166 in log_debug_if /tmp/madis-dialog-fix/source/log.mko:70
+    #6 0x5fd3a2975e4f in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:1559
+    #7 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #8 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #9 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #10 0x5fd3a29b5d06 in main bench/dialog_allocation_probe.c:86
+    #11 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #12 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #13 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 200 byte(s) in 100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25d1ca3 in cmap_dup_bytes /tmp/madis-makori-249a616/runtime/mako_cmap.h:60
+    #2 0x5fd3a25d1ca3 in mako_cmap_get /tmp/madis-makori-249a616/runtime/mako_cmap.h:241
+    #3 0x5fd3a25d31c1 in mako_cmap_get_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:484
+    #4 0x5fd3a25d31c1 in mako_cmap_get_int2 /tmp/madis-makori-249a616/runtime/mako_cmap.h:496
+    #5 0x5fd3a273cbea in sip_client_txn_record /tmp/madis-dialog-fix/source/rfc.mko:883
+    #6 0x5fd3a28ca751 in sip_forward_target /tmp/madis-dialog-fix/source/transport.mko:585
+    #7 0x5fd3a290afed in sip_forward_dialog_request /tmp/madis-dialog-fix/source/sip_dialog.mko:37
+    #8 0x5fd3a2975ccc in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:1554
+    #9 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #10 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #11 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #12 0x5fd3a29b5d06 in main bench/dialog_allocation_probe.c:86
+    #13 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #14 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #15 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 200 byte(s) in 100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25d1ca3 in cmap_dup_bytes /tmp/madis-makori-249a616/runtime/mako_cmap.h:60
+    #2 0x5fd3a25d1ca3 in mako_cmap_get /tmp/madis-makori-249a616/runtime/mako_cmap.h:241
+    #3 0x5fd3a25d2a8a in mako_cmap_get_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:484
+    #4 0x5fd3a273caff in sip_client_txn_record /tmp/madis-dialog-fix/source/rfc.mko:880
+    #5 0x5fd3a28ca751 in sip_forward_target /tmp/madis-dialog-fix/source/transport.mko:585
+    #6 0x5fd3a290afed in sip_forward_dialog_request /tmp/madis-dialog-fix/source/sip_dialog.mko:37
+    #7 0x5fd3a2975ccc in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:1554
+    #8 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #9 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #10 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #11 0x5fd3a29b5d06 in main bench/dialog_allocation_probe.c:86
+    #12 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #13 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #14 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 200 byte(s) in 100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25d1ca3 in cmap_dup_bytes /tmp/madis-makori-249a616/runtime/mako_cmap.h:60
+    #2 0x5fd3a25d1ca3 in mako_cmap_get /tmp/madis-makori-249a616/runtime/mako_cmap.h:241
+    #3 0x5fd3a297e952 in mako_cmap_get_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:484
+    #4 0x5fd3a297e952 in process_sip /tmp/madis-dialog-fix/source/workers.mko:1712
+    #5 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #6 0x5fd3a29b4eb2 in main bench/dialog_allocation_probe.c:72
+    #7 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #8 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #9 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 198 byte(s) in 99 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25d1ca3 in cmap_dup_bytes /tmp/madis-makori-249a616/runtime/mako_cmap.h:60
+    #2 0x5fd3a25d1ca3 in mako_cmap_get /tmp/madis-makori-249a616/runtime/mako_cmap.h:241
+    #3 0x5fd3a25d31c1 in mako_cmap_get_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:484
+    #4 0x5fd3a25d31c1 in mako_cmap_get_int2 /tmp/madis-makori-249a616/runtime/mako_cmap.h:496
+    #5 0x5fd3a273cbea in sip_client_txn_record /tmp/madis-dialog-fix/source/rfc.mko:883
+    #6 0x5fd3a28ca751 in sip_forward_target /tmp/madis-dialog-fix/source/transport.mko:585
+    #7 0x5fd3a2967ab0 in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:1376
+    #8 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #9 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #10 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #11 0x5fd3a29b4eb2 in main bench/dialog_allocation_probe.c:72
+    #12 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #13 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #14 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 198 byte(s) in 99 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25d1ca3 in cmap_dup_bytes /tmp/madis-makori-249a616/runtime/mako_cmap.h:60
+    #2 0x5fd3a25d1ca3 in mako_cmap_get /tmp/madis-makori-249a616/runtime/mako_cmap.h:241
+    #3 0x5fd3a25d2a8a in mako_cmap_get_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:484
+    #4 0x5fd3a273caff in sip_client_txn_record /tmp/madis-dialog-fix/source/rfc.mko:880
+    #5 0x5fd3a28ca751 in sip_forward_target /tmp/madis-dialog-fix/source/transport.mko:585
+    #6 0x5fd3a2967ab0 in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:1376
+    #7 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #8 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #9 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #10 0x5fd3a29b4eb2 in main bench/dialog_allocation_probe.c:72
+    #11 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #12 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #13 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 198 byte(s) in 99 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25d1ca3 in cmap_dup_bytes /tmp/madis-makori-249a616/runtime/mako_cmap.h:60
+    #2 0x5fd3a25d1ca3 in mako_cmap_get /tmp/madis-makori-249a616/runtime/mako_cmap.h:241
+    #3 0x5fd3a263a850 in mako_cmap_get_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:484
+    #4 0x5fd3a263a850 in log_level_cached /tmp/madis-dialog-fix/source/log.mko:16
+    #5 0x5fd3a28c19bf in log_debug_if /tmp/madis-dialog-fix/source/log.mko:70
+    #6 0x5fd3a28c19bf in sip_forward_udp /tmp/madis-dialog-fix/source/sip_forwarding.mko:122
+    #7 0x5fd3a28c99c6 in sip_forward_target /tmp/madis-dialog-fix/source/transport.mko:561
+    #8 0x5fd3a2967ab0 in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:1376
+    #9 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #10 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #11 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #12 0x5fd3a29b4eb2 in main bench/dialog_allocation_probe.c:72
+    #13 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #14 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #15 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 33 byte(s) in 1 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25b305d in mako_rc_alloc /tmp/madis-makori-249a616/runtime/mako_rt.h:143
+    #2 0x5fd3a25f9084 in mako_str_from_cstr /tmp/madis-makori-249a616/runtime/mako_rt.h:535
+    #3 0x5fd3a25f9084 in mako_time_format_rfc3339 /tmp/madis-makori-249a616/runtime/mako_stdlib.h:1017
+    #4 0x5fd3a25f9084 in slog /tmp/madis-dialog-fix/source/log.mko:34
+    #5 0x5fd3a281520a in ims_lifecycle_reconcile /tmp/madis-dialog-fix/source/ims_lifecycle.mko:814
+    #6 0x5fd3a294dbec in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:948
+    #7 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #8 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #9 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #10 0x5fd3a29b4df8 in main bench/dialog_allocation_probe.c:64
+    #11 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #12 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #13 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 33 byte(s) in 1 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25b305d in mako_rc_alloc /tmp/madis-makori-249a616/runtime/mako_rt.h:143
+    #2 0x5fd3a25f9084 in mako_str_from_cstr /tmp/madis-makori-249a616/runtime/mako_rt.h:535
+    #3 0x5fd3a25f9084 in mako_time_format_rfc3339 /tmp/madis-makori-249a616/runtime/mako_stdlib.h:1017
+    #4 0x5fd3a25f9084 in slog /tmp/madis-dialog-fix/source/log.mko:34
+    #5 0x5fd3a27780bc in registration_store /tmp/madis-dialog-fix/source/registration.mko:292
+    #6 0x5fd3a2781c33 in outbound_store_binding /tmp/madis-dialog-fix/source/outbound.mko:161
+    #7 0x5fd3a294c7c6 in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:907
+    #8 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #9 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #10 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #11 0x5fd3a29b4df8 in main bench/dialog_allocation_probe.c:64
+    #12 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #13 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #14 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 23 byte(s) in 1 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25b305d in mako_rc_alloc /tmp/madis-makori-249a616/runtime/mako_rt.h:143
+    #2 0x5fd3a25b42b7 in mako_str_concat /tmp/madis-makori-249a616/runtime/mako_rt.h:591
+    #3 0x5fd3a294e943 in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:990
+    #4 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #5 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #6 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #7 0x5fd3a29b4df8 in main bench/dialog_allocation_probe.c:64
+    #8 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #9 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #10 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 20 byte(s) in 1 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25b305d in mako_rc_alloc /tmp/madis-makori-249a616/runtime/mako_rt.h:143
+    #2 0x5fd3a2776b1f in mako_str_from_cstr /tmp/madis-makori-249a616/runtime/mako_rt.h:535
+    #3 0x5fd3a2776b1f in registration_track_aor /tmp/madis-dialog-fix/source/registration.mko:231
+    #4 0x5fd3a2777402 in registration_store /tmp/madis-dialog-fix/source/registration.mko:249
+    #5 0x5fd3a2781c33 in outbound_store_binding /tmp/madis-dialog-fix/source/outbound.mko:161
+    #6 0x5fd3a294c7c6 in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:907
+    #7 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #8 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #9 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #10 0x5fd3a29b4df8 in main bench/dialog_allocation_probe.c:64
+    #11 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #12 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #13 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 19 byte(s) in 1 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25b305d in mako_rc_alloc /tmp/madis-makori-249a616/runtime/mako_rt.h:143
+    #2 0x5fd3a25b470b in mako_str_from_cstr /tmp/madis-makori-249a616/runtime/mako_rt.h:535
+    #3 0x5fd3a2732ec7 in sip_server_txn_record /tmp/madis-dialog-fix/source/rfc.mko:639
+    #4 0x5fd3a297fb27 in process_sip /tmp/madis-dialog-fix/source/workers.mko:1743
+    #5 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #6 0x5fd3a29b4df8 in main bench/dialog_allocation_probe.c:64
+    #7 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #8 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #9 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 16 byte(s) in 1 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25b305d in mako_rc_alloc /tmp/madis-makori-249a616/runtime/mako_rt.h:143
+    #2 0x5fd3a27213e1 in mako_str_from_cstr /tmp/madis-makori-249a616/runtime/mako_rt.h:535
+    #3 0x5fd3a27213e1 in sip_txn_index_response /tmp/madis-dialog-fix/source/rfc.mko:324
+    #4 0x5fd3a272fe3f in sip_store_txn /tmp/madis-dialog-fix/source/rfc.mko:422
+    #5 0x5fd3a27319e8 in sip_txn_cache_response /tmp/madis-dialog-fix/source/rfc.mko:577
+    #6 0x5fd3a297fa4f in process_sip /tmp/madis-dialog-fix/source/workers.mko:1739
+    #7 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #8 0x5fd3a29b4df8 in main bench/dialog_allocation_probe.c:64
+    #9 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #10 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #11 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 11 byte(s) in 1 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25b305d in mako_rc_alloc /tmp/madis-makori-249a616/runtime/mako_rt.h:143
+    #2 0x5fd3a25b470b in mako_str_from_cstr /tmp/madis-makori-249a616/runtime/mako_rt.h:535
+    #3 0x5fd3a294e991 in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:992
+    #4 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #5 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #6 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #7 0x5fd3a29b4df8 in main bench/dialog_allocation_probe.c:64
+    #8 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #9 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #10 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 10 byte(s) in 1 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25b305d in mako_rc_alloc /tmp/madis-makori-249a616/runtime/mako_rt.h:143
+    #2 0x5fd3a25b353f in mako_str_clone /tmp/madis-makori-249a616/runtime/mako_rt.h:3497
+    #3 0x5fd3a263a73d in mako_cmap_set_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:479
+    #4 0x5fd3a263a73d in log_level_cached /tmp/madis-dialog-fix/source/log.mko:19
+    #5 0x5fd3a28c19bf in log_debug_if /tmp/madis-dialog-fix/source/log.mko:70
+    #6 0x5fd3a28c19bf in sip_forward_udp /tmp/madis-dialog-fix/source/sip_forwarding.mko:122
+    #7 0x5fd3a28c99c6 in sip_forward_target /tmp/madis-dialog-fix/source/transport.mko:561
+    #8 0x5fd3a2967ab0 in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:1376
+    #9 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #10 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #11 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #12 0x5fd3a29b4eb2 in main bench/dialog_allocation_probe.c:72
+    #13 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #14 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #15 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 10 byte(s) in 1 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25b305d in mako_rc_alloc /tmp/madis-makori-249a616/runtime/mako_rt.h:143
+    #2 0x5fd3a25b353f in mako_str_clone /tmp/madis-makori-249a616/runtime/mako_rt.h:3497
+    #3 0x5fd3a25f6cdf in mako_cmap_set_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:479
+    #4 0x5fd3a25f6cdf in mako_cmap_set_int2 /tmp/madis-makori-249a616/runtime/mako_cmap.h:503
+    #5 0x5fd3a273410c in sip_server_txn_record /tmp/madis-dialog-fix/source/rfc.mko:637
+    #6 0x5fd3a297fb27 in process_sip /tmp/madis-dialog-fix/source/workers.mko:1743
+    #7 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #8 0x5fd3a29b4df8 in main bench/dialog_allocation_probe.c:64
+    #9 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #10 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #11 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 10 byte(s) in 1 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25b305d in mako_rc_alloc /tmp/madis-makori-249a616/runtime/mako_rt.h:143
+    #2 0x5fd3a25b353f in mako_str_clone /tmp/madis-makori-249a616/runtime/mako_rt.h:3497
+    #3 0x5fd3a25f6638 in mako_cmap_set_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:479
+    #4 0x5fd3a29b4d23 in main bench/dialog_allocation_probe.c:54
+    #5 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #6 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #7 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 10 byte(s) in 1 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25b305d in mako_rc_alloc /tmp/madis-makori-249a616/runtime/mako_rt.h:143
+    #2 0x5fd3a25b353f in mako_str_clone /tmp/madis-makori-249a616/runtime/mako_rt.h:3497
+    #3 0x5fd3a2721376 in mako_cmap_set_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:479
+    #4 0x5fd3a2721376 in sip_txn_index_response /tmp/madis-dialog-fix/source/rfc.mko:323
+    #5 0x5fd3a272fe3f in sip_store_txn /tmp/madis-dialog-fix/source/rfc.mko:422
+    #6 0x5fd3a27319e8 in sip_txn_cache_response /tmp/madis-dialog-fix/source/rfc.mko:577
+    #7 0x5fd3a297fa4f in process_sip /tmp/madis-dialog-fix/source/workers.mko:1739
+    #8 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #9 0x5fd3a29b4df8 in main bench/dialog_allocation_probe.c:64
+    #10 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #11 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #12 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 10 byte(s) in 1 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25b305d in mako_rc_alloc /tmp/madis-makori-249a616/runtime/mako_rt.h:143
+    #2 0x5fd3a25b353f in mako_str_clone /tmp/madis-makori-249a616/runtime/mako_rt.h:3497
+    #3 0x5fd3a27302ee in mako_cmap_set_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:479
+    #4 0x5fd3a27302ee in sip_store_txn /tmp/madis-dialog-fix/source/rfc.mko:420
+    #5 0x5fd3a27319e8 in sip_txn_cache_response /tmp/madis-dialog-fix/source/rfc.mko:577
+    #6 0x5fd3a297fa4f in process_sip /tmp/madis-dialog-fix/source/workers.mko:1739
+    #7 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #8 0x5fd3a29b4df8 in main bench/dialog_allocation_probe.c:64
+    #9 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #10 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #11 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Direct leak of 2 byte(s) in 1 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a25d1ca3 in cmap_dup_bytes /tmp/madis-makori-249a616/runtime/mako_cmap.h:60
+    #2 0x5fd3a25d1ca3 in mako_cmap_get /tmp/madis-makori-249a616/runtime/mako_cmap.h:241
+    #3 0x5fd3a297e952 in mako_cmap_get_int /tmp/madis-makori-249a616/runtime/mako_cmap.h:484
+    #4 0x5fd3a297e952 in process_sip /tmp/madis-dialog-fix/source/workers.mko:1712
+    #5 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #6 0x5fd3a29b4df8 in main bench/dialog_allocation_probe.c:64
+    #7 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #8 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #9 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Indirect leak of 13500 byte(s) in 1100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a27ff875 in mako_str_slice /tmp/madis-makori-249a616/runtime/mako_rt.h:2349
+    #2 0x5fd3a27ff875 in mako_str_split /tmp/madis-makori-249a616/runtime/mako_stdlib.h:208
+    #3 0x5fd3a27ff875 in ims_lifecycle_parts /tmp/madis-dialog-fix/source/ims_lifecycle.mko:194
+    #4 0x5fd3a27ff875 in ims_lifecycle_path /tmp/madis-dialog-fix/source/ims_lifecycle.mko:271
+    #5 0x5fd3a2967403 in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:1367
+    #6 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #7 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #8 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #9 0x5fd3a29b4eb2 in main bench/dialog_allocation_probe.c:72
+    #10 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #11 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #12 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Indirect leak of 13500 byte(s) in 1100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a27ff875 in mako_str_slice /tmp/madis-makori-249a616/runtime/mako_rt.h:2349
+    #2 0x5fd3a27ff875 in mako_str_split /tmp/madis-makori-249a616/runtime/mako_stdlib.h:208
+    #3 0x5fd3a27ff875 in ims_lifecycle_parts /tmp/madis-dialog-fix/source/ims_lifecycle.mko:194
+    #4 0x5fd3a27ff875 in ims_lifecycle_path /tmp/madis-dialog-fix/source/ims_lifecycle.mko:271
+    #5 0x5fd3a29686aa in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:1353
+    #6 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #7 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #8 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #9 0x5fd3a29b4eb2 in main bench/dialog_allocation_probe.c:72
+    #10 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #11 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #12 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Indirect leak of 1100 byte(s) in 100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a27ffbf7 in mako_str_slice /tmp/madis-makori-249a616/runtime/mako_rt.h:2349
+    #2 0x5fd3a27ffbf7 in mako_str_split /tmp/madis-makori-249a616/runtime/mako_stdlib.h:215
+    #3 0x5fd3a27ffbf7 in ims_lifecycle_parts /tmp/madis-dialog-fix/source/ims_lifecycle.mko:194
+    #4 0x5fd3a27ffbf7 in ims_lifecycle_path /tmp/madis-dialog-fix/source/ims_lifecycle.mko:271
+    #5 0x5fd3a2967403 in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:1367
+    #6 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #7 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #8 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #9 0x5fd3a29b4eb2 in main bench/dialog_allocation_probe.c:72
+    #10 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #11 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #12 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+Indirect leak of 1100 byte(s) in 100 object(s) allocated from:
+    #0 0x732ab0cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fd3a27ffbf7 in mako_str_slice /tmp/madis-makori-249a616/runtime/mako_rt.h:2349
+    #2 0x5fd3a27ffbf7 in mako_str_split /tmp/madis-makori-249a616/runtime/mako_stdlib.h:215
+    #3 0x5fd3a27ffbf7 in ims_lifecycle_parts /tmp/madis-dialog-fix/source/ims_lifecycle.mko:194
+    #4 0x5fd3a27ffbf7 in ims_lifecycle_path /tmp/madis-dialog-fix/source/ims_lifecycle.mko:271
+    #5 0x5fd3a29686aa in process_sip_core__impl /tmp/madis-dialog-fix/source/workers.mko:1353
+    #6 0x5fd3a297c531 in process_sip_core /tmp/madis-dialog-fix/source/workers.mko:1701
+    #7 0x5fd3a297ec0d in process_sip /tmp/madis-dialog-fix/source/workers.mko:1731
+    #8 0x5fd3a29a13f1 in process bench/dialog_allocation_probe.c:27
+    #9 0x5fd3a29b4eb2 in main bench/dialog_allocation_probe.c:72
+    #10 0x732aafa2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #11 0x732aafa2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #12 0x5fd3a2598144 in _start (/tmp/madis-dialog-fix/dialog-probe+0x1c6144) (BuildId: 15c00c0ed44a47f9f0f664e23be633844eefc352)
+
+SUMMARY: AddressSanitizer: 111879 byte(s) leaked in 6010 allocation(s).

@@ -1,0 +1,81 @@
+// Benchmark-only baseline: the RC-aware array implementation before StreamFrame.
+pull . "../stream.mko"
+
+fn bounded_cache_set(cache: CMap, seq_key: string, ring_prefix: string, key: string, value: string, capacity: int) -> int { return 0 }
+fn log_warn_if(cache: CMap, component: string, msg: string) -> int { return 0 }
+
+fn framing_array_next(buf: string) -> []string {
+    let mut out = make([]string, 2)
+    out[0] = ""
+    out[1] = buf
+    let n = sip_first_message_len(buf)
+    if n <= 0 { return out }
+    if n > len(buf) { return out }
+    if n == len(buf) {
+        out[0] = buf
+        out[1] = ""
+        return out
+    }
+    out[0] = buf[0:n]
+    out[1] = buf[n:]
+    return out
+}
+
+fn framing_array_once(scenario: int, wire: string, first: string, second: string, third: string, pipeline: string) -> int {
+    if scenario == 0 {
+        let frame = framing_array_next(stream_append("", wire))
+        return len(frame[0]) + len(frame[1])
+    }
+    if scenario == 1 {
+        let a = framing_array_next(stream_append("", first))
+        let b = framing_array_next(stream_append(a[1], second))
+        let c = framing_array_next(stream_append(b[1], third))
+        return len(a[0]) + len(b[0]) + len(c[0]) + len(c[1])
+    }
+    let a = framing_array_next(pipeline)
+    let b = framing_array_next(a[1])
+    let c = framing_array_next(b[1])
+    return len(a[0]) + len(b[0]) + len(c[0]) + len(c[1])
+}
+
+fn framing_struct_once(scenario: int, wire: string, first: string, second: string, third: string, pipeline: string) -> int {
+    if scenario == 0 {
+        let frame = stream_next_msg(stream_append("", wire))
+        return len(frame.message) + len(frame.remainder)
+    }
+    if scenario == 1 {
+        let a = stream_next_msg(stream_append("", first))
+        let b = stream_next_msg(stream_append(a.remainder, second))
+        let c = stream_next_msg(stream_append(b.remainder, third))
+        return len(a.message) + len(b.message) + len(c.message) + len(c.remainder)
+    }
+    let a = stream_next_msg(pipeline)
+    let b = stream_next_msg(a.remainder)
+    let c = stream_next_msg(b.remainder)
+    return len(a.message) + len(b.message) + len(c.message) + len(c.remainder)
+}
+
+// Called by the C measurement harness; keep both paths live during Mako DCE.
+fn framing_bench_run(variant: int, scenario: int, iterations: int, wire: string) -> int {
+    let cut = len(wire) / 3
+    let first = wire[0:cut]
+    let second = wire[cut:cut * 2]
+    let third = wire[cut * 2:]
+    let pipeline = wire + wire + first
+    let mut checksum = 0
+    let mut i = 0
+    while i < iterations {
+        if variant == 0 {
+            checksum = checksum + framing_array_once(scenario, wire, first, second, third, pipeline)
+        } else {
+            checksum = checksum + framing_struct_once(scenario, wire, first, second, third, pipeline)
+        }
+        i = i + 1
+    }
+    return checksum
+}
+
+fn main() {
+    print_int(framing_bench_run(0, 0, 1, "OPTIONS sip:x SIP/2.0\r\nContent-Length: 0\r\n\r\n"))
+    print_int(framing_bench_run(1, 0, 1, "OPTIONS sip:x SIP/2.0\r\nContent-Length: 0\r\n\r\n"))
+}
