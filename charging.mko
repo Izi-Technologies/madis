@@ -80,13 +80,13 @@ fn charging_https_post(url: string, body: string) -> string {
         host = authority[1:close]
         if close + 1 < len(authority) {
             if int(authority[close + 1]) != 58 { return "" }
-            match parse_int(authority[close + 2:]) { Ok(v) => { port = v } Err(_) => { return "" } }
+            if let Ok(v) = parse_int(authority[close + 2:]) { port = v } else { return "" }
         }
     } else {
         let colon = str_index(authority, ":")
         if colon >= 0 {
             host = authority[0:colon]
-            match parse_int(authority[colon + 1:]) { Ok(v) => { port = v } Err(_) => { return "" } }
+            if let Ok(v) = parse_int(authority[colon + 1:]) { port = v } else { return "" }
         }
     }
     if len(host) == 0 || len(host) > 512 || len(path) > 2048 || port < 1 || port > 65535 { return "" }

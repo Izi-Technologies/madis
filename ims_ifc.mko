@@ -50,20 +50,14 @@ fn ims_ifc_rule_as_uri(rule: string) -> string {
 fn ims_ifc_rule_priority(rule: string) -> int {
     let parts = str_split(rule, "|")
     if len(parts) < 1 { return 9999 }
-    match parse_int(parts[0]) {
-        Ok(v) => { return v }
-        Err(_) => { return 9999 }
-    }
+    if let Ok(v) = parse_int(parts[0]) { return v }
     return 9999
 }
 
 fn ims_ifc_rule_session_case(rule: string) -> int {
     let parts = str_split(rule, "|")
     if len(parts) < 2 { return 2 }
-    match parse_int(parts[1]) {
-        Ok(v) => { return v }
-        Err(_) => { return 2 }
-    }
+    if let Ok(v) = parse_int(parts[1]) { return v }
     return 2
 }
 
@@ -76,10 +70,7 @@ fn ims_ifc_rule_method(rule: string) -> string {
 fn ims_ifc_rule_default_handling(rule: string) -> int {
     let parts = str_split(rule, "|")
     if len(parts) < 4 { return 0 }
-    match parse_int(parts[3]) {
-        Ok(v) => { return v }
-        Err(_) => { return 0 }
-    }
+    if let Ok(v) = parse_int(parts[3]) { return v }
     return 0
 }
 
@@ -98,26 +89,22 @@ fn ims_ifc_targets_valid(targets: string) -> int {
     if str_index(targets, "|") >= 0 {
         let rules = str_split(targets, ";")
         if len(rules) < 1 || len(rules) > ims_ifc_max_entries() { return 0 }
-        let mut i = 0
-        while i < len(rules) {
-            let r = str_trim_space(rules[i])
+        for rule in rules {
+            let r = str_trim_space(rule)
             if len(ims_ifc_rule_as_uri(r)) == 0 { return 0 }
             if ims_ifc_target_valid(ims_ifc_rule_as_uri(r)) == 0 { return 0 }
-            i = i + 1
         }
         return 1
     }
     let items = str_split(targets, ",")
     if len(items) < 1 || len(items) > 4 { return 0 }
     let mut seen = ""
-    let mut i = 0
-    while i < len(items) {
-        let target = str_trim_space(items[i])
+    for item in items {
+        let target = str_trim_space(item)
         if ims_ifc_target_valid(target) == 0 { return 0 }
         let marker = "|" + target + "|"
         if str_index(seen, marker) >= 0 { return 0 }
         seen = seen + marker
-        i = i + 1
     }
     return 1
 }
@@ -280,13 +267,11 @@ fn ims_ifc_match_targets(reg: CMap, aor: string, session_case: int, method: stri
     let items = str_split(rules, ";")
     // Simple insertion sort by priority (N<=8).
     let mut ordered = make([]string, 0, 8)
-    let mut i = 0
-    while i < len(items) {
-        let r = str_trim_space(items[i])
+    for item in items {
+        let r = str_trim_space(item)
         if ims_ifc_rule_matches(r, session_case, method) == 1 {
             ordered = append(ordered, r)
         }
-        i = i + 1
     }
     // Bubble sort by priority ascending.
     let mut a = 0
@@ -303,14 +288,12 @@ fn ims_ifc_match_targets(reg: CMap, aor: string, session_case: int, method: stri
         a = a + 1
     }
     let mut out = ""
-    let mut j = 0
-    while j < len(ordered) {
-        let uri = ims_ifc_rule_as_uri(ordered[j])
+    for entry in ordered {
+        let uri = ims_ifc_rule_as_uri(entry)
         if len(uri) > 0 {
             if len(out) > 0 { out = out + "," }
             out = out + uri
         }
-        j = j + 1
     }
     return out
 }
@@ -323,9 +306,8 @@ fn ims_ifc_first_default_handling(reg: CMap, aor: string, session_case: int, met
     let items = str_split(rules, ";")
     let mut best_pri = 10000
     let mut handling = 0
-    let mut i = 0
-    while i < len(items) {
-        let r = str_trim_space(items[i])
+    for item in items {
+        let r = str_trim_space(item)
         if ims_ifc_rule_matches(r, session_case, method) == 1 {
             let p = ims_ifc_rule_priority(r)
             if p < best_pri {
@@ -333,7 +315,6 @@ fn ims_ifc_first_default_handling(reg: CMap, aor: string, session_case: int, met
                 handling = ims_ifc_rule_default_handling(r)
             }
         }
-        i = i + 1
     }
     return handling
 }
@@ -463,9 +444,8 @@ fn ims_ifc_3preg_targets(reg: CMap, aor: string) -> string {
     let items = str_split(rules, ";")
     let mut out = ""
     let mut seen = ""
-    let mut i = 0
-    while i < len(items) {
-        let uri = ims_ifc_rule_as_uri(str_trim_space(items[i]))
+    for item in items {
+        let uri = ims_ifc_rule_as_uri(str_trim_space(item))
         if len(uri) > 0 {
             let marker = "|" + uri + "|"
             if str_index(seen, marker) < 0 {
@@ -474,7 +454,6 @@ fn ims_ifc_3preg_targets(reg: CMap, aor: string) -> string {
                 out = out + uri
             }
         }
-        i = i + 1
     }
     return out
 }

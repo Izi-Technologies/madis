@@ -99,6 +99,11 @@ fn sql_like_escape(s: string) -> string {
     return builder_string(b)
 }
 
+fn route_rule_regex_matches(callee: string, match_regex: string) -> int {
+    if len(match_regex) == 0 { return 0 }
+    return if regex_match(match_regex, callee) { 1 } else { 0 }
+}
+
 fn prefix_matches(number: string, prefix: string) -> int {
     if len(prefix) == 0 { return 1 }
     if str_eq(prefix, "*") { return 1 }
@@ -111,10 +116,7 @@ fn dispatch_next_rr(set_id: int, count: int, cache: CMap) -> int {
     let key = "dsp_rr|" + string(set_id)
     let mut idx = 0
     if cmap_has(cache, key) == 1 {
-        match parse_int(cmap_get(cache, key)) {
-            Ok(v) => { idx = v }
-            Err(_) => { idx = 0 }
-        }
+        if let Ok(v) = parse_int(cmap_get(cache, key)) { idx = v }
     }
     let next = idx + 1
     if next >= count { cmap_set(cache, key, "0") } else { cmap_set(cache, key, string(next)) }
@@ -179,10 +181,7 @@ fn dispatch_score_store(idx: int, gateway: string, cache: CMap) -> int {
 
 fn dispatch_score_at(idx: int, cache: CMap) -> int {
     let mut score = 500
-    match parse_int(cmap_get(cache, "tmp_score|" + string(idx))) {
-        Ok(v) => { score = v }
-        Err(_) => { score = 500 }
-    }
+    if let Ok(v) = parse_int(cmap_get(cache, "tmp_score|" + string(idx))) { score = v }
     return score
 }
 
@@ -265,7 +264,7 @@ fn resolve_dispatch_set(db: SqlDB, set_name: string, from_user: string, call_id:
         let pipe = str_index(set_info, "|")
         if pipe < 1 { return "" }
         let set_id_str = "" + set_info[0:pipe]
-        match parse_int(set_id_str) { Ok(v) => { set_id = v } Err(_) => { return "" } }
+        if let Ok(v) = parse_int(set_id_str) { set_id = v } else { return "" }
         algo = "" + set_info[pipe + 1:]
 
         let member_rows = sql_query_rows_str(db, "SELECT g.address || ':' || g.port FROM dispatch_members dm JOIN gateways g ON dm.gateway_id = g.id WHERE dm.set_id = $1 AND dm.enabled = true AND g.enabled = true ORDER BY dm.priority ASC, dm.weight DESC LIMIT 8", set_id_str)
@@ -286,14 +285,14 @@ fn resolve_dispatch_set(db: SqlDB, set_name: string, from_user: string, call_id:
 
     if len(member_csv) == 0 { return "" }
 
-    // Filter by health
+    // Filter by health and capacity
     let all = str_split(member_csv, ",")
     let mut members = make([]string, 0, 8)
-    let mut mi = 0
-    while mi < len(all) {
-        let m = str_trim_space(all[mi])
-        if len(m) > 0 && dispatch_is_healthy(m, cache) == 1 { members = append(members, m) }
-        mi = mi + 1
+    for entry in all {
+        let m = str_trim_space(entry)
+        if len(m) > 0 && dispatch_is_healthy(m, cache) == 1 && gateway_has_capacity(m, cache) == 1 {
+            members = append(members, m)
+        }
     }
     let count = len(members)
     if count == 0 { return "" }
@@ -427,7 +426,7 @@ fn db_route_call(db: SqlDB, db_ok: int, callee: string, caller: string, src_ip: 
         }
     }
     if rules_fresh == 0 {
-        rule_rows = sql_query_col_str(db, "SELECT match_prefix || chr(1) || COALESCE(match_caller,'') || chr(1) || COALESCE(match_src_ip,'') || chr(1) || COALESCE(match_time_start,'') || chr(1) || COALESCE(match_time_end,'') || chr(1) || COALESCE(match_day,'') || chr(1) || action || chr(1) || COALESCE(match_ani_group,'') FROM routing_rules WHERE enabled = true ORDER BY priority ASC LIMIT 50", 50)
+        rule_rows = sql_query_col_str(db, "SELECT match_prefix || chr(1) || COALESCE(match_caller,'') || chr(1) || COALESCE(match_src_ip,'') || chr(1) || COALESCE(match_time_start,'') || chr(1) || COALESCE(match_time_end,'') || chr(1) || COALESCE(match_day,'') || chr(1) || action || chr(1) || COALESCE(match_ani_group,'') || chr(1) || COALESCE(match_regex,'') FROM routing_rules WHERE enabled = true ORDER BY priority ASC LIMIT 50", 50)
         let mut rule_joined = ""
         let mut rj = 0
         while rj < len(rule_rows) {
@@ -457,12 +456,18 @@ fn db_route_call(db: SqlDB, db_ok: int, callee: string, caller: string, src_ip: 
         let r_action = parts[6]
         let mut r_ani = ""
         if len(parts) >= 8 { r_ani = parts[7] }
+        let mut r_regex = ""
+        if len(parts) >= 9 { r_regex = parts[8] }
 
         // Check all conditions
         let mut matched = 1
 
-        // Prefix match on callee
-        if prefix_matches(callee, r_prefix) == 0 { matched = 0 }
+        // Regex match on callee takes priority over prefix
+        if len(r_regex) > 0 {
+            if route_rule_regex_matches(callee, r_regex) == 0 { matched = 0 }
+        } else {
+            if prefix_matches(callee, r_prefix) == 0 { matched = 0 }
+        }
 
         // Caller prefix match
         if matched == 1 {
@@ -717,4 +722,138 @@ fn routing_gateway_score(cache: CMap, gateway: string, prefix: string) -> int {
         if pdd_score < 0 { pdd_score = 0 }
     }
     return asr + acd_score + pdd_score
+}
+
+// ============ ACTIVE OPTIONS PROBING ============
+// Background health checks: send OPTIONS to dispatch members on a timer.
+// Supplements passive health detection (which only fires on call attempts).
+
+fn dispatch_probe_interval_ms() -> int {
+    let mut interval = 30000
+    if let Ok(v) = parse_int(env_get_or("SIP_DISPATCH_PROBE_INTERVAL", "30000")) { interval = v }
+    if interval < 5000 { interval = 5000 }
+    if interval > 300000 { interval = 300000 }
+    return interval
+}
+
+fn dispatch_active_probe_enabled() -> int {
+    let v = env_get_or("SIP_DISPATCH_PROBE", "1") |> str_trim_space() |> str_to_lower()
+    return if str_eq(v, "0") || str_eq(v, "false") || str_eq(v, "no") { 0 } else { 1 }
+}
+
+fn dispatch_build_options(target: string, ip: string, port: int) -> string {
+    let branch = sip_branch()
+    return "OPTIONS sip:ping@" + target + " SIP/2.0\r\n"
+        + "Via: SIP/2.0/UDP " + ip + ":" + string(port) + ";branch=" + branch + "\r\n"
+        + "From: <sip:madis-probe@" + ip + ">;tag=probe-" + branch[12:] + "\r\n"
+        + "To: <sip:ping@" + target + ">\r\n"
+        + "Call-ID: probe-" + branch + "\r\n"
+        + "CSeq: 1 OPTIONS\r\n"
+        + "Max-Forwards: 2\r\n"
+        + "Content-Length: 0\r\n\r\n"
+}
+
+fn dispatch_probe_one(addr: string, ip: string, port: int, cache: CMap, out_fd: int) -> int {
+    if len(addr) == 0 { return 0 }
+    let probe_key = "probe_at|" + addr
+    let now = mono_ms()
+    if cmap_has(cache, probe_key) == 1 {
+        let mut last = 0
+        if let Ok(v) = parse_int(cmap_get(cache, probe_key)) { last = v }
+        if now - last < dispatch_probe_interval_ms() { return 0 }
+    }
+    cmap_set(cache, probe_key, string(now))
+    let host = sip_target_host(addr)
+    let target_port = sip_target_port(addr, 5060)
+    if len(host) > 0 && target_port > 0 {
+        let options = dispatch_build_options(addr, ip, port)
+        let _ = udp_send_to(out_fd, host, target_port, options)
+    }
+    return 1
+}
+
+// Tick: probe all known dispatch members. Scans the health state ring.
+fn dispatch_probe_tick(cache: CMap, ip: string, port: int, out_fd: int) -> int {
+    if dispatch_active_probe_enabled() == 0 { return 0 }
+    let mut probed = 0
+    let mut i = 0
+    while i < 256 {
+        let ring_key = "health_state_ring|" + string(i)
+        if cmap_has(cache, ring_key) == 1 {
+            let state_key = cmap_get(cache, ring_key)
+            if len(state_key) > 7 && str_has_prefix(state_key, "health|") {
+                let addr = state_key[7:]
+                if len(addr) > 0 {
+                    let _ = dispatch_probe_one(addr, ip, port, cache, out_fd)
+                    probed = probed + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    return probed
+}
+
+// Handle OPTIONS response from a probed gateway.
+fn dispatch_probe_handle_response(data: string, cache: CMap) -> int {
+    let cid = sip_header(data, "Call-ID")
+    if not str_has_prefix(cid, "probe-") { return 0 }
+    let code = sip_status_code(data)
+    let to = sip_header(data, "To")
+    let to_host = sip_uri_host(to)
+    if len(to_host) == 0 { return 0 }
+    let addr = to_host + ":" + string(if sip_uri_port(to) > 0 { sip_uri_port(to) } else { 5060 })
+    if code >= 200 && code < 400 {
+        let _ = dispatch_health_note(addr, 1, cache)
+    } else if code >= 400 {
+        let _ = dispatch_health_note(addr, 0, cache)
+    }
+    return 1
+}
+
+// ============ CHANNEL-BASED LOAD BALANCING ============
+// Track active calls per gateway for resource-aware dispatch.
+
+fn gateway_active_channels(cache: CMap, addr: string) -> int {
+    let key = "gw_ch|" + addr
+    if cmap_has(cache, key) == 0 { return 0 }
+    let mut count = 0
+    if let Ok(v) = parse_int(cmap_get(cache, key)) { count = v }
+    if count < 0 { return 0 }
+    return count
+}
+
+fn gateway_channel_incr(cache: CMap, addr: string, cid: string) -> int {
+    let count = cache_incr(cache, "gw_ch|" + addr, 1)
+    let _ = bounded_cache_set(cache, "gw_cid_seq", "gw_cid_ring|", "gw_cid|" + cid, addr, 131072)
+    return count
+}
+
+fn gateway_channel_decr_by_cid(cache: CMap, cid: string) -> int {
+    let key = "gw_cid|" + cid
+    if cmap_has(cache, key) == 0 { return 0 }
+    let gw = cmap_get(cache, key)
+    let _ = cmap_del(cache, key)
+    if len(gw) == 0 { return 0 }
+    let ch_key = "gw_ch|" + gw
+    let mut count = 0
+    if cmap_has(cache, ch_key) == 1 {
+        if let Ok(v) = parse_int(cmap_get(cache, ch_key)) { count = v }
+    }
+    if count > 0 { cmap_set(cache, ch_key, string(count - 1)) }
+    return if count > 0 { count - 1 } else { 0 }
+}
+
+fn gateway_max_channels(addr: string, cache: CMap) -> int {
+    let key = "gw_maxch|" + addr
+    if cmap_has(cache, key) == 0 { return 0 }
+    let mut v = 0
+    if let Ok(n) = parse_int(cmap_get(cache, key)) { v = n }
+    return v
+}
+
+fn gateway_has_capacity(addr: string, cache: CMap) -> int {
+    let max = gateway_max_channels(addr, cache)
+    if max <= 0 { return 1 }
+    return if gateway_active_channels(cache, addr) < max { 1 } else { 0 }
 }

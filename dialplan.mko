@@ -17,10 +17,7 @@ fn num_apply_action(num: string, action: string) -> string {
     if str_has_prefix(action, "strip:") {
         let digits_str = action[6:]
         let mut digits = 0
-        match parse_int(digits_str) {
-            Ok(v) => { digits = v }
-            Err(_) => { return num }
-        }
+        if let Ok(v) = parse_int(digits_str) { digits = v } else { return num }
         if digits >= n { return "" }
         return num[digits:]
     }
@@ -78,13 +75,11 @@ fn num_apply_chain(num: string, actions: string) -> string {
     // Split on ";" and apply each action
     let parts = str_split(actions, ";")
     let mut result = num
-    let mut i = 0
-    while i < len(parts) {
-        let action = str_trim_space(parts[i])
+    for part in parts {
+        let action = str_trim_space(part)
         if len(action) > 0 {
             result = num_apply_action(result, action)
         }
-        i = i + 1
     }
     return result
 }
@@ -182,8 +177,8 @@ fn db_rate_ok(user: string, cache: CMap) -> int {
     if pipe < 0 { return 1 }
     let mut tokens = 0
     let mut last = 0
-    match parse_int(st[0:pipe]) { Ok(v) => { tokens = v } Err(_) => { return 1 } }
-    match parse_int(st[pipe + 1:]) { Ok(v) => { last = v } Err(_) => { return 1 } }
+    if let Ok(v) = parse_int(st[0:pipe]) { tokens = v } else { return 1 }
+    if let Ok(v) = parse_int(st[pipe + 1:]) { last = v } else { return 1 }
     tokens = tokens + (now - last) / 10
     if tokens > limit { tokens = limit }
     if tokens <= 0 { return 0 }

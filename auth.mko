@@ -184,10 +184,7 @@ fn db_digest_valid(db: SqlDB, db_ok: int, msg: string, n: int, method: string, f
     if str_has_suffix(algorithm, "-sess") && len(cnonce) == 0 { return 0 }
     if cmap_has(cache, "nonce|" + nonce) == 0 { return 0 }
     let mut nonce_at = 0
-    match parse_int(cmap_get(cache, "nonce|" + nonce)) {
-        Ok(v) => { nonce_at = v }
-        Err(_) => { return 0 }
-    }
+    if let Ok(v) = parse_int(cmap_get(cache, "nonce|" + nonce)) { nonce_at = v } else { return 0 }
     // Default 120s nonce lifetime; configurable via SIP_NONCE_TTL_SEC.
     let mut nonce_ttl = 120000
     if let Ok(v) = parse_int(env_get_or("SIP_NONCE_TTL_SEC", "120")) { nonce_ttl = v * 1000 }

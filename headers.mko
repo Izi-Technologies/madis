@@ -107,6 +107,93 @@ fn hdr_set(msg: string, name: string, value: string) -> string {
     return msg |> hdr_remove(name) |> hdr_add(name, value)
 }
 
+// Single-pass batch header rewrite. remove_names is a comma-separated list of
+// header names to drop. set_pairs is a comma-separated list of "Name: value"
+// entries to replace (removed then re-added). add_pairs is a comma-separated
+// list of "Name: value" entries to append. One scan instead of N.
+fn hdr_batch_rewrite(msg: string, remove_names: string, set_pairs: string, add_pairs: string) -> string {
+    let removes = str_split(remove_names, ",")
+    let sets = str_split(set_pairs, "|")
+    // Build a combined remove list: explicit removes + set names
+    let mut drop_names = make([]string, 0, len(removes) + len(sets))
+    let mut ri = 0
+    while ri < len(removes) {
+        let r = str_trim_space(removes[ri])
+        if len(r) > 0 { drop_names = append(drop_names, str_to_lower(r)) }
+        ri = ri + 1
+    }
+    let mut set_hdrs = make([]string, 0, len(sets))
+    let mut si = 0
+    while si < len(sets) {
+        let pair = str_trim_space(sets[si])
+        if len(pair) > 0 {
+            let colon = str_index(pair, ": ")
+            if colon > 0 {
+                drop_names = append(drop_names, str_to_lower(pair[0:colon]))
+                set_hdrs = append(set_hdrs, pair)
+            }
+        }
+        si = si + 1
+    }
+    let adds = str_split(add_pairs, "|")
+    let n = len(msg)
+    let b = str_builder()
+    let mut i = 0
+    // Copy request/status line
+    while i < n {
+        if int(msg[i]) == 10 { i = i + 1; break }
+        i = i + 1
+    }
+    builder_write(b, msg[0:i])
+    // Scan headers, skip lines matching any drop name
+    while i < n {
+        if int(msg[i]) == 13 { break }
+        let line_start = i
+        // Find colon in this line
+        let mut colon_pos = -1
+        let mut scan = i
+        while scan < n && int(msg[scan]) != 10 && int(msg[scan]) != 13 {
+            if colon_pos < 0 && int(msg[scan]) == 58 { colon_pos = scan }
+            scan = scan + 1
+        }
+        let mut should_drop = 0
+        if colon_pos > i {
+            let hname = str_to_lower(str_trim_space(msg[i:colon_pos]))
+            let mut di = 0
+            while di < len(drop_names) {
+                if str_eq(hname, drop_names[di]) { should_drop = 1; break }
+                di = di + 1
+            }
+        }
+        // Advance past line
+        while i < n {
+            if int(msg[i]) == 10 { i = i + 1; break }
+            i = i + 1
+        }
+        if should_drop == 0 { builder_write(b, msg[line_start:i]) }
+    }
+    // Add set headers
+    let mut wi = 0
+    while wi < len(set_hdrs) {
+        builder_write(b, set_hdrs[wi])
+        builder_write(b, "\r\n")
+        wi = wi + 1
+    }
+    // Add new headers
+    let mut ai = 0
+    while ai < len(adds) {
+        let add = str_trim_space(adds[ai])
+        if len(add) > 0 {
+            builder_write(b, add)
+            builder_write(b, "\r\n")
+        }
+        ai = ai + 1
+    }
+    // Copy body separator + body
+    if i < n { builder_write(b, msg[i:]) }
+    return builder_string(b)
+}
+
 // Apply DB-driven header rules
 // header_rules table: match_method, match_direction, action, header_name, header_value, priority
 fn db_apply_header_rules(db: SqlDB, db_ok: int, msg: string, method: string, direction: string, cache: CMap) -> string {

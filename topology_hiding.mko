@@ -1,0 +1,252 @@
+// ============ TOPOLOGY HIDING (topoh) ============
+// Strips internal Via, Record-Route, and Contact headers from outbound
+// messages, replacing them with opaque proxy-owned values. Inbound
+// responses restore the originals from CMap so the transaction layer
+// sees unchanged headers. Gated by SIP_TOPOLOGY_HIDING=1.
+//
+// Reference: OpenSIPS topology_hiding, Kamailio topoh — same concept,
+// different implementation. Madis stores the hidden headers per-branch
+// in a bounded ring so a compromised endpoint cannot enumerate internals.
+
+fn topoh_enabled() -> int {
+    let v = env_get_or("SIP_TOPOLOGY_HIDING", "0") |> str_trim_space() |> str_to_lower()
+    return if str_eq(v, "1") || str_eq(v, "true") || str_eq(v, "yes") { 1 } else { 0 }
+}
+
+fn topoh_proxy_host(cache: CMap) -> string {
+    if cmap_has(cache, "_topoh_host") == 1 { return cmap_get(cache, "_topoh_host") }
+    let mut host = env_get_or("SIP_PUBLIC_IP", "")
+    if len(host) == 0 { host = env_get_or("SIP_BIND_IP", "") }
+    if len(host) == 0 || str_eq(host, "0.0.0.0") || str_eq(host, "::") { host = "127.0.0.1" }
+    cmap_set(cache, "_topoh_host", host)
+    return host
+}
+
+fn topoh_proxy_port(cache: CMap) -> int {
+    if cmap_has(cache, "_topoh_port") == 1 {
+        let mut p = 5060
+        if let Ok(v) = parse_int(cmap_get(cache, "_topoh_port")) { p = v }
+        return p
+    }
+    let mut port = 5060
+    if let Ok(v) = parse_int(env_get_or("SIP_UDP_PORT", "5060")) { port = v }
+    cmap_set(cache, "_topoh_port", string(port))
+    return port
+}
+
+// Key for storing hidden headers. Uses branch so each fork leg is independent.
+fn topoh_key(branch: string) -> string {
+    return "topoh|" + branch
+}
+
+// Collect all Via headers except the topmost one (which is ours).
+// Returns them newline-separated for compact CMap storage.
+fn topoh_collect_vias(msg: string) -> string {
+    let mut vias = ""
+    let mut idx = 1
+    while idx < 32 {
+        let v = sip_header_n(msg, "Via", idx)
+        if len(v) == 0 { break }
+        if len(vias) > 0 { vias = vias + "\n" }
+        vias = vias + v
+        idx = idx + 1
+    }
+    return vias
+}
+
+// Collect all Record-Route headers, newline-separated.
+fn topoh_collect_record_routes(msg: string) -> string {
+    let mut rrs = ""
+    let mut idx = 0
+    while idx < 32 {
+        let v = sip_header_n(msg, "Record-Route", idx)
+        if len(v) == 0 { break }
+        if len(rrs) > 0 { rrs = rrs + "\n" }
+        rrs = rrs + v
+        idx = idx + 1
+    }
+    return rrs
+}
+
+// Strip all Via headers except the topmost, all Record-Route headers,
+// and replace Contact with our proxy address. Store originals in CMap.
+fn topoh_hide_request(msg: string, branch: string, cache: CMap) -> string {
+    if topoh_enabled() == 0 { return msg }
+    if len(branch) == 0 { return msg }
+
+    let vias = topoh_collect_vias(msg)
+    let rrs = topoh_collect_record_routes(msg)
+    let contact = sip_header(msg, "Contact")
+
+    // Store: vias\x01record-routes\x01contact
+    let stored = vias + "\x01" + rrs + "\x01" + contact
+    let _ = bounded_cache_set(cache, "topoh_seq", "topoh_ring|", topoh_key(branch), stored, 65536)
+
+    // Strip internal Vias (keep only the topmost — ours)
+    let mut result = msg
+    let mut strip_idx = 1
+    while strip_idx < 32 {
+        let v = sip_header_n(result, "Via", 1)
+        if len(v) == 0 { break }
+        result = hdr_remove_nth(result, "Via", 1)
+        strip_idx = strip_idx + 1
+    }
+
+    // Strip all Record-Route headers
+    result = hdr_remove(result, "Record-Route")
+
+    // Replace Contact with our proxy address
+    if len(contact) > 0 {
+        let host = topoh_proxy_host(cache)
+        let port = topoh_proxy_port(cache)
+        result = hdr_remove(result, "Contact")
+        result = hdr_add(result, "Contact", "<sip:" + host + ":" + string(port) + ";transport=udp>")
+    }
+
+    return result
+}
+
+// Restore hidden headers on a response before the transaction layer sees it.
+// The branch in the topmost Via identifies which stored set to restore.
+fn topoh_restore_response(msg: string, cache: CMap) -> string {
+    if topoh_enabled() == 0 { return msg }
+
+    let branch = sip_via_branch(sip_header(msg, "Via"))
+    if len(branch) == 0 { return msg }
+
+    let key = topoh_key(branch)
+    if cmap_has(cache, key) == 0 { return msg }
+    let stored = cmap_get(cache, key)
+    let parts = str_split(stored, "\x01")
+    if len(parts) < 3 { return msg }
+
+    let vias = parts[0]
+    let rrs = parts[1]
+    let contact = parts[2]
+
+    let mut result = msg
+
+    // Restore Via headers after the topmost one
+    if len(vias) > 0 {
+        let via_list = str_split(vias, "\n")
+        // Insert in reverse order so they end up in correct order
+        let mut vi = len(via_list) - 1
+        while vi >= 0 {
+            let v = str_trim_space(via_list[vi])
+            if len(v) > 0 {
+                result = sip_prepend_header_after_first(result, "Via", v)
+            }
+            vi = vi - 1
+        }
+    }
+
+    // Restore Record-Route headers
+    if len(rrs) > 0 {
+        let rr_list = str_split(rrs, "\n")
+        for rr in rr_list {
+            let r = str_trim_space(rr)
+            if len(r) > 0 {
+                result = sip_prepend_header(result, "Record-Route", r)
+            }
+        }
+    }
+
+    // Restore Contact
+    if len(contact) > 0 {
+        result = hdr_remove(result, "Contact")
+        result = hdr_add(result, "Contact", contact)
+    }
+
+    // Clean up on final responses (2xx-6xx)
+    let code = sip_status_code(msg)
+    if code >= 200 {
+        let _ = cmap_del(cache, key)
+    }
+
+    return result
+}
+
+// Strip Route headers that point to our proxy (prevents topology leak via
+// Route set). Called on outbound requests after Record-Route processing.
+fn topoh_strip_internal_routes(msg: string, cache: CMap) -> string {
+    if topoh_enabled() == 0 { return msg }
+    let host = topoh_proxy_host(cache)
+    let mut result = msg
+    let route = sip_header(result, "Route")
+    if len(route) > 0 && str_contains(route, host) {
+        result = hdr_remove(result, "Route")
+    }
+    return result
+}
+
+// Helper: insert a Via header after the first Via (for response restoration).
+// Uses the same pattern as sip_prepend_header but targets position after first Via.
+fn sip_prepend_header_after_first(msg: string, name: string, value: string) -> string {
+    // Find end of first Via line
+    let first_via = sip_header(msg, "Via")
+    if len(first_via) == 0 { return sip_prepend_header(msg, name, value) }
+    // Find the Via: line in the message and insert after it
+    let via_pos = str_index(msg, first_via)
+    if via_pos < 0 { return sip_prepend_header(msg, name, value) }
+    // Find end of this line
+    let after_via = via_pos + len(first_via)
+    let mut end = after_via
+    let n = len(msg)
+    while end < n {
+        if int(msg[end]) == 10 { end = end + 1; break }
+        end = end + 1
+    }
+    return msg[0:end] + name + ": " + value + "\r\n" + msg[end:]
+}
+
+// Remove the Nth occurrence of a header (0-indexed).
+fn hdr_remove_nth(msg: string, name: string, index: int) -> string {
+    let namelen = len(name)
+    let n = len(msg)
+    let mut b = str_builder()
+    let mut i = 0
+    let mut count = 0
+    // Copy request line
+    while i < n {
+        if int(msg[i]) == 10 { i = i + 1; break }
+        i = i + 1
+    }
+    builder_write(b, msg[0:i])
+    // Scan headers
+    while i < n {
+        if int(msg[i]) == 13 { break }
+        let line_start = i
+        // Check if this line matches the header name
+        let mut match_ok = 0
+        if i + namelen + 1 < n {
+            let mut ok = 1
+            let mut j = 0
+            while j < namelen {
+                let mut c1 = int(msg[i + j])
+                let mut c2 = int(name[j])
+                if c1 >= 65 { if c1 <= 90 { c1 = c1 + 32 } }
+                if c2 >= 65 { if c2 <= 90 { c2 = c2 + 32 } }
+                if c1 != c2 { ok = 0; break }
+                j = j + 1
+            }
+            if ok == 1 && i + namelen < n && int(msg[i + namelen]) == 58 {
+                match_ok = 1
+            }
+        }
+        // Advance to end of line
+        while i < n {
+            if int(msg[i]) == 10 { i = i + 1; break }
+            i = i + 1
+        }
+        if match_ok == 1 && count == index {
+            // Skip this line (don't write it)
+            count = count + 1
+        } else {
+            if match_ok == 1 { count = count + 1 }
+            builder_write(b, msg[line_start:i])
+        }
+    }
+    // Copy remaining (body separator + body)
+    if i < n { builder_write(b, msg[i:]) }
+    return builder_string(b)
+}

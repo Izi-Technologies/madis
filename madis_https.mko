@@ -44,10 +44,7 @@ fn https_post_status_line(raw: string) -> int {
     if len(raw) < 12 || not str_has_prefix(raw, "HTTP/") { return 0 }
     let sp = str_index(raw, " ")
     if sp < 5 || sp > 12 || sp + 4 > len(raw) { return 0 }
-    match parse_int(raw[sp + 1:sp + 4]) {
-        Ok(v) => { return v }
-        Err(_) => { return 0 }
-    }
+    if let Ok(v) = parse_int(raw[sp + 1:sp + 4]) { return v }
     return 0
 }
 
@@ -64,15 +61,22 @@ fn madis_https_post(host: string, port: int, path: string, token: string, body: 
     if handle < 1 || tls_pool_fd(handle) < 0 { return "" }
     let _ = tls_pool_set_timeout(handle, timeout_ms)
 
-    let mut auth = ""
-    if len(token) > 0 { auth = "Authorization: Bearer " + token + "\r\n" }
-    let request = "POST " + path + " HTTP/1.1\r\n"
-        + "Host: " + host + "\r\n"
-        + auth
-        + "Accept: application/json\r\n"
-        + "Content-Type: application/json\r\n"
-        + "Content-Length: " + string(len(body)) + "\r\n"
-        + "Connection: close\r\n\r\n" + body
+    let b = str_builder()
+    builder_write(b, "POST ")
+    builder_write(b, path)
+    builder_write(b, " HTTP/1.1\r\nHost: ")
+    builder_write(b, host)
+    builder_write(b, "\r\n")
+    if len(token) > 0 {
+        builder_write(b, "Authorization: Bearer ")
+        builder_write(b, token)
+        builder_write(b, "\r\n")
+    }
+    builder_write(b, "Accept: application/json\r\nContent-Type: application/json\r\nContent-Length: ")
+    builder_write(b, string(len(body)))
+    builder_write(b, "\r\nConnection: close\r\n\r\n")
+    builder_write(b, body)
+    let request = builder_string(b)
     let sent = tls_pool_send(handle, request)
     if sent != len(request) {
         let _ = tls_pool_close(handle)
@@ -93,10 +97,7 @@ fn madis_https_post(host: string, port: int, path: string, token: string, body: 
 // These two helpers are the only sanctioned way to read that envelope.
 fn https_post_status(response: string) -> int {
     if len(response) < 4 || int(response[3]) != 124 { return 0 }
-    match parse_int(response[0:3]) {
-        Ok(v) => { return v }
-        Err(_) => { return 0 }
-    }
+    if let Ok(v) = parse_int(response[0:3]) { return v }
     return 0
 }
 

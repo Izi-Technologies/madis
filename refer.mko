@@ -1,0 +1,205 @@
+// ============ SIP REFER / CALL TRANSFER (RFC 3515, RFC 5589) ============
+// Proxy-side REFER handling for blind and attended transfer. The proxy
+// routes REFER like any in-dialog request but also tracks the implicit
+// NOTIFY subscription so transfer progress reaches the transferor.
+//
+// Attended transfer uses the Replaces header (RFC 3891) in the INVITE
+// triggered by the REFER. The proxy lets Replaces pass through and
+// matches the replaced dialog for teardown.
+
+fn refer_enabled() -> int {
+    let v = env_get_or("SIP_REFER", "1") |> str_trim_space() |> str_to_lower()
+    return if str_eq(v, "0") || str_eq(v, "false") || str_eq(v, "no") { 0 } else { 1 }
+}
+
+// Validate Refer-To header — must be a parseable SIP URI.
+fn refer_to_valid(refer_to: string) -> int {
+    if len(refer_to) == 0 || len(refer_to) > 2048 { return 0 }
+    // Extract URI from angle brackets if present
+    let mut uri = refer_to
+    let lt = str_index(refer_to, "<")
+    if lt >= 0 {
+        let gt = str_index(refer_to, ">")
+        if gt > lt { uri = refer_to[lt + 1:gt] }
+    }
+    let uri_low = str_to_lower(uri)
+    if not str_has_prefix(uri_low, "sip:") && not str_has_prefix(uri_low, "sips:") && not str_has_prefix(uri_low, "tel:") { return 0 }
+    return 1
+}
+
+// Extract Replaces header value from Refer-To URI parameters.
+// Refer-To: <sip:bob@example.com?Replaces=call-id%3Bto-tag%3Dx%3Bfrom-tag%3Dy>
+fn refer_to_replaces(refer_to: string) -> string {
+    let low = str_to_lower(refer_to)
+    let idx = str_index(low, "replaces=")
+    if idx < 0 { return "" }
+    let start = idx + 9
+    let mut end = start
+    let n = len(refer_to)
+    while end < n {
+        let c = int(refer_to[end])
+        if c == 62 || c == 38 || c == 59 { break }
+        end = end + 1
+    }
+    if end <= start { return "" }
+    // URL-decode the value (%3B → ;, %3D → =)
+    return refer_url_decode(refer_to[start:end])
+}
+
+// Minimal URL decode for Replaces header value.
+fn refer_url_decode(s: string) -> string {
+    let n = len(s)
+    if str_index(s, "%") < 0 { return s }
+    let b = str_builder()
+    let mut i = 0
+    while i < n {
+        if int(s[i]) == 37 && i + 2 < n {
+            let hi = refer_hex_digit(int(s[i + 1]))
+            let lo = refer_hex_digit(int(s[i + 2]))
+            if hi >= 0 && lo >= 0 {
+                builder_write_byte(b, byte(hi * 16 + lo))
+                i = i + 3
+                continue
+            }
+        }
+        builder_write_byte(b, byte(int(s[i])))
+        i = i + 1
+    }
+    return builder_string(b)
+}
+
+fn refer_hex_digit(c: int) -> int {
+    if c >= 48 && c <= 57 { return c - 48 }
+    if c >= 65 && c <= 70 { return c - 55 }
+    if c >= 97 && c <= 102 { return c - 87 }
+    return -1
+}
+
+// Track the implicit subscription created by REFER (RFC 3515 §2.4.4).
+// The subscription lives until a NOTIFY with subscription-state: terminated.
+// Store: referrer contact so NOTIFY can be routed back.
+fn refer_track_subscription(cache: CMap, cid: string, from_tag: string, referrer_contact: string) -> int {
+    let key = "refer_sub|" + cid + "|" + from_tag
+    let _ = bounded_cache_set(cache, "refer_sub_seq", "refer_sub_ring|", key, referrer_contact, 8192)
+    return 1
+}
+
+// Check if an inbound NOTIFY is for a REFER subscription.
+fn refer_has_subscription(cache: CMap, cid: string, to_tag: string) -> int {
+    let key = "refer_sub|" + cid + "|" + to_tag
+    return if cmap_has(cache, key) == 1 { 1 } else { 0 }
+}
+
+// Clean up subscription on terminated NOTIFY.
+fn refer_clear_subscription(cache: CMap, cid: string, to_tag: string) -> int {
+    let key = "refer_sub|" + cid + "|" + to_tag
+    let _ = cmap_del(cache, key)
+    return 1
+}
+
+// Check if a NOTIFY is for a REFER subscription and has terminated state.
+fn refer_notify_terminated(sub_state: string) -> int {
+    return if str_contains(str_to_lower(sub_state), "terminated") { 1 } else { 0 }
+}
+
+// Parse Replaces header from an INVITE: Replaces: call-id;to-tag=x;from-tag=y
+// Returns the call-id portion.
+fn replaces_call_id(replaces: string) -> string {
+    if len(replaces) == 0 { return "" }
+    let semi = str_index(replaces, ";")
+    if semi < 0 { return str_trim_space(replaces) }
+    return str_trim_space(replaces[0:semi])
+}
+
+// Extract to-tag from Replaces header.
+fn replaces_to_tag(replaces: string) -> string {
+    let low = str_to_lower(replaces)
+    let idx = str_index(low, "to-tag=")
+    if idx < 0 { return "" }
+    let start = idx + 7
+    let mut end = start
+    while end < len(replaces) {
+        let c = int(replaces[end])
+        if c == 59 || c == 44 || c == 32 || c == 9 { break }
+        end = end + 1
+    }
+    return replaces[start:end]
+}
+
+// Extract from-tag from Replaces header.
+fn replaces_from_tag(replaces: string) -> string {
+    let low = str_to_lower(replaces)
+    let idx = str_index(low, "from-tag=")
+    if idx < 0 { return "" }
+    let start = idx + 9
+    let mut end = start
+    while end < len(replaces) {
+        let c = int(replaces[end])
+        if c == 59 || c == 44 || c == 32 || c == 9 { break }
+        end = end + 1
+    }
+    return replaces[start:end]
+}
+
+// Validate a Replaces header — check that the referenced dialog exists.
+fn replaces_dialog_exists(replaces: string, calls: CMap) -> int {
+    let cid = replaces_call_id(replaces)
+    if len(cid) == 0 { return 0 }
+    if cmap_has(calls, cid) == 1 { return 1 }
+    let to_tag = replaces_to_tag(replaces)
+    let from_tag = replaces_from_tag(replaces)
+    if len(to_tag) > 0 && len(from_tag) > 0 {
+        let dialog_key = "dialog|" + cid + ";" + from_tag + ";" + to_tag
+        if cmap_has(calls, dialog_key) == 1 { return 1 }
+        let dialog_key_rev = "dialog|" + cid + ";" + to_tag + ";" + from_tag
+        if cmap_has(calls, dialog_key_rev) == 1 { return 1 }
+    }
+    return 0
+}
+
+// Build a 202 Accepted response for REFER (RFC 3515 §2.4.2).
+fn refer_accepted_response(data: string) -> string {
+    return sip_reply(data, 202, "Accepted", "", "")
+}
+
+// Process an inbound REFER request. Returns a response string or "" to
+// let the normal forwarding path handle it.
+fn refer_process(data: string, dl: int, cache: CMap, calls: CMap) -> string {
+    if refer_enabled() == 0 { return "" }
+
+    let refer_to = str_trim_space(sip_header(data, "Refer-To"))
+    if len(refer_to) == 0 {
+        // RFC 3515 §2.4.1: Refer-To is mandatory
+        return sip_reply(data, 400, "Bad Request", "", "")
+    }
+    if refer_to_valid(refer_to) == 0 {
+        return sip_reply(data, 400, "Bad Request", "", "")
+    }
+
+    // Track the implicit subscription for NOTIFY routing
+    let cid = sip_header(data, "Call-ID")
+    let from_tag = sip_addr_tag(sip_header(data, "From"))
+    let contact = str_trim_space(sip_header(data, "Contact"))
+    if len(cid) > 0 && len(from_tag) > 0 {
+        let _ = refer_track_subscription(cache, cid, from_tag, contact)
+    }
+
+    // Let the normal in-dialog forwarding handle actual routing
+    // Return "" so the caller forwards the REFER to the peer
+    return ""
+}
+
+// Handle NOTIFY for REFER subscription. Clean up when terminated.
+fn refer_handle_notify(data: string, cache: CMap) -> int {
+    let event = str_trim_space(sip_header(data, "Event"))
+    if not str_eq(str_to_lower(event), "refer") { return 0 }
+
+    let cid = sip_header(data, "Call-ID")
+    let to_tag = sip_addr_tag(sip_header(data, "To"))
+    let sub_state = str_trim_space(sip_header(data, "Subscription-State"))
+
+    if refer_notify_terminated(sub_state) == 1 {
+        let _ = refer_clear_subscription(cache, cid, to_tag)
+    }
+    return 1
+}

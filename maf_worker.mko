@@ -176,7 +176,8 @@ fn maf_worker_emit_event(db: SqlDB, ok: int, tenant: string, event_type: string,
 }
 
 // maf_worker_fire_webhooks delivers event payloads to registered webhook URLs.
-// Cache is refreshed every 30s per tenant. Fire-and-forget — no retries.
+// Cache is refreshed every 30s per tenant. Failed deliveries are queued for
+// retry with exponential backoff (1s, 5s, 25s — 3 attempts max).
 fn maf_worker_fire_webhooks(db: SqlDB, ok: int, tenant: string, event_type: string, payload: string, cache: CMap) -> int {
     if ok == 0 { return 0 }
     // Cache webhook list for 30s
@@ -209,9 +210,7 @@ fn maf_worker_fire_webhooks(db: SqlDB, ok: int, tenant: string, event_type: stri
     // Fire each matching webhook
     let lines = str_split(webhooks, "\n")
     let mut fired = 0
-    let mut i = 0
-    while i < len(lines) {
-        let line = lines[i]
+    for line in lines {
         let sep1 = str_index(line, "\x01")
         if sep1 > 0 {
             let url = line[0:sep1]
@@ -227,15 +226,82 @@ fn maf_worker_fire_webhooks(db: SqlDB, ok: int, tenant: string, event_type: stri
                     let sig = sha256(secret + "|" + payload)
                     headers = headers + "X-Madis-Signature: sha256=" + sig + "\r\n"
                 }
+                let mut delivered = 0
                 if str_has_prefix(url, "https://") {
-                    let _ = https_post(url, payload, headers, "", 3000)
+                    let resp = https_post(url, payload, headers, "", 3000)
+                    if len(resp) > 0 { delivered = 1 }
+                }
+                if delivered == 0 {
+                    // Queue for retry — store url|secret|payload|attempt|retry_at
+                    let retry_at = string(mono_ms() + 1000)
+                    let retry_val = url + "\x02" + secret + "\x02" + payload + "\x02" + "0" + "\x02" + retry_at
+                    let _ = bounded_cache_set(cache, "wh_retry_seq", "wh_retry_ring|", "wh_retry|" + sha256(url + "|" + event_type + "|" + string(mono_ms()))[0:24], retry_val, 4096)
                 }
                 fired = fired + 1
             }
         }
-        i = i + 1
     }
     return fired
+}
+
+// Retry failed webhook deliveries. Called from heartbeat tick.
+// Backoff: attempt 0 → 1s, attempt 1 → 5s, attempt 2 → 25s, then discard.
+fn maf_worker_webhook_retry_tick(cache: CMap) -> int {
+    let now = mono_ms()
+    let mut retried = 0
+    let mut i = 0
+    while i < 64 {
+        let ring_key = "wh_retry_ring|" + string(i)
+        if cmap_has(cache, ring_key) == 1 {
+            let retry_key = cmap_get(cache, ring_key)
+            if len(retry_key) > 0 && cmap_has(cache, retry_key) == 1 {
+                let val = cmap_get(cache, retry_key)
+                // Parse: url\x02secret\x02payload\x02attempt\x02retry_at
+                let parts = str_split(val, "\x02")
+                if len(parts) >= 5 {
+                    let mut retry_at = 0
+                    if let Ok(v) = parse_int(parts[4]) { retry_at = v }
+                    if retry_at > 0 && now >= retry_at {
+                        let url = parts[0]
+                        let secret = parts[1]
+                        let payload = parts[2]
+                        let mut attempt = 0
+                        if let Ok(v) = parse_int(parts[3]) { attempt = v }
+                        let mut headers = "Content-Type: application/json\r\n"
+                        if len(secret) > 0 {
+                            let sig = sha256(secret + "|" + payload)
+                            headers = headers + "X-Madis-Signature: sha256=" + sig + "\r\n"
+                        }
+                        let mut delivered = 0
+                        if str_has_prefix(url, "https://") {
+                            let resp = https_post(url, payload, headers, "", 5000)
+                            if len(resp) > 0 { delivered = 1 }
+                        }
+                        if delivered == 1 {
+                            let _ = cmap_del(cache, retry_key)
+                            retried = retried + 1
+                        } else {
+                            attempt = attempt + 1
+                            if attempt >= 3 {
+                                // Max retries exhausted — discard
+                                let _ = cmap_del(cache, retry_key)
+                            } else {
+                                // Exponential backoff: 1s, 5s, 25s
+                                let mut delay = 1000
+                                if attempt == 1 { delay = 5000 }
+                                if attempt == 2 { delay = 25000 }
+                                let next_at = now + delay
+                                let new_val = url + "\x02" + secret + "\x02" + payload + "\x02" + string(attempt) + "\x02" + string(next_at)
+                                cmap_set(cache, retry_key, new_val)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return retried
 }
 
 fn maf_worker_call_state(db: SqlDB, ok: int, tenant: string, call_id: string, state: string, trace: string) -> int {
@@ -296,7 +362,7 @@ fn maf_worker_metric(cache: CMap, name: string, labels: string) -> int {
 fn maf_worker_env_int(name: string, fallback: int, min: int, max: int) -> int {
     let raw = str_trim_space(env_get_or(name, string(fallback)))
     let mut value = fallback
-    match parse_int(raw) { Ok(v) => { value = v } Err(_) => { value = fallback } }
+    if let Ok(v) = parse_int(raw) { value = v }
     if value < min { value = min }
     if value > max { value = max }
     return value
@@ -304,7 +370,7 @@ fn maf_worker_env_int(name: string, fallback: int, min: int, max: int) -> int {
 
 fn maf_worker_int_text(value: string) -> int {
     let mut out = 0
-    match parse_int(str_trim_space(value)) { Ok(v) => { out = v } Err(_) => { out = 0 } }
+    if let Ok(v) = parse_int(str_trim_space(value)) { out = v }
     if out < 0 { out = 0 }
     return out
 }
@@ -316,7 +382,7 @@ fn maf_worker_sip_reason(msg: string) -> string {
     let parts = str_split(first, " ")
     if len(parts) < 3 { return "" }
     let mut code = 0
-    match parse_int(parts[1]) { Ok(v) => { code = v } Err(_) => { return "" } }
+    if let Ok(v) = parse_int(parts[1]) { code = v } else { return "" }
     if code < 100 || code > 699 { return "" }
     let mut reason = ""
     let mut i = 2

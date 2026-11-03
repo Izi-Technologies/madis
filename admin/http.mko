@@ -105,11 +105,11 @@ fn ws_upgrade_response(raw: string) -> string {
     if len(key) == 0 { return "" }
     let acc = ws_accept_key(key)
     if len(acc) == 0 { return "" }
-    return "HTTP/1.1 101 Switching Protocols\r\n"
-        + "Upgrade: websocket\r\n"
-        + "Connection: Upgrade\r\n"
-        + "Sec-WebSocket-Accept: " + acc + "\r\n"
-        + "\r\n"
+    let b = str_builder()
+    builder_write(b, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ")
+    builder_write(b, acc)
+    builder_write(b, "\r\n\r\n")
+    return builder_string(b)
 }
 
 fn parse_method(raw: string, n: int) -> string {
@@ -344,9 +344,7 @@ fn url_decode(s: string) -> string {
 fn form_map(body: string) -> CMap {
     let out = cmap_new()
     let parts = str_split(body, "&")
-    let mut i = 0
-    while i < len(parts) {
-        let part = parts[i]
+    for part in parts {
         let eq = str_index(part, "=")
         let mut raw_key = part
         let mut raw_value = ""
@@ -360,7 +358,6 @@ fn form_map(body: string) -> CMap {
                 cmap_set(out, key, url_decode(raw_value))
             }
         }
-        i = i + 1
     }
     return out
 }
@@ -680,6 +677,50 @@ fn check_role(required: string, actual: string) -> int {
     if needed < 0 || have < 0 { return 0 }
     if have >= needed { return 1 }
     return 0
+}
+
+// ============ API RATE LIMITING ============
+// Per-IP token bucket rate limiter for admin/MAF API endpoints.
+// Prevents abuse when admin port is exposed. Default: 100 req/s.
+
+fn api_rate_limit() -> int {
+    let mut limit = 100
+    if let Ok(v) = parse_int(env_get_or("SIP_API_RATE_LIMIT", "100")) { limit = v }
+    if limit < 1 { limit = 1 }
+    if limit > 100000 { limit = 100000 }
+    return limit
+}
+
+fn api_rate_check(cache: CMap, ip: string) -> int {
+    let limit = api_rate_limit()
+    let key = "api_rl|" + ip
+    let now = now_ms()
+    if cmap_has(cache, key) == 0 {
+        cmap_set(cache, key, string(limit - 1) + "|" + string(now))
+        return 1
+    }
+    let st = cmap_get(cache, key)
+    let pipe = str_index(st, "|")
+    if pipe < 0 { return 1 }
+    let mut tokens = 0
+    let mut last = 0
+    if let Ok(v) = parse_int(st[0:pipe]) { tokens = v } else { return 1 }
+    if let Ok(v) = parse_int(st[pipe + 1:]) { last = v } else { return 1 }
+    // Replenish tokens based on elapsed time (1 token per 1000/limit ms)
+    let elapsed = now - last
+    let replenish = (elapsed * limit) / 1000
+    tokens = tokens + replenish
+    if tokens > limit { tokens = limit }
+    if tokens <= 0 {
+        return 0
+    }
+    tokens = tokens - 1
+    cmap_set(cache, key, string(tokens) + "|" + string(now))
+    return 1
+}
+
+fn api_rate_limited_response() -> string {
+    return http_resp(429, "application/json", "{\"error\":\"rate_limit_exceeded\"}\n", "Retry-After: 1\r\n")
 }
 
 // ============ REQUEST HANDLER ============

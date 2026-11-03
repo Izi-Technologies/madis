@@ -225,3 +225,53 @@ fn outbound_contact_has_outbound(contact: string) -> int {
     if len(outbound_instance_id(contact)) == 0 { return 0 }
     return 1
 }
+
+// --- §4.4.1  Connection-oriented flow invalidation ---
+// Called when a TCP/TLS/WSS connection closes. Invalidates any flow
+// token associated with that connection so stale tokens don't route
+// to a dead socket. The UA will detect the failure via keepalive and
+// re-REGISTER to mint a new token.
+fn outbound_invalidate_connection(cache: CMap, ip: string, port: int, transport: string) -> int {
+    if outbound_enabled() == 0 { return 0 }
+    let conn_val = ip + "|" + string(port) + "|" + transport
+    let rev_key = "ob-conn|" + conn_val
+    if cmap_has(cache, rev_key) == 0 { return 0 }
+    let token = cmap_get(cache, rev_key)
+    if len(token) > 0 {
+        let _ = cmap_del(cache, "ob-flow|" + token)
+    }
+    let _ = cmap_del(cache, rev_key)
+    return 1
+}
+
+// --- §5.3  Route flow token for terminating requests ---
+// Check if the top Route header contains a flow token. If so, resolve
+// it to the original transport and return the target. This enables
+// routing through the original NATted connection for multiple AORs
+// behind one NAT.
+fn outbound_route_flow_target(cache: CMap, msg: string) -> string {
+    if outbound_enabled() == 0 { return "" }
+    let route = sip_header(msg, "Route")
+    if len(route) == 0 { return "" }
+    // Check if Route contains ;ob parameter (outbound marker)
+    if not str_contains(str_to_lower(route), ";ob") { return "" }
+    let flow = outbound_resolve_flow(cache, route)
+    if len(flow) == 0 { return "" }
+    // flow = "ip|port|transport"
+    let parts = str_split(flow, "|")
+    if len(parts) < 3 { return "" }
+    return parts[0] + ":" + parts[1]
+}
+
+// Transport for a resolved outbound flow.
+fn outbound_route_flow_transport(cache: CMap, msg: string) -> string {
+    if outbound_enabled() == 0 { return "" }
+    let route = sip_header(msg, "Route")
+    if len(route) == 0 { return "" }
+    if not str_contains(str_to_lower(route), ";ob") { return "" }
+    let flow = outbound_resolve_flow(cache, route)
+    if len(flow) == 0 { return "" }
+    let parts = str_split(flow, "|")
+    if len(parts) < 3 { return "" }
+    return parts[2]
+}

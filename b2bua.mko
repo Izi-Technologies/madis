@@ -188,22 +188,20 @@ fn b2bua_peer_transport(key: string, cache: CMap) -> string { return cmap_get(ca
 
 fn b2bua_rewrite_request(msg: string, call_id: string, from: string, to: string, cseq: string, transport: string, cache: CMap) -> string {
     if len(call_id) == 0 || len(from) == 0 || len(to) == 0 { return "" }
-    let mut out = hdr_remove(msg, "Via")
-    out = hdr_remove(out, "Route")
-    out = hdr_remove(out, "Record-Route")
-    out = hdr_set(out, "Call-ID", call_id)
-    out = hdr_set(out, "From", from)
-    out = hdr_set(out, "To", to)
+    let mut method = madis_method(msg)
     if len(cseq) > 0 {
-        let parts = out |> sip_header("CSeq") |> str_trim_space() |> str_split(" ")
-        let mut method = madis_method(msg)
+        let parts = msg |> sip_header("CSeq") |> str_trim_space() |> str_split(" ")
         if len(parts) >= 2 { method = str_trim_space(parts[1]) }
-        out = hdr_set(out, "CSeq", cseq + " " + method)
     }
-    out = hdr_remove(out, "Contact")
-    out = hdr_add(out, "Contact", "<" + b2bua_contact_uri(transport) + ">")
+    let mut cseq_value = sip_header(msg, "CSeq")
+    if len(cseq) > 0 { cseq_value = cseq + " " + method }
+    let contact = "<" + b2bua_contact_uri(transport) + ">"
     let via = sip_via_value_rport(transport, b2bua_signal_host(), b2bua_signal_port(), sip_branch())
-    out = sip_insert_via(out, via)
+    // Single-pass: remove Via/Route/Record-Route/Contact, set Call-ID/From/To/CSeq, add Contact/Via
+    let out = hdr_batch_rewrite(msg,
+        "Via,Route,Record-Route,Contact",
+        "Call-ID: " + call_id + "|From: " + from + "|To: " + to + "|CSeq: " + cseq_value,
+        "Contact: " + contact + "|Via: " + via)
     if sip_validate_message(out, len(out)) == 0 { return "" }
     return out
 }
@@ -223,13 +221,12 @@ fn b2bua_prepare_invite(msg: string, target: string, transport: string, peer: st
     let out_tag = b2bua_tag(key + "|out")
     let out_from = b2bua_with_tag(in_from, out_tag)
     let out_to = b2bua_without_tag(in_to)
-    let stripped = hdr_remove(hdr_remove(hdr_remove(msg, "Via"), "Route"), "Record-Route")
-    let with_cid = hdr_set(stripped, "Call-ID", out_cid)
-    let with_from = hdr_set(with_cid, "From", out_from)
-    let with_to = hdr_set(with_from, "To", out_to)
-    let without_contact = hdr_remove(with_to, "Contact")
-    let with_contact = hdr_add(without_contact, "Contact", "<" + b2bua_contact_uri(transport) + ">")
-    let out = sip_insert_via(with_contact, sip_via_value_rport(transport, b2bua_signal_host(), b2bua_signal_port(), sip_branch()))
+    let contact = "<" + b2bua_contact_uri(transport) + ">"
+    let via = sip_via_value_rport(transport, b2bua_signal_host(), b2bua_signal_port(), sip_branch())
+    let out = hdr_batch_rewrite(msg,
+        "Via,Route,Record-Route,Contact",
+        "Call-ID: " + out_cid + "|From: " + out_from + "|To: " + out_to,
+        "Contact: " + contact + "|Via: " + via)
     if sip_validate_message(out, len(out)) == 0 { return "" }
     if b2bua_store(key, in_cid, out_cid, in_from, in_to, in_via, in_tag, out_tag, out, target, transport, peer, peer_transport, invite_cseq, cache) == 0 { return "" }
     return out
@@ -284,23 +281,21 @@ fn b2bua_translate_response(response: string, key: string, cache: CMap) -> strin
     if len(remote_tag) > 0 {
         cmap_set(cache, "b2bua_out_remote_to|" + key, b2bua_with_tag(b2bua_in_to(key, cache), remote_tag))
     }
-    let mut out = hdr_remove(response, "Via")
-    out = hdr_remove(out, "Record-Route")
-    out = hdr_remove(out, "Route")
-    out = hdr_remove(out, "Contact")
-    out = hdr_set(out, "Call-ID", b2bua_in_cid(key, cache))
-    out = hdr_set(out, "From", b2bua_in_from(key, cache))
-    out = hdr_set(out, "To", b2bua_with_tag(b2bua_in_to(key, cache), cmap_get(cache, "b2bua_in_tag|" + key)))
+    let in_cid = b2bua_in_cid(key, cache)
+    let in_from = b2bua_in_from(key, cache)
+    let in_to_tagged = b2bua_with_tag(b2bua_in_to(key, cache), cmap_get(cache, "b2bua_in_tag|" + key))
     let pending_in = cmap_get(cache, "b2bua_pending_in_cseq|" + key)
-    if len(pending_in) > 0 { out = hdr_set(out, "CSeq", pending_in + " INVITE") }
     let via = cmap_get(cache, "b2bua_in_via|" + key)
     if len(via) == 0 { return "" }
-    out = hdr_add(out, "Via", via)
+    let mut set_parts = "Call-ID: " + in_cid + "|From: " + in_from + "|To: " + in_to_tagged
+    if len(pending_in) > 0 { set_parts = set_parts + "|CSeq: " + pending_in + " INVITE" }
+    let mut add_parts = "Via: " + via
     let code = sip_status_code(response)
     if code >= 200 && code < 300 {
-        out = hdr_add(out, "Contact", "<" + b2bua_contact_uri(cmap_get(cache, "b2bua_peer_transport|" + key)) + ">")
+        add_parts = add_parts + "|Contact: <" + b2bua_contact_uri(cmap_get(cache, "b2bua_peer_transport|" + key)) + ">"
         cmap_set(cache, "b2bua_state|" + key, "confirmed")
     }
+    let out = hdr_batch_rewrite(response, "Via,Record-Route,Route,Contact", set_parts, add_parts)
     return out
 }
 

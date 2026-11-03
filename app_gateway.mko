@@ -85,7 +85,7 @@ fn app_url_port(url: string) -> int {
         colon = close + 1
     }
     if colon >= 0 {
-        match parse_int(authority[colon + 1:]) { Ok(v) => { port = v } Err(_) => { return -1 } }
+        if let Ok(v) = parse_int(authority[colon + 1:]) { port = v } else { return -1 }
     }
     if port < 1 || port > 65535 { return -1 }
     return port
@@ -222,7 +222,52 @@ fn app_gateway_http_post_ca(url: string, token: string, body: string, timeout_ms
 }
 
 fn app_gateway_http_post(url: string, token: string, body: string, timeout_ms: int) -> string {
-    return app_gateway_http_post_ca(url, token, body, timeout_ms, env_get_or("SIP_APP_CA", ""))
+    let ca = env_get_or("SIP_APP_CA", "")
+    // mTLS: optional client certificate for mutual TLS authentication
+    let client_cert = env_get_or("SIP_APP_CLIENT_CERT", "")
+    let client_key = env_get_or("SIP_APP_CLIENT_KEY", "")
+    if len(client_cert) > 0 && len(client_key) > 0 && app_url_is_https(url) == 1 {
+        return app_gateway_http_post_mtls(url, token, body, timeout_ms, ca, client_cert, client_key)
+    }
+    return app_gateway_http_post_ca(url, token, body, timeout_ms, ca)
+}
+
+// mTLS variant: presents client certificate during TLS handshake
+fn app_gateway_http_post_mtls(url: string, token: string, body: string, timeout_ms: int, ca: string, cert: string, key: string) -> string {
+    if app_url_valid(url) == 0 || len(body) == 0 || len(body) > 524288 { return "" }
+    let host = app_url_host(url)
+    let port = app_url_port(url)
+    let path = app_url_path(url)
+    let handle = tls_pool_open_mtls(host, port, ca, cert, key, timeout_ms)
+    if handle < 1 || tls_pool_fd(handle) < 0 { return "" }
+    let _ = tls_pool_set_timeout(handle, timeout_ms)
+    let b = str_builder()
+    builder_write(b, "POST ")
+    builder_write(b, path)
+    builder_write(b, " HTTP/1.1\r\nHost: ")
+    builder_write(b, host)
+    builder_write(b, "\r\nAuthorization: Bearer ")
+    builder_write(b, token)
+    builder_write(b, "\r\nAccept: application/json\r\nContent-Type: application/json\r\nContent-Length: ")
+    builder_write(b, string(len(body)))
+    builder_write(b, "\r\nConnection: close\r\n\r\n")
+    builder_write(b, body)
+    let request = builder_string(b)
+    let sent = tls_pool_send(handle, request)
+    if sent != len(request) {
+        let _ = tls_pool_close(handle)
+        return ""
+    }
+    let raw = https_post_read_all(handle)
+    let _ = tls_pool_close(handle)
+    if len(raw) < 12 { return "" }
+    let status = https_post_status_line(raw)
+    if status < 200 || status >= 300 { return "" }
+    let head_end = str_index(raw, "\r\n\r\n")
+    if head_end < 0 { return "" }
+    let resp_body = raw[head_end + 4:]
+    if len(resp_body) <= 0 || len(resp_body) > 65536 { return "" }
+    return resp_body
 }
 
 fn app_gateway_call(msg: string, ip: string, port: int, tr: string, event: string) -> string {
@@ -296,11 +341,9 @@ fn app_gateway_target_safe(target: string, list_ok: int) -> int {
     let items = str_split(target, ",")
     if list_ok == 0 && len(items) != 1 { return 0 }
     if len(items) > 32 { return 0 }
-    let mut i = 0
-    while i < len(items) {
-        let item = str_trim_space(items[i])
+    for entry in items {
+        let item = str_trim_space(entry)
         if len(item) == 0 || len(item) > 1024 || sip_target_port_state(item) < 0 { return 0 }
-        i = i + 1
     }
     return 1
 }
@@ -324,16 +367,14 @@ fn app_gateway_header_lines_safe(lines: string, allow_protected: int) -> int {
     }
     let items = str_split(lines, "\n")
     if len(items) > 16 { return 0 }
-    let mut i = 0
-    while i < len(items) {
-        let item = str_trim_space(items[i])
+    for entry in items {
+        let item = str_trim_space(entry)
         let colon = str_index(item, ":")
         if colon <= 0 || colon > 128 { return 0 }
         let name = str_trim_space(item[0:colon])
         let value = str_trim_space(item[colon + 1:])
         if hdr_name_safe(name) == 0 || app_gateway_text_safe(value, 2048) == 0 { return 0 }
         if allow_protected == 0 && app_gateway_protected_header(name) == 1 { return 0 }
-        i = i + 1
     }
     return 1
 }
@@ -349,11 +390,9 @@ fn app_gateway_remove_headers_safe(lines: string) -> int {
     }
     let items = str_split(lines, "\n")
     if len(items) > 16 { return 0 }
-    let mut i = 0
-    while i < len(items) {
-        let name = str_trim_space(items[i])
+    for entry in items {
+        let name = str_trim_space(entry)
         if hdr_name_safe(name) == 0 || app_gateway_protected_header(name) == 1 { return 0 }
-        i = i + 1
     }
     return 1
 }
@@ -409,27 +448,21 @@ fn app_gateway_action(raw: string, request_id: string, for_response: int) -> str
 fn app_gateway_apply_headers(msg: string, raw: string) -> string {
     let mut result = msg
     let removes = str_split(json_get_string(raw, "remove_headers"), "\n")
-    let mut i = 0
-    while i < len(removes) {
-        let name = str_trim_space(removes[i])
+    for entry in removes {
+        let name = str_trim_space(entry)
         if len(name) > 0 { result = hdr_remove(result, name) }
-        i = i + 1
     }
     let sets = str_split(json_get_string(raw, "set_headers"), "\n")
-    i = 0
-    while i < len(sets) {
-        let item = str_trim_space(sets[i])
+    for entry in sets {
+        let item = str_trim_space(entry)
         let colon = str_index(item, ":")
         if colon > 0 { result = hdr_set(result, str_trim_space(item[0:colon]), str_trim_space(item[colon + 1:])) }
-        i = i + 1
     }
     let adds = str_split(json_get_string(raw, "add_headers"), "\n")
-    i = 0
-    while i < len(adds) {
-        let item = str_trim_space(adds[i])
+    for entry in adds {
+        let item = str_trim_space(entry)
         let colon = str_index(item, ":")
         if colon > 0 { result = hdr_add(result, str_trim_space(item[0:colon]), str_trim_space(item[colon + 1:])) }
-        i = i + 1
     }
     let body = json_get_string(raw, "body")
     if str_index(raw, "\"body\"") >= 0 { result = msg_set_body(result, body) }
@@ -440,17 +473,13 @@ fn app_gateway_reply_headers(raw: string) -> string {
     let mut result = ""
     let sets = str_split(json_get_string(raw, "set_headers"), "\n")
     let adds = str_split(json_get_string(raw, "add_headers"), "\n")
-    let mut i = 0
-    while i < len(sets) {
-        let item = str_trim_space(sets[i])
+    for entry in sets {
+        let item = str_trim_space(entry)
         if len(item) > 0 { result = result + item + "\r\n" }
-        i = i + 1
     }
-    i = 0
-    while i < len(adds) {
-        let item = str_trim_space(adds[i])
+    for entry in adds {
+        let item = str_trim_space(entry)
         if len(item) > 0 { result = result + item + "\r\n" }
-        i = i + 1
     }
     return result
 }

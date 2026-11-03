@@ -117,11 +117,9 @@ fn ims_lifecycle_path_host_allowed(uri: string, hosts_csv: string) -> int {
     let host = ims_lifecycle_path_host(uri)
     if len(host) == 0 { return 0 }
     let items = str_split(hosts_csv, ",")
-    let mut i = 0
-    while i < len(items) {
-        let item = items[i] |> str_trim_space() |> str_to_lower()
+    for entry in items {
+        let item = entry |> str_trim_space() |> str_to_lower()
         if len(item) > 0 && len(item) <= 253 && str_eq(item, host) { return 1 }
-        i = i + 1
     }
     return 0
 }
@@ -203,17 +201,11 @@ fn ims_lifecycle_decode_ok(value: string) -> int {
     if ims_lifecycle_uri_ok(parts[3]) == 0 { return 0 }
     if ims_lifecycle_transport_ok(parts[4]) == 0 { return 0 }
     let mut expires_at = 0
-    match parse_int(parts[5]) {
-        Ok(v) => { expires_at = v }
-        Err(_) => { return 0 }
-    }
+    if let Ok(v) = parse_int(parts[5]) { expires_at = v } else { return 0 }
     if expires_at < 0 { return 0 }
     if ims_lifecycle_field_ok(parts[6], 128) == 0 { return 0 }
     let mut port = 0
-    match parse_int(parts[7]) {
-        Ok(v) => { port = v }
-        Err(_) => { return 0 }
-    }
+    if let Ok(v) = parse_int(parts[7]) { port = v } else { return 0 }
     if port < 0 || port > 65535 { return 0 }
     if ims_lifecycle_path_ok(parts[8]) == 0 || ims_lifecycle_path_ok(parts[9]) == 0 { return 0 }
     if ims_lifecycle_field_ok(parts[10], 2048) == 0 { return 0 }
@@ -226,10 +218,7 @@ fn ims_lifecycle_live(value: string) -> int {
     let parts = ims_lifecycle_parts(value)
     if not str_eq(parts[11], "registered") { return 0 }
     let mut expires_at = 0
-    match parse_int(parts[5]) {
-        Ok(v) => { expires_at = v }
-        Err(_) => { return 0 }
-    }
+    if let Ok(v) = parse_int(parts[5]) { expires_at = v } else { return 0 }
     if expires_at <= now_ms() { return 0 }
     return 1
 }
@@ -375,14 +364,12 @@ fn ims_lifecycle_irs_remove_aor(reg: CMap, aor: string) -> int {
     if cmap_has(reg, key) == 0 { return 1 }
     let items = str_split(cmap_get(reg, key), ",")
     let mut out = ""
-    let mut i = 0
-    while i < len(items) {
-        let item = str_trim_space(items[i])
+    for entry in items {
+        let item = str_trim_space(entry)
         if len(item) > 0 && not str_eq(item, aor) {
             if len(out) > 0 { out = out + "," }
             out = out + item
         }
-        i = i + 1
     }
     if len(out) == 0 { let _ = cmap_del(reg, key) } else { cmap_set(reg, key, out) }
     return 1
@@ -406,9 +393,8 @@ fn ims_lifecycle_associated_set(reg: CMap, primary_aor: string, associated_csv: 
     let items = str_split(associated_csv, ",")
     if len(items) < 1 || len(items) > 8 { return 0 }
     let mut stored = ""
-    let mut i = 0
-    while i < len(items) {
-        let uri = str_trim_space(items[i])
+    for item in items {
+        let uri = str_trim_space(item)
         if ims_lifecycle_uri_ok(uri) == 0 { return 0 }
         let alias_aor = ims_lifecycle_aor_from_public(uri)
         if len(alias_aor) == 0 { return 0 }
@@ -419,9 +405,8 @@ fn ims_lifecycle_associated_set(reg: CMap, primary_aor: string, associated_csv: 
             if not str_eq(owner, primary_aor) { return 0 }
         }
         cmap_set(reg, akey, primary_aor)
-        if i > 0 { stored = stored + "," }
+        if len(stored) > 0 { stored = stored + "," }
         stored = stored + uri
-        i = i + 1
     }
     cmap_set(reg, ims_lifecycle_impus_key(primary_aor), stored)
     return 1
@@ -433,16 +418,14 @@ fn ims_lifecycle_associated_clear(reg: CMap, primary_aor: string) -> int {
     if cmap_has(reg, ikey) == 1 {
         let prev = cmap_get(reg, ikey)
         let items = str_split(prev, ",")
-        let mut i = 0
-        while i < len(items) {
-            let alias_aor = ims_lifecycle_aor_from_public(str_trim_space(items[i]))
+        for item in items {
+            let alias_aor = ims_lifecycle_aor_from_public(str_trim_space(item))
             if len(alias_aor) > 0 {
                 let akey = ims_lifecycle_alias_key(alias_aor)
                 if cmap_has(reg, akey) == 1 && str_eq(cmap_get(reg, akey), primary_aor) {
                     let _ = cmap_del(reg, akey)
                 }
             }
-            i = i + 1
         }
         let _ = cmap_del(reg, ikey)
     }
@@ -527,11 +510,9 @@ fn ims_lifecycle_network_deregister(reg: CMap, aor: string, db: SqlDB, db_ok: in
         let members = ims_lifecycle_irs_members(reg, private_identity)
         if len(members) > 0 {
             let items = str_split(members, ",")
-            let mut i = 0
-            while i < len(items) {
-                let m = str_trim_space(items[i])
+            for item in items {
+                let m = str_trim_space(item)
                 if len(m) > 0 { let _ = ims_lifecycle_clear_one(reg, m, db, db_ok) }
-                i = i + 1
             }
             return 1
         }
@@ -546,10 +527,7 @@ fn ims_lifecycle_admit_aor(reg: CMap, aor: string) -> int {
     if cmap_has(reg, key) == 1 { return 1 }
     let mut count = 0
     if cmap_has(reg, "ims_life_count") == 1 {
-        match parse_int(cmap_get(reg, "ims_life_count")) {
-            Ok(v) => { count = v }
-            Err(_) => { count = 0 }
-        }
+        if let Ok(v) = parse_int(cmap_get(reg, "ims_life_count")) { count = v }
     }
     if count >= ims_lifecycle_capacity() { return 0 }
     cmap_set(reg, "ims_life_count", string(count + 1))
@@ -560,10 +538,7 @@ fn ims_lifecycle_release_aor_count(reg: CMap, aor: string, had_key: int) -> int 
     if had_key == 0 { return 1 }
     let mut count = 0
     if cmap_has(reg, "ims_life_count") == 1 {
-        match parse_int(cmap_get(reg, "ims_life_count")) {
-            Ok(v) => { count = v }
-            Err(_) => { count = 0 }
-        }
+        if let Ok(v) = parse_int(cmap_get(reg, "ims_life_count")) { count = v }
     }
     if count > 0 { cmap_set(reg, "ims_life_count", string(count - 1)) }
     let _ = aor
@@ -635,10 +610,8 @@ fn ims_lifecycle_associated_csv_ok(associated_csv: string) -> int {
     if len(associated_csv) > 8192 { return 0 }
     let items = str_split(associated_csv, ",")
     if len(items) < 1 || len(items) > 8 { return 0 }
-    let mut i = 0
-    while i < len(items) {
-        if ims_lifecycle_uri_ok(str_trim_space(items[i])) == 0 { return 0 }
-        i = i + 1
+    for item in items {
+        if ims_lifecycle_uri_ok(str_trim_space(item)) == 0 { return 0 }
     }
     return 1
 }

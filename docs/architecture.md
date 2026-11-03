@@ -27,7 +27,7 @@ The worker owns:
 - Database-backed routes, dispatch groups, dialplans, gateways, access control, security bans, header rules, ANI ranges, and optional B2BUA policy.
 - Bounded CDR/outbox writes, optional preauthorization, metrics, and worker-local health/state endpoints.
 
-The main modular entry point is [`../main.mko`](../main.mko). It pulls 47 modules including parser, header, authentication, registration, routing, transport, billing, charging, application, module, event package, TLS reuse, outbound, operations, NAT traversal, security, STIR/SHAKEN, RTPEngine, B2BUA, stream/TCP workers, dialplan, database, app gateway, HEP, clustering, IMS (subscriber, iFC, roles, identity, path, flow, registration, lifecycle, Cx push, session timer, charging vector, drain, AKA, Diameter, Rx, IPsec), MAF (headers, worker), and HTTPS client. The codebase is pure Mako with no C bridge code. [`../sipproxy_full.mko`](../sipproxy_full.mko) is a legacy monolithic reference and is not the deployment target.
+The main modular entry point is [`../main.mko`](../main.mko). It pulls 47 modules including parser, header, authentication, registration, routing, transport, billing, charging, application, module, event package, TLS reuse, outbound, operations, NAT traversal, security, STIR/SHAKEN, RTPEngine, B2BUA, stream/TCP workers, dialplan, database, app gateway, HEP, clustering, IMS (subscriber, iFC, roles, identity, path, flow, registration, lifecycle, Cx push, session timer, charging vector, drain, AKA, Diameter, Rx, IPsec), MAF (headers, worker), and HTTPS client. The codebase is pure Mako with no C bridge code. `legacy/sipproxy_full.mko` is an archived monolithic snapshot and is not the deployment target.
 
 ## Request path
 

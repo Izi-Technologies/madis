@@ -6,17 +6,17 @@ This README is an orientation guide, not a complete feature matrix. The linked d
 
 ## Version
 
-**v0.7.4** — source builds require Makori 0.6.38 with the issues #74–#77 ownership fixes (or a later compiler that passes the ownership probe). CI and releases pin
-`c2a2d38212903b981f967c7023c5fe07744e1d71` with its matching runtime.
+**v0.7.5** — source builds require Makori 0.7.0 (or a later compiler that passes the ownership probe). CI and releases pin
+`157e3ba1b9cd0b70903c0b0acde73608ba95526a` with its matching runtime.
 Pure Mako: zero `extern "C"` functions, no C bridge code.
 
-The compiler pin adopts Makori 0.6.38 reference-counted strings, ownership
-fixes, and worker-pool stack safety. Existing crew policies, actors, inline
-channels, and SIP behavior remain covered by the contract suite. Compiler and
-runtime must come from the same release: the string representation changed.
+The compiler pin adopts Makori 0.7.0 generics parity, memory safety fixes
+(COW refcount leaks, JSON derive leaks, view-to-owned tracking, DCE
+retention), and systems features. Builder-based SIP/Diameter message assembly
+replaces string concatenation for reduced allocations. The shared stream
+framing helper deduplicates TLS/WSS/TCP poll loops. Compiler and runtime must
+come from the same release: the string representation changed.
 See the [retained-string fix integration](docs/makori-string-ownership-integration.md) for the current compiler pin and checks.
-See the [0.6.38 validation report](docs/makori-0.6.38-validation.md) for upgrade
-results and remaining production checks.
 
 ## Current implementation
 
@@ -379,7 +379,7 @@ The machine API is served by the standalone WebUI at `/admin/api/v1/`. Bearer-to
 
 ## Build and test
 
-The supported source entry point is [`main.mko`](main.mko). [`sipproxy_full.mko`](sipproxy_full.mko) is a legacy monolithic reference and is not the deployment target. The codebase is pure Mako with no C bridge code; all composite-key maps, UDP reuseport, TLS server pool, base64url, and JWT custom header support are Mako builtins. Tests run without linking any C code. Builds and CI require the pinned Makori `0.6.38` ownership fix (or a later compiler that passes the ownership probe) with its matching runtime; do not mix compiler/runtime versions when generating native C.
+The supported source entry point is [`main.mko`](main.mko). `legacy/sipproxy_full.mko` is an archived monolithic snapshot and is not the deployment target. The codebase is pure Mako with no C bridge code; all composite-key maps, UDP reuseport, TLS server pool, base64url, and JWT custom header support are Mako builtins. Tests run without linking any C code. Builds and CI require Makori `0.7.0` or later (with the ownership probe) and its matching runtime; do not mix compiler/runtime versions when generating native C.
 
 ```sh
 MAKO_BIN=/path/to/mako \

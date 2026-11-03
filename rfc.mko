@@ -9,10 +9,7 @@ fn sip_get_max_forwards(msg: string, n: int) -> int {
     let mf = sip_hdr(msg, "Max-Forwards", n)
     if len(mf) == 0 { return 70 }  // default per RFC
     let mut val = 0
-    match parse_int(mf) {
-        Ok(v) => { val = v }
-        Err(_) => { return -1 }
-    }
+    if let Ok(v) = parse_int(mf) { val = v } else { return -1 }
     if val < 0 || val > 255 { return -1 }
     return val
 }
@@ -25,10 +22,7 @@ fn sip_decrement_max_forwards(msg: string, n: int) -> string {
         return sip_prepend_header(msg, name, value)
     }
     let mut mf = 70
-    match parse_int(mf_str) {
-        Ok(v) => { mf = v }
-        Err(_) => { mf = 70 }
-    }
+    if let Ok(v) = parse_int(mf_str) { mf = v }
     let crlf = "\r\n"
     let first = str_index(msg, crlf)
     if first < 0 { return msg }
@@ -152,9 +146,8 @@ fn sip_check_require(msg: string, n: int) -> string {
     let pr = sip_hdr(msg, "Proxy-Require", n)
     if len(pr) == 0 { return "" }
     let parts = str_split(pr, ",")
-    let mut i = 0
-    while i < len(parts) {
-        let ext = str_trim_space(parts[i])
+    for part in parts {
+        let ext = str_trim_space(part)
         // No Proxy-Require extension is implemented by this proxy yet. Do
         // not silently claim support for timer, replaces, path, or 100rel.
         return ext
@@ -204,10 +197,7 @@ fn sip_cseq_method_value(msg: string) string {
 fn sip_rseq_number_value(msg: string) int {
     let raw = str_trim_space(sip_header(msg, "RSeq"))
     let mut value = 0
-    match parse_int(raw) {
-        Ok(v) => { value = v }
-        Err(_) => { return -1 }
-    }
+    if let Ok(v) = parse_int(raw) { value = v } else { return -1 }
     if value > 0 && value <= 2147483647 { return value }
     return -1
 }
@@ -215,10 +205,8 @@ fn sip_rseq_number_value(msg: string) int {
 fn sip_header_token_present(value: string, expected: string) int {
     let items = str_split(value, ",")
     let wanted = expected |> str_trim_space() |> str_to_lower()
-    let mut i = 0
-    while i < len(items) {
-        if str_eq(items[i] |> str_trim_space() |> str_to_lower(), wanted) { return 1 }
-        i = i + 1
+    for item in items {
+        if str_eq(item |> str_trim_space() |> str_to_lower(), wanted) { return 1 }
     }
     return 0
 }
@@ -508,11 +496,9 @@ fn sip_call_state_cleanup(calls: CMap, cid: string, from_tag: string, to_tag: st
     let idx = "dialog_keys|" + cid
     if cmap_has(calls, idx) == 1 {
         let keys = str_split(cmap_get(calls, idx), ",")
-        let mut i = 0
-        while i < len(keys) {
-            let key = str_trim_space(keys[i])
+        for k in keys {
+            let key = str_trim_space(k)
             if len(key) > 0 { let _ = cmap_del(calls, key) }
-            i = i + 1
         }
         let _ = cmap_del(calls, idx)
     }
@@ -936,9 +922,8 @@ fn sip_fork_cleanup_group(cid: string, cache: CMap) -> int {
     let list_key = "fork_branches|" + cid
     if cmap_has(cache, list_key) == 1 {
         let branches = str_split(cmap_get(cache, list_key), ",")
-        let mut i = 0
-        while i < len(branches) {
-            let branch = str_trim_space(branches[i])
+        for b in branches {
+            let branch = str_trim_space(b)
             if len(branch) > 0 {
                 let _ = cmap_del(cache, "fork_branch|" + branch)
                 let _ = cmap_del(cache, "fork_target|" + cid + "|" + branch)
@@ -947,7 +932,6 @@ fn sip_fork_cleanup_group(cid: string, cache: CMap) -> int {
                 let _ = cmap_del(cache, "fork_response|" + cid + "|" + branch)
                 let _ = cmap_del(cache, "fork_cancelled|" + cid + "|" + branch)
             }
-            i = i + 1
         }
     }
     let _ = cmap_del(cache, list_key)
@@ -1045,11 +1029,9 @@ fn sip_fork_attach_auth(cid: string, response: string, cache: CMap) -> string {
     let name = if code == 401 { "WWW-Authenticate" } else { "Proxy-Authenticate" }
     let values = str_split(cmap_get(cache, key), "\n")
     let mut out = response
-    let mut i = 0
-    while i < len(values) {
-        let value = str_trim_space(values[i])
+    for v in values {
+        let value = str_trim_space(v)
         if len(value) > 0 && not str_contains(out, value) { out = sip_prepend_header(out, name, value) }
-        i = i + 1
     }
     return out
 }

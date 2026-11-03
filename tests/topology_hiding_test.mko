@@ -1,0 +1,165 @@
+pull . "../topology_hiding.mko"
+pull . "../cache_owned.mko"
+pull . "../headers.mko"
+
+// Stub builtins used by topology_hiding
+fn sip_header(msg: string, name: string) -> string {
+    let namelen = len(name)
+    let n = len(msg)
+    let mut i = 0
+    while i < n {
+        if int(msg[i]) == 10 { i = i + 1; break }
+        i = i + 1
+    }
+    while i + namelen + 2 < n {
+        if int(msg[i]) == 13 { break }
+        let mut ok = 1
+        let mut j = 0
+        while j < namelen {
+            let mut c1 = int(msg[i + j])
+            let mut c2 = int(name[j])
+            if c1 >= 65 { if c1 <= 90 { c1 = c1 + 32 } }
+            if c2 >= 65 { if c2 <= 90 { c2 = c2 + 32 } }
+            if c1 != c2 { ok = 0; break }
+            j = j + 1
+        }
+        if ok == 1 && i + namelen < n && int(msg[i + namelen]) == 58 {
+            let mut vs = i + namelen + 1
+            if vs < n { if int(msg[vs]) == 32 { vs = vs + 1 } }
+            let mut ve = vs
+            while ve < n {
+                if int(msg[ve]) == 13 || int(msg[ve]) == 10 { break }
+                ve = ve + 1
+            }
+            return msg[vs:ve]
+        }
+        while i < n {
+        if int(msg[i]) == 10 { i = i + 1; break }
+        i = i + 1
+    }
+    }
+    return ""
+}
+
+fn sip_header_n(msg: string, name: string, index: int) -> string {
+    let namelen = len(name)
+    let n = len(msg)
+    let mut i = 0
+    let mut count = 0
+    while i < n {
+        if int(msg[i]) == 10 { i = i + 1; break }
+        i = i + 1
+    }
+    while i + namelen + 2 < n {
+        if int(msg[i]) == 13 { break }
+        let mut ok = 1
+        let mut j = 0
+        while j < namelen {
+            let mut c1 = int(msg[i + j])
+            let mut c2 = int(name[j])
+            if c1 >= 65 { if c1 <= 90 { c1 = c1 + 32 } }
+            if c2 >= 65 { if c2 <= 90 { c2 = c2 + 32 } }
+            if c1 != c2 { ok = 0; break }
+            j = j + 1
+        }
+        if ok == 1 && i + namelen < n && int(msg[i + namelen]) == 58 {
+            let mut vs = i + namelen + 1
+            if vs < n { if int(msg[vs]) == 32 { vs = vs + 1 } }
+            let mut ve = vs
+            while ve < n {
+                if int(msg[ve]) == 13 || int(msg[ve]) == 10 { break }
+                ve = ve + 1
+            }
+            if count == index { return msg[vs:ve] }
+            count = count + 1
+        }
+        while i < n {
+        if int(msg[i]) == 10 { i = i + 1; break }
+        i = i + 1
+    }
+    }
+    return ""
+}
+
+fn sip_via_branch(via: string) -> string {
+    let low = str_to_lower(via)
+    let idx = str_index(low, "branch=")
+    if idx < 0 { return "" }
+    let start = idx + 7
+    let mut end = start
+    while end < len(via) {
+        let c = int(via[end])
+        if c == 59 || c == 44 || c == 32 || c == 13 || c == 10 { break }
+        end = end + 1
+    }
+    return via[start:end]
+}
+
+fn sip_status_code(msg: string) -> int {
+    if len(msg) < 12 { return 0 }
+    if not str_has_prefix(msg, "SIP/2.0 ") { return 0 }
+    let mut v = 0
+    if let Ok(n) = parse_int(msg[8:11]) { v = n }
+    return v
+}
+
+fn sip_is_response(msg: string) -> int {
+    if len(msg) >= 7 && str_has_prefix(msg, "SIP/2.0") { return 1 }
+    return 0
+}
+
+fn sip_prepend_header(msg: string, name: string, value: string) -> string {
+    let n = len(msg)
+    let mut i = 0
+    while i < n {
+        if int(msg[i]) == 10 { i = i + 1; break }
+        i = i + 1
+    }
+    return msg[0:i] + name + ": " + value + "\r\n" + msg[i:]
+}
+
+fn env_get_or(key: string, fallback: string) -> string { return fallback }
+fn bounded_cache_set(cache: CMap, seq_key: string, ring_prefix: string, key: string, value: string, capacity: int) -> int { cmap_set(cache, key, value); return 0 }
+fn log_debug_if(cache: CMap, component: string, msg: string) -> int { return 0 }
+
+fn TestTopohDisabledByDefault() {
+    let cache = cmap_new()
+    assert(topoh_enabled() == 0)
+    let msg = "INVITE sip:bob@example.com SIP/2.0\r\nVia: SIP/2.0/UDP proxy:5060;branch=z9hG4bK-1\r\nVia: SIP/2.0/UDP internal:5060;branch=z9hG4bK-2\r\nContent-Length: 0\r\n\r\n"
+    let result = topoh_hide_request(msg, "z9hG4bK-1", cache)
+    // When disabled, message passes through unchanged
+    assert_eq_str(result, msg)
+}
+
+fn TestTopohHdrRemoveNth() {
+    let msg = "INVITE sip:bob@example.com SIP/2.0\r\nVia: SIP/2.0/UDP proxy:5060;branch=z9hG4bK-1\r\nVia: SIP/2.0/UDP internal1:5060;branch=z9hG4bK-2\r\nVia: SIP/2.0/UDP internal2:5060;branch=z9hG4bK-3\r\nContent-Length: 0\r\n\r\n"
+    // Remove the second Via (index 1)
+    let result = hdr_remove_nth(msg, "Via", 1)
+    // Should still have first and third Via
+    assert(str_contains(result, "proxy:5060"))
+    assert(not str_contains(result, "internal1:5060"))
+    assert(str_contains(result, "internal2:5060"))
+}
+
+fn TestTopohCollectVias() {
+    let msg = "INVITE sip:bob@example.com SIP/2.0\r\nVia: SIP/2.0/UDP proxy:5060;branch=z9hG4bK-1\r\nVia: SIP/2.0/UDP internal1:5060;branch=z9hG4bK-2\r\nVia: SIP/2.0/UDP internal2:5060;branch=z9hG4bK-3\r\nContent-Length: 0\r\n\r\n"
+    let vias = topoh_collect_vias(msg)
+    // Should contain internal vias but not the first one (proxy)
+    assert(str_contains(vias, "internal1"))
+    assert(str_contains(vias, "internal2"))
+    assert(not str_contains(vias, "proxy:5060"))
+}
+
+fn TestTopohCollectRecordRoutes() {
+    let msg = "INVITE sip:bob@example.com SIP/2.0\r\nVia: SIP/2.0/UDP proxy:5060;branch=z9hG4bK-1\r\nRecord-Route: <sip:rr1@10.0.0.1;lr>\r\nRecord-Route: <sip:rr2@10.0.0.2;lr>\r\nContent-Length: 0\r\n\r\n"
+    let rrs = topoh_collect_record_routes(msg)
+    assert(str_contains(rrs, "10.0.0.1"))
+    assert(str_contains(rrs, "10.0.0.2"))
+}
+
+fn TestTopohProxyHost() {
+    let cache = cmap_new()
+    let host = topoh_proxy_host(cache)
+    // Falls back to 127.0.0.1 when no env is set
+    assert_eq_str(host, "127.0.0.1")
+}

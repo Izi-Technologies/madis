@@ -222,17 +222,20 @@ fn diameter_cea_for_cer(cer: string, application: int) -> string {
     if diameter_identity_ok(host) == 0 || diameter_identity_ok(realm) == 0 { return "" }
     let hop = diameter_read_u32(cer, 12)
     let end = diameter_read_u32(cer, 16)
-    let mut body = madis_diameter_avp_u32(268, 2001)
-        + diameter_avp_string(264, host)
-        + diameter_avp_string(296, realm)
-        + diameter_host_ip_avp()
-        + diameter_avp_string(269, "Madis")
+    let b = str_builder()
+    builder_write(b, madis_diameter_avp_u32(268, 2001))
+    builder_write(b, diameter_avp_string(264, host))
+    builder_write(b, diameter_avp_string(296, realm))
+    builder_write(b, diameter_host_ip_avp())
+    builder_write(b, diameter_avp_string(269, "Madis"))
     let vendor = diameter_app_vendor(application)
     if vendor > 0 {
-        body = body + madis_diameter_avp_u32(265, vendor) + diameter_vendor_application_id(application)
+        builder_write(b, madis_diameter_avp_u32(265, vendor))
+        builder_write(b, diameter_vendor_application_id(application))
     } else if application > 0 {
-        body = body + madis_diameter_avp_u32(258, application)
+        builder_write(b, madis_diameter_avp_u32(258, application))
     }
+    let body = builder_string(b)
     let message = diameter_header(0, 257, 0, hop, end, body)
     return if diameter_message_valid(message) == 1 { message } else { "" }
 }
@@ -493,37 +496,38 @@ fn diameter_ccr_body(cid: string, caller: string, callee: string, kind: string, 
     let destination_realm = diameter_destination_realm()
     if diameter_identity_ok(origin_host) == 0 || diameter_identity_ok(origin_realm) == 0 || diameter_identity_ok(destination_realm) == 0 { return "" }
     let session_id = origin_host + ";" + sha256("madis.diameter.session|" + cid)[0:32]
-    let mut body = diameter_avp_string(263, session_id)
-        + diameter_avp_string(264, origin_host)
-        + diameter_avp_string(296, origin_realm)
-        + diameter_avp_string(283, destination_realm)
-        + madis_diameter_avp_u32(258, 4)
-        + diameter_avp_string(461, diameter_service_context())
-        + madis_diameter_avp_u32(416, request_type)
-        + madis_diameter_avp_u32(415, request_number)
+    let b = str_builder()
+    builder_write(b, diameter_avp_string(263, session_id))
+    builder_write(b, diameter_avp_string(264, origin_host))
+    builder_write(b, diameter_avp_string(296, origin_realm))
+    builder_write(b, diameter_avp_string(283, destination_realm))
+    builder_write(b, madis_diameter_avp_u32(258, 4))
+    builder_write(b, diameter_avp_string(461, diameter_service_context()))
+    builder_write(b, madis_diameter_avp_u32(416, request_type))
+    builder_write(b, madis_diameter_avp_u32(415, request_number))
     let subscription = diameter_subscription_id(caller)
     if len(subscription) == 0 { return "" }
-    body = body + subscription
+    builder_write(b, subscription)
     let parameter = diameter_service_parameter(callee)
-    if len(parameter) > 0 { body = body + parameter }
+    if len(parameter) > 0 { builder_write(b, parameter) }
     let service_id = env_get_or("SIP_DIAMETER_SERVICE_ID", "")
     if len(service_id) > 0 {
-        if let Ok(v) = parse_int(service_id) { if v > 0 { body = body + madis_diameter_avp_u32(439, v) } }
+        if let Ok(v) = parse_int(service_id) { if v > 0 { builder_write(b, madis_diameter_avp_u32(439, v)) } }
     }
     if request_type == 1 {
         let requested = env_get_or("SIP_DIAMETER_REQUESTED_SECONDS", "")
-        if let Ok(v) = parse_int(requested) { let unit = diameter_cc_time_group(437, v); if len(unit) > 0 { body = body + unit } }
+        if let Ok(v) = parse_int(requested) { let unit = diameter_cc_time_group(437, v); if len(unit) > 0 { builder_write(b, unit) } }
     }
     if (request_type == 2 || request_type == 3) && used_seconds > 0 {
         let used = diameter_cc_time_group(446, used_seconds)
-        if len(used) > 0 { body = body + used }
+        if len(used) > 0 { builder_write(b, used) }
     }
-    if request_type == 3 { body = body + diameter_termination_cause() }
+    if request_type == 3 { builder_write(b, diameter_termination_cause()) }
     if request_type == 4 {
         let action = env_get_or("SIP_DIAMETER_REQUESTED_ACTION", "0")
-        if let Ok(v) = parse_int(action) { if v >= 0 && v <= 4 { body = body + madis_diameter_avp_u32(436, v) } }
+        if let Ok(v) = parse_int(action) { if v >= 0 && v <= 4 { builder_write(b, madis_diameter_avp_u32(436, v)) } }
     }
-    return body
+    return builder_string(b)
 }
 
 fn diameter_ccr_message(cid: string, caller: string, callee: string, kind: string, request_number: int, used_seconds: int) -> string {
@@ -661,7 +665,7 @@ fn diameter_cc_exchange(cid: string, caller: string, callee: string, kind: strin
     if secure { port = 5658 }
     let configured_port = env_get_or("SIP_DIAMETER_PORT", "")
     if len(configured_port) > 0 {
-        match parse_int(configured_port) { Ok(v) => { port = v } Err(_) => { return "" } }
+        if let Ok(v) = parse_int(configured_port) { port = v } else { return "" }
     }
     if len(host) == 0 || len(host) > 512 || port < 1 || port > 65535 { return "" }
     if secure {
@@ -803,7 +807,7 @@ fn diameter_peer_port() -> int {
     if str_eq(diameter_transport(), "sctp") { port = 3868 }
     let configured = env_get_or("SIP_DIAMETER_PORT", "")
     if len(configured) > 0 {
-        match parse_int(configured) { Ok(v) => { port = v } Err(_) => { return -1 } }
+        if let Ok(v) = parse_int(configured) { port = v } else { return -1 }
     }
     if port < 1 || port > 65535 { return -1 }
     return port
@@ -828,10 +832,8 @@ fn diameter_peer_entry_count() -> int {
     if len(csv) == 0 { return 0 }
     let items = str_split(csv, ",")
     let mut n = 0
-    let mut i = 0
-    while i < len(items) {
-        if len(str_trim_space(items[i])) > 0 { n = n + 1 }
-        i = i + 1
+    for item in items {
+        if len(str_trim_space(item)) > 0 { n = n + 1 }
     }
     return n
 }
@@ -842,14 +844,12 @@ fn diameter_peer_entry_at(index: int) -> string {
     if len(csv) == 0 { return "" }
     let items = str_split(csv, ",")
     let mut n = 0
-    let mut i = 0
-    while i < len(items) {
-        let item = str_trim_space(items[i])
+    for entry in items {
+        let item = str_trim_space(entry)
         if len(item) > 0 {
             if n == index { return item }
             n = n + 1
         }
-        i = i + 1
     }
     return ""
 }
@@ -894,10 +894,7 @@ fn diameter_peer_entry_port(entry: string) -> int {
     if str_index(e[colon + 1:], ":") >= 0 { return diameter_peer_port() }
     let port_s = e[colon + 1:]
     let mut port = -1
-    match parse_int(port_s) {
-        Ok(v) => { port = v }
-        Err(_) => { return -1 }
-    }
+    if let Ok(v) = parse_int(port_s) { port = v } else { return -1 }
     if port < 1 || port > 65535 { return -1 }
     return port
 }
@@ -980,10 +977,7 @@ fn diameter_peer_is_backed_off(cache: CMap, index: int) -> int {
     let key = diameter_peer_backoff_key(index)
     if cmap_has(cache, key) == 0 { return 0 }
     let mut until = 0
-    match parse_int(cmap_get(cache, key)) {
-        Ok(v) => { until = v }
-        Err(_) => { return 0 }
-    }
+    if let Ok(v) = parse_int(cmap_get(cache, key)) { until = v } else { return 0 }
     if mono_ms() < until { return 1 }
     let _ = cmap_del(cache, key)
     let _ = cmap_del(cache, diameter_peer_fail_key(index))
@@ -1053,10 +1047,7 @@ fn diameter_peer_read_pool_message(handle: int) -> string {
 
 fn diameter_peer_handle(cache: CMap) -> int {
     if cmap_has(cache, "diameter.peer.handle") == 0 { return -1 }
-    match parse_int(cmap_get(cache, "diameter.peer.handle")) {
-        Ok(v) => { return v }
-        Err(_) => { return -1 }
-    }
+    if let Ok(v) = parse_int(cmap_get(cache, "diameter.peer.handle")) { return v }
     return -1
 }
 
@@ -1177,10 +1168,7 @@ fn diameter_peer_failover_advance(cache: CMap, realm: string) -> int {
         i = i + 1
     }
     let next_pos = if pos + 1 >= count { 0 } else { pos + 1 }
-    match parse_int(str_trim_space(items[next_pos])) {
-        Ok(v) => { cmap_set(cache, "diameter.peer.host_index", string(v)) }
-        Err(_) => { return 0 }
-    }
+    if let Ok(v) = parse_int(str_trim_space(items[next_pos])) { cmap_set(cache, "diameter.peer.host_index", string(v)) } else { return 0 }
     return 1
 }
 

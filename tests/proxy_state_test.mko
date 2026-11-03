@@ -5,7 +5,9 @@ pull . "../rfc.mko"
 pull . "../registration.mko"
 pull . "../headers.mko"
 
-// Stub: is_private_ip lives in nat.mko, called by registration.mko
+// Stubs for functions used by registration.mko but defined in other modules
+fn bounded_cache_set(cache: CMap, seq_key: string, ring_prefix: string, key: string, value: string, capacity: int) -> int { cmap_set(cache, key, value); return 0 }
+fn sql_query_str(db: SqlDB, query: string, param: string) -> string { return "" }
 fn TestPendingByeTransaction() {
     let cache = cmap_new()
     let key = "z9hG4bK-pending-bye|2 BYE"

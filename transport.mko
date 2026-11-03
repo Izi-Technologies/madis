@@ -78,7 +78,7 @@ fn sip_srv_record_priority(record: string) -> int {
     let parts = str_split(record, ":")
     if len(parts) < 4 { return -1 }
     let mut value = -1
-    match parse_int(str_trim_space(parts[0])) { Ok(v) => { value = v } Err(_) => { value = -1 } }
+    if let Ok(v) = parse_int(str_trim_space(parts[0])) { value = v }
     return value
 }
 
@@ -86,7 +86,7 @@ fn sip_srv_record_weight(record: string) -> int {
     let parts = str_split(record, ":")
     if len(parts) < 4 { return 0 }
     let mut value = 0
-    match parse_int(str_trim_space(parts[1])) { Ok(v) => { value = v } Err(_) => { value = 0 } }
+    if let Ok(v) = parse_int(str_trim_space(parts[1])) { value = v }
     return value
 }
 
@@ -167,9 +167,8 @@ fn sip_naptr_resolve_service(target: string, transport: string, cache: CMap) -> 
     let mut best_pref = 65536
     let mut selected = ""
     let raw = str_split(records, ",")
-    let mut i = 0
-    while i < len(raw) {
-        let record = str_trim_space(raw[i])
+    for entry in raw {
+        let record = str_trim_space(entry)
         let service = sip_naptr_record_service(record)
         let mut service_transport = ""
         if str_eq(service, "sip+d2u") { service_transport = "udp" }
@@ -184,7 +183,6 @@ fn sip_naptr_resolve_service(target: string, transport: string, cache: CMap) -> 
                 selected = sip_naptr_service_target(service, host)
             }
         }
-        i = i + 1
     }
     return selected
 }
@@ -214,18 +212,17 @@ fn sip_srv_resolve_targets(target: string, transport: string, cache: CMap) -> st
     let raw = str_split(records, ",")
     let mut remaining = make([]string, 0, 8)
     let mut used = make([]int, 0, 8)
-    let mut i = 0
-    while i < len(raw) {
-        let item = str_trim_space(raw[i])
+    for entry in raw {
+        let item = str_trim_space(entry)
         if sip_srv_record_target(item) != "" {
             remaining = append(remaining, item)
             used = append(used, 0)
         }
-        i = i + 1
     }
     let mut result = ""
     let mut picked_count = 0
     let total_records = len(remaining)
+    let mut i = 0
     while picked_count < total_records {
         let mut priority = 65536
         i = 0
@@ -317,14 +314,12 @@ fn sip_assoc_list_remove(cache: CMap, list_key: string, item: string) -> int {
     if cmap_has(cache, list_key) == 0 { return 0 }
     let values = str_split(cmap_get(cache, list_key), ",")
     let mut kept = ""
-    let mut i = 0
-    while i < len(values) {
-        let value = str_trim_space(values[i])
+    for v in values {
+        let value = str_trim_space(v)
         if len(value) > 0 && not str_eq(value, item) {
             if len(kept) > 0 { kept = kept + "," }
             kept = kept + value
         }
-        i = i + 1
     }
     if len(kept) == 0 { let _ = cmap_del(cache, list_key) } else { cmap_set(cache, list_key, kept) }
     return 0
@@ -353,7 +348,7 @@ fn sip_forward_tcp(target: string, msg: string, cache: CMap, owner: int) -> int 
     let assoc_key = "tcp_assoc|" + string(owner) + "|" + host + ":" + string(port)
     let mut fd = -1
     if cmap_has(cache, assoc_key) == 1 {
-        match parse_int(cmap_get(cache, assoc_key)) { Ok(v) => { fd = v } Err(_) => { fd = -1 } }
+        if let Ok(v) = parse_int(cmap_get(cache, assoc_key)) { fd = v }
     }
     if fd >= 0 {
         let sent_existing = sip_tcp_send(fd, msg)
@@ -410,7 +405,7 @@ fn sip_forward_tls(target: string, msg: string, cache: CMap, owner: int) -> int 
     let assoc_key = "tls_assoc|" + string(owner) + "|" + item
     let mut handle = -1
     if cmap_has(cache, assoc_key) == 1 {
-        match parse_int(cmap_get(cache, assoc_key)) { Ok(v) => { handle = v } Err(_) => { handle = -1 } }
+        if let Ok(v) = parse_int(cmap_get(cache, assoc_key)) { handle = v }
     }
     if handle > 0 {
         let sent_existing = tls_pool_send(handle, msg)
@@ -483,7 +478,7 @@ fn sip_forward_wss(target: string, msg: string, cache: CMap, owner: int) -> int 
     let assoc_key = "wss_assoc|" + string(owner) + "|" + item
     let mut handle = -1
     if cmap_has(cache, assoc_key) == 1 {
-        match parse_int(cmap_get(cache, assoc_key)) { Ok(v) => { handle = v } Err(_) => { handle = -1 } }
+        if let Ok(v) = parse_int(cmap_get(cache, assoc_key)) { handle = v }
     }
     if handle > 0 {
         let sent_existing = wss_pool_send(handle, msg)
@@ -531,6 +526,12 @@ fn sip_forward_wss(target: string, msg: string, cache: CMap, owner: int) -> int 
 }
 
 fn sip_forward_target(target: string, msg: string, transport: string, cache: CMap, out_fd: int) -> int {
+    // Topology hiding: strip internal headers before sending outbound
+    let mut fwd_msg = msg
+    if topoh_enabled() == 1 && sip_is_response(msg) == 0 {
+        let branch = sip_via_branch(sip_header(msg, "Via"))
+        fwd_msg = topoh_hide_request(msg, branch, cache)
+    }
     let mut tr = sip_transport_param(target, transport)
     let target_low = str_to_lower(target)
     let mut explicit = 0
@@ -550,23 +551,22 @@ fn sip_forward_target(target: string, msg: string, transport: string, cache: CMa
     let mut sent = 0
     let mut chosen_target = ""
     let candidates = str_split(resolved_targets, ",")
-    let mut i = 0
-    while i < len(candidates) && sent == 0 {
-        let send_target = str_trim_space(candidates[i])
-        if len(send_target) == 0 { i = i + 1; continue }
-        if sip_target_port_state(send_target) < 0 { i = i + 1; continue }
+    for candidate in candidates {
+        if sent == 1 { break }
+        let send_target = str_trim_space(candidate)
+        if len(send_target) == 0 { continue }
+        if sip_target_port_state(send_target) < 0 { continue }
         let health_addr = sip_target_host(send_target) + ":" + string(sip_target_port(send_target, default_port))
         if dispatch_is_healthy(health_addr, cache) == 1 {
-            if str_eq(tr, "udp") { sent = sip_forward_udp(send_target, msg, cache, out_fd) }
-            if str_eq(tr, "tcp") { sent = sip_forward_tcp(send_target, msg, cache, out_fd) }
-            if str_eq(tr, "tls") || str_eq(tr, "sips") { sent = sip_forward_tls(send_target, msg, cache, out_fd) }
-            if str_eq(tr, "ws") { sent = sip_forward_ws(send_target, msg, cache) }
-            if str_eq(tr, "wss") { sent = sip_forward_wss(send_target, msg, cache, out_fd) }
-            if len(tr) == 0 { sent = sip_forward_udp(send_target, msg, cache, out_fd) }
+            if str_eq(tr, "udp") { sent = sip_forward_udp(send_target, fwd_msg, cache, out_fd) }
+            if str_eq(tr, "tcp") { sent = sip_forward_tcp(send_target, fwd_msg, cache, out_fd) }
+            if str_eq(tr, "tls") || str_eq(tr, "sips") { sent = sip_forward_tls(send_target, fwd_msg, cache, out_fd) }
+            if str_eq(tr, "ws") { sent = sip_forward_ws(send_target, fwd_msg, cache) }
+            if str_eq(tr, "wss") { sent = sip_forward_wss(send_target, fwd_msg, cache, out_fd) }
+            if len(tr) == 0 { sent = sip_forward_udp(send_target, fwd_msg, cache, out_fd) }
             let _ = dispatch_health_note(health_addr, sent, cache)
             if sent == 1 { chosen_target = send_target }
         }
-        i = i + 1
     }
     if sent == 1 && str_eq(madis_method(msg), "INVITE") {
         let cid = sip_header(msg, "Call-ID")
@@ -574,6 +574,8 @@ fn sip_forward_target(target: string, msg: string, transport: string, cache: CMa
         if len(cid) > 0 && len(branch) > 0 {
             let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_dst|" + cid, target, 131072)
             let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_branch|" + cid, branch, 131072)
+            // Channel counting: track active call on this gateway
+            let _ = gateway_channel_incr(cache, chosen_target, cid)
         }
     }
     if sent == 0 {

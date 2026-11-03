@@ -55,10 +55,8 @@ fn module_gateway_request_allowed(name: string, operation: string) -> int {
     if len(configured) > 0 {
         let names = str_split(configured, ",")
         let mut found = 0
-        let mut i = 0
-        while i < len(names) {
-            if str_eq(names[i] |> str_trim_space() |> str_to_lower(), str_to_lower(name)) { found = 1 }
-            i = i + 1
+        for entry in names {
+            if str_eq(entry |> str_trim_space() |> str_to_lower(), str_to_lower(name)) { found = 1 }
         }
         if found == 0 { return 0 }
     } else {
