@@ -220,7 +220,10 @@ fn sip_cseq_valid(msg: string, is_response: int) -> int {
     if i <= seq_start { return 0 }
     let mut seq = 0
     let seq_text = str_slice(cseq, seq_start, i)
-    if let Ok(v) = parse_int(seq_text) { seq = v } else { return 0 }
+    match parse_int(seq_text) {
+        Ok(v) => { seq = v }
+        Err(_) => { return 0 }
+    }
     if seq < 0 || seq > 2147483647 { return 0 }
     while i < len(cseq) && (int(cseq[i]) == 32 || int(cseq[i]) == 9) { i = i + 1 }
     let method_start = i

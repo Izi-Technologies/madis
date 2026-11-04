@@ -44,7 +44,7 @@ fn https_post_status_line(raw: string) -> int {
     if len(raw) < 12 || not str_has_prefix(raw, "HTTP/") { return 0 }
     let sp = str_index(raw, " ")
     if sp < 5 || sp > 12 || sp + 4 > len(raw) { return 0 }
-    if let Ok(v) = parse_int(raw[sp + 1:sp + 4]) { return v }
+    match parse_int(raw[sp + 1:sp + 4]) { Ok(v) => { return v } Err(_) => { return 0 } }
     return 0
 }
 
@@ -97,7 +97,7 @@ fn madis_https_post(host: string, port: int, path: string, token: string, body: 
 // These two helpers are the only sanctioned way to read that envelope.
 fn https_post_status(response: string) -> int {
     if len(response) < 4 || int(response[3]) != 124 { return 0 }
-    if let Ok(v) = parse_int(response[0:3]) { return v }
+    match parse_int(response[0:3]) { Ok(v) => { return v } Err(_) => { return 0 } }
     return 0
 }
 

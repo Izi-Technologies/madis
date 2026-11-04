@@ -9,7 +9,7 @@ fn sip_get_max_forwards(msg: string, n: int) -> int {
     let mf = sip_hdr(msg, "Max-Forwards", n)
     if len(mf) == 0 { return 70 }  // default per RFC
     let mut val = 0
-    if let Ok(v) = parse_int(mf) { val = v } else { return -1 }
+    match parse_int(mf) { Ok(v) => { val = v } Err(_) => { return -1 } }
     if val < 0 || val > 255 { return -1 }
     return val
 }
@@ -197,7 +197,7 @@ fn sip_cseq_method_value(msg: string) string {
 fn sip_rseq_number_value(msg: string) int {
     let raw = str_trim_space(sip_header(msg, "RSeq"))
     let mut value = 0
-    if let Ok(v) = parse_int(raw) { value = v } else { return -1 }
+    match parse_int(raw) { Ok(v) => { value = v } Err(_) => { return -1 } }
     if value > 0 && value <= 2147483647 { return value }
     return -1
 }
