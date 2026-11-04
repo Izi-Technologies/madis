@@ -9,17 +9,15 @@ fn event_package_enabled() -> int {
 }
 
 fn event_package_list() -> string {
-    return env_get_or("SIP_EVENT_PACKAGE_LIST", "presence,message-summary") |> str_trim_space() |> str_to_lower()
+    return env_get_or("SIP_EVENT_PACKAGE_LIST", "presence,message-summary,dialog") |> str_trim_space() |> str_to_lower()
 }
 
 fn event_package_supported(pkg: string) -> int {
     let list = event_package_list()
     let parts = str_split(list, ",")
     let p = pkg |> str_trim_space() |> str_to_lower()
-    let mut i = 0
-    while i < len(parts) {
-        if str_eq(str_trim_space(parts[i]), p) { return 1 }
-        i = i + 1
+    for part in parts {
+        if str_eq(str_trim_space(part), p) { return 1 }
     }
     return 0
 }
@@ -89,6 +87,62 @@ fn event_package_mwi_body() -> string {
     return "Messages-Waiting: no\r\n"
 }
 
+// --- RFC 4235 dialog-info for BLF ---
+
+fn event_package_dialog_state(cache: CMap, resource: string) -> string {
+    let key = "dialog_aor_state|" + resource
+    if cmap_has(cache, key) == 1 {
+        let v = cmap_get(cache, key)
+        // Stored as "<state>|<call_id>"
+        let pipe = str_index(v, "|")
+        if pipe > 0 { return "" + v[0:pipe] }
+        return v
+    }
+    return "terminated"
+}
+
+fn event_package_dialog_body(cache: CMap, resource: string) -> string {
+    let state = event_package_dialog_state(cache, resource)
+    // Increment per-resource version counter for RFC 4235 compliance
+    let ver_key = "dialog_info_ver|" + resource
+    let mut version = 0
+    if cmap_has(cache, ver_key) == 1 {
+        if let Ok(v) = parse_int(cmap_get(cache, ver_key)) { version = v }
+    }
+    cmap_set(cache, ver_key, string(version + 1))
+    // Extract call-id from stored state if present
+    let aor_key = "dialog_aor_state|" + resource
+    let mut call_id = "none"
+    if cmap_has(cache, aor_key) == 1 {
+        let raw = cmap_get(cache, aor_key)
+        let pipe = str_index(raw, "|")
+        if pipe >= 0 && pipe + 1 < len(raw) { call_id = "" + raw[pipe + 1:] }
+    }
+    let mut direction = "recipient"
+    let dir_key = "dialog_aor_dir|" + resource
+    if cmap_has(cache, dir_key) == 1 { direction = cmap_get(cache, dir_key) }
+    let b = str_builder()
+    builder_write(b, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n")
+    builder_write(b, "<dialog-info xmlns=\"urn:ietf:params:xml:ns:dialog-info\" version=\"")
+    builder_write(b, string(version))
+    builder_write(b, "\" state=\"full\" entity=\"")
+    builder_write(b, resource)
+    builder_write(b, "\">\r\n")
+    if not str_eq(state, "terminated") {
+        builder_write(b, "  <dialog id=\"")
+        builder_write(b, call_id)
+        builder_write(b, "\" call-id=\"")
+        builder_write(b, call_id)
+        builder_write(b, "\" direction=\"")
+        builder_write(b, direction)
+        builder_write(b, "\">\r\n    <state>")
+        builder_write(b, state)
+        builder_write(b, "</state>\r\n  </dialog>\r\n")
+    }
+    builder_write(b, "</dialog-info>")
+    return builder_string(b)
+}
+
 // Derive presence from registration state: if AOR has a live binding → open.
 fn event_package_presence_open(reg: CMap, resource: string) -> int {
     // resource is a SIP URI like sip:user@domain — extract AOR
@@ -98,41 +152,76 @@ fn event_package_presence_open(reg: CMap, resource: string) -> int {
     return 0
 }
 
+// --- Dialog state change (call to push BLF NOTIFYs) ---
+// Call when INVITE confirmed, early media, or BYE received.
+// state: "trying", "early", "confirmed", "terminated"
+// aor: the SIP URI of the monitored user (e.g. sip:alice@example.com)
+// call_id: the Call-ID of the dialog that changed
+
+fn event_package_update_dialog_aor(cache: CMap, aor: string, state: string, call_id: string, direction: string) -> int {
+    let key = "dialog_aor_state|" + aor
+    if str_eq(state, "terminated") {
+        let _ = cmap_del(cache, key)
+        let _ = cmap_del(cache, "dialog_aor_dir|" + aor)
+    } else {
+        cmap_set(cache, key, state + "|" + call_id)
+        cmap_set(cache, "dialog_aor_dir|" + aor, direction)
+    }
+    return 0
+}
+
+fn event_package_notify_dialog_change(cache: CMap, reg: CMap, aor: string) -> int {
+    if event_package_enabled() == 0 { return 0 }
+    if event_package_supported("dialog") == 0 { return 0 }
+    return event_package_notify(cache, reg, "dialog", aor)
+}
+
 // --- Build NOTIFY request ---
 
 fn event_package_build_notify(call_id: string, from_hdr: string, to_hdr: string, event: string, sub_state: string, content_type: string, body: string, cseq: int, contact: string) -> string {
-    // NOTIFY is sent to the subscriber's Contact
-    let target = contact
-    let mut req = "NOTIFY " + target + " SIP/2.0\r\n"
-        + "From: " + to_hdr + "\r\n"
-        + "To: " + from_hdr + "\r\n"
-        + "Call-ID: " + call_id + "\r\n"
-        + "CSeq: " + string(cseq) + " NOTIFY\r\n"
-        + "Event: " + event + "\r\n"
-        + "Subscription-State: " + sub_state + "\r\n"
-        + "Max-Forwards: 70\r\n"
+    let b = str_builder()
+    builder_write(b, "NOTIFY ")
+    builder_write(b, contact)
+    builder_write(b, " SIP/2.0\r\nFrom: ")
+    builder_write(b, to_hdr)
+    builder_write(b, "\r\nTo: ")
+    builder_write(b, from_hdr)
+    builder_write(b, "\r\nCall-ID: ")
+    builder_write(b, call_id)
+    builder_write(b, "\r\nCSeq: ")
+    builder_write(b, string(cseq))
+    builder_write(b, " NOTIFY\r\nEvent: ")
+    builder_write(b, event)
+    builder_write(b, "\r\nSubscription-State: ")
+    builder_write(b, sub_state)
+    builder_write(b, "\r\nMax-Forwards: 70\r\n")
     if len(body) > 0 {
-        req = req + "Content-Type: " + content_type + "\r\n"
-            + "Content-Length: " + string(len(body)) + "\r\n\r\n"
-            + body
+        builder_write(b, "Content-Type: ")
+        builder_write(b, content_type)
+        builder_write(b, "\r\nContent-Length: ")
+        builder_write(b, string(len(body)))
+        builder_write(b, "\r\n\r\n")
+        builder_write(b, body)
     } else {
-        req = req + "Content-Length: 0\r\n\r\n"
+        builder_write(b, "Content-Length: 0\r\n\r\n")
     }
-    return req
+    return builder_string(b)
 }
 
 fn event_package_content_type(event: string) -> string {
     if str_eq(event, "presence") { return "application/pidf+xml" }
     if str_eq(event, "message-summary") { return "application/simple-message-summary" }
+    if str_eq(event, "dialog") { return "application/dialog-info+xml" }
     return "text/plain"
 }
 
-fn event_package_body(event: string, reg: CMap, resource: string) -> string {
+fn event_package_body(event: string, reg: CMap, resource: string, cache: CMap) -> string {
     if str_eq(event, "presence") {
         let is_open = event_package_presence_open(reg, resource)
         return event_package_pidf(resource, is_open)
     }
     if str_eq(event, "message-summary") { return event_package_mwi_body() }
+    if str_eq(event, "dialog") { return event_package_dialog_body(cache, resource) }
     return ""
 }
 
@@ -165,7 +254,7 @@ fn event_package_send_notify(cache: CMap, reg: CMap, sub_key: string, terminated
     }
 
     let content_type = event_package_content_type(event)
-    let body = event_package_body(event, reg, resource)
+    let body = event_package_body(event, reg, resource, cache)
     let from_hdr = from_uri + ";tag=" + from_tag
     let to_hdr = resource + ";tag=" + to_tag
     let notify = event_package_build_notify(call_id, from_hdr, to_hdr, event, sub_state, content_type, body, cseq, contact)

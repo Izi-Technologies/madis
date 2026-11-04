@@ -104,6 +104,13 @@ fn main() {
                         let mut resp = ""
                         let mut ws_handed_off = 0
 
+                        // API rate limiting per source IP
+                        let peer_ip = tcp_peer_addr(fd)
+                        if api_rate_check(live_cache, peer_ip) == 0 {
+                            resp = api_rate_limited_response()
+                            path = "__rate_limited__"
+                        }
+
                         if http_request_size_ok(raw, rl) == 0 {
                             resp = http_resp(400, "text/plain", "invalid request size or body\n", "Connection: close\r\n")
                             path = "__invalid_request__"

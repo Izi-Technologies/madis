@@ -167,14 +167,8 @@ fn ims_aka_pool_next_nonce(cache: CMap, private_identity: string) -> string {
     if cmap_has(cache, count_key) == 0 || cmap_has(cache, next_key) == 0 { return "" }
     let mut count = 0
     let mut next = 0
-    match parse_int(cmap_get(cache, count_key)) {
-        Ok(v) => { count = v }
-        Err(_) => { return "" }
-    }
-    match parse_int(cmap_get(cache, next_key)) {
-        Ok(v) => { next = v }
-        Err(_) => { return "" }
-    }
+    if let Ok(v) = parse_int(cmap_get(cache, count_key)) { count = v } else { return "" }
+    if let Ok(v) = parse_int(cmap_get(cache, next_key)) { next = v } else { return "" }
     if next < 1 || next >= count { return "" }
     let slot_key = ims_aka_pool_slot_key(private_identity, next)
     if cmap_has(cache, slot_key) == 0 { return "" }
@@ -296,10 +290,7 @@ fn ims_aka_response_valid(msg: string, n: int, cache: CMap, public_identity: str
     if cmap_has(cache, key) == 0 { return 2 }
     let at_key = key + "|at"
     let mut created_at = 0
-    match parse_int(cmap_get(cache, at_key)) {
-        Ok(v) => { created_at = v }
-        Err(_) => { return 2 }
-    }
+    if let Ok(v) = parse_int(cmap_get(cache, at_key)) { created_at = v } else { return 2 }
     // Vector lifetime is operator-configurable; default five minutes.
     let mut ttl_ms = 300000
     if let Ok(v) = parse_int(env_get_or("SIP_IMS_AKA_VECTOR_TTL_MS", "300000")) {

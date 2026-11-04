@@ -51,7 +51,10 @@ pull . "./cluster.mko"
 pull . "./event_package.mko"
 pull . "./sip_forwarding.mko"
 pull . "./sip_dialog.mko"
+pull . "./topology_hiding.mko"
+pull . "./refer.mko"
 pull . "./workers.mko"
+pull . "./uac_registration.mko"
 
 fn ims_ifc_prepare_outbound(msg: string) -> string {
     return ims_identity_apply_privacy(msg)
@@ -124,6 +127,12 @@ live fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: stri
             let _ = sip_client_txn_finish(data, cache)
             return ""
         }
+        // Active OPTIONS probe responses — consume and don't forward
+        if dispatch_probe_handle_response(data, cache) == 1 { return "" }
+        // Topology hiding: restore internal headers stripped on egress
+        let data = topoh_restore_response(data, cache)
+        // UAC registration: consume responses to our outbound REGISTERs
+        if uac_reg_handle_response(data, cache) == 1 { return "" }
         // A stateful proxy does not forward a downstream 100 Trying; it has
         // already generated the transaction-level 100 when appropriate.
         let response_txn = sip_transaction_key(data, len(data))
@@ -311,6 +320,10 @@ live fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: stri
         }
         if resp_code_int >= 200 && resp_code_int < 300 {
             let _ = cmap_del(cache, "dialog_non2xx|" + resp_cid)
+        }
+        // Release re-INVITE glare lock on final response (any >= 200)
+        if resp_code_int >= 200 {
+            let _ = ims_session_glare_end(cache, resp_cid)
         }
         let _ = db_sip_tx(db, db_ok, resp_cid, "recv", resp_code, 0, ip, "proxy")
         return resp
@@ -930,10 +943,7 @@ live fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: stri
             if len(rem_parts) >= 2 && len(rem_parts[1]) > 0 { life_tr = rem_parts[1] }
             if len(rem_parts) >= 3 {
                 let mut exp_at = 0
-                match parse_int(rem_parts[2]) {
-                    Ok(v) => { exp_at = v }
-                    Err(_) => { exp_at = 0 }
-                }
+                if let Ok(v) = parse_int(rem_parts[2]) { exp_at = v }
                 let mut rem_s = (exp_at - now_ms()) / 1000
                 if rem_s < 1 { rem_s = 1 }
                 life_expires = rem_s
@@ -1072,7 +1082,12 @@ live fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: stri
         if initial_dialog == 0 {
             let dialog_msg = rtp_process_offer(msg, len(msg), cid, from_tag, db, db_ok, cache)
             let sent = sip_forward_dialog_request(dialog_msg, cid, "INVITE", next_hop, ip, port, tr, cache, forward_fd)
-            let _ = ims_session_glare_end(cache, cid)
+            if sent == 0 {
+                // Forward failed — release glare lock immediately
+                let _ = ims_session_glare_end(cache, cid)
+            }
+            // On success, glare lock stays until the response arrives (cleared
+            // in the response path by dialog_non2xx or 2xx processing).
             if sent == 1 { return "" }
             if len(maf_inbound_call) > 0 && cmap_has(cache, "maf_inbound_answer|" + maf_inbound_call) == 1 {
                 let prev_resp = cmap_get(cache, "maf_inbound_answer|" + maf_inbound_call)
@@ -1317,6 +1332,11 @@ live fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: stri
                 let fwd = nat_fix_sdp(proxy_hop(term_msg, ip, port, tr), len(term_msg), public_ip)
                 let _ = sip_forward_target(term_target, fwd, term_tr, cache, forward_fd)
                 let _ = bounded_cache_set(cache, "dialog_seq", "dialog_ring|", "dialog_dst|" + cid, term_target, 131072)
+                // BLF: notify subscribers that callee has an incoming call
+                let _ = event_package_update_dialog_aor(cache, did_aor, "trying", cid, "recipient")
+                let _ = event_package_notify_dialog_change(cache, reg, did_aor)
+                let _ = maf_worker_emit_event(db, db_ok, maf_worker_tenant(), "dialog.state_changed", cid,
+                    "{\"aor\":\"" + maf_worker_json_escape(did_aor) + "\",\"state\":\"trying\",\"call_id\":\"" + maf_worker_json_escape(cid) + "\"}", "")
                 return sip_resp(100, "Trying", data, dl, "")
             }
         }
@@ -1554,6 +1574,14 @@ live fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: stri
             let _ = rtp_process_delete(cid, db, db_ok, cache)
             let _ = ims_rx_terminate(cache, diameter_lock, cid)
             let _ = sip_call_state_cleanup(calls, cid, sip_addr_tag(from), sip_addr_tag(to))
+            // BLF: notify subscribers that this AOR's call has ended
+            let bye_aor = sip_user(to) + "@" + sip_domain(to)
+            let _ = event_package_update_dialog_aor(cache, bye_aor, "terminated", cid, "")
+            let _ = event_package_notify_dialog_change(cache, reg, bye_aor)
+            let _ = maf_worker_emit_event(db, db_ok, maf_worker_tenant(), "dialog.state_changed", cid,
+                "{\"aor\":\"" + maf_worker_json_escape(bye_aor) + "\",\"state\":\"terminated\",\"call_id\":\"" + maf_worker_json_escape(cid) + "\"}", "")
+            // Channel counting: release gateway slot
+            let _ = gateway_channel_decr_by_cid(cache, cid)
         }
         let sent = sip_forward_dialog_request(msg, cid, "BYE", next_hop, ip, port, tr, cache, forward_fd)
         let _ = log_debug_if(cache, "sip", "bye cid=" + cid + " ip=" + ip)
@@ -1601,6 +1629,27 @@ live fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: stri
         if len(evt_resp) > 0 { return evt_resp }
         // Unsupported event package — fall through to forward or reject
     }
+    // === REFER (RFC 3515) ===
+    // Validate Refer-To, track implicit subscription, then forward.
+    if str_eq(method, "REFER") {
+        let refer_resp = refer_process(data, dl, cache, calls)
+        if len(refer_resp) > 0 { return refer_resp }
+        // MAF event: REFER received
+        let refer_to_hdr = str_trim_space(sip_header(data, "Refer-To"))
+        let _ = maf_worker_emit_event(db, db_ok, maf_worker_tenant(), "refer.received", cid,
+            "{\"call_id\":\"" + maf_worker_json_escape(cid) + "\",\"refer_to\":\"" + maf_worker_json_escape(refer_to_hdr) + "\"}", "")
+    }
+    // === NOTIFY for REFER subscription cleanup ===
+    if str_eq(method, "NOTIFY") {
+        let _ = refer_handle_notify(data, cache)
+    }
+    // === MESSAGE: emit MAF event ===
+    if str_eq(method, "MESSAGE") {
+        let msg_from = sip_user(from) + "@" + from_domain
+        let msg_to = sip_user(to) + "@" + sip_domain(to)
+        let _ = maf_worker_emit_event(db, db_ok, maf_worker_tenant(), "message.received", cid,
+            "{\"call_id\":\"" + maf_worker_json_escape(cid) + "\",\"from\":\"" + maf_worker_json_escape(msg_from) + "\",\"to\":\"" + maf_worker_json_escape(msg_to) + "\"}", "")
+    }
     // === REFER / INFO / MESSAGE / NOTIFY / SUBSCRIBE (passthrough) ===
     // RFC 3261 §16.2: a proxy MUST forward any request it understands if it
     // can determine the next hop. In-dialog requests (To-tag present) use the
@@ -1619,6 +1668,13 @@ live fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: stri
         return sip_resp(503, "Service Unavailable", data, dl, "route-failed")
     }
     if str_eq(method, "MESSAGE") || str_eq(method, "PUBLISH") || str_eq(method, "NOTIFY") || str_eq(method, "REFER") || str_eq(method, "SUBSCRIBE") {
+        // RFC 3428 body-size guard: reject MESSAGE with body > 64 KB
+        if str_eq(method, "MESSAGE") {
+            let msg_body = sip_body(data)
+            if len(msg_body) > 65536 {
+                return sip_resp(413, "Request Entity Too Large", data, dl, "message-body-too-large")
+            }
+        }
         let ruri = sip_request_uri(data)
         let mut target_aor = sip_user(to) + "@" + sip_domain(to)
         if len(sip_user(ruri)) > 0 { target_aor = sip_user(ruri) + "@" + sip_domain(ruri) }
@@ -1639,6 +1695,25 @@ live fn process_sip_core(data: string, dl: int, reg: CMap, calls: CMap, ip: stri
             let sent = sip_forward_target(term_target, fwd, contact_tr, cache, forward_fd)
             if sent == 1 { return "" }
             return sip_resp(503, "Service Unavailable", data, dl, "forward-failed")
+        }
+        // No registration binding — try routing_rules table (same engine as INVITE)
+        let pt_route = db_route_call(db, db_ok, target_aor, from_user, ip, data, dl, from_user, cid, cache)
+        if len(pt_route) > 0 {
+            if str_has_prefix(pt_route, "reject:") {
+                let rp = str_split(pt_route[7:], ":")
+                let mut rc = 403
+                let mut rr = "Forbidden"
+                if len(rp) >= 1 { if let Ok(v) = parse_int(rp[0]) { rc = v } }
+                if len(rp) >= 2 { rr = rp[1] }
+                return sip_resp(rc, rr, data, dl, "route-reject")
+            }
+            if str_has_prefix(pt_route, "route|") {
+                let rt_target = pt_route[6:]
+                let fwd = proxy_hop_via(msg, ip, port, tr)
+                let sent = sip_forward_target(rt_target, fwd, sip_transport_param(rt_target, tr), cache, forward_fd)
+                if sent == 1 { return "" }
+                return sip_resp(503, "Service Unavailable", data, dl, "route-failed")
+            }
         }
         return sip_resp(404, "Not Found", data, dl, "user-not-registered")
     }
@@ -1778,10 +1853,7 @@ fn sip_bind_ip() -> string {
 
 fn sip_worker_count(name: string, default_val: int, max_val: int) -> int {
     let mut n = default_val
-    match parse_int(env_get_or(name, string(default_val))) {
-        Ok(v) => { n = v }
-        Err(_) => { n = default_val }
-    }
+    if let Ok(v) = parse_int(env_get_or(name, string(default_val))) { n = v }
     if n < 0 { n = 0 }
     if n > max_val { n = max_val }
     return n
@@ -1794,10 +1866,7 @@ fn sip_scheduler_workers(udp_workers: int, tcp_workers: int, tls_workers: int, w
     let mut minimum = udp_workers + tcp_workers + tls_workers + wss_workers + 2
     if ipv6_enabled == 1 { minimum = minimum + 1 }
     let mut workers = 0
-    match parse_int(env_get_or("SIP_SCHED_WORKERS", "0")) {
-        Ok(v) => { workers = v }
-        Err(_) => { workers = 0 }
-    }
+    if let Ok(v) = parse_int(env_get_or("SIP_SCHED_WORKERS", "0")) { workers = v }
     if workers <= 0 { return 0 }
     if minimum > 0 && workers < minimum { workers = minimum }
     if workers > 64 { workers = 64 }
@@ -1809,10 +1878,7 @@ fn sip_scheduler_workers(udp_workers: int, tcp_workers: int, tls_workers: int, w
 // four workers for request-scoped kicks instead of one pthread per branch.
 fn sip_request_workers() -> int {
     let mut n = 4
-    match parse_int(env_get_or("SIP_REQUEST_WORKERS", "4")) {
-        Ok(v) => { n = v }
-        Err(_) => { n = 4 }
-    }
+    if let Ok(v) = parse_int(env_get_or("SIP_REQUEST_WORKERS", "4")) { n = v }
     if n < 0 { n = 0 }
     if n > 16 { n = 16 }
     return n
@@ -2213,11 +2279,26 @@ fn main() {
             slog("  Crew:    request pool " + string(request_workers) + " (fork/race/cancel/ticks)")
         }
 
+        // UAC registration: load env config and open a dedicated UDP fd
+        let mut uac_reg_fd = -1
+        if uac_reg_enabled() == 1 {
+            let _ = uac_reg_env_config(cache)
+            uac_reg_fd = nb_udp_bind(0)
+            if uac_reg_fd >= 0 { let _ = io_set_nonblocking(uac_reg_fd, 1) }
+            slog("  UAC-Reg: upstream registration enabled")
+        }
+
         while shutdown_requested() == 0 {
             sleep_ms(1000)
 
             if shutdown_requested() == 1 {
                 break
+            }
+
+            // UAC registration tick
+            if uac_reg_fd >= 0 {
+                let _ = uac_reg_send_auth_pending(cache, uac_reg_fd)
+                let _ = uac_reg_tick(cache, uac_reg_fd)
             }
 
             // Sync DB config into worker cache so MAF config changes take

@@ -5,11 +5,9 @@
 // names from callers and never interprets application data as Mako source.
 
 fn control_resource_name_ok(resource: string) -> int {
-    let names = ["gateways", "routes", "dispatch-sets", "dispatch-members", "dids", "header-rules", "access-control", "security-bans", "ani-groups", "ani-ranges", "registrations", "registration-bindings", "cluster-nodes", "security-events"]
-    let mut i = 0
-    while i < len(names) {
-        if str_eq(resource, names[i]) { return 1 }
-        i = i + 1
+    let names = ["gateways", "routes", "dispatch-sets", "dispatch-members", "dids", "header-rules", "access-control", "security-bans", "ani-groups", "ani-ranges", "registrations", "registration-bindings", "cluster-nodes", "security-events", "user-aliases", "local-domains", "uac-registrations"]
+    for name in names {
+        if str_eq(resource, name) { return 1 }
     }
     return 0
 }

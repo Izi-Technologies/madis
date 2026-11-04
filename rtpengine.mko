@@ -115,10 +115,8 @@ fn rtp_node_count() -> int {
     if len(csv) == 0 { return 0 }
     let items = str_split(csv, ",")
     let mut n = 0
-    let mut i = 0
-    while i < len(items) {
-        if len(str_trim_space(items[i])) > 0 { n = n + 1 }
-        i = i + 1
+    for item in items {
+        if len(str_trim_space(item)) > 0 { n = n + 1 }
     }
     return n
 }
@@ -129,14 +127,12 @@ fn rtp_node_at(index: int) -> string {
     if len(csv) == 0 { return "" }
     let items = str_split(csv, ",")
     let mut n = 0
-    let mut i = 0
-    while i < len(items) {
-        let item = str_trim_space(items[i])
+    for entry in items {
+        let item = str_trim_space(entry)
         if len(item) > 0 {
             if n == index { return item }
             n = n + 1
         }
-        i = i + 1
     }
     return ""
 }

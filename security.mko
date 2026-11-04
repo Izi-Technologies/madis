@@ -103,11 +103,9 @@ fn sec_is_scanner(msg: string, msglen: int) -> int {
     let extra = env_get_or("SIP_SCANNER_UA_LIST", "")
     if len(extra) > 0 {
         let items = str_split(extra, ",")
-        let mut i = 0
-        while i < len(items) {
-            let pattern = items[i] |> str_trim_space() |> str_to_lower()
+        for item in items {
+            let pattern = item |> str_trim_space() |> str_to_lower()
             if len(pattern) > 0 && str_contains(ua_low, pattern) { return 1 }
-            i = i + 1
         }
     }
     return 0
@@ -266,5 +264,38 @@ fn sec_auth_fail_clear(src_ip: string, cache: CMap) -> int {
 fn sec_log(db: SqlDB, db_ok: int, event_type: string, src_ip: string, user: string, severity: string, details: string) -> int {
     if db_ok == 0 { return 0 }
     let _ = sql_exec_str4(db, "INSERT INTO security_events (event_type, source_ip, sip_user, severity) VALUES ($1, $2, $3, $4)", event_type, src_ip, user, severity)
+    return 0
+}
+
+fn domain_validation_enabled() -> int {
+    let v = env_get_or("SIP_DOMAIN_VALIDATION", "0") |> str_trim_space() |> str_to_lower()
+    return if str_eq(v, "1") || str_eq(v, "true") || str_eq(v, "yes") { 1 } else { 0 }
+}
+
+fn is_domain_local(domain: string, cache: CMap) -> int {
+    if domain_validation_enabled() == 0 { return 1 }
+    if len(domain) == 0 { return 0 }
+    let low = str_to_lower(domain)
+    // Check env list first
+    let domains_key = "_local_domains"
+    let mut domains = ""
+    if cmap_has(cache, domains_key) == 1 {
+        domains = cmap_get(cache, domains_key)
+    } else {
+        domains = env_get_or("SIP_LOCAL_DOMAINS", "") |> str_trim_space() |> str_to_lower()
+        // Always include the configured realm
+        let realm = env_get_or("SIP_REALM", "") |> str_trim_space() |> str_to_lower()
+        if len(realm) > 0 {
+            if len(domains) > 0 { domains = domains + "," + realm }
+            else { domains = realm }
+        }
+        cmap_set(cache, domains_key, domains)
+    }
+    if len(domains) == 0 { return 1 }  // no list configured = accept all
+    // Check comma-separated list
+    let parts = str_split(domains, ",")
+    for part in parts {
+        if str_eq(str_trim_space(part), low) { return 1 }
+    }
     return 0
 }

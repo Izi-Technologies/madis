@@ -25,10 +25,7 @@ fn registration_expires(contact: string, msg: string, n: int) -> int {
     let mut value = 3600
     let header = sip_hdr(msg, "Expires", n)
     if len(header) > 0 {
-        match parse_int(str_trim_space(header)) {
-            Ok(v) => { value = v }
-            Err(_) => { return -1 }
-        }
+        if let Ok(v) = parse_int(str_trim_space(header)) { value = v } else { return -1 }
         if value < 0 { return -1 }
     }
 
@@ -43,10 +40,7 @@ fn registration_expires(contact: string, msg: string, n: int) -> int {
             end = end + 1
         }
         if end > start {
-            match parse_int(contact[start:end]) {
-                Ok(v) => { value = v }
-                Err(_) => { return -1 }
-            }
+            if let Ok(v) = parse_int(contact[start:end]) { value = v } else { return -1 }
             if value < 0 { return -1 }
         }
     }
@@ -89,10 +83,7 @@ fn registration_live(value: string) -> int {
     while exp_end < len(value) && int(value[exp_end]) != 124 { exp_end = exp_end + 1 }
     if exp_end == exp_start { return 0 }
     let mut expires_at = 0
-    match parse_int(value[exp_start:exp_end]) {
-        Ok(v) => { expires_at = v }
-        Err(_) => { return 0 }
-    }
+    if let Ok(v) = parse_int(value[exp_start:exp_end]) { expires_at = v } else { return 0 }
     if expires_at <= now_ms() { return 0 }
     return 1
 }
@@ -168,14 +159,41 @@ fn registration_find(reg: CMap, aor: string) -> string {
     return ""
 }
 
+fn registration_resolve_alias(db: SqlDB, db_ok: int, aor: string, cache: CMap) -> string {
+    let key = "alias|" + aor
+    let now = now_ms()
+    if cmap_has(cache, key) == 1 {
+        let cached = cmap_get(cache, key)
+        let pipe = str_index(cached, "|")
+        if pipe > 0 {
+            let mut cached_at = 0
+            if let Ok(v) = parse_int(cached[pipe + 1:]) { cached_at = v }
+            if cached_at > 0 && now - cached_at < 5000 { return cached[0:pipe] }
+        }
+    }
+    if db_ok == 0 { return aor }
+    let canonical = sql_query_str(db, "SELECT canonical_aor FROM user_aliases WHERE alias_aor = $1 AND enabled = true LIMIT 1", aor)
+    if len(canonical) > 0 {
+        let _ = bounded_cache_set(cache, "alias_seq", "alias_ring|", key, canonical + "|" + string(now), 16384)
+        return canonical
+    }
+    let _ = bounded_cache_set(cache, "alias_seq", "alias_ring|", key, aor + "|" + string(now), 16384)
+    return aor
+}
+
+fn registration_find_with_alias(reg: CMap, db: SqlDB, db_ok: int, aor: string, cache: CMap) -> string {
+    let direct = registration_find(reg, aor)
+    if len(direct) > 0 { return direct }
+    let alias = registration_resolve_alias(db, db_ok, aor, cache)
+    if not str_eq(alias, aor) { return registration_find(reg, alias) }
+    return ""
+}
+
 fn registration_response_contact(value: string) -> string {
     let parts = str_split(value, "|")
     if len(parts) < 3 { return "" }
     let mut expires_at = 0
-    match parse_int(parts[2]) {
-        Ok(v) => { expires_at = v }
-        Err(_) => { return "" }
-    }
+    if let Ok(v) = parse_int(parts[2]) { expires_at = v } else { return "" }
     let mut remaining = (expires_at - now_ms()) / 1000
     if remaining < 1 { remaining = 1 }
     return "<" + parts[0] + ">;expires=" + string(remaining)

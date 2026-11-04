@@ -1,0 +1,263 @@
+pull . "./cache_owned.mko"
+// ============ UAC REGISTRATION ============
+// Proxy-side upstream registration: the proxy registers itself with an
+// upstream provider/SBC, acting as a UAC.  Gated by SIP_UAC_REG=1.
+// Credentials from env (SIP_UAC_REG_* for single-trunk deployments).
+// ponytail: single-trunk via env only; DB-based multi-trunk if needed later.
+
+fn uac_reg_enabled() -> int {
+    let v = env_get_or("SIP_UAC_REG", "0") |> str_trim_space() |> str_to_lower()
+    if str_eq(v, "1") || str_eq(v, "true") || str_eq(v, "yes") { return 1 }
+    return 0
+}
+
+// ---------- env config loader ----------
+
+fn uac_reg_env_config(cache: CMap) -> int {
+    if uac_reg_enabled() == 0 { return 0 }
+    let registrar = env_get_or("SIP_UAC_REG_REGISTRAR", "")
+    let aor = env_get_or("SIP_UAC_REG_AOR", "")
+    let username = env_get_or("SIP_UAC_REG_USERNAME", "")
+    let password = env_get_or("SIP_UAC_REG_PASSWORD", "")
+    if len(registrar) == 0 || len(aor) == 0 { return 0 }
+    let mut expires = 3600
+    if let Ok(v) = parse_int(env_get_or("SIP_UAC_REG_EXPIRES", "3600")) { expires = v }
+    if expires < 60 { expires = 60 }
+    if expires > 86400 { expires = 86400 }
+    cmap_set(cache, "uac_reg|registrar", registrar)
+    cmap_set(cache, "uac_reg|aor", aor)
+    cmap_set(cache, "uac_reg|username", username)
+    cmap_set(cache, "uac_reg|password", password)
+    cmap_set(cache, "uac_reg|expires", string(expires))
+    // Seed next_at = 0 so first tick fires immediately
+    if cmap_has(cache, "uac_reg|next_at") == 0 {
+        cmap_set(cache, "uac_reg|next_at", "0")
+    }
+    return 1
+}
+
+// ---------- REGISTER builder ----------
+
+fn uac_reg_signal_host() -> string {
+    let mut host = env_get_or("SIP_PUBLIC_IP", "")
+    if len(host) == 0 { host = env_get_or("SIP_BIND_IP", "") }
+    if len(host) == 0 { host = "127.0.0.1" }
+    return host
+}
+
+fn uac_reg_signal_port() -> int {
+    let mut port = 5060
+    if let Ok(v) = parse_int(env_get_or("SIP_UDP_PORT", "5060")) { port = v }
+    if port <= 0 || port > 65535 { port = 5060 }
+    return port
+}
+
+fn uac_reg_build_register(aor: string, registrar: string, contact: string, expires: int, call_id: string, cseq: int) -> string {
+    let host = uac_reg_signal_host()
+    let port = uac_reg_signal_port()
+    let branch = sip_branch()
+    let tag = base64_encode(random_bytes(8))
+    let b = str_builder()
+    builder_write(b, "REGISTER " + registrar + " SIP/2.0\r\n")
+    builder_write(b, "Via: SIP/2.0/UDP " + host + ":" + string(port) + ";branch=" + branch + ";rport\r\n")
+    builder_write(b, "From: <" + aor + ">;tag=" + tag + "\r\n")
+    builder_write(b, "To: <" + aor + ">\r\n")
+    builder_write(b, "Call-ID: " + call_id + "\r\n")
+    builder_write(b, "CSeq: " + string(cseq) + " REGISTER\r\n")
+    builder_write(b, "Contact: <" + contact + ">\r\n")
+    builder_write(b, "Expires: " + string(expires) + "\r\n")
+    builder_write(b, "Max-Forwards: 70\r\n")
+    builder_write(b, "User-Agent: Madis\r\n")
+    builder_write(b, "Content-Length: 0\r\n")
+    builder_write(b, "\r\n")
+    return builder_string(b)
+}
+
+// ---------- digest auth response builder ----------
+
+// Extract a parameter value from a Digest challenge header value.
+// Handles both quoted ("value") and unquoted (value) forms.
+fn uac_reg_digest_param(challenge: string, name: string) -> string {
+    let low = str_to_lower(challenge)
+    let key = str_to_lower(name) + "="
+    let idx = str_index(low, key)
+    if idx < 0 { return "" }
+    let start = idx + len(key)
+    if start >= len(challenge) { return "" }
+    // Quoted value
+    if int(challenge[start]) == 34 {
+        let vstart = start + 1
+        let mut vend = vstart
+        while vend < len(challenge) && int(challenge[vend]) != 34 {
+            vend = vend + 1
+        }
+        return str_slice(challenge, vstart, vend)
+    }
+    // Unquoted value — ends at comma or whitespace
+    let mut vend = start
+    while vend < len(challenge) {
+        let ch = int(challenge[vend])
+        if ch == 44 || ch == 32 || ch == 9 || ch == 13 || ch == 10 { break }
+        vend = vend + 1
+    }
+    return str_slice(challenge, start, vend)
+}
+
+fn uac_reg_build_auth_register(original: string, challenge: string, username: string, password: string, realm: string) -> string {
+    let nonce = uac_reg_digest_param(challenge, "nonce")
+    let ch_realm = uac_reg_digest_param(challenge, "realm")
+    let mut auth_realm = realm
+    if len(ch_realm) > 0 { auth_realm = ch_realm }
+    let mut algorithm = uac_reg_digest_param(challenge, "algorithm")
+    if len(algorithm) == 0 { algorithm = "MD5" }
+    let uri = sip_request_uri(original)
+    // HA1 = md5(username:realm:password)
+    let ha1 = sip_md5_hex(username + ":" + auth_realm + ":" + password)
+    // HA2 = md5(method:uri)
+    let ha2 = sip_md5_hex("REGISTER:" + uri)
+    // response = md5(HA1:nonce:HA2)
+    let response = sip_md5_hex(ha1 + ":" + nonce + ":" + ha2)
+    // Bump CSeq
+    let old_cseq_hdr = sip_header(original, "CSeq")
+    let old_parts = str_split(str_trim_space(old_cseq_hdr), " ")
+    let mut new_cseq = 2
+    if len(old_parts) >= 1 {
+        if let Ok(v) = parse_int(old_parts[0]) { new_cseq = v + 1 }
+    }
+    // Replace Via branch, CSeq, and add Authorization
+    let new_branch = sip_branch()
+    let host = uac_reg_signal_host()
+    let port = uac_reg_signal_port()
+    let auth_value = "Digest username=\"" + username + "\", realm=\"" + auth_realm + "\", nonce=\"" + nonce + "\", uri=\"" + uri + "\", response=\"" + response + "\", algorithm=" + algorithm
+    let out = hdr_batch_rewrite(original,
+        "Via,CSeq",
+        "",
+        "Via: SIP/2.0/UDP " + host + ":" + string(port) + ";branch=" + new_branch + ";rport|CSeq: " + string(new_cseq) + " REGISTER|Authorization: " + auth_value)
+    return out
+}
+
+// ---------- tick: heartbeat-driven re-registration ----------
+
+fn uac_reg_tick(cache: CMap, forward_fd: int) -> int {
+    if uac_reg_enabled() == 0 { return 0 }
+    if cmap_has(cache, "uac_reg|registrar") == 0 { return 0 }
+    let now = mono_ms()
+    let mut next_at = 0
+    if let Ok(v) = parse_int(cmap_get(cache, "uac_reg|next_at")) { next_at = v }
+    if now < next_at { return 0 }
+    let registrar = cmap_get(cache, "uac_reg|registrar")
+    let aor = cmap_get(cache, "uac_reg|aor")
+    let mut expires = 3600
+    if let Ok(v) = parse_int(cmap_get(cache, "uac_reg|expires")) { expires = v }
+    // Check if we're waiting for a response
+    let state_key = "uac_reg|" + registrar
+    if cmap_has(cache, state_key) == 1 {
+        let state = cmap_get(cache, state_key)
+        if str_has_prefix(state, "pending|") {
+            // Still pending — don't re-send yet. Timeout after 32s (T1*64).
+            let mut sent_at = 0
+            if let Ok(v) = parse_int(cmap_get(cache, "uac_reg|sent_at")) { sent_at = v }
+            if now - sent_at < 32000 { return 0 }
+            // Timed out — clear and retry
+        }
+    }
+    // Build and send REGISTER
+    let call_id = "madis-uac-reg-" + base64_encode(random_bytes(8))
+    let mut cseq = 1
+    let contact = "sip:madis@" + uac_reg_signal_host() + ":" + string(uac_reg_signal_port())
+    let msg = uac_reg_build_register(aor, registrar, contact, expires, call_id, cseq)
+    if len(msg) == 0 { return 0 }
+    let sent = sip_forward_target(registrar, msg, sip_transport_param(registrar, "udp"), cache, forward_fd)
+    if sent == 1 {
+        cmap_set(cache, state_key, "pending|" + call_id + "|" + string(cseq))
+        cmap_set(cache, "uac_reg|sent_at", string(now))
+        cmap_set(cache, "uac_reg|call_id", call_id)
+        // Set next_at far out — response handler or timeout will reset
+        cmap_set(cache, "uac_reg|next_at", string(now + 32000))
+    }
+    return sent
+}
+
+// ---------- response handler ----------
+
+fn uac_reg_handle_response(data: string, cache: CMap) -> int {
+    if uac_reg_enabled() == 0 { return 0 }
+    let cid = sip_header(data, "Call-ID") |> str_trim_space()
+    if not str_has_prefix(cid, "madis-uac-reg-") { return 0 }
+    // This is ours — consume it
+    let registrar = cmap_get(cache, "uac_reg|registrar")
+    let state_key = "uac_reg|" + registrar
+    let code = sip_status_code(data)
+    if code == 200 {
+        // Registered successfully
+        let mut expires = 3600
+        if let Ok(v) = parse_int(cmap_get(cache, "uac_reg|expires")) { expires = v }
+        // Re-register 30s before expiry (or half if very short)
+        let mut buffer = 30000
+        if expires < 120 { buffer = expires * 1000 / 2 }
+        let refresh_ms = expires * 1000 - buffer
+        cmap_set(cache, state_key, "registered|" + cid)
+        cmap_set(cache, "uac_reg|next_at", string(mono_ms() + refresh_ms))
+        slog("[uac-reg] registered with " + registrar + " (refresh in " + string(refresh_ms / 1000) + "s)")
+        return 1
+    }
+    if code == 401 || code == 407 {
+        // Auth challenge — compute digest and resend
+        let mut challenge = sip_header(data, "WWW-Authenticate")
+        if len(challenge) == 0 { challenge = sip_header(data, "Proxy-Authenticate") }
+        if len(challenge) == 0 {
+            slog("[uac-reg] 401/407 without challenge from " + registrar)
+            cmap_set(cache, "uac_reg|next_at", string(mono_ms() + 60000))
+            let _ = cmap_del(cache, state_key)
+            return 1
+        }
+        let username = cmap_get(cache, "uac_reg|username")
+        let password = cmap_get(cache, "uac_reg|password")
+        let realm = uac_reg_digest_param(challenge, "realm")
+        // Reconstruct original REGISTER from cache state
+        let aor = cmap_get(cache, "uac_reg|aor")
+        let mut expires = 3600
+        if let Ok(v) = parse_int(cmap_get(cache, "uac_reg|expires")) { expires = v }
+        let contact = "sip:madis@" + uac_reg_signal_host() + ":" + string(uac_reg_signal_port())
+        let original = uac_reg_build_register(aor, registrar, contact, expires, cid, 1)
+        let auth_msg = uac_reg_build_auth_register(original, challenge, username, password, realm)
+        if len(auth_msg) > 0 {
+            // Store the auth message for sending — we need forward_fd which
+            // the tick has but the response handler may not. Store it and
+            // let tick pick it up on next cycle (1s).
+            cmap_set(cache, "uac_reg|auth_pending", auth_msg)
+            cmap_set(cache, state_key, "auth_pending|" + cid + "|2")
+            cmap_set(cache, "uac_reg|next_at", "0")
+        } else {
+            slog("[uac-reg] failed to build auth REGISTER for " + registrar)
+            cmap_set(cache, "uac_reg|next_at", string(mono_ms() + 60000))
+            let _ = cmap_del(cache, state_key)
+        }
+        return 1
+    }
+    // Other error — retry after 60s
+    slog("[uac-reg] " + string(code) + " from " + registrar + ", retry in 60s")
+    cmap_set(cache, "uac_reg|next_at", string(mono_ms() + 60000))
+    let _ = cmap_del(cache, state_key)
+    return 1
+}
+
+// ---------- auth-pending sender (called from tick) ----------
+
+fn uac_reg_send_auth_pending(cache: CMap, forward_fd: int) -> int {
+    if cmap_has(cache, "uac_reg|auth_pending") == 0 { return 0 }
+    let msg = cmap_get(cache, "uac_reg|auth_pending")
+    if len(msg) == 0 {
+        let _ = cmap_del(cache, "uac_reg|auth_pending")
+        return 0
+    }
+    let registrar = cmap_get(cache, "uac_reg|registrar")
+    let sent = sip_forward_target(registrar, msg, sip_transport_param(registrar, "udp"), cache, forward_fd)
+    let _ = cmap_del(cache, "uac_reg|auth_pending")
+    if sent == 1 {
+        let state_key = "uac_reg|" + registrar
+        cmap_set(cache, "uac_reg|sent_at", string(mono_ms()))
+        cmap_set(cache, "uac_reg|next_at", string(mono_ms() + 32000))
+    }
+    return sent
+}

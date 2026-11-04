@@ -6,7 +6,7 @@ if [[ "$VERSION" =~ makori([0-9]+)\.([0-9]+)\.([0-9]+)([[:space:]]|$) ]]; then
     MAJOR=$((10#${BASH_REMATCH[1]}))
     MINOR=$((10#${BASH_REMATCH[2]}))
     PATCH=$((10#${BASH_REMATCH[3]}))
-    if (( MAJOR > 0 || MINOR > 6 || (MINOR == 6 && PATCH >= 38) )); then
+    if (( MAJOR > 0 || MINOR > 7 || (MINOR == 7 && PATCH >= 0) || (MINOR == 6 && PATCH >= 38) )); then
         # Both pre-fix and post-fix compilers report 0.6.38. Verify ownership
         # behavior rather than accepting an indistinguishable version string.
         ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -29,5 +29,5 @@ if [[ "$VERSION" =~ makori([0-9]+)\.([0-9]+)\.([0-9]+)([[:space:]]|$) ]]; then
         exit 0
     fi
 fi
-echo "Makori 0.6.38 or later is required for reference-counted strings and ownership fixes (found: ${VERSION:-unknown})" >&2
+echo "Makori 0.7.0 or later is required for generics parity, writev, thread_local, and memory safety fixes (found: ${VERSION:-unknown})" >&2
 exit 1

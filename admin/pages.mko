@@ -38,10 +38,7 @@ fn sip_options_probe() -> string {
 fn fetch_metrics_path(path: string) -> string {
     let host = env_get_or("SIP_METRICS_HOST", "127.0.0.1")
     let mut port = 9090
-    match parse_int(env_get_or("SIP_METRICS_PORT", "9090")) {
-        Ok(v) => { port = v }
-        Err(_) => { port = 9090 }
-    }
+    if let Ok(v) = parse_int(env_get_or("SIP_METRICS_PORT", "9090")) { port = v }
     if port < 1 || port > 65535 { return "" }
     let c = tcp_connect(host, port)
     if c < 0 { return "" }
@@ -399,41 +396,35 @@ fn f_dashboard(db: SqlDB, ok: int) -> string {
     // Ops panels: failed CDRs, auth fails, gateway health
     let mut fail_rows = ""
     let fails = tbl_query(db, ok, "SELECT call_id || '|' || COALESCE(caller,'') || '|' || COALESCE(callee,'') || '|' || COALESCE(status,'') || '|' || to_char(started_at,'HH24:MI:SS') FROM cdr WHERE status LIKE '%NOT_FOUND%' OR status LIKE '%REJECT%' OR status = 'OFFLINE' OR status LIKE '%CANCEL%' ORDER BY started_at DESC", 8)
-    let mut fi = 0
-    while fi < len(fails) {
-        let fp = str_split(fails[fi], "|")
+    for fail in fails {
+        let fp = str_split(fail, "|")
         if len(fp) >= 5 {
             fail_rows = fail_rows + "<tr><td style=\"font-size:12px;color:var(--muted)\">" + html_esc(fp[4]) + "</td><td><strong>" + html_esc(fp[1]) + "</strong> → " + html_esc(fp[2]) + "</td><td><span class=\"badge r\">" + html_esc(fp[3]) + "</span></td>"
                 + "<td><a class=\"btn sm\" hx-get=\"/admin/transactions?cid=" + html_esc(fp[0]) + "\" hx-target=\"#c\" hx-push-url=\"true\">Trace</a></td></tr>"
         }
-        fi = fi + 1
     }
     if len(fail_rows) == 0 { fail_rows = "<tr><td colspan=\"4\" style=\"color:var(--muted);text-align:center;padding:16px\">No recent failures</td></tr>" }
 
     let mut auth_rows = ""
     let auths = tbl_query(db, ok, "SELECT to_char(ts,'HH24:MI:SS') || '|' || COALESCE(source_ip,'') || '|' || COALESCE(sip_user,'') || '|' || COALESCE(severity,'') FROM security_events WHERE event_type LIKE '%auth%' OR event_type = 'auth_failure' ORDER BY ts DESC", 8)
-    let mut ai = 0
-    while ai < len(auths) {
-        let ap = str_split(auths[ai], "|")
+    for auth in auths {
+        let ap = str_split(auth, "|")
         if len(ap) >= 3 {
             auth_rows = auth_rows + "<tr><td style=\"font-size:12px;color:var(--muted)\">" + html_esc(ap[0]) + "</td><td><code>" + html_esc(ap[1]) + "</code></td><td>" + html_esc(ap[2]) + "</td><td><span class=\"badge y\">" + html_esc(ap[3]) + "</span></td></tr>"
         }
-        ai = ai + 1
     }
     if len(auth_rows) == 0 { auth_rows = "<tr><td colspan=\"4\" style=\"color:var(--muted);text-align:center;padding:16px\">No recent auth failures</td></tr>" }
 
     let mut gw_rows = ""
     let gws = tbl_query(db, ok, "SELECT name || '|' || address || ':' || port || '|' || COALESCE(health_status,'unknown') || '|' || COALESCE(last_health_code::text,'') || '|' || COALESCE(to_char(last_health_check,'HH24:MI:SS'),'') FROM gateways WHERE enabled = true ORDER BY name", 20)
-    let mut gi = 0
-    while gi < len(gws) {
-        let gp = str_split(gws[gi], "|")
+    for gw in gws {
+        let gp = str_split(gw, "|")
         if len(gp) >= 3 {
             let mut hb = "y"
             if str_eq(gp[2], "up") { hb = "g" }
             if str_eq(gp[2], "down") { hb = "r" }
             gw_rows = gw_rows + "<tr><td><strong>" + html_esc(gp[0]) + "</strong></td><td style=\"font-size:12px\"><code>" + html_esc(gp[1]) + "</code></td><td><span class=\"badge " + hb + "\">" + html_esc(gp[2]) + "</span></td><td style=\"font-size:12px;color:var(--muted)\">" + html_esc(gp[3]) + " @ " + html_esc(gp[4]) + "</td></tr>"
         }
-        gi = gi + 1
     }
     if len(gw_rows) == 0 { gw_rows = "<tr><td colspan=\"4\" style=\"color:var(--muted);text-align:center;padding:16px\">No enabled gateways</td></tr>" }
 
@@ -656,9 +647,8 @@ fn f_transactions(db: SqlDB, ok: int, qstr: string) -> string {
 
     let mut cids = make([]string, 0, 64)
     let mut seen = "|"
-    let mut di = 0
-    while di < len(data) {
-        let p = str_split(data[di], "|")
+    for row in data {
+        let p = str_split(row, "|")
         if len(p) >= 2 {
             let cid = p[1]
             if len(cid) > 0 {
@@ -677,7 +667,6 @@ fn f_transactions(db: SqlDB, ok: int, qstr: string) -> string {
                 }
             }
         }
-        di = di + 1
         if len(cids) >= 50 { break }
     }
 
@@ -685,18 +674,15 @@ fn f_transactions(db: SqlDB, ok: int, qstr: string) -> string {
     let mut n_regs = 0
     let mut n_other = 0
     let mut cards = ""
-    let mut gi = 0
-    while gi < len(cids) {
-        let cid = cids[gi]
+    for cid in cids {
 
         // CDR parties
         let mut caller = ""
         let mut callee = ""
         let mut cdr_st = ""
         let mut dur = ""
-        let mut ci = 0
-        while ci < len(cdrs) {
-            let cp = str_split(cdrs[ci], "|")
+        for cdr_row in cdrs {
+            let cp = str_split(cdr_row, "|")
             if len(cp) >= 1 {
                 if str_eq(cp[0], cid) {
                     if len(cp) >= 2 { caller = cp[1] }
@@ -706,7 +692,6 @@ fn f_transactions(db: SqlDB, ok: int, qstr: string) -> string {
                     break
                 }
             }
-            ci = ci + 1
         }
 
         let mut legs_rows = ""
@@ -821,7 +806,6 @@ fn f_transactions(db: SqlDB, ok: int, qstr: string) -> string {
         if len(filter_kind) > 0 {
             if str_eq(filter_kind, kind) {
             } else {
-                gi = gi + 1
                 continue
             }
         }
@@ -834,7 +818,6 @@ fn f_transactions(db: SqlDB, ok: int, qstr: string) -> string {
             if str_contains(caller, filter_q) { hit = 1 }
             if str_contains(callee, filter_q) { hit = 1 }
             if hit == 0 {
-                gi = gi + 1
                 continue
             }
         }
@@ -919,7 +902,6 @@ fn f_transactions(db: SqlDB, ok: int, qstr: string) -> string {
             + "<thead><tr><th>#</th><th>Time</th><th>Dir</th><th>Message</th><th>From</th><th></th><th>To</th></tr></thead>"
             + "<tbody>" + legs_rows + "</tbody></table></div>"
             + "</div></details>"
-        gi = gi + 1
     }
 
     if len(cards) == 0 {
@@ -1053,16 +1035,14 @@ fn tbl_query_param(db: SqlDB, ok: int, sql: string, param: string, max: int) -> 
 fn f_users(db: SqlDB, ok: int) -> string {
     let mut rows = ""
     let data = tbl_query(db, ok, "SELECT username || '|' || COALESCE(domain,'') || '|' || enabled FROM users ORDER BY id", 50)
-    let mut i = 0
-    while i < len(data) {
-        let p = str_split(data[i], "|")
+    for row in data {
+        let p = str_split(row, "|")
         if len(p) >= 3 {
             let mut b = "g"
             let mut st = "Active"
             if str_eq(p[2], "f") { b = "r"; st = "Disabled" }
             rows = rows + "<tr><td>" + html_esc(p[0]) + "</td><td>" + html_esc(p[1]) + "</td><td><span class=\"badge " + b + "\">" + st + "</span></td><td><button class=\"btn sm\" hx-post=\"/admin/api/toggle\" hx-vals='{\"table\":\"users\",\"key\":\"username\",\"val\":\"" + html_esc(p[0]) + "\"}' hx-target=\"#c\">Toggle</button> <button class=\"btn sm r\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"users\",\"key\":\"username\",\"val\":\"" + html_esc(p[0]) + "\"}' hx-target=\"#c\" hx-confirm=\"Delete?\">Del</button></td></tr>"
         }
-        i = i + 1
     }
     let mut realm = env_get_or("SIP_REALM", "mako.local")
     let mut fqdn = env_get_or("SIP_PUBLIC_HOST", "")
@@ -1093,9 +1073,8 @@ fn f_users(db: SqlDB, ok: int) -> string {
 fn f_access(db: SqlDB, ok: int) -> string {
     let mut rows = ""
     let data = tbl_query(db, ok, "SELECT source_ip || '|' || COALESCE(sip_user,'*') || '|' || action || '|' || skip_auth || '|' || COALESCE(tenant,'') || '|' || max_channels || '|' || priority || '|' || enabled || '|' || COALESCE(description,'') || '|' || id FROM access_control ORDER BY priority, id", 100)
-    let mut i = 0
-    while i < len(data) {
-        let p = str_split(data[i], "|")
+    for row in data {
+        let p = str_split(row, "|")
         if len(p) >= 10 {
             let mut ab = "g"
             if str_eq(p[2], "deny") { ab = "r" }
@@ -1106,7 +1085,6 @@ fn f_access(db: SqlDB, ok: int) -> string {
             if str_eq(p[7], "f") { eb = "r"; est = "Off" }
             rows = rows + "<tr><td>" + html_esc(p[0]) + "</td><td>" + html_esc(p[1]) + "</td><td><span class=\"badge " + ab + "\">" + html_esc(p[2]) + "</span> " + sb + "</td><td>" + html_esc(p[4]) + "</td><td>" + html_esc(p[5]) + "</td><td>" + html_esc(p[6]) + "</td><td><span class=\"badge " + eb + "\">" + est + "</span></td><td>" + html_esc(p[8]) + "</td><td><button class=\"btn sm\" hx-post=\"/admin/api/toggle\" hx-vals='{\"table\":\"access_control\",\"key\":\"id\",\"val\":\"" + html_esc(p[9]) + "\"}' hx-target=\"#c\">Toggle</button> <button class=\"btn sm r\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"access_control\",\"key\":\"id\",\"val\":\"" + html_esc(p[9]) + "\"}' hx-target=\"#c\" hx-confirm=\"Delete?\">Del</button></td></tr>"
         }
-        i = i + 1
     }
     return "<div class=\"card\"><h2>Access Control</h2><p style=\"color:var(--muted);font-size:12px;margin-bottom:10px\">Manage IP allow/deny, trusted IPs (skip digest auth), per-tenant limits. Evaluated by priority (lowest first).</p><form hx-post=\"/admin/api/access\" hx-target=\"#c\"><div class=\"form-row\"><input name=\"ip\" placeholder=\"Source IP / CIDR\" required value=\"*\"><input name=\"sip_user\" placeholder=\"SIP User (*=any)\" value=\"*\"><select name=\"action\"><option>allow</option><option>deny</option></select><select name=\"skip_auth\"><option value=\"false\">Require Auth</option><option value=\"true\">Skip Auth (IP trusted)</option></select></div><div class=\"form-row\"><input name=\"tenant\" placeholder=\"Tenant\" value=\"default\"><input name=\"max_channels\" placeholder=\"Max Channels\" value=\"0\"><input name=\"priority\" placeholder=\"Priority\" value=\"10\"><input name=\"description\" placeholder=\"Description\"><button type=\"submit\">Add Rule</button></div></form></div><div class=\"card\"><table><tr><th>Source IP</th><th>User</th><th>Action</th><th>Tenant</th><th>Max Ch</th><th>Priority</th><th>Status</th><th>Description</th><th></th></tr>" + rows + "</table></div>"
 }
@@ -1114,9 +1092,8 @@ fn f_access(db: SqlDB, ok: int) -> string {
 fn f_gateways(db: SqlDB, ok: int) -> string {
     let mut cards = ""
     let data = tbl_query(db, ok, "SELECT name || '|' || address || '|' || port || '|' || COALESCE(transport,'UDP') || '|' || COALESCE(number_format,'e164') || '|' || COALESCE(tech_prefix,'') || '|' || COALESCE(caller_id_override,'') || '|' || COALESCE(enabled::text,'t') || '|' || id || '|' || COALESCE(health_status,'unknown') || '|' || COALESCE(last_health_code::text,'') || '|' || COALESCE(to_char(last_health_check,'HH24:MI:SS'),'') FROM gateways ORDER BY id", 50)
-    let mut i = 0
-    while i < len(data) {
-        let p = str_split(data[i], "|")
+    for row in data {
+        let p = str_split(row, "|")
         if len(p) >= 9 {
             let mut eb = "g"
             let mut est = "Active"
@@ -1137,7 +1114,6 @@ fn f_gateways(db: SqlDB, ok: int) -> string {
             if len(p[6]) > 0 { caller_badge = " <span class=\"badge b\">CID: " + html_esc(p[6]) + "</span>" }
             cards = cards + "<div style=\"border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:10px;background:rgba(15,23,42,.6)\"><div style=\"display:flex;justify-content:space-between;align-items:start;margin-bottom:8px\"><div><strong style=\"font-size:15px\">" + html_esc(p[0]) + "</strong><div style=\"font-size:12px;color:var(--muted);margin-top:2px\">" + html_esc(p[1]) + ":" + html_esc(p[2]) + " / " + html_esc(p[3]) + "</div></div><div style=\"display:flex;gap:4px;align-items:center;flex-wrap:wrap\"><span class=\"badge " + hb + "\">health: " + html_esc(hs) + "</span><span class=\"badge " + eb + "\">" + est + "</span><button class=\"btn sm\" hx-post=\"/admin/api/gateway_test\" hx-vals='{\"name\":\"" + html_esc(p[0]) + "\"}' hx-target=\"#c\">Test OPTIONS</button><button class=\"btn sm\" hx-post=\"/admin/api/toggle\" hx-vals='{\"table\":\"gateways\",\"key\":\"id\",\"val\":\"" + html_esc(p[8]) + "\"}' hx-target=\"#c\">Toggle</button><button class=\"btn sm r\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"gateways\",\"key\":\"id\",\"val\":\"" + html_esc(p[8]) + "\"}' hx-target=\"#c\" hx-confirm=\"Delete?\">Del</button></div></div><div style=\"font-size:12px;color:var(--muted)\">Last probe: code=" + html_esc(hcode) + " at " + html_esc(hwhen) + "</div><div style=\"font-size:12px;color:var(--muted);margin-top:4px\">Format: <span class=\"badge g\">" + html_esc(p[4]) + "</span>" + tech_badge + caller_badge + "</div><form hx-post=\"/admin/api/gateway_format\" hx-target=\"#c\" style=\"margin-top:10px;padding-top:10px;border-top:1px solid var(--border)\"><input type=\"hidden\" name=\"name\" value=\"" + html_esc(p[0]) + "\"><div class=\"form-row\"><div><label style=\"font-size:11px;color:var(--muted)\">Number Format</label><select name=\"number_format\"><option>e164</option><option>e164_no_plus</option><option>national</option><option>tech_prefix</option></select></div><div><label style=\"font-size:11px;color:var(--muted)\">Tech Prefix</label><input name=\"tech_prefix\" value=\"" + html_esc(p[5]) + "\" placeholder=\"e.g. 0049#\"></div><div><label style=\"font-size:11px;color:var(--muted)\">Caller ID Override</label><input name=\"caller_id\" value=\"" + html_esc(p[6]) + "\" placeholder=\"+15551234567\"></div><div style=\"flex:none\"><label style=\"font-size:11px;color:transparent\">.</label><button type=\"submit\" class=\"btn sm\">Save Format</button></div></div></form></div>"
         }
-        i = i + 1
     }
     return "<div class=\"card\"><h2>Gateways / Trunks</h2><p style=\"color:var(--muted);font-size:12px;margin-bottom:10px\">Trunks for outbound routing. Health is probed via OPTIONS (heartbeat + Test button). Number format applies per carrier.</p><form hx-post=\"/admin/api/gateways\" hx-target=\"#c\"><div class=\"form-row\"><input name=\"name\" placeholder=\"Gateway Name\" required><input name=\"address\" placeholder=\"IP / Hostname\" required><input name=\"port\" placeholder=\"Port\" value=\"5060\"><select name=\"transport\"><option>UDP</option><option>TCP</option><option>TLS</option></select><button type=\"submit\">Add Gateway</button></div></form></div><div class=\"card\"><div style=\"display:grid;gap:0\">" + cards + "</div></div>"
 }
@@ -1214,9 +1190,8 @@ fn f_routing(db: SqlDB, ok: int) -> string {
     // Build existing rules as visual cards
     let mut rule_cards = ""
     let adata = tbl_query(db, ok, "SELECT COALESCE(match_prefix,'') || '|' || COALESCE(match_caller,'') || '|' || COALESCE(match_src_ip,'') || '|' || COALESCE(match_time_start,'') || '|' || COALESCE(match_time_end,'') || '|' || COALESCE(match_day,'') || '|' || action || '|' || priority || '|' || enabled || '|' || COALESCE(description,'') || '|' || id || '|' || COALESCE(match_ani_group,'') FROM routing_rules ORDER BY priority, id", 50)
-    let mut ai = 0
-    while ai < len(adata) {
-        let p = str_split(adata[ai], "|")
+    for rule in adata {
+        let p = str_split(rule, "|")
         if len(p) >= 12 {
             let mut eb = "g"
             let mut est = "Active"
@@ -1243,19 +1218,16 @@ fn f_routing(db: SqlDB, ok: int) -> string {
 
             rule_cards = rule_cards + "</div><div style=\"display:flex;gap:4px;align-items:center\"><span class=\"badge " + eb + "\">" + est + "</span><button class=\"btn sm\" hx-post=\"/admin/api/toggle\" hx-vals='{\"table\":\"routing_rules\",\"key\":\"id\",\"val\":\"" + html_esc(p[10]) + "\"}' hx-target=\"#c\">Toggle</button><button class=\"btn sm r\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"routing_rules\",\"key\":\"id\",\"val\":\"" + html_esc(p[10]) + "\"}' hx-target=\"#c\" hx-confirm=\"Delete this rule?\">Del</button></div></div>"
         }
-        ai = ai + 1
     }
 
     // Prefix routes as simple table
     let mut srows = ""
     let sdata = tbl_query(db, ok, "SELECT r.prefix || '|' || COALESCE(g.name,'set:' || COALESCE(r.dispatch_set_id::text,'?')) || '|' || r.priority || '|' || r.cost_per_min || '|' || r.id FROM routes r LEFT JOIN gateways g ON r.gateway_id = g.id ORDER BY r.priority, r.id", 50)
-    let mut si = 0
-    while si < len(sdata) {
-        let p = str_split(sdata[si], "|")
+    for srow in sdata {
+        let p = str_split(srow, "|")
         if len(p) >= 5 {
             srows = srows + "<tr><td><strong>" + html_esc(p[0]) + "</strong></td><td>&rarr; " + html_esc(p[1]) + "</td><td>" + html_esc(p[2]) + "</td><td>$" + html_esc(p[3]) + "</td><td><button class=\"btn sm r\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"routes\",\"key\":\"id\",\"val\":\"" + html_esc(p[4]) + "\"}' hx-target=\"#c\" hx-confirm=\"Delete?\">Del</button></td></tr>"
         }
-        si = si + 1
     }
 
     return "<div class=\"card\"><h2>Call Routing Rules</h2><p style=\"color:var(--muted);font-size:13px;margin-bottom:16px\">Rules are evaluated top-to-bottom by priority. The first matching rule wins. Add conditions to control when a rule applies.</p><form hx-post=\"/admin/api/routing\" hx-target=\"#c\"><div style=\"background:rgba(2,6,23,.45);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:12px\"><div style=\"font-weight:600;font-size:13px;margin-bottom:10px;color:var(--muted)\">When a call matches...</div><div class=\"form-row\"><div><label style=\"font-size:11px;color:var(--muted);display:block;margin-bottom:3px\">Called number starts with</label><input name=\"prefix\" placeholder=\"e.g. +1, +44, +1800\"></div><div><label style=\"font-size:11px;color:var(--muted);display:block;margin-bottom:3px\">Caller number starts with</label><input name=\"caller\" placeholder=\"e.g. +1212\"></div><div><label style=\"font-size:11px;color:var(--muted);display:block;margin-bottom:3px\">From IP address</label><input name=\"src_ip\" placeholder=\"e.g. 10.0.0.5\"></div><div><label style=\"font-size:11px;color:var(--muted);display:block;margin-bottom:3px\">ANI Group (caller range)</label><input name=\"ani_group\" placeholder=\"e.g. customer_a\"></div></div><div class=\"form-row\"><div><label style=\"font-size:11px;color:var(--muted);display:block;margin-bottom:3px\">Time window</label><div style=\"display:flex;gap:4px;align-items:center\"><input name=\"time_start\" placeholder=\"09:00\" style=\"max-width:80px\"><span style=\"color:var(--faint)\">to</span><input name=\"time_end\" placeholder=\"17:00\" style=\"max-width:80px\"></div></div><div><label style=\"font-size:11px;color:var(--muted);display:block;margin-bottom:3px\">Days of week</label><select name=\"day\"><option value=\"\">Every day</option><option value=\"1,2,3,4,5\">Weekdays</option><option value=\"0,6\">Weekends</option><option value=\"0\">Sunday</option><option value=\"1\">Monday</option><option value=\"2\">Tuesday</option><option value=\"3\">Wednesday</option><option value=\"4\">Thursday</option><option value=\"5\">Friday</option><option value=\"6\">Saturday</option></select></div><div><label style=\"font-size:11px;color:var(--muted);display:block;margin-bottom:3px\">Priority (lower = first)</label><input name=\"priority\" value=\"10\" style=\"max-width:60px\"></div></div><div style=\"font-weight:600;font-size:13px;margin:12px 0 10px;color:var(--muted)\">...then do this:</div><div class=\"form-row\"><div style=\"flex:2\"><label style=\"font-size:11px;color:var(--muted);display:block;margin-bottom:3px\">Action</label><select name=\"action_type\" onchange=\"var v=this.value;var eg=document.getElementById('egress_row');var t=this.form.action_target;if(v=='lcr'||v=='continue'||v=='reject'){t.style.display='none';t.value='';eg.style.display='none';}else{t.style.display='';eg.style.display=(v=='dispatch')?'flex':'none';t.placeholder=v=='route'?'Gateway name':v=='dispatch'?'Ingress dispatch group (e.g. datacenter4)':v=='failover'?'gw1, gw2, gw3':v=='redirect'?'sip:user@host':v=='forward'?'10.0.0.5:5060':'';}\"><option value=\"dispatch\">Dispatch to Server Group</option><option value=\"route\">Send to Carrier/Gateway</option><option value=\"failover\">Failover Chain</option><option value=\"lcr\">Least Cost Routing</option><option value=\"reject\">Reject Call</option><option value=\"redirect\">Redirect (302)</option><option value=\"forward\">Forward to IP</option><option value=\"continue\">Skip (try next rule)</option></select></div><div style=\"flex:2\"><label style=\"font-size:11px;color:var(--muted);display:block;margin-bottom:3px\">Target</label><input name=\"action_target\" placeholder=\"Ingress dispatch group (e.g. datacenter4)\"></div></div><div class=\"form-row\" id=\"egress_row\"><div style=\"flex:2;padding:8px;background:rgba(15,23,42,.6)8e1;border-radius:6px;border:1px solid #ffd54f\"><label style=\"font-size:11px;color:#f57f17;display:block;margin-bottom:3px\">Egress carrier group (optional — for outbound leg)</label><input name=\"egress_target\" placeholder=\"e.g. us_carriers (leave empty if not needed)\" style=\"border-color:#ffd54f\"></div></div><div class=\"form-row\"><div style=\"flex:3\"><label style=\"font-size:11px;color:var(--muted);display:block;margin-bottom:3px\">Description (optional)</label><input name=\"description\" placeholder=\"e.g. US business hours via Twilio\"></div><div style=\"flex:none\"><label style=\"font-size:11px;color:transparent;display:block;margin-bottom:3px\">.</label><button type=\"submit\">Add Rule</button></div></div></div><input type=\"hidden\" name=\"action\" value=\"\"><script>document.querySelector('form[hx-post*=routing]').addEventListener('htmx:configRequest',function(e){var f=e.target;var t=f.querySelector('[name=action_type]').value;var v=f.querySelector('[name=action_target]').value;var eg=f.querySelector('[name=egress_target]');var a=t;if(v)a=t+':'+v;if(eg&&eg.value&&t=='dispatch')a=a+'|egress:'+eg.value;if(t=='reject')a='reject:403:Forbidden';f.querySelector('[name=action]').value=a;})</script></form>" + rule_cards + "</div><div class=\"card\"><h2>Prefix Routes (fallback)</h2><p style=\"color:var(--muted);font-size:12px;margin-bottom:8px\">Simple prefix-to-gateway mapping. Used when no routing rule above matches.</p><form hx-post=\"/admin/api/routes\" hx-target=\"#c\"><div class=\"form-row\"><input name=\"prefix\" placeholder=\"Prefix (*, +1, +44)\" required><input name=\"gateway\" placeholder=\"Gateway Name\"><input name=\"priority\" placeholder=\"Priority\" value=\"10\"><input name=\"cost\" placeholder=\"$/min\" value=\"0\"><button type=\"submit\">Add</button></div></form><table><tr><th>Prefix</th><th>Destination</th><th>Priority</th><th>Cost/min</th><th></th></tr>" + srows + "</table></div>"
@@ -1265,9 +1237,8 @@ fn f_dispatch(db: SqlDB, ok: int) -> string {
     // Build a card per dispatch set with its members inline
     let mut set_cards = ""
     let sets = tbl_query(db, ok, "SELECT ds.name || '|' || ds.algorithm || '|' || COALESCE(ds.direction,'egress') || '|' || ds.enabled || '|' || ds.id || '|' || (SELECT COUNT(*) FROM dispatch_members dm WHERE dm.set_id = ds.id AND dm.enabled = true) FROM dispatch_sets ds ORDER BY ds.name", 30)
-    let mut si = 0
-    while si < len(sets) {
-        let p = str_split(sets[si], "|")
+    for set_row in sets {
+        let p = str_split(set_row, "|")
         if len(p) >= 6 {
             let mut eb = "g"
             let mut est = "Active"
@@ -1294,7 +1265,6 @@ fn f_dispatch(db: SqlDB, ok: int) -> string {
 
             set_cards = set_cards + "<div class=\"card\" style=\"margin-bottom:12px\"><div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:12px\"><div style=\"display:flex;align-items:center;gap:8px\"><strong style=\"font-size:16px\">" + html_esc(p[0]) + "</strong><span class=\"badge " + dir_badge + "\">" + dir_label + "</span><span class=\"badge b\">" + html_esc(p[1]) + "</span><span class=\"badge " + eb + "\">" + est + "</span><span style=\"color:var(--muted);font-size:12px\">" + html_esc(p[5]) + " servers</span></div><div style=\"display:flex;gap:4px\"><button class=\"btn sm\" hx-post=\"/admin/api/toggle\" hx-vals='{\"table\":\"dispatch_sets\",\"key\":\"id\",\"val\":\"" + html_esc(p[4]) + "\"}' hx-target=\"#c\">Toggle</button><button class=\"btn sm r\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"dispatch_sets\",\"key\":\"id\",\"val\":\"" + html_esc(p[4]) + "\"}' hx-target=\"#c\" hx-confirm=\"Delete this group and all its members?\">Del</button></div></div><div style=\"background:rgba(2,6,23,.4);border-radius:8px;margin-bottom:10px\">" + members + "</div><form hx-post=\"/admin/api/dispatch_member\" hx-target=\"#c\"><input type=\"hidden\" name=\"set_name\" value=\"" + html_esc(p[0]) + "\"><div class=\"form-row\"><div style=\"flex:2\"><label style=\"font-size:11px;color:var(--muted)\">Add Server (gateway name)</label><input name=\"gateway\" placeholder=\"e.g. asterisk1, freeswitch2\" required></div><div><label style=\"font-size:11px;color:var(--muted)\">Priority</label><input name=\"priority\" value=\"10\"></div><div><label style=\"font-size:11px;color:var(--muted)\">Weight</label><input name=\"weight\" value=\"100\"></div><div style=\"flex:none\"><label style=\"font-size:11px;color:transparent\">.</label><button type=\"submit\" class=\"btn sm\">Add Server</button></div></div></form></div>"
         }
-        si = si + 1
     }
 
     return "<div class=\"card\"><h2>Dispatch Groups</h2><p style=\"color:var(--muted);font-size:13px;margin-bottom:12px\">Create server groups for load balancing. <strong>Ingress</strong> groups contain PBX/media servers (Asterisk, FreeSWITCH) that receive calls. <strong>Egress</strong> groups contain carriers/trunks for outbound calls.</p><form hx-post=\"/admin/api/dispatch\" hx-target=\"#c\"><div class=\"form-row\"><div><label style=\"font-size:11px;color:var(--muted)\">Group Name</label><input name=\"name\" placeholder=\"e.g. datacenter4, us_carriers\" required></div><div><label style=\"font-size:11px;color:var(--muted)\">Algorithm</label><select name=\"algorithm\"><option>round-robin</option><option>weight</option><option>priority</option><option>hash</option><option>hash-user</option><option>broadcast</option><option>first</option><option>race</option><option>quality</option></select></div><div><label style=\"font-size:11px;color:var(--muted)\">Direction</label><select name=\"direction\"><option value=\"ingress\">Ingress (PBX/Media Servers)</option><option value=\"egress\">Egress (Carriers/Trunks)</option></select></div><div style=\"flex:none\"><label style=\"font-size:11px;color:transparent\">.</label><button type=\"submit\">Create Group</button></div></div></form></div>" + set_cards
@@ -1417,30 +1387,26 @@ fn f_security(db: SqlDB, ok: int) -> string {
     // Active bans
     let mut ban_rows = ""
     let bdata = tbl_query(db, ok, "SELECT source_ip || '|' || COALESCE(reason,'') || '|' || ban_count || '|' || COALESCE(to_char(created_at,'YYYY-MM-DD HH24:MI:SS'),'') || '|' || COALESCE(to_char(expires_at,'YYYY-MM-DD HH24:MI:SS'),'') || '|' || permanent || '|' || source_ip FROM security_bans ORDER BY created_at DESC", 50)
-    let mut bi = 0
-    while bi < len(bdata) {
-        let p = str_split(bdata[bi], "|")
+    for ban in bdata {
+        let p = str_split(ban, "|")
         if len(p) >= 7 {
             let mut perm = ""
             if str_eq(p[5], "t") { perm = "<span class=\"badge r\">PERMANENT</span>" } else { perm = "<span class=\"badge y\">temp</span>" }
             ban_rows = ban_rows + "<tr><td><strong>" + html_esc(p[0]) + "</strong></td><td>" + html_esc(p[1]) + "</td><td>" + html_esc(p[2]) + "</td><td>" + perm + "</td><td style=\"font-size:11px\">" + html_esc(p[4]) + "</td><td><button class=\"btn sm\" hx-post=\"/admin/api/delete\" hx-vals='{\"table\":\"security_bans\",\"key\":\"source_ip\",\"val\":\"" + html_esc(p[6]) + "\"}' hx-target=\"#c\" hx-confirm=\"Unban this IP?\">Unban</button></td></tr>"
         }
-        bi = bi + 1
     }
 
     // Recent security events
     let mut event_rows = ""
     let edata = tbl_query(db, ok, "SELECT ts || '|' || event_type || '|' || source_ip || '|' || COALESCE(sip_user,'') || '|' || severity FROM security_events ORDER BY ts DESC", 50)
-    let mut ei = 0
-    while ei < len(edata) {
-        let p = str_split(edata[ei], "|")
+    for event in edata {
+        let p = str_split(event, "|")
         if len(p) >= 5 {
             let mut sb = "b"
             if str_eq(p[4], "high") { sb = "y" }
             if str_eq(p[4], "critical") { sb = "r" }
             event_rows = event_rows + "<tr><td style=\"font-size:11px\">" + html_esc(p[0]) + "</td><td>" + html_esc(p[1]) + "</td><td>" + html_esc(p[2]) + "</td><td>" + html_esc(p[3]) + "</td><td><span class=\"badge " + sb + "\">" + html_esc(p[4]) + "</span></td></tr>"
         }
-        ei = ei + 1
     }
 
     // Stats

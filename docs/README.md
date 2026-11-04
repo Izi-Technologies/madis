@@ -18,4 +18,4 @@ Madis is a SIP proxy/registrar with a separate WebUI and language-neutral carrie
 
 The HTTP/JSON machine API is under `/admin/api/v1/`. It has separate carrier and control bearer scopes, a durable billing event outbox, bounded CDR reads, routing/dialplan validation, and an allowlisted control-resource API. It is not a generic application database API.
 
-The supported deployment entry point is [`../main.mko`](../main.mko). The WebUI source is under [`../admin/`](../admin/). [`../sipproxy_full.mko`](../sipproxy_full.mko) is a legacy monolithic reference and is not the deployment target.
+The supported deployment entry point is [`../main.mko`](../main.mko). The WebUI source is under [`../admin/`](../admin/). [`../legacy/sipproxy_full.mko`](../legacy/sipproxy_full.mko) is an archived monolithic snapshot and is not the deployment target.

@@ -192,7 +192,23 @@ fn sip_resp(st: int, reason: string, msg: string, n: int, tag: string) -> string
     let cseq = sip_hdr(msg, "CSeq", n)
     let mut to_h = to
     if len(tag) > 0 { to_h = to + ";tag=" + tag }
-    return "SIP/2.0 " + string(st) + " " + reason + "\r\nVia: " + via + "\r\nFrom: " + from + "\r\nTo: " + to_h + "\r\nCall-ID: " + cid + "\r\nCSeq: " + cseq + "\r\nAllow: INVITE,ACK,BYE,CANCEL,OPTIONS,REGISTER\r\nContent-Length: 0\r\n\r\n"
+    let b = str_builder()
+    builder_write(b, "SIP/2.0 ")
+    builder_write(b, string(st))
+    builder_write(b, " ")
+    builder_write(b, reason)
+    builder_write(b, "\r\nVia: ")
+    builder_write(b, via)
+    builder_write(b, "\r\nFrom: ")
+    builder_write(b, from)
+    builder_write(b, "\r\nTo: ")
+    builder_write(b, to_h)
+    builder_write(b, "\r\nCall-ID: ")
+    builder_write(b, cid)
+    builder_write(b, "\r\nCSeq: ")
+    builder_write(b, cseq)
+    builder_write(b, "\r\nAllow: INVITE,ACK,BYE,CANCEL,OPTIONS,REGISTER\r\nContent-Length: 0\r\n\r\n")
+    return builder_string(b)
 }
 // ============ SDP PARSING & NAT TRAVERSAL ============
 
@@ -449,7 +465,7 @@ fn via_add_received(msg: string, msglen: int, source_ip: string, source_port: in
 }
 // ============ DIGEST AUTH (RFC 2617) ============
 
-fn digest_challenge(realm: string, msg: string, n: int, tag: string) -> string {
+fn digest_challenge_build(status: int, reason: string, auth_header: string, realm: string, msg: string, n: int, tag: string) -> string {
     let nonce = base64_encode(random_bytes(16))
     let via = sip_hdr(msg, "Via", n)
     let from = sip_hdr(msg, "From", n)
@@ -458,19 +474,37 @@ fn digest_challenge(realm: string, msg: string, n: int, tag: string) -> string {
     let cseq = sip_hdr(msg, "CSeq", n)
     let mut to_h = to
     if len(tag) > 0 { to_h = to + ";tag=" + tag }
-    return "SIP/2.0 401 Unauthorized\r\nVia: " + via + "\r\nFrom: " + from + "\r\nTo: " + to_h + "\r\nCall-ID: " + cid + "\r\nCSeq: " + cseq + "\r\nWWW-Authenticate: Digest realm=\"" + realm + "\",nonce=\"" + nonce + "\",algorithm=MD5,qop=\"auth\"\r\nContent-Length: 0\r\n\r\n"
+    let b = str_builder()
+    builder_write(b, "SIP/2.0 ")
+    builder_write(b, string(status))
+    builder_write(b, " ")
+    builder_write(b, reason)
+    builder_write(b, "\r\nVia: ")
+    builder_write(b, via)
+    builder_write(b, "\r\nFrom: ")
+    builder_write(b, from)
+    builder_write(b, "\r\nTo: ")
+    builder_write(b, to_h)
+    builder_write(b, "\r\nCall-ID: ")
+    builder_write(b, cid)
+    builder_write(b, "\r\nCSeq: ")
+    builder_write(b, cseq)
+    builder_write(b, "\r\n")
+    builder_write(b, auth_header)
+    builder_write(b, ": Digest realm=\"")
+    builder_write(b, realm)
+    builder_write(b, "\",nonce=\"")
+    builder_write(b, nonce)
+    builder_write(b, "\",algorithm=MD5,qop=\"auth\"\r\nContent-Length: 0\r\n\r\n")
+    return builder_string(b)
+}
+
+fn digest_challenge(realm: string, msg: string, n: int, tag: string) -> string {
+    return digest_challenge_build(401, "Unauthorized", "WWW-Authenticate", realm, msg, n, tag)
 }
 
 fn digest_challenge_proxy(realm: string, msg: string, n: int, tag: string) -> string {
-    let nonce = base64_encode(random_bytes(16))
-    let via = sip_hdr(msg, "Via", n)
-    let from = sip_hdr(msg, "From", n)
-    let to = sip_hdr(msg, "To", n)
-    let cid = sip_hdr(msg, "Call-ID", n)
-    let cseq = sip_hdr(msg, "CSeq", n)
-    let mut to_h = to
-    if len(tag) > 0 { to_h = to + ";tag=" + tag }
-    return "SIP/2.0 407 Proxy Authentication Required\r\nVia: " + via + "\r\nFrom: " + from + "\r\nTo: " + to_h + "\r\nCall-ID: " + cid + "\r\nCSeq: " + cseq + "\r\nProxy-Authenticate: Digest realm=\"" + realm + "\",nonce=\"" + nonce + "\",algorithm=MD5,qop=\"auth\"\r\nContent-Length: 0\r\n\r\n"
+    return digest_challenge_build(407, "Proxy Authentication Required", "Proxy-Authenticate", realm, msg, n, tag)
 }
 
 fn has_auth(msg: string, n: int) -> int {
@@ -1558,7 +1592,21 @@ fn sip_420_response(msg: string, n: int, unsupported: string) -> string {
     let to = sip_hdr(msg, "To", n)
     let cid = sip_hdr(msg, "Call-ID", n)
     let cseq = sip_hdr(msg, "CSeq", n)
-    return "SIP/2.0 420 Bad Extension\r\nVia: " + via + "\r\nFrom: " + from + "\r\nTo: " + to + "\r\nCall-ID: " + cid + "\r\nCSeq: " + cseq + "\r\nUnsupported: " + unsupported + "\r\nContent-Length: 0\r\n\r\n"
+    let b = str_builder()
+    builder_write(b, "SIP/2.0 420 Bad Extension\r\nVia: ")
+    builder_write(b, via)
+    builder_write(b, "\r\nFrom: ")
+    builder_write(b, from)
+    builder_write(b, "\r\nTo: ")
+    builder_write(b, to)
+    builder_write(b, "\r\nCall-ID: ")
+    builder_write(b, cid)
+    builder_write(b, "\r\nCSeq: ")
+    builder_write(b, cseq)
+    builder_write(b, "\r\nUnsupported: ")
+    builder_write(b, unsupported)
+    builder_write(b, "\r\nContent-Length: 0\r\n\r\n")
+    return builder_string(b)
 }
 
 // --- Transaction deduplication (Section 17.2.3) ---
@@ -1955,7 +2003,11 @@ fn rtp_process_offer(msg: string, msglen: int, call_id: string, from_tag: string
         }
         updated = headers[0:vs] + new_cl + headers[ve:]
     }
-    return updated + "\r\n\r\n" + new_sdp
+    let b = str_builder()
+    builder_write(b, updated)
+    builder_write(b, "\r\n\r\n")
+    builder_write(b, new_sdp)
+    return builder_string(b)
 }
 
 // High-level: process SDP through rtpengine for a 200 OK response
