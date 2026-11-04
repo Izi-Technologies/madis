@@ -103,7 +103,10 @@ fn ims_flow_get(cache: CMap, token: string) -> string {
     let parts = ims_flow_fields(value)
     if len(parts) < 6 { return "" }
     let mut expires_at = 0
-    if let Ok(v) = parse_int(parts[4]) { expires_at = v } else { return "" }
+    match parse_int(parts[4]) {
+        Ok(v) => { expires_at = v }
+        Err(_) => { return "" }
+    }
     if mono_ms() > expires_at {
         let _ = ims_flow_clear(cache, token)
         return ""
@@ -134,7 +137,10 @@ fn ims_flow_refresh_value(value: string, now: int, keepalive_ms: int) -> string 
     let p2 = parts[2]
     let p3 = parts[3]
     let mut expires_at = 0
-    if let Ok(v) = parse_int(parts[4]) { expires_at = v } else { return "" }
+    match parse_int(parts[4]) {
+        Ok(v) => { expires_at = v }
+        Err(_) => { return "" }
+    }
     let new_exp = now + keepalive_ms
     if new_exp > expires_at { expires_at = new_exp }
     let sep = "~~"
